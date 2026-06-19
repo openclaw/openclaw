@@ -33,8 +33,6 @@ export type ChannelUiMetaEntry = {
   systemImage?: string;
 };
 
-export const CRON_CHANNEL_LAST = "last";
-
 export type ChannelAccountSnapshot = {
   accountId: string;
   name?: string | null;

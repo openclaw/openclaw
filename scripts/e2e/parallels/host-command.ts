@@ -531,6 +531,9 @@ export async function runStreaming(
           }, options.timeoutMs);
 
     child.on("error", (error) => {
+      if (timer) {
+        clearTimeout(timer);
+      }
       if (killTimer) {
         clearTimeout(killTimer);
       }

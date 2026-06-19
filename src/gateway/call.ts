@@ -100,10 +100,6 @@ type CallGatewayBaseOptions = {
   configPath?: string;
 };
 
-export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
-  scopes: OperatorScope[];
-};
-
 export type CallGatewayCliOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
@@ -1233,12 +1229,6 @@ export async function buildGatewayProbeConnectionDetails(
       ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
       : {}),
   };
-}
-
-export async function callGatewayScoped<T = Record<string, unknown>>(
-  opts: CallGatewayScopedOptions,
-): Promise<T> {
-  return await callGatewayWithScopes(opts, opts.scopes);
 }
 
 export async function callGatewayCli<T = Record<string, unknown>>(

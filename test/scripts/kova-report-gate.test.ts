@@ -90,6 +90,16 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     ).toEqual({ ok: false, reason: "missing baseline regression count" });
   });
 
+  it("accepts partial reports without a baseline comparison", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          baseline: null,
+        }),
+      ),
+    ).toEqual({ ok: true });
+  });
+
   it("rejects partial reports with malformed zero-like baseline regression counts", () => {
     expect(
       evaluateToleratedPartialKovaReport(

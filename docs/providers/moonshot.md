@@ -200,6 +200,12 @@ Choose your provider and follow the setup steps.
   </Tab>
 
   <Tab title="Kimi Coding">
+    Install the official plugin, then restart Gateway:
+
+    ```bash
+    openclaw plugins install @openclaw/kimi-provider
+    openclaw gateway restart
+    ```
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>

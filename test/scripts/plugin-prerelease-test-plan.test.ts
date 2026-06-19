@@ -183,6 +183,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       retryPatterns: [],
       retries: 0,
       stateScenario: "empty",
+      timeoutMs: 1_500_000,
       weight: 3,
     });
     expect(lane.timeoutMs).toBeGreaterThanOrEqual(15 * 60 * 1000);

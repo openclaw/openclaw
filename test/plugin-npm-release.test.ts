@@ -312,7 +312,7 @@ describe("collectPluginReleaseVersionFloorErrors", () => {
 });
 
 describe("collectPublishablePluginPackages", () => {
-  it("keeps publishable plugin dist trees out of the core npm package files list", () => {
+  it("keeps publishable plugin dist trees out of the core npm package unless bundled", () => {
     const corePackageRuntimePluginIds = new Set(["discord"]);
     const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
       files?: unknown;
@@ -322,6 +322,20 @@ describe("collectPublishablePluginPackages", () => {
       ...collectPublishablePluginPackages(),
       ...collectClawHubPublishablePluginPackages(),
     ];
+    for (const plugin of publishablePlugins) {
+      const packageJson = JSON.parse(
+        readFileSync(join(plugin.packageDir, "package.json"), "utf8"),
+      ) as {
+        openclaw?: {
+          build?: {
+            bundledDist?: unknown;
+          };
+        };
+      };
+      if (packageJson.openclaw?.build?.bundledDist === true) {
+        corePackageRuntimePluginIds.add(plugin.extensionId);
+      }
+    }
     const missingExclusions = Array.from(
       new Set(
         publishablePlugins

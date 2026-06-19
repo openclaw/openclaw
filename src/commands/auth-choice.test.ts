@@ -29,6 +29,8 @@ type DetectZaiEndpoint = (params: {
   modelId: string;
   note: string;
 } | null>;
+type ResolveDeprecatedProviderInstallCatalogEntry =
+  typeof import("../plugins/provider-install-catalog.js").resolveDeprecatedProviderInstallCatalogEntry;
 
 const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
@@ -36,8 +38,12 @@ const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
+const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
+  vi.fn<ResolveDeprecatedProviderInstallCatalogEntry>(() => undefined),
+);
 
 vi.mock("../plugins/provider-install-catalog.js", () => ({
+  resolveDeprecatedProviderInstallCatalogEntry,
   resolveProviderInstallCatalogEntry: vi.fn(() => undefined),
 }));
 
@@ -691,6 +697,8 @@ describe("applyAuthChoice", () => {
     runProviderModelSelectedHook.mockClear();
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
+    resolveDeprecatedProviderInstallCatalogEntry.mockReset();
+    resolveDeprecatedProviderInstallCatalogEntry.mockReturnValue(undefined);
     testAuthProfileStores.clear();
     await lifecycle.cleanup();
   });
@@ -793,6 +801,30 @@ describe("applyAuthChoice", () => {
       );
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("guides external provider auth-choice replacements before the plugin is installed", async () => {
+    const deprecatedChoiceSpy = vi
+      .spyOn(providerAuthChoices, "resolveManifestDeprecatedProviderAuthChoice")
+      .mockReturnValueOnce(undefined);
+    resolveDeprecatedProviderInstallCatalogEntry.mockReturnValueOnce({
+      choiceId: "qwen-api-key",
+    } as never);
+    try {
+      await expect(
+        applyAuthChoice({
+          authChoice: "modelstudio-api-key",
+          config: {},
+          prompter: createPrompter({}),
+          runtime: createExitThrowingRuntime(),
+          setDefaultModel: true,
+        }),
+      ).rejects.toThrow(
+        'Auth choice "modelstudio-api-key" is no longer supported. Use "qwen-api-key" instead, or run openclaw onboard to choose interactively.',
+      );
+    } finally {
+      deprecatedChoiceSpy.mockRestore();
     }
   });
 

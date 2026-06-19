@@ -28,7 +28,6 @@ import {
   listPluginInstallWholeRecordPaths,
   resolveConfigReloadMetadata,
   resolveGatewayReloadSettings,
-  shouldInvalidateSkillsSnapshotForPaths,
   startGatewayConfigReloader,
 } from "./config-reload.js";
 
@@ -1865,43 +1864,6 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       }
       await reloader?.stop();
     }
-  });
-});
-
-describe("shouldInvalidateSkillsSnapshotForPaths", () => {
-  it.each([
-    "skills",
-    "skills.allowBundled",
-    "skills.entries",
-    "skills.entries.himalaya",
-    "skills.entries.himalaya.enabled",
-    "skills.profile",
-  ])("returns true for skills path %s", (path) => {
-    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(true);
-  });
-
-  it.each([
-    "tools.profile",
-    "agents.defaults.model",
-    "gateway.port",
-    "skillset.allowBundled",
-    "channels.telegram.enabled",
-  ])("returns false for unrelated path %s", (path) => {
-    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(false);
-  });
-
-  it("returns true when any path in the list matches", () => {
-    expect(
-      shouldInvalidateSkillsSnapshotForPaths([
-        "gateway.port",
-        "skills.allowBundled",
-        "channels.telegram.enabled",
-      ]),
-    ).toBe(true);
-  });
-
-  it("returns false for empty input", () => {
-    expect(shouldInvalidateSkillsSnapshotForPaths([])).toBe(false);
   });
 });
 

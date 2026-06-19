@@ -405,7 +405,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
 ]);
-const BROAD_ONLY_TEST_HELPERS = new Set(["test/helpers/poll.ts"]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
@@ -630,6 +629,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/e2e/mcp-code-mode-gateway-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
   [
+    "scripts/e2e/lib/mcp-code-mode-probe-server.ts",
+    ["test/scripts/docker-e2e-seeds.test.ts", "test/scripts/mcp-code-mode-gateway-client.test.ts"],
+  ],
+  [
     "scripts/e2e/cron-mcp-cleanup-docker.sh",
     [
       "test/scripts/docker-build-helper.test.ts",
@@ -720,6 +723,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/run-oxlint-shards.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-with-env.mjs", ["test/scripts/run-with-env.test.ts"]],
   ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
+  ["scripts/setup-auth-system.sh", ["test/scripts/test-projects.test.ts"]],
   ["scripts/ci-run-timings.mjs", ["test/scripts/ci-run-timings.test.ts"]],
   ["scripts/docker-e2e.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/docker-e2e-rerun.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
@@ -905,7 +909,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh",
     ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts"],
   ],
-  ["scripts/e2e/lib/bun-global-install/assertions.mjs", ["test/scripts/test-install-sh-docker.test.ts"]],
+  [
+    "scripts/e2e/lib/bun-global-install/assertions.mjs",
+    ["test/scripts/test-install-sh-docker.test.ts"],
+  ],
   [
     "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
     ["test/scripts/docker-build-helper.test.ts"],
@@ -915,7 +922,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs",
     ["test/scripts/docker-stats-resource-ceiling.test.ts"],
   ],
-  ["scripts/e2e/lib/doctor-install-switch/scenario.sh", ["test/scripts/docker-build-helper.test.ts"]],
+  [
+    "scripts/e2e/lib/doctor-install-switch/scenario.sh",
+    ["test/scripts/docker-build-helper.test.ts"],
+  ],
   [
     "scripts/e2e/lib/fixture.mjs",
     ["test/scripts/fixture-config.test.ts", "test/scripts/fixtures-workspace.test.ts"],
@@ -975,8 +985,14 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/e2e/lib/plugins/fixtures.sh", ["test/scripts/plugins-assertions.test.ts"]],
   ["scripts/e2e/lib/plugins/marketplace.sh", ["test/scripts/plugins-assertions.test.ts"]],
   ["scripts/e2e/lib/plugins/sweep.sh", ["test/scripts/plugins-assertions.test.ts"]],
-  ["scripts/e2e/lib/release-plugin-marketplace/scenario.sh", ["test/scripts/docker-build-helper.test.ts"]],
-  ["scripts/e2e/lib/release-typed-onboarding/scenario.sh", ["test/scripts/docker-build-helper.test.ts"]],
+  [
+    "scripts/e2e/lib/release-plugin-marketplace/scenario.sh",
+    ["test/scripts/docker-build-helper.test.ts"],
+  ],
+  [
+    "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
+    ["test/scripts/docker-build-helper.test.ts"],
+  ],
   [
     "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh",
     ["test/scripts/docker-build-helper.test.ts"],
@@ -1014,6 +1030,13 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/release-user-journey-assertions.test.ts",
     ],
   ],
+  [
+    "scripts/e2e/lib/release-assertion-files.mjs",
+    [
+      "test/scripts/release-scenarios-assertions.test.ts",
+      "test/scripts/release-user-journey-assertions.test.ts",
+    ],
+  ],
   ["scripts/e2e/lib/skills/clawhub-install-proof.sh", ["test/scripts/e2e-shell-tempfiles.test.ts"]],
   [
     "scripts/e2e/lib/update-channel-switch/assertions.mjs",
@@ -1046,10 +1069,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "scripts/e2e/openai-chat-tools-docker.sh",
-    [
-      "test/scripts/openai-chat-tools-client.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-    ],
+    ["test/scripts/openai-chat-tools-client.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
   ],
   [
     "scripts/e2e/openai-web-search-minimal-docker.sh",
@@ -2310,9 +2330,6 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
   if (siblingTest && !shouldCombineSiblingTestWithImportGraph(changedPath)) {
     return [siblingTest];
-  }
-  if (BROAD_ONLY_TEST_HELPERS.has(changedPath)) {
-    return null;
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
     return changedPath.startsWith("ui/src/") ? [changedPath] : null;
