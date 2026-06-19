@@ -50,6 +50,26 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
+  // FIX #94846: recovery from tool warnings should not depend on channel
+  // preference — all tool errors are warnings and the agent produced final
+  // output, so the run is not fatal regardless of preferFinalAssistantVisibleText.
+  it("detects recovered tool warnings without preferFinalAssistantVisibleText", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ sed ... (agent) failed: No such file or directory",
+          isError: true,
+        },
+        { text: "REPRO_FINAL_OUTPUT_PRESENT" },
+      ],
+      finalAssistantVisibleText: "REPRO_FINAL_OUTPUT_PRESENT",
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe("REPRO_FINAL_OUTPUT_PRESENT");
+  });
+
   it("treats transient error payloads as non-fatal when a later success exists", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

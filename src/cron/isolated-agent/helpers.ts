@@ -289,7 +289,6 @@ export function resolveCronPayloadOutcome(params: {
   const hasRecoveredToolWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
-    params.preferFinalAssistantVisibleText === true &&
     normalizedFinalAssistantVisibleText !== undefined &&
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
