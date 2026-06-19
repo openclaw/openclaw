@@ -64,6 +64,7 @@ function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
 function pinGatewayPluginRuntimeRegistries(pluginRegistry: PluginRegistry): void {
   pinActivePluginChannelRegistry(pluginRegistry);
   pinActivePluginSessionExtensionRegistry(pluginRegistry);
+  pinActivePluginHttpRouteRegistry(pluginRegistry);
 }
 
 // Diagnostics are logged after registry priming so startup output contains
