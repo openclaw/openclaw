@@ -1031,6 +1031,13 @@ function readBenchmarkComparison(
   };
 }
 
+function readBenchmarkComparisonForTesting(
+  baselinePath: string,
+  candidatePath: string,
+): { comparison: unknown } {
+  return readBenchmarkComparison(baselinePath, candidatePath);
+}
+
 async function main(): Promise<void> {
   if (hasFlag("--help")) {
     printUsage();
@@ -1140,7 +1147,7 @@ export const testing = {
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,
-  readBenchmarkComparison,
+  readBenchmarkComparison: readBenchmarkComparisonForTesting,
   writeJsonOutput,
 };
 
