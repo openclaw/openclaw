@@ -548,6 +548,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let action: String
     public let params: [String: AnyCodable]
     public let accountid: String?
+    public let requesteraccountid: String?
     public let requestersenderid: String?
     public let senderisowner: Bool?
     public let sessionkey: String?
@@ -562,6 +563,7 @@ public struct MessageActionParams: Codable, Sendable {
         action: String,
         params: [String: AnyCodable],
         accountid: String?,
+        requesteraccountid: String? = nil,
         requestersenderid: String?,
         senderisowner: Bool?,
         sessionkey: String?,
@@ -575,6 +577,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.action = action
         self.params = params
         self.accountid = accountid
+        self.requesteraccountid = requesteraccountid
         self.requestersenderid = requestersenderid
         self.senderisowner = senderisowner
         self.sessionkey = sessionkey
@@ -590,6 +593,7 @@ public struct MessageActionParams: Codable, Sendable {
         case action
         case params
         case accountid = "accountId"
+        case requesteraccountid = "requesterAccountId"
         case requestersenderid = "requesterSenderId"
         case senderisowner = "senderIsOwner"
         case sessionkey = "sessionKey"
