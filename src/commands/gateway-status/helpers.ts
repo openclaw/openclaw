@@ -87,7 +87,11 @@ function normalizeWsUrl(value: string): string | null {
 }
 
 /** Builds the deduplicated ordered gateway probe targets from CLI input and config. */
-export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
+export function resolveTargets(
+  cfg: OpenClawConfig,
+  explicitUrl?: string,
+  explicitPort?: string,
+): GatewayStatusTarget[] {
   const targets: GatewayStatusTarget[] = [];
   const add = (t: GatewayStatusTarget) => {
     if (!targets.some((x) => x.url === t.url)) {
@@ -111,7 +115,7 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
     });
   }
 
-  const port = resolveGatewayPort(cfg);
+  const port = explicitPort !== undefined ? Number(explicitPort) : resolveGatewayPort(cfg);
   const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   add({
     id: "localLoopback",
@@ -253,9 +257,9 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 }
 
 /** Builds local and tailnet gateway URL hints for the configured gateway port. */
-export function buildNetworkHints(cfg: OpenClawConfig) {
+export function buildNetworkHints(cfg: OpenClawConfig, explicitPort?: string) {
   const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
-  const port = resolveGatewayPort(cfg);
+  const port = explicitPort !== undefined ? Number(explicitPort) : resolveGatewayPort(cfg);
   const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   return {
     localLoopbackUrl: `${localScheme}://127.0.0.1:${port}`,

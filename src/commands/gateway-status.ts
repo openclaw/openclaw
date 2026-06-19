@@ -47,6 +47,7 @@ export async function gatewayStatusCommand(
     ssh?: string;
     sshIdentity?: string;
     sshAuto?: boolean;
+    port?: string;
   },
   runtime: RuntimeEnv,
 ) {
@@ -58,9 +59,11 @@ export async function gatewayStatusCommand(
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
-  const baseTargets = resolveTargets(cfg, opts.url);
-  const network = buildNetworkHints(cfg);
-  const remotePort = resolveGatewayPort(cfg);
+  const explicitPort =
+    typeof opts.port === "string" || typeof opts.port === "number" ? String(opts.port) : undefined;
+  const baseTargets = resolveTargets(cfg, opts.url, explicitPort);
+  const network = buildNetworkHints(cfg, explicitPort);
+  const remotePort = explicitPort !== undefined ? Number(explicitPort) : resolveGatewayPort(cfg);
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
 
   let sshTarget = sanitizeSshTarget(opts.ssh) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);

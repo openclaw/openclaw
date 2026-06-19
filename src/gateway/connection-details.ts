@@ -28,6 +28,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     configPath?: string;
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
+    port?: string;
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
@@ -40,7 +41,9 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort =
-    resolvers.resolveGatewayPort?.(config, process.env) ?? resolveGatewayPort(config);
+    options.port !== undefined
+      ? Number(options.port)
+      : (resolvers.resolveGatewayPort?.(config, process.env) ?? resolveGatewayPort(config));
   const bindMode = config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;

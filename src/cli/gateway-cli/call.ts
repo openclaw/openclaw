@@ -14,6 +14,7 @@ export type GatewayRpcOpts = {
   url?: string;
   token?: string;
   password?: string;
+  port?: string;
   timeout?: string;
   expectFinal?: boolean;
   json?: boolean;
@@ -24,6 +25,7 @@ const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 export const gatewayCallOpts = (cmd: Command) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--port <port>", "Gateway port")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
@@ -46,6 +48,7 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
         url: opts.url,
         token: opts.token,
         password: opts.password,
+        port: opts.port,
         method,
         params,
         expectFinal: Boolean(opts.expectFinal),

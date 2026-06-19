@@ -70,6 +70,7 @@ type CallGatewayBaseOptions = {
   url?: string;
   token?: string;
   password?: string;
+  port?: string;
   tlsFingerprint?: string;
   config?: OpenClawConfig;
   method: string;
@@ -421,6 +422,7 @@ export function buildGatewayConnectionDetails(
     url?: string;
     configPath?: string;
     urlSource?: "cli" | "env";
+    port?: string;
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
@@ -1127,6 +1129,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
+    port: opts.port,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;

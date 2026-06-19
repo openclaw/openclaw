@@ -91,6 +91,7 @@ function loadDaemonStatusGatherModule() {
 function gatewayCallOpts(cmd: Command): Command {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--port <port>", "Gateway port")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
@@ -703,6 +704,7 @@ export function registerGatewayCli(program: Command) {
     .option("--log-lines <count>", "Maximum sanitized log lines to include", "5000")
     .option("--log-bytes <bytes>", "Maximum log bytes to inspect", "1000000")
     .option("--url <url>", "Gateway WebSocket URL for health snapshot")
+    .option("--port <port>", "Gateway port for health snapshot")
     .option("--token <token>", "Gateway token for health snapshot")
     .option("--password <password>", "Gateway password for health snapshot")
     .option("--timeout <ms>", "Status/health snapshot timeout in ms", "3000")
@@ -728,6 +730,7 @@ export function registerGatewayCli(program: Command) {
       "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
     )
     .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--port <port>", "Gateway port (applies to all probes)")
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
