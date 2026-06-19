@@ -55,6 +55,10 @@ type ChildState = {
   transcriptPollAttempt: number;
   transcriptPollTimer?: ReturnType<typeof setTimeout>;
   transcriptTerminal: boolean;
+  idle: boolean;
+  lastAgentMessage?: string;
+  lastAgentMessageAt?: number;
+  agentMessageCompletionDelivered: boolean;
   pendingCompletion?: CodexNativeSubagentCompletion;
   pendingCompletionEventAt?: number;
   completionDeliveryAttempt: number;
@@ -211,7 +215,10 @@ export class CodexNativeSubagentMonitor {
         });
       }
     }
+    const childThreadId = this.recordChildAgentMessage(notification);
+    const idleChildThreadId = this.recordChildIdle(notification);
     await this.handleCompletionNotification(notification);
+    await this.processChildAgentMessageCompletion(childThreadId ?? idleChildThreadId);
   }
 
   private ensureParentTaskRuntime(state: ParentState): void {
@@ -552,6 +559,8 @@ export class CodexNativeSubagentMonitor {
         parentThreadId: normalizedParentThreadId,
         transcriptPollAttempt: 0,
         transcriptTerminal: false,
+        idle: false,
+        agentMessageCompletionDelivered: false,
         completionDeliveryAttempt: 0,
       };
       this.childStates.set(normalizedChildThreadId, childState);
@@ -559,6 +568,83 @@ export class CodexNativeSubagentMonitor {
     if (options.scheduleTranscriptPoll !== false) {
       this.scheduleTranscriptPoll(childState);
     }
+  }
+
+  private recordChildAgentMessage(notification: CodexServerNotification): string | undefined {
+    if (notification.method !== "item/completed") {
+      return undefined;
+    }
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const item = isJsonObject(params?.item) ? params.item : undefined;
+    if (!params || !item || readString(item, "type") !== "agentMessage") {
+      return undefined;
+    }
+    const childThreadId = readString(params, "threadId")?.trim();
+    const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+    if (!childState || childState.transcriptTerminal) {
+      return undefined;
+    }
+    // Codex app-server can report the child final answer as the child thread's
+    // own agentMessage without also emitting a parent subagent notification.
+    // Pair it with idle below so commentary does not become a false terminal.
+    const phase = readString(item, "phase");
+    if (phase === "commentary") {
+      return undefined;
+    }
+    const text = readString(item, "text")?.trim();
+    if (!text) {
+      return undefined;
+    }
+    childState.lastAgentMessage = text;
+    childState.lastAgentMessageAt = Date.now();
+    return childState.childThreadId;
+  }
+
+  private recordChildIdle(notification: CodexServerNotification): string | undefined {
+    if (notification.method !== "thread/status/changed") {
+      return undefined;
+    }
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    if (!params || !isJsonObject(params.status) || readString(params.status, "type") !== "idle") {
+      return undefined;
+    }
+    const childThreadId = readString(params, "threadId")?.trim();
+    const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+    if (!childState || childState.transcriptTerminal) {
+      return undefined;
+    }
+    childState.idle = true;
+    return childState.childThreadId;
+  }
+
+  private async processChildAgentMessageCompletion(
+    childThreadId: string | undefined,
+  ): Promise<void> {
+    const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+    if (
+      !childState ||
+      !childState.idle ||
+      childState.transcriptTerminal ||
+      childState.agentMessageCompletionDelivered ||
+      !childState.lastAgentMessage
+    ) {
+      return;
+    }
+    const state = this.parentStates.get(childState.parentThreadId);
+    if (!state) {
+      return;
+    }
+    childState.agentMessageCompletionDelivered = true;
+    await this.processCompletion(
+      state,
+      {
+        childThreadId: childState.childThreadId,
+        status: "succeeded",
+        statusLabel: "agent_message",
+        result: childState.lastAgentMessage,
+      },
+      childState.lastAgentMessageAt,
+    );
   }
 
   private ensureChildState(parentThreadId: string, childThreadId: string): ChildState {

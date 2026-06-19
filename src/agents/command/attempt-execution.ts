@@ -982,9 +982,6 @@ export function emitAcpLifecycleError(params: {
   });
 }
 
-/** @deprecated use formatAcpErrorChain from src/acp/runtime/errors.ts */
-export const formatAcpLifecycleError = formatAcpErrorChain;
-
 export function emitAcpAssistantDelta(params: { runId: string; text: string; delta: string }) {
   emitAgentEvent({
     runId: params.runId,

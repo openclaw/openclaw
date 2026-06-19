@@ -673,10 +673,6 @@ export function extractToolResultMediaArtifact(
   return undefined;
 }
 
-export function extractToolResultMediaPaths(result: unknown): string[] {
-  return extractToolResultMediaArtifact(result)?.mediaUrls ?? [];
-}
-
 export function extractToolErrorCode(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;

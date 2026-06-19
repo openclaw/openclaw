@@ -172,6 +172,9 @@ describe("Parallels smoke model selection", () => {
   let invalidHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidLinuxHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidMacosHostPortRangeResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidLinuxHostPortRangeResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsHostPortRangeResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
@@ -218,6 +221,18 @@ describe("Parallels smoke model selection", () => {
       `process.argv = ["node", "${TS_PATHS.windows}", "--host-port", "0x4800"]; await import("./${TS_PATHS.windows}");`,
       { env: process.env, imports: ["tsx"] },
     );
+    invalidMacosHostPortRangeResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "65536"]; await import("./${TS_PATHS.macos}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidLinuxHostPortRangeResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.linux}", "--host-port", "65536"]; await import("./${TS_PATHS.linux}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsHostPortRangeResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.windows}", "--host-port", "65536"]; await import("./${TS_PATHS.windows}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
     invalidLinuxAgentTimeoutResult = spawnNodeEvalSync(
       `process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S = "1e3"; process.argv = ["node", "${TS_PATHS.linux}"]; await import("./${TS_PATHS.linux}");`,
       { env: process.env, imports: ["tsx"] },
@@ -254,6 +269,9 @@ describe("Parallels smoke model selection", () => {
     expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
     expect(parseMacosSmokeArgs([]).vmNameExplicit).toBe(false);
     expect(parseMacosSmokeArgs(["--vm", "macOS"]).vmNameExplicit).toBe(true);
+    expect(parseMacosSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    expect(parseLinuxSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    expect(parseWindowsSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseNpmUpdateSmokeArgs(["--", "--package-spec", "openclaw@2026.5.1"]).packageSpec).toBe(
       "openclaw@2026.5.1",
     );
@@ -1495,6 +1513,15 @@ setInterval(() => {}, 1000);
 
     expect(invalidWindowsHostPortResult.status).toBe(1);
     expect(invalidWindowsHostPortResult.stderr).toContain("invalid --host-port: 0x4800");
+
+    expect(invalidMacosHostPortRangeResult.status).toBe(1);
+    expect(invalidMacosHostPortRangeResult.stderr).toContain("invalid --host-port: 65536");
+
+    expect(invalidLinuxHostPortRangeResult.status).toBe(1);
+    expect(invalidLinuxHostPortRangeResult.stderr).toContain("invalid --host-port: 65536");
+
+    expect(invalidWindowsHostPortRangeResult.status).toBe(1);
+    expect(invalidWindowsHostPortRangeResult.stderr).toContain("invalid --host-port: 65536");
 
     expect(invalidLinuxAgentTimeoutResult.status).toBe(1);
     expect(invalidLinuxAgentTimeoutResult.stderr).toContain(
