@@ -1022,7 +1022,7 @@ jobs:
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
-          OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
+          OPENCLAW_TEST_PROJECTS_PARALLEL: ${{ matrix.shard_name == 'core-tooling' && '1' || '2' }}
         shell: bash
         run: |
           set -euo pipefail
