@@ -234,11 +234,11 @@ export type StopSlackStreamResult = {
  * After calling this the stream message becomes a normal Slack message.
  * Optionally include final text to append before stopping.
  *
- * If Slack's `chat.stopStream` responds with a platform rejection while text
- * is still buffered locally, this function throws a
+ * If Slack's `chat.stopStream` responds with a definitive recipient/channel
+ * rejection while text is still buffered locally, this function throws a
  * {@link SlackStreamNotDeliveredError} carrying that pending text so the caller
- * can deliver it through the normal Slack reply path. Ambiguous transport
- * failures propagate unchanged because Slack may have committed the request.
+ * can deliver it through the normal Slack reply path. Ambiguous failures
+ * propagate unchanged because Slack may have committed the request.
  *
  * If Slack responds with a known benign finalize error (see
  * {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) after prior `append` calls already
@@ -289,14 +289,14 @@ export async function stopSlackStream(
     const messageId = stopResponse?.ts ?? stopResponse?.message?.ts;
     return messageId ? { messageId } : {};
   } catch (err) {
-    const code = extractSlackErrorCode(err);
-    if (session.pendingText && code) {
-      // stop() can be the first network call for short replies. If Slack
-      // definitively rejects that finalize, the user has not seen the
-      // SDK-buffered text. Let the caller fall back to chat.postMessage.
-      throw new SlackStreamNotDeliveredError(session.pendingText, code);
-    }
     if (isBenignSlackFinalizeError(err)) {
+      const code = extractSlackErrorCode(err) ?? "unknown";
+      if (session.pendingText) {
+        // stop() can be the first network call for short replies. If Slack
+        // definitively rejects that finalize, the user has not seen the
+        // SDK-buffered text. Let the caller fall back to chat.postMessage.
+        throw new SlackStreamNotDeliveredError(session.pendingText, code);
+      }
       if (session.delivered) {
         logVerbose(
           `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
@@ -328,6 +328,8 @@ const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
   "team_not_found",
   // DMs that closed between stream start and stop.
   "missing_recipient_user_id",
+  // Channels where Slack accepts ordinary messages but not native streaming.
+  "method_not_supported_for_channel_type",
 ]);
 
 export function isBenignSlackFinalizeError(err: unknown): boolean {

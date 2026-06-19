@@ -403,13 +403,24 @@ describe("stopSlackStream finalize error handling", () => {
 
 describe("error classification", () => {
   it("isBenignSlackFinalizeError matches each allowlisted code", () => {
-    for (const code of ["user_not_found", "team_not_found", "missing_recipient_user_id"]) {
+    for (const code of [
+      "user_not_found",
+      "team_not_found",
+      "missing_recipient_user_id",
+      "method_not_supported_for_channel_type",
+    ]) {
       expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(true);
     }
   });
 
   it("isBenignSlackFinalizeError rejects non-listed codes", () => {
-    for (const code of ["not_authed", "ratelimited", "channel_not_found"]) {
+    for (const code of [
+      "not_authed",
+      "ratelimited",
+      "channel_not_found",
+      "internal_error",
+      "fatal_error",
+    ]) {
       expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(false);
     }
   });
