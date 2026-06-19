@@ -111,6 +111,7 @@ import {
 } from "../../agent-tools.policy.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
+import type { ExecToolDefaults } from "../../bash-tools.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -789,6 +790,21 @@ function collectAttemptExplicitToolAllowlistSources(params: {
   ]);
 }
 
+type EmbeddedSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
+
+function toExecSandboxDefaults(
+  sandbox: NonNullable<EmbeddedSandboxContext>,
+): NonNullable<ExecToolDefaults["sandbox"]> {
+  return {
+    containerName: sandbox.containerName,
+    workspaceDir: sandbox.workspaceDir,
+    containerWorkdir: sandbox.containerWorkdir,
+    env: sandbox.backend?.env ?? sandbox.docker.env,
+    buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
+    finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
+  };
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -850,6 +866,25 @@ export async function runEmbeddedAttempt(
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });
+  const toolSandboxRuntime = resolveSandboxRuntimeStatus({
+    cfg: params.config,
+    sessionKey: sandboxSessionKey,
+    activation: "tool",
+  });
+  let lazySandboxPromise: Promise<EmbeddedSandboxContext> | undefined;
+  const resolveExecSandbox: ExecToolDefaults["resolveSandbox"] | undefined =
+    !sandbox?.enabled && toolSandboxRuntime.sandboxed
+      ? async () => {
+          lazySandboxPromise ??= resolveSandboxContext({
+            config: params.config,
+            sessionKey: sandboxSessionKey,
+            workspaceDir: resolvedWorkspace,
+            activation: "tool",
+          });
+          const lazySandbox = await lazySandboxPromise;
+          return lazySandbox?.enabled ? toExecSandboxDefaults(lazySandbox) : undefined;
+        }
+      : undefined;
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? resolvedWorkspace
@@ -1211,6 +1246,7 @@ export async function runEmbeddedAttempt(
               ...params.execOverrides,
               config: params.config,
               elevated: params.bashElevated,
+              ...(resolveExecSandbox ? { resolveSandbox: resolveExecSandbox } : {}),
             },
             sandbox,
             messageProvider: resolveAttemptToolPolicyMessageProvider(params),
@@ -1740,8 +1776,12 @@ export async function runEmbeddedAttempt(
     const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
       config: params.config,
       agentId: sessionAgentId,
-      sessionKey: params.sessionKey,
-      sandboxAvailable: sandbox?.enabled === true,
+      sessionKey: sandboxSessionKey,
+      ...(sandbox?.enabled === true
+        ? { sandboxAvailable: true }
+        : resolveExecSandbox
+          ? {}
+          : { sandboxAvailable: false }),
       execOverrides: params.execOverrides,
     });
     const sandboxInfo = buildEmbeddedSandboxInfo(

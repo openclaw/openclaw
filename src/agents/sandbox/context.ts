@@ -26,7 +26,12 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
-import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
+import type {
+  SandboxActivation,
+  SandboxContext,
+  SandboxDockerConfig,
+  SandboxWorkspaceInfo,
+} from "./types.js";
 import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
@@ -160,7 +165,11 @@ export async function resolveSandboxDockerUser(params: {
   }
 }
 
-function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
+function resolveSandboxSession(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  activation?: SandboxActivation;
+}) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
@@ -169,6 +178,7 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     sessionKey: rawSessionKey,
+    activation: params.activation,
   });
   if (!runtime.sandboxed) {
     return null;
@@ -200,6 +210,7 @@ export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   workspaceDir?: string;
+  activation?: SandboxActivation;
 }): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
@@ -319,6 +330,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   workspaceDir?: string;
+  activation?: SandboxActivation;
 }): Promise<SandboxWorkspaceInfo | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {

@@ -19,6 +19,7 @@ import type { SecurityAuditFinding } from "./audit.types.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 
 type SandboxToolPolicy = import("../agents/sandbox/types.js").SandboxToolPolicy;
+type SandboxMode = import("../agents/sandbox/types.js").SandboxMode;
 
 type PluginTrustPolicyDeps = {
   isToolAllowedByPolicies: typeof import("../agents/tool-policy-match.js").isToolAllowedByPolicies;
@@ -155,7 +156,7 @@ function resolveToolPolicies(params: {
   cfg: OpenClawConfig;
   deps: PluginTrustPolicyDeps;
   agentTools?: AgentToolsConfig;
-  sandboxMode?: "off" | "non-main" | "all";
+  sandboxMode?: SandboxMode;
   agentId?: string | null;
 }): Array<SandboxToolPolicy | undefined> {
   const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;

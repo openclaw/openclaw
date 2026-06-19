@@ -8,7 +8,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
-import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
+import type { SandboxMode, SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
@@ -282,7 +282,7 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
 function resolveToolPolicies(params: {
   cfg: OpenClawConfig;
   agentTools?: AgentToolsConfig;
-  sandboxMode?: "off" | "non-main" | "all";
+  sandboxMode?: SandboxMode;
   agentId?: string | null;
 }): SandboxToolPolicy[] {
   const policies: SandboxToolPolicy[] = [];
@@ -825,7 +825,7 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
       "These docker settings will not take effect until sandbox mode is enabled:\n" +
       configuredPaths.map((entry) => `- ${entry}`).join("\n"),
     remediation:
-      'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) where needed, or remove unused docker settings.',
+      'Enable sandbox mode (`agents.defaults.sandbox.mode="needed"`, `"non-main"`, or `"all"`) where needed, or remove unused docker settings.',
   });
 
   return findings;

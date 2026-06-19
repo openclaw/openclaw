@@ -50,6 +50,12 @@ Not sandboxed:
     `"non-main"` is based on `session.mainKey` (default `"main"`), not agent id. Group/channel sessions use their own keys, so they count as non-main and will be sandboxed.
 
   </Tab>
+  <Tab title="needed">
+    Chat-only turns run direct. Sandbox-bound tools such as `exec` start the configured sandbox backend only when called.
+
+    Use `"needed"` for chat-first deployments where Docker or a remote sandbox backend may be temporarily unavailable, but shell commands must still run in the sandbox when they are requested. If the backend cannot start, sandbox-bound tools fail closed with a clear error instead of falling back to host execution.
+
+  </Tab>
   <Tab title="all">
     Every session runs in a sandbox.
   </Tab>

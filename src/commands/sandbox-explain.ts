@@ -11,7 +11,7 @@ import {
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -169,16 +169,23 @@ export async function sandboxExplainCommand(
 
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
-  const mainSessionKey = resolveAgentMainSessionKey({
+  const configuredMainSessionKey = resolveAgentMainSessionKey({
     cfg,
     agentId: resolvedAgentId,
   });
-  const sessionIsSandboxed =
-    sandboxCfg.mode === "all"
-      ? true
-      : sandboxCfg.mode === "off"
-        ? false
-        : sessionKey.trim() !== mainSessionKey.trim();
+  const runSandboxRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey,
+    activation: "run",
+  });
+  const toolSandboxRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey,
+    activation: "tool",
+  });
+  const mainSessionKey = runSandboxRuntime.mainSessionKey || configuredMainSessionKey;
+  const sessionIsSandboxed = runSandboxRuntime.sandboxed;
+  const toolActivationIsSandboxed = toolSandboxRuntime.sandboxed;
 
   const channel = resolveActiveChannel({
     cfg,
@@ -263,6 +270,7 @@ export async function sandboxExplainCommand(
       workspaceAccess: sandboxCfg.workspaceAccess,
       workspaceRoot: sandboxCfg.workspaceRoot,
       sessionIsSandboxed,
+      toolActivationIsSandboxed,
       tools: {
         allow: toolPolicy.allow,
         deny: toolPolicy.deny,
@@ -298,13 +306,16 @@ export async function sandboxExplainCommand(
   const bool = (flag: boolean) => (flag ? ok("true") : err("false"));
 
   const lines: string[] = [];
+  const runtimeLabel = payload.sandbox.sessionIsSandboxed
+    ? warn("sandboxed")
+    : payload.sandbox.toolActivationIsSandboxed
+      ? warn("direct (sandbox-on-tool)")
+      : ok("direct");
   lines.push(heading("Effective sandbox:"));
   lines.push(`  ${key("agentId:")} ${value(payload.agentId)}`);
   lines.push(`  ${key("sessionKey:")} ${value(payload.sessionKey)}`);
   lines.push(`  ${key("mainSessionKey:")} ${value(payload.mainSessionKey)}`);
-  lines.push(
-    `  ${key("runtime:")} ${payload.sandbox.sessionIsSandboxed ? warn("sandboxed") : ok("direct")}`,
-  );
+  lines.push(`  ${key("runtime:")} ${runtimeLabel}`);
   lines.push(
     `  ${key("mode:")} ${value(payload.sandbox.mode)} ${key("scope:")} ${value(
       payload.sandbox.scope,
@@ -345,6 +356,12 @@ export async function sandboxExplainCommand(
       `${warn("Hint:")} sandbox mode is non-main; use main session key to run direct: ${value(
         payload.mainSessionKey,
       )}`,
+    );
+  }
+  if (payload.sandbox.mode === "needed" && payload.sandbox.toolActivationIsSandboxed) {
+    lines.push("");
+    lines.push(
+      `${warn("Hint:")} sandbox mode is needed; chat-only turns run direct, and sandbox-bound tools start the sandbox when called.`,
     );
   }
   lines.push("");

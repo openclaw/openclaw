@@ -2,7 +2,7 @@
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
-import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
+import type { SandboxMode, SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -16,7 +16,7 @@ export type ExecFilesystemPolicyDriftHit = {
   scopeLabel: string;
   runtimeTools: string[];
   disabledFilesystemTools: string[];
-  sandboxMode: "off" | "non-main" | "all";
+  sandboxMode: SandboxMode;
   sandboxWorkspaceAccess: "none" | "ro" | "rw";
   execHost: NonNullable<ExecToolConfig["host"]>;
 };
@@ -24,7 +24,7 @@ export type ExecFilesystemPolicyDriftHit = {
 function resolveToolPolicies(params: {
   cfg: OpenClawConfig;
   agentTools?: AgentToolsConfig;
-  sandboxMode: "off" | "non-main" | "all";
+  sandboxMode: SandboxMode;
   agentId?: string;
 }): SandboxToolPolicy[] {
   const policies: SandboxToolPolicy[] = [];
@@ -59,7 +59,7 @@ function resolveExecHost(params: {
 }
 
 function isExecFilesystemConstrained(params: {
-  sandboxMode: "off" | "non-main" | "all";
+  sandboxMode: SandboxMode;
   sandboxWorkspaceAccess: "none" | "ro" | "rw";
   execHost: NonNullable<ExecToolConfig["host"]>;
 }): boolean {

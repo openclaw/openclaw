@@ -80,11 +80,13 @@ export type {
 } from "./sandbox/ssh.js";
 
 export type {
+  SandboxActivation,
   SandboxBrowserConfig,
   SandboxBrowserContext,
   SandboxConfig,
   SandboxContext,
   SandboxDockerConfig,
+  SandboxMode,
   SandboxPruneConfig,
   SandboxScope,
   SandboxSshConfig,

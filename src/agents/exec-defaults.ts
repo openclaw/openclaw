@@ -139,6 +139,7 @@ function resolveExecSandboxAvailability(params: {
       ? resolveSandboxRuntimeStatus({
           cfg: params.cfg,
           sessionKey: params.sessionKey,
+          activation: "tool",
         }).sandboxed
       : false)
   );

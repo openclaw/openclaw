@@ -799,7 +799,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
   agents: {
     defaults: {
       sandbox: {
-        mode: "non-main", // off | non-main | all
+        mode: "non-main", // off | non-main | needed | all
         backend: "docker", // docker | ssh | openshell
         scope: "agent", // session | agent | shared
         workspaceAccess: "none", // none | ro | rw

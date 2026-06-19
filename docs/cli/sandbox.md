@@ -27,7 +27,7 @@ For `ssh` and OpenShell `remote`, recreate matters more than with Docker:
 
 ### `openclaw sandbox explain`
 
-Inspect the **effective** sandbox mode/scope/workspace access, sandbox tool policy, and elevated gates (with fix-it config key paths).
+Inspect the **effective** sandbox mode/scope/workspace access, sandbox-on-tool status, sandbox tool policy, and elevated gates (with fix-it config key paths).
 
 ```bash
 openclaw sandbox explain
@@ -182,7 +182,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
   "agents": {
     "defaults": {
       "sandbox": {
-        "mode": "all", // off, non-main, all
+        "mode": "all", // off, non-main, needed, all
         "backend": "docker", // docker, ssh, openshell
         "scope": "agent", // session, agent, shared
         "docker": {

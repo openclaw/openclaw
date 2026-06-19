@@ -99,4 +99,27 @@ describe("sandbox explain command", () => {
       key: "agents.list[].tools.sandbox.tools.alsoAllow",
     });
   });
+
+  it("reports needed mode as direct until sandbox-bound tools run", async () => {
+    mockCfg = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "needed", scope: "agent", workspaceAccess: "rw" },
+        },
+      },
+      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true, session: "agent:main:main" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    expect(parsed.sandbox.mode).toBe("needed");
+    expect(parsed.sandbox.sessionIsSandboxed).toBe(false);
+    expect(parsed.sandbox.toolActivationIsSandboxed).toBe(true);
+  });
 });

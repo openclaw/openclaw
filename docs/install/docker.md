@@ -489,7 +489,7 @@ For full configuration, images, security notes, and multi-agent profiles, see:
   agents: {
     defaults: {
       sandbox: {
-        mode: "non-main", // off | non-main | all
+        mode: "non-main", // off | non-main | needed | all
         scope: "agent", // session | agent | shared
       },
     },
