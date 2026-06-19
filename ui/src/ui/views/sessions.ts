@@ -5,6 +5,7 @@ import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { resolveSessionDisplayName } from "../session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
@@ -838,7 +839,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     identityName && keyParts
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
       : null;
-  const keyCellTitle = friendlyKeyLabel ?? row.key;
+  const keyCellTitle = friendlyKeyLabel ?? resolveSessionDisplayName(row.key, row);
   const canLink = row.kind !== "global";
   const captured = props.workboardSessionKeys?.has(row.key) === true;
   const captureBusy = props.workboardBusySessionKey === row.key;
@@ -923,9 +924,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     props.onNavigateToChat(row.key);
                   }
                 }}
-                >${friendlyKeyLabel ?? row.key}</a
+                >${keyCellTitle}</a
               >`
-            : (friendlyKeyLabel ?? row.key)}
+            : keyCellTitle}
           ${showDisplayName
             ? html`<span class="muted session-key-display-name">${displayName}</span>`
             : nothing}
@@ -1081,7 +1082,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     <div class="session-details-panel__eyebrow">
                       ${t("sessionsView.sessionDetails")}
                     </div>
-                    <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
+                    <div class="session-details-panel__title">${keyCellTitle}</div>
                     ${showDisplayName
                       ? html`
                           <div class="muted session-details-panel__subtitle">${displayName}</div>
