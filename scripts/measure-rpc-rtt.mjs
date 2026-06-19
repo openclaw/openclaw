@@ -130,6 +130,7 @@ function formatErrorMessage(error) {
 
 async function readyzReportsReady(response, options = {}) {
   if (!response.ok) {
+    void response.body?.cancel().catch(() => undefined);
     return false;
   }
   try {
@@ -235,6 +236,7 @@ export async function waitForGatewayReady({
         `http://127.0.0.1:${port}/healthz`,
         probeTimeoutMs,
       );
+      void probe.response.body?.cancel().catch(() => undefined);
       probe.clearTimeout();
     } catch {
       // Liveness is diagnostic only; /readyz is the usable RPC readiness contract.

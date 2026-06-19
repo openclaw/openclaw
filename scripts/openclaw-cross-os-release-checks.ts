@@ -2741,16 +2741,21 @@ async function postDiscordMessage(params) {
   }
 }
 
-async function deleteDiscordMessage(params) {
+export async function deleteDiscordMessage(params) {
   if (!params.messageId) {
     return;
   }
-  await fetch(
-    `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
-    buildDiscordFetchInit(params.token, {
-      method: "DELETE",
-    }),
-  ).catch(() => undefined);
+  try {
+    const response = await fetch(
+      `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
+      buildDiscordFetchInit(params.token, {
+        method: "DELETE",
+      }),
+    );
+    await response.body?.cancel?.().catch(() => undefined);
+  } catch {
+    // Cleanup is best-effort; the smoke result should not fail after readback succeeds.
+  }
 }
 
 async function waitForInstalledDiscordReadback(params) {

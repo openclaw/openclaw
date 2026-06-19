@@ -14,11 +14,12 @@ describe("runOpenAIOAuthTlsPreflight", () => {
   });
 
   it("returns ok when OpenAI auth endpoint is reachable", async () => {
-    const fetchImpl = vi.fn(
-      async () => new Response("", { status: 400 }),
-    ) as unknown as typeof fetch;
+    const response = new Response("reachable", { status: 400 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchImpl = vi.fn(async () => response) as unknown as typeof fetch;
     const result = await runOpenAIOAuthTlsPreflight({ fetchImpl, timeoutMs: 20 });
     expect(result).toEqual({ ok: true });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("caps oversized probe timeouts before creating abort signals", async () => {

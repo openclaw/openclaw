@@ -124,6 +124,7 @@ const qaScenarioCoverageSchema = z
 
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
+  preserveDebugArtifacts: z.boolean().optional(),
 });
 
 export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;

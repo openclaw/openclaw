@@ -50,6 +50,7 @@ import {
   CROSS_OS_DISCORD_FETCH_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
+  deleteDiscordMessage,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
@@ -1468,6 +1469,31 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       },
     });
     expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("cancels Discord delete response bodies", async () => {
+    let canceled = false;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+    try {
+      await deleteDiscordMessage({
+        channelId: "channel-123",
+        messageId: "message-456",
+        token: "discord-token",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(canceled).toBe(true);
   });
 
   it("keeps the dev-update lane for main only", () => {

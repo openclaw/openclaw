@@ -758,6 +758,40 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
+  it("times out stalled package_url response bodies", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-timeout-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    let bodyCancelled = false;
+    const startedAt = Date.now();
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () =>
+          new Response(
+            new ReadableStream({
+              pull() {
+                return new Promise(() => {});
+              },
+              cancel() {
+                bodyCancelled = true;
+              },
+            }),
+            { status: 200 },
+          ),
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow(
+      "package_url download timed out after 25ms: https://packages.example/openclaw.tgz",
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(bodyCancelled).toBe(true);
+    await expect(missing(target)).resolves.toBe(true);
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
+  });
+
   it("streams non-decimal package_url content-length values through the download cap", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);

@@ -580,4 +580,45 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       }),
     );
   });
+
+  it("cancels unconsumed readiness probe response bodies", async () => {
+    const child = new EventEmitter();
+    let readyzCanceled = false;
+    let healthzCanceled = false;
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        body: {
+          async cancel() {
+            readyzCanceled = true;
+          },
+        },
+        ok: false,
+        status: 503,
+      })
+      .mockResolvedValueOnce({
+        body: {
+          async cancel() {
+            healthzCanceled = true;
+          },
+        },
+        ok: true,
+        status: 200,
+      })
+      .mockResolvedValueOnce(jsonResponse({ failing: [], ready: true }));
+
+    await waitForGatewayReady({
+      child,
+      fetchImpl,
+      port: 12345,
+      probeTimeoutMs: 7,
+      readyTimeoutMs: 50,
+      sleepMs: 1,
+      stderrPath: "/no/such/stderr.log",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(readyzCanceled).toBe(true);
+    expect(healthzCanceled).toBe(true);
+  });
 });
