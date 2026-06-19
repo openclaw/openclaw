@@ -95,12 +95,12 @@ describe("kimi web search provider", () => {
     );
   });
 
-  it("does not inherit non-native Moonshot baseUrl for web search", () => {
+  it("inherits configured Moonshot baseUrl for web search", () => {
     const proxyConfig = {
       models: { providers: { moonshot: { baseUrl: "https://proxy.example/v1" } } },
     } as unknown as OpenClawConfig;
 
-    expect(testing.resolveKimiBaseUrl(undefined, proxyConfig)).toBe("https://api.moonshot.ai/v1");
+    expect(testing.resolveKimiBaseUrl(undefined, proxyConfig)).toBe("https://proxy.example/v1");
   });
 
   it("keeps explicit kimi baseUrl over models.providers.moonshot.baseUrl", () => {
