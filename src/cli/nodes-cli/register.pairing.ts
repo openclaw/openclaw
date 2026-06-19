@@ -65,6 +65,43 @@ async function resolveApproveScopesForRequest(
   }
 }
 
+function isUnknownNodePairRequestIdError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.name === "GatewayClientRequestError" &&
+    (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("unknown requestId")
+  );
+}
+
+async function buildUnknownRequestIdHint(
+  opts: NodesRpcOpts,
+  requestId: string,
+): Promise<string> {
+  let pendingIds: string[] = [];
+  try {
+    const result = await callNodePairApprovalGatewayCli(
+      "node.pair.list",
+      opts,
+      {},
+      { scopes: DEFAULT_NODE_PAIR_APPROVE_SCOPES },
+    );
+    pendingIds = parsePairingList(result)
+      .pending.map((request) => request.requestId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+  } catch {
+    // If we can't list pending requests, skip the hint listing
+  }
+  const lines = [`Unknown node pairing requestId: ${requestId}`];
+  if (pendingIds.length > 0) {
+    lines.push(`Currently pending requestIds: ${pendingIds.join(", ")}`);
+  } else {
+    lines.push("No pending node pairing requests are currently visible.");
+  }
+  lines.push(`Run ${formatCliCommand("openclaw nodes pending")} to inspect current requests.`);
+  return lines.join("\n");
+}
+
 /** Register node pairing management commands. */
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
@@ -107,16 +144,24 @@ export function registerNodesPairingCommands(nodes: Command) {
       .action(async (requestId: string, opts: NodesRpcOpts) => {
         await runNodesCommand("approve", async () => {
           const scopes = await resolveApproveScopesForRequest(opts, requestId);
-          const result = await callNodePairApprovalGatewayCli(
-            "node.pair.approve",
-            opts,
-            {
-              requestId,
-            },
-            {
-              scopes,
-            },
-          );
+          let result: unknown;
+          try {
+            result = await callNodePairApprovalGatewayCli(
+              "node.pair.approve",
+              opts,
+              {
+                requestId,
+              },
+              {
+                scopes,
+              },
+            );
+          } catch (error) {
+            if (!isUnknownNodePairRequestIdError(error)) {
+              throw error;
+            }
+            throw new Error(await buildUnknownRequestIdHint(opts, requestId));
+          }
           defaultRuntime.writeJson(result);
         });
       }),
