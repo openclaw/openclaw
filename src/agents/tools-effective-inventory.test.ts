@@ -284,7 +284,21 @@ describe("resolveEffectiveToolInventory", () => {
 
   it("projects plugin tool metadata into the effective inventory", async () => {
     const registry = createEmptyPluginRegistry();
+    const unreadableMetadata = Object.defineProperty(
+      {
+        pluginId: "broken-plugin",
+        pluginName: "Broken Plugin",
+        source: "fixture",
+      },
+      "metadata",
+      {
+        get() {
+          throw new Error("plugin tool metadata row exploded");
+        },
+      },
+    );
     registry.toolMetadata = [
+      unreadableMetadata as never,
       {
         pluginId: "docs",
         pluginName: "Docs",

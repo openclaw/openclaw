@@ -10,6 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { buildReadablePluginToolMetadataMap } from "../plugins/tool-metadata-projection.js";
 import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tools.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
@@ -173,11 +174,8 @@ export function buildEffectiveToolInventoryEntries(
 ): EffectiveToolInventoryEntry[] {
   // Key metadata by plugin ownership and tool name so only the owning plugin can
   // project display/risk metadata for its own tool.
-  const pluginToolMetadata = new Map(
-    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
-      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
-      entry.metadata,
-    ]),
+  const pluginToolMetadata = buildReadablePluginToolMetadataMap(
+    getActivePluginRegistry()?.toolMetadata,
   );
 
   return disambiguateLabels(
