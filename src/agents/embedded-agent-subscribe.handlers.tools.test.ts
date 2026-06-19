@@ -806,6 +806,59 @@ describe("handleToolExecutionEnd message delivery evidence", () => {
       }),
     ).toMatchObject({ allowed: false });
   });
+
+  it("records built-in message tool SMS broadcast receipt evidence", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-broadcast-sms",
+      args: {
+        action: "broadcast",
+        channel: "sms",
+        targets: ["+15551234567"],
+        message: "hello",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-broadcast-sms",
+      isError: false,
+      result: {
+        details: {
+          action: "broadcast",
+          channel: "sms",
+          payload: {
+            results: [
+              {
+                channel: "sms",
+                to: "+15551234567",
+                ok: true,
+                result: {
+                  channel: "sms",
+                  messageId: "SM-broadcast",
+                  toJid: "+15551234567",
+                  status: "sent",
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-broadcast",
+        status: "sent",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
 });
 
 describe("handleToolExecutionEnd mutating failure recovery", () => {

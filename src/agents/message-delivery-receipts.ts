@@ -135,29 +135,26 @@ function collectReceiptCandidateRecords(
   payload: Record<string, unknown>,
 ): Record<string, unknown>[] {
   const records: Record<string, unknown>[] = [];
-  const addRecord = (value: unknown): Record<string, unknown> | undefined => {
+  const addRecord = (value: unknown, depth = 0): Record<string, unknown> | undefined => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        addRecord(item, depth);
+      }
+      return undefined;
+    }
     const record = asRecord(value);
     if (record) {
       records.push(record);
+      if (depth < 3) {
+        for (const key of ["details", "result", "results", "sendResult", "payload", "toolResult"]) {
+          addRecord(record[key], depth + 1);
+        }
+      }
     }
     return record;
   };
 
-  const root = addRecord(payload);
-  const details = addRecord(root?.details);
-  const nestedPayloads = [
-    root?.result,
-    root?.sendResult,
-    root?.payload,
-    root?.toolResult,
-    details?.result,
-    details?.sendResult,
-    details?.payload,
-    details?.toolResult,
-  ];
-  for (const nestedPayload of nestedPayloads) {
-    addRecord(nestedPayload);
-  }
+  addRecord(payload);
 
   return records.flatMap((record) => {
     const receipt = asRecord(record.receipt);

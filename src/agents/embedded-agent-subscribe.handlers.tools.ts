@@ -1189,8 +1189,11 @@ export async function handleToolExecutionEnd(
   if (acceptedSessionSpawn) {
     ctx.state.acceptedSessionSpawns.push(acceptedSessionSpawn);
   }
+  const actionName = normalizeOptionalLowercaseString(startArgs.action);
   const canRecordMessageDeliveryEvidence =
-    toolName === "message" && executionStarted && isMessagingToolSendAction(toolName, startArgs);
+    toolName === "message" &&
+    executionStarted &&
+    (isMessagingToolSendAction(toolName, startArgs) || actionName === "broadcast");
   if (!isToolError) {
     ctx.state.messageDeliveryEvidence.push(
       ...(canRecordMessageDeliveryEvidence

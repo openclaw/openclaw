@@ -200,6 +200,43 @@ describe("message delivery receipts", () => {
     ]);
   });
 
+  it("normalizes SMS broadcast target results into delivery evidence", () => {
+    expect(
+      normalizeMessageToolDeliveryEvidence({
+        toolName: "message",
+        result: {
+          details: {
+            action: "broadcast",
+            channel: "sms",
+            payload: {
+              results: [
+                {
+                  channel: "sms",
+                  to: "+15551234567",
+                  ok: true,
+                  result: {
+                    channel: "sms",
+                    messageId: "SM-broadcast",
+                    toJid: "+15551234567",
+                    status: "sent",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-broadcast",
+        status: "sent",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
+
   it("rejects failed and non-SMS message receipts", () => {
     expect(
       normalizeMessageToolDeliveryEvidence({

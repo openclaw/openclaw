@@ -183,12 +183,19 @@ function guardChunkedBlockReplyBuffer(ctx: EmbeddedAgentSubscribeContext): boole
     evidence: ctx.state.messageDeliveryEvidence,
   });
   if (!receiptGuard.allowed) {
+    const directives = ctx.consumeReplyDirectives(bufferedText, { final: true });
     ctx.blockChunker?.reset();
     ctx.state.suppressBlockChunks = true;
     ctx.state.lastBlockReplyText = receiptGuard.replacementText;
     ctx.state.lastDeliveredBlockReplyText = receiptGuard.replacementText;
     ctx.emitBlockReply({
       text: receiptGuard.replacementText,
+      ...(directives?.mediaUrl ? { mediaUrl: directives.mediaUrl } : {}),
+      ...(directives?.mediaUrls ? { mediaUrls: directives.mediaUrls } : {}),
+      ...(directives?.audioAsVoice ? { audioAsVoice: true } : {}),
+      ...(directives?.replyToId ? { replyToId: directives.replyToId } : {}),
+      ...(directives?.replyToCurrent ? { replyToCurrent: true } : {}),
+      ...(directives?.replyToTag ? { replyToTag: true } : {}),
     });
     return false;
   }

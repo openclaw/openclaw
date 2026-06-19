@@ -345,7 +345,8 @@ Message ID: 6655442331193344`,
       onBlockReply,
       blockReplyChunking: { minChars: 1, maxChars: 24, breakPreference: "newline" },
     });
-    const receiptText = `Sent to Jiva. To: +13522815065
+    const receiptText = `[[reply_to_current]]
+Sent to Jiva. To: +13522815065
 From: +14155201316
 Status: accepted/queued
 Message ID: 6655442331193344`;
@@ -361,6 +362,8 @@ Message ID: 6655442331193344`;
     expect(payload.text).toBe(
       "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
     );
+    expect(payload.replyToCurrent).toBe(true);
+    expect(payload.replyToTag).toBe(true);
     expect(payload.text).not.toContain("Message ID: 6655442331193344");
 
     emit({
