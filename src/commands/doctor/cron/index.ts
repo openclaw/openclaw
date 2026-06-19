@@ -368,6 +368,30 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
 
+  // Separate auto-fixable issues from manual-only advisories. When every
+  // preview line is an unresolved shell/process prompt (which the repair
+  // path cannot automatically convert), skip the misleading "Repair with
+  // --fix" promise and give the operator actionable guidance instead.
+  const autoFixable =
+    legacyStoreDetected ||
+    legacyRunLogDetected ||
+    sqliteProjectionBackfillCount > 0 ||
+    notifyCount > 0 ||
+    dreamingStaleCount > 0 ||
+    normalized.mutated;
+
+  if (!autoFixable) {
+    note(
+      [
+        `Cron store advisories at ${shortenHomePath(storePath)}.`,
+        ...previewLines,
+        "These jobs need manual editing. Replace shell/process tool references in the cron job prompt with agent-native instructions, or convert the job to a command cron type.",
+      ].join("\n"),
+      "Cron",
+    );
+    return;
+  }
+
   const noteHeading = legacyStoreDetected
     ? `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`
     : `Cron store issues detected at ${shortenHomePath(storePath)}.`;
