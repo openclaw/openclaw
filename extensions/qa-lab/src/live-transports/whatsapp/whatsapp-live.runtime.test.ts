@@ -276,7 +276,7 @@ describe("WhatsApp QA live runtime", () => {
       await fs.mkdir(debugDir);
       const emptyDebugView = await testing.buildPublishedWhatsAppQaRunView({
         cleanupIssues: [
-          "WhatsApp QA failed before scenario completion: private setup failure details",
+          "WhatsApp QA failed during driver session start: private setup failure details for +15550000002",
         ],
         gatewayDebugDirPath: debugDir,
         preservedGatewayDebugArtifacts: true,
@@ -287,18 +287,19 @@ describe("WhatsApp QA live runtime", () => {
             title: "WhatsApp DM canary",
             standardId: "canary",
             status: "fail",
-            details: "private setup failure details",
+            details:
+              "WhatsApp QA failed during driver session start: private setup failure details for +15550000002",
           },
         ],
       });
 
       expect(emptyDebugView.gatewayDebugDirPath).toBeUndefined();
       expect(emptyDebugView.cleanupIssues).toEqual([
-        "WhatsApp QA failed before scenario completion: " +
+        "WhatsApp QA failed during driver session start: " +
           "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
       ]);
       expect(emptyDebugView.scenarioResults[0]?.details).toBe(
-        "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
+        "WhatsApp QA failed during driver session start",
       );
 
       await fs.writeFile(path.join(debugDir, "gateway.stderr.log"), "stderr\n");

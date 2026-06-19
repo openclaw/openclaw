@@ -1968,6 +1968,40 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(canceled).toBe(true);
   });
 
+  it("cancels stalled HTTP probe response streams when the external signal fires", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const controller = new AbortController();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          pull() {
+            readStarted = true;
+            return new Promise(() => {});
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = fetchJson("http://127.0.0.1:19680/readyz", {
+      attempts: 1,
+      fetchImpl,
+      signal: controller.signal,
+      timeoutMs: 30_000,
+    });
+    const rejection = expect(result).rejects.toThrow("gateway exited before ready");
+
+    await waitFor(() => readStarted);
+    controller.abort(new Error("gateway exited before ready"));
+
+    await rejection;
+    await waitFor(() => canceled);
+  });
+
   it("times out stalled HTTP probe response bodies", async () => {
     vi.useFakeTimers();
     const fetchImpl = vi.fn().mockResolvedValue({

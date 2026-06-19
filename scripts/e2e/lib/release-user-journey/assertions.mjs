@@ -53,26 +53,41 @@ function readPositiveInt(raw, fallback, label) {
 async function withClickClackFixtureResponse(url, init, consume, options = {}) {
   const timeoutMs = options.timeoutMs ?? clickClackHttpTimeoutMs();
   const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
+  const timeoutError = new Error(`${url} timed out after ${timeoutMs}ms`);
+  let timer;
+  let response;
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
   try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
-    return await consume(response);
+    response = await Promise.race([
+      fetch(url, {
+        ...init,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    return await consume(response, { timeoutPromise });
   } finally {
     clearTimeout(timer);
+    await response?.body?.cancel?.().catch(() => undefined);
   }
 }
 
-async function readBoundedResponseText(response, label, byteLimit = clickClackHttpBodyMaxBytes()) {
-  return await readBoundedResponseTextWithLimit(response, label, byteLimit);
+async function readBoundedResponseText(
+  response,
+  label,
+  byteLimit = clickClackHttpBodyMaxBytes(),
+  options = {},
+) {
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit, options.timeoutPromise);
 }
 
-async function readBoundedResponseJson(response, label) {
-  return JSON.parse(await readBoundedResponseText(response, label));
+async function readBoundedResponseJson(response, label, options = {}) {
+  return JSON.parse(await readBoundedResponseText(response, label, undefined, options));
 }
 
 function resolveHomePath(value) {
@@ -278,8 +293,10 @@ async function postClickClackInbound() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ body }),
     },
-    async (response) => {
-      const text = response.ok ? "" : await readBoundedResponseText(response, "ClickClack inbound");
+    async (response, options) => {
+      const text = response.ok
+        ? ""
+        : await readBoundedResponseText(response, "ClickClack inbound", undefined, options);
       assert(response.ok, `fixture inbound failed: ${response.status} ${text}`);
     },
   );
@@ -298,9 +315,9 @@ async function waitClickClackSocket() {
     const state = await withClickClackFixtureResponse(
       `${baseUrl}/fixture/state`,
       {},
-      async (response) =>
+      async (response, options) =>
         response.ok
-          ? await readBoundedResponseJson(response, "ClickClack fixture state")
+          ? await readBoundedResponseJson(response, "ClickClack fixture state", options)
           : undefined,
       {
         timeoutMs: Math.min(clickClackHttpTimeoutMs(), remainingMs),

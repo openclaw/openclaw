@@ -57,13 +57,6 @@ export async function normalizeSupportedLanguageHint(
   }
 }
 
-export async function filterSupportedLanguageHints(
-  values: Iterable<string>,
-  options: { languagePackAvailable?: boolean } = {},
-): Promise<SupportedLanguages[]> {
-  return normalizeSupportedLanguageHints(values, { fallbackToText: true, ...options });
-}
-
 async function normalizeSupportedLanguageHints(
   values: Iterable<string>,
   options: { fallbackToText: boolean; languagePackAvailable?: boolean },
