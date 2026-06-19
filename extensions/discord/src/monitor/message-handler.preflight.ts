@@ -94,6 +94,11 @@ const DISCORD_OPERATIONAL_TELEMETRY_PREFIXES = [
   "⏳ working",
   "⚡ interrupting current task",
   "💾 self-improvement review",
+  "🔧 patch",
+  "🔎 search_files",
+  "✍️ write_file",
+  "⚙️ process",
+  "🔀 delegate_task",
 ];
 
 function normalizeDiscordOperationalTelemetryText(text: string) {
@@ -112,7 +117,7 @@ function isStandaloneDiscordOperationalTelemetry(text: string) {
   if (/^toolresult-only messages?\b/i.test(normalized)) {
     return true;
   }
-  return /^tool calls:\s*\S+/i.test(normalized);
+  return /^tool calls?:\s*\S+/i.test(normalized);
 }
 
 function resolveDiscordPreflightConversationKind(params: {

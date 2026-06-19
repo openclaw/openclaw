@@ -669,8 +669,14 @@ describe("preflightDiscordMessage", () => {
       "⏳ Working — 3 min...",
       "⚡ Interrupting current task...",
       "💾 Self-improvement review...",
+      "🔧 patch: message-handler.preflight.ts",
+      "🔎 search_files: telemetry detector",
+      "✍️ write_file: state/evidence/example.md",
+      "⚙️ process: wait ci",
+      "🔀 delegate_task: review diff",
       "toolResult-only message",
       "tool calls: read_file, terminal",
+      "tool call: bash",
     ].entries()) {
       const message = createDiscordMessage({
         id: `m-bot-telemetry-${index}`,
