@@ -193,7 +193,42 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registrationMode: params.registrationMode,
     config: params.config,
     pluginConfig: params.pluginConfig,
-    runtime: params.runtime,
+    runtime: new Proxy(params.runtime || {}, {
+      get(target, prop, receiver) {
+        if (prop === "state") {
+          return (
+            target.state ?? {
+              resolveStateDir: () => "",
+              openKeyedStore: () =>
+                ({
+                  get: async () => undefined,
+                  set: async () => {},
+                  delete: async () => {},
+                  clear: async () => {},
+                  has: async () => false,
+                  register: async () => {},
+                }) as any,
+              openSyncKeyedStore: () =>
+                ({
+                  get: () => undefined,
+                  set: () => {},
+                  delete: () => {},
+                  clear: () => {},
+                  has: () => false,
+                  register: () => {},
+                }) as any,
+              openChannelIngressQueue: () =>
+                ({
+                  enqueue: async () => {},
+                  dequeue: async () => undefined,
+                  close: async () => {},
+                }) as any,
+            }
+          );
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as any,
     logger: params.logger,
     registerTool: handlers.registerTool ?? noopRegisterTool,
     registerHook: handlers.registerHook ?? noopRegisterHook,
