@@ -166,6 +166,37 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdConfig(resolved).command).toBe("/Applications/QMD Tools/qmd");
   });
 
+  it("preserves Windows absolute paths with backslashes in qmd command", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command:
+            "C:\\Users\\admin\\AppData\\Roaming\\npm\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe(
+      "C:\\Users\\admin\\AppData\\Roaming\\npm\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js",
+    );
+  });
+
+  it("preserves quoted Windows paths with arguments", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: '"C:\\Program Files\\qmd\\qmd.js" --index-dir "C:\\Vaults"',
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe("C:\\Program Files\\qmd\\qmd.js");
+  });
+
   it("resolves custom paths relative to workspace", () => {
     const cfg = {
       agents: {

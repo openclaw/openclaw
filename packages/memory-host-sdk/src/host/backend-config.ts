@@ -390,6 +390,28 @@ function resolveDefaultCollections(
   }));
 }
 
+/** Extract the first token from a QMD command string, preserving Windows
+ *  backslash paths that POSIX `splitShellArgs` would strip as escapes. */
+function resolveQmdCommandToken(rawCommand: string): string {
+  // Windows absolute/UNC paths contain backslashes; avoid the POSIX shell
+  // tokenizer which treats `\` as an escape character.
+  if (rawCommand.includes("\\")) {
+    // Quoted path: `"C:\Program Files\qmd\qmd.js" [args...]`
+    if (rawCommand.startsWith('"')) {
+      const closeIndex = rawCommand.indexOf('"', 1);
+      if (closeIndex > 0) {
+        return rawCommand.slice(1, closeIndex);
+      }
+    }
+    // Unquoted: take the first whitespace-delimited token as-is.
+    return rawCommand.split(/\s+/)[0] || "qmd";
+  }
+  // POSIX-style command — safe for the shell-aware tokenizer.
+  const parsed = splitShellArgs(rawCommand);
+  const first = parsed?.[0];
+  return (first ?? rawCommand.split(/\s+/)[0]) || "qmd";
+}
+
 export function resolveMemoryBackendConfig(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -439,8 +461,7 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  const command = resolveQmdCommandToken(rawCommand);
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
