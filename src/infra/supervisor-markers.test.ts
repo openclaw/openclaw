@@ -1,6 +1,11 @@
 // Covers supervisor marker files used to identify managed OpenClaw processes.
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { detectRespawnSupervisor, SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
+
+vi.mock("node:child_process", () => ({
+  spawnSync: vi.fn(),
+}));
 
 describe("SUPERVISOR_HINT_ENV_VARS", () => {
   it("includes the cross-platform supervisor hint env vars", () => {
@@ -116,5 +121,68 @@ describe("detectRespawnSupervisor", () => {
     expect(
       detectRespawnSupervisor({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, "freebsd"),
     ).toBeNull();
+  });
+});
+
+describe("win32 schtasks probe fallback", () => {
+  const mockSpawnSync = vi.mocked(spawnSync);
+
+  beforeEach(() => {
+    mockSpawnSync.mockReset();
+  });
+
+  afterEach(() => {
+    mockSpawnSync.mockReset();
+  });
+
+  it("returns schtasks when probe succeeds with no env vars set", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      pid: 0,
+      output: ["", "", ""],
+      stdout: "",
+      stderr: "",
+      signal: null,
+    });
+    expect(detectRespawnSupervisor({}, "win32")).toBe("schtasks");
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "schtasks.exe",
+      ["/Query", "/TN", "OpenClaw Gateway"],
+      expect.objectContaining({ timeout: expect.any(Number), windowsHide: true }),
+    );
+  });
+
+  it("returns null when probe fails (task not found)", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 1,
+      pid: 0,
+      output: ["", "", ""],
+      stdout: "",
+      stderr: "",
+      signal: null,
+    });
+    expect(detectRespawnSupervisor({}, "win32")).toBeNull();
+  });
+
+  it("returns null when probe throws (schtasks.exe not found)", () => {
+    mockSpawnSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    expect(detectRespawnSupervisor({}, "win32")).toBeNull();
+  });
+
+  it("skips probe when env vars are already set", () => {
+    detectRespawnSupervisor({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" }, "win32");
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it("skips probe when markers are present but don't match", () => {
+    expect(
+      detectRespawnSupervisor(
+        { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "worker" },
+        "win32",
+      ),
+    ).toBeNull();
+    expect(mockSpawnSync).not.toHaveBeenCalled();
   });
 });
