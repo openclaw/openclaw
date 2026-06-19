@@ -196,7 +196,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
   });
 
-  it("compacts claude-cli native harness sessions using the persisted Anthropic configured budget", async () => {
+  it("persists the configured Anthropic budget before ordinary claude-cli compaction defers to its backend", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -246,26 +246,18 @@ describe("runCliTurnCompactionLifecycle", () => {
             sessionId,
             provider: "claude-cli",
             model: "claude-opus-4-7",
-            agentHarnessId: "claude-cli",
           },
         },
       } as never,
     });
 
-    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
-    const compactAgentHarnessSession = vi.fn(async () => ({
-      ok: true,
-      compacted: true,
-      result: { tokensBefore: 90_000, tokensAfter: 10_000 },
-    }));
-    const recordCliCompactionInStore = vi.fn(async () => ({
-      ...sessionStore[sessionKey],
-      compactionCount: 1,
-    }));
+    const ensureContextEnginesInitialized = vi.fn();
+    const resolveContextEngine = vi.fn(async () => buildContextEngine({ compactCalls: [] }));
+    const compactAgentHarnessSession = vi.fn();
+    const recordCliCompactionInStore = vi.fn();
     setCliCompactionTestDeps({
-      ensureContextEnginesInitialized: vi.fn(),
-      resolveContextEngine: async () => buildContextEngine({ compactCalls }),
-      ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+      ensureContextEnginesInitialized,
+      resolveContextEngine,
       maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
       resolveCliBackendConfig: () => ({
         id: "claude-cli",
@@ -279,7 +271,6 @@ describe("runCliTurnCompactionLifecycle", () => {
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
       }),
-      applyAgentAutoCompactionGuard: vi.fn(async () => undefined),
       shouldPreemptivelyCompactBeforePrompt: (params) => ({
         route: "fits",
         shouldCompact: false,
@@ -293,11 +284,12 @@ describe("runCliTurnCompactionLifecycle", () => {
       recordCliCompactionInStore,
     });
 
+    const ordinarySessionEntry = sessionStore[sessionKey];
     const updatedEntry = await runCliTurnCompactionLifecycle({
       cfg,
       sessionId,
       sessionKey,
-      sessionEntry: sessionStore[sessionKey],
+      sessionEntry: ordinarySessionEntry,
       sessionStore,
       storePath,
       sessionAgentId: "main",
@@ -307,21 +299,13 @@ describe("runCliTurnCompactionLifecycle", () => {
       model: "claude-opus-4-7",
     });
 
-    expect(sessionStore[sessionKey]?.contextTokens).toBe(100_000);
-    expect(sessionStore[sessionKey]?.agentHarnessId).toBe("claude-cli");
-    expect(compactAgentHarnessSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentHarnessId: "claude-cli",
-        contextTokenBudget: 100_000,
-        currentTokenCount: 90_000,
-        force: true,
-        provider: "claude-cli",
-        model: "claude-opus-4-7",
-      }),
-    );
-    expect(compactCalls).toHaveLength(0);
-    expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
-    expect(updatedEntry?.compactionCount).toBe(1);
+    expect(ordinarySessionEntry?.contextTokens).toBe(100_000);
+    expect(ordinarySessionEntry?.agentHarnessId).toBeUndefined();
+    expect(updatedEntry).toBe(ordinarySessionEntry);
+    expect(ensureContextEnginesInitialized).not.toHaveBeenCalled();
+    expect(resolveContextEngine).not.toHaveBeenCalled();
+    expect(compactAgentHarnessSession).not.toHaveBeenCalled();
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
   });
 
   it("treats below-target CLI transcript compaction as a no-op", async () => {
