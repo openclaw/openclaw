@@ -170,7 +170,9 @@ describe("session transcript runtime SDK", () => {
     await publishSessionTranscriptUpdateByIdentity({
       ...scope,
       update: {
+        agentId: "stale-agent",
         messageId: "message-from-direct-publish",
+        sessionKey: "agent:stale:other",
       },
     });
 

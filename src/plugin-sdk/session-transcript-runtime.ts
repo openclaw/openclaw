@@ -206,9 +206,9 @@ export async function publishSessionTranscriptUpdateByIdentity(
       sessionFile: target.sessionFile,
     },
     {
+      ...params.update,
       agentId: target.agentId,
       sessionKey: target.sessionKey,
-      ...params.update,
     },
   );
 }
