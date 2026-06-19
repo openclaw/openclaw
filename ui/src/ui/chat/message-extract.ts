@@ -5,7 +5,6 @@ import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
 import { sanitizeAssistantVisibleText } from "../../../../src/shared/text/assistant-visible-text.js";
 import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../string-coerce.ts";
-import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
