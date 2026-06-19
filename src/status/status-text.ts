@@ -105,12 +105,13 @@ function resolveStatusChannelFeatureLine(params: {
 }
 
 let agentHarnessSelectionRuntimePromise: Promise<
-  typeof import("../agents/harness/selection.js")
+  typeof import("../agents/harness/selection.js") | undefined
 > | null = null;
-let statusSubagentsRuntimePromise: Promise<typeof import("./status-subagents.runtime.js")> | null =
-  null;
+let statusSubagentsRuntimePromise: Promise<
+  typeof import("./status-subagents.runtime.js") | undefined
+> | null = null;
 let statusPluginHealthRuntimePromise: Promise<
-  typeof import("./status-plugin-health.runtime.js")
+  typeof import("./status-plugin-health.runtime.js") | undefined
 > | null = null;
 
 function loadAgentHarnessSelectionRuntime(): Promise<
@@ -119,7 +120,7 @@ function loadAgentHarnessSelectionRuntime(): Promise<
   if (!agentHarnessSelectionRuntimePromise) {
     agentHarnessSelectionRuntimePromise = import("../agents/harness/selection.js").catch(() => {
       agentHarnessSelectionRuntimePromise = null;
-      return undefined as any;
+      return undefined;
     });
   }
   return agentHarnessSelectionRuntimePromise;
@@ -131,7 +132,7 @@ function loadStatusSubagentsRuntime(): Promise<
   if (!statusSubagentsRuntimePromise) {
     statusSubagentsRuntimePromise = import("./status-subagents.runtime.js").catch(() => {
       statusSubagentsRuntimePromise = null;
-      return undefined as any;
+      return undefined;
     });
   }
   return statusSubagentsRuntimePromise;
@@ -143,7 +144,7 @@ function loadStatusPluginHealthRuntime(): Promise<
   if (!statusPluginHealthRuntimePromise) {
     statusPluginHealthRuntimePromise = import("./status-plugin-health.runtime.js").catch(() => {
       statusPluginHealthRuntimePromise = null;
-      return undefined as any;
+      return undefined;
     });
   }
   return statusPluginHealthRuntimePromise;
@@ -325,7 +326,9 @@ function buildStatusUptimeLine(): string {
 async function resolveRuntimePluginHealthLine(): Promise<string> {
   try {
     const mod = await loadStatusPluginHealthRuntime();
-    if (!mod) return "⚠️ Plugins: health unavailable";
+    if (!mod) {
+      return "⚠️ Plugins: health unavailable";
+    }
     const snapshot = mod.collectRuntimePluginHealthSnapshot?.();
     return formatCompactPluginHealthLine(snapshot);
   } catch {

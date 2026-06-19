@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildStatusText } from "./status-text.js";
+import type { BuildStatusTextParams } from "./status-text.types.js";
 
 function minimalBuildStatusTextParams(
-  overrides?: Record<string, unknown>,
-): Record<string, unknown> {
+  overrides?: Partial<BuildStatusTextParams>,
+): BuildStatusTextParams {
   return {
     cfg: {},
     sessionEntry: { sessionId: "retry-test", updatedAt: 0 },
