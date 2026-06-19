@@ -335,7 +335,14 @@ describe("ci workflow guards", () => {
   it("bounds early unauthenticated checkout fetches", () => {
     const workflow = readCiWorkflow();
 
-    for (const jobName of ["preflight", "security-fast", "skills-python"]) {
+    const expectedFetchDepths = new Map([
+      ["ci_scope", 2],
+      ["preflight", 2],
+      ["security-fast", 1],
+      ["skills-python", 1],
+    ]);
+
+    for (const [jobName, expectedDepth] of expectedFetchDepths) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain(
@@ -345,7 +352,6 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
-      const expectedDepth = jobName === "preflight" ? 2 : 1;
       expect(checkoutStep.run, jobName).toContain(
         `fetch --no-tags --prune --no-recurse-submodules --depth=${expectedDepth} origin`,
       );
@@ -357,6 +363,42 @@ describe("ci workflow guards", () => {
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("keeps Markdown-only PR CI scope checks off Blacksmith runners", () => {
+    const workflow = readCiWorkflow();
+    const scopeGate = workflow.jobs.ci_scope;
+    const preflight = workflow.jobs.preflight;
+    const securityFast = workflow.jobs["security-fast"];
+    const pnpmStoreWarmup = workflow.jobs["pnpm-store-warmup"];
+    const checkDocs = workflow.jobs["check-docs"];
+    const markdownOnlyHostedRunner =
+      "github.event_name == 'pull_request' && needs.ci_scope.outputs.docs_only == 'true' && 'ubuntu-24.04'";
+    const markdownOnlyDocsHostedRunner =
+      "github.event_name == 'pull_request' && needs.preflight.outputs.docs_only == 'true' && 'ubuntu-24.04'";
+
+    expect(scopeGate["runs-on"]).toBe("ubuntu-24.04");
+    expect(scopeGate.outputs).toMatchObject({
+      docs_only: "${{ steps.scope.outputs.docs_only }}",
+      docs_changed: "${{ steps.scope.outputs.docs_changed }}",
+    });
+    expect(scopeGate.steps.map((step) => step.name)).toEqual([
+      "Checkout",
+      "Ensure scope base commit",
+      "Detect docs-only changes",
+      "Publish scope outputs",
+    ]);
+
+    expect(preflight.needs).toEqual(["runner-admission", "ci_scope"]);
+    expect(preflight["runs-on"]).toContain(markdownOnlyHostedRunner);
+    expect(preflight["runs-on"]).toContain("'blacksmith-4vcpu-ubuntu-2404'");
+    expect(securityFast.needs).toEqual(["runner-admission", "ci_scope"]);
+    expect(securityFast["runs-on"]).toContain(markdownOnlyHostedRunner);
+    expect(securityFast["runs-on"]).toContain("'blacksmith-4vcpu-ubuntu-2404'");
+    expect(pnpmStoreWarmup["runs-on"]).toContain(markdownOnlyDocsHostedRunner);
+    expect(pnpmStoreWarmup["runs-on"]).toContain("'blacksmith-4vcpu-ubuntu-2404'");
+    expect(checkDocs["runs-on"]).toContain(markdownOnlyDocsHostedRunner);
+    expect(checkDocs["runs-on"]).toContain("'blacksmith-4vcpu-ubuntu-2404'");
   });
 
   it("retries workflow sanity checkout fetch timeouts", () => {

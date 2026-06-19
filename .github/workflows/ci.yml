@@ -61,14 +61,88 @@ jobs:
         if: github.event_name != 'push' || github.repository != 'openclaw/openclaw' || github.ref != 'refs/heads/main'
         run: echo "No canonical main debounce required"
 
+  # Scope gate: compute docs-only routing on a GitHub-hosted runner before any
+  # canonical PR job chooses a Blacksmith runner label.
+  ci_scope:
+    name: CI scope gate
+    permissions:
+      contents: read
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      docs_changed: ${{ steps.scope.outputs.docs_changed }}
+    steps:
+      - name: Checkout
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_REF: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_checkout_ref() {
+            local ref="$1"
+            local fetch_status
+            for attempt in 1 2 3; do
+              timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
+                -c protocol.version=2 \
+                fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
+                "+${ref}:refs/remotes/origin/checkout" && return 0
+              fetch_status="$?"
+              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
+                return "$fetch_status"
+              fi
+              if [ "$attempt" = "3" ]; then
+                return "$fetch_status"
+              fi
+              echo "::warning::checkout fetch for '$ref' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
+          }
+          if fetch_checkout_ref "$CHECKOUT_REF"; then
+            :
+          else
+            fetch_status="$?"
+            if [ "$fetch_status" = "124" ] || [ "$fetch_status" = "137" ]; then
+              echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
+            fi
+            exit "$fetch_status"
+          fi
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+
+      - name: Ensure scope base commit
+        if: github.event_name != 'workflow_dispatch'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Detect docs-only changes
+        id: docs_scope
+        if: github.event_name != 'workflow_dispatch'
+        uses: ./.github/actions/detect-docs-changes
+
+      - name: Publish scope outputs
+        id: scope
+        env:
+          DOCS_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only || 'false' }}
+          DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed || 'false' }}
+        run: |
+          echo "docs_only=${DOCS_ONLY}" >> "$GITHUB_OUTPUT"
+          echo "docs_changed=${DOCS_CHANGED}" >> "$GITHUB_OUTPUT"
+
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
     permissions:
       contents: read
-    needs: [runner-admission]
+    needs: [runner-admission, ci_scope]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && needs.ci_scope.outputs.docs_only == 'true' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
@@ -387,14 +461,14 @@ jobs:
           }
           EOF
 
-  # Run dependency-free security checks in parallel with scope detection so the
-  # main Node jobs do not have to wait for Python/pre-commit setup.
+  # Run dependency-free security checks after the lightweight scope gate so
+  # Markdown-only PRs do not reserve Blacksmith while still keeping the check.
   security-fast:
     permissions:
       contents: read
-    needs: [runner-admission]
+    needs: [runner-admission, ci_scope]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && needs.ci_scope.outputs.docs_only == 'true' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -536,7 +610,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && needs.preflight.outputs.docs_only == 'true' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1676,7 +1750,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && needs.preflight.outputs.docs_only == 'true' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 20
     steps:
       - name: Checkout
