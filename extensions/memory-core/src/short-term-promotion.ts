@@ -424,6 +424,39 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
 }
 
+// Markdown skeleton placeholders (bare list markers, heading-only lines, and
+// heading + empty-bullet ranges) carry no durable content. Without filtering
+// they get recorded as short-term recall candidates and can later be promoted
+// into MEMORY.md as empty blocks, or anchor relocation substring matches onto
+// structurally meaningless ranges. See issue #80582.
+function isMarkdownPlaceholderLine(raw: string): boolean {
+  const line = raw.trim();
+  if (!line || /^[-*+]$/.test(line)) {
+    return true;
+  }
+  // A heading line is a placeholder unless it also carries a list item with
+  // real body text on the same line (e.g. "## Notes - real content").
+  if (/^#{1,6}\s+\S/.test(line)) {
+    return !/\s[-*+]\s+\S/.test(line);
+  }
+  return false;
+}
+
+function isPlaceholderShortTermSnippet(raw: string): boolean {
+  const snippet = normalizeSnippet(raw);
+  if (!snippet || /^[-*+]$/.test(snippet)) {
+    return true;
+  }
+  const lines = raw.split(/\r?\n/);
+  const nonEmpty = lines.map((line) => line.trim()).filter(Boolean);
+  return nonEmpty.length > 0 && lines.every(isMarkdownPlaceholderLine);
+}
+
+function isUnpromotableShortTermSnippet(raw: string): boolean {
+  const snippet = normalizeSnippet(raw);
+  return !snippet || isPlaceholderShortTermSnippet(raw) || isContaminatedDreamingSnippet(snippet);
+}
+
 function normalizeMemoryPath(rawPath: string): string {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
 }
@@ -597,8 +630,9 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         typeof entry.claimHash === "string" && entry.claimHash.trim().length > 0
           ? entry.claimHash.trim()
           : undefined;
-      const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
-      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
+      const rawEntrySnippet = typeof entry.snippet === "string" ? entry.snippet : "";
+      const fullSnippet = normalizeSnippet(rawEntrySnippet);
+      if (fullSnippet && isUnpromotableShortTermSnippet(rawEntrySnippet)) {
         continue;
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
@@ -1423,7 +1457,7 @@ export async function recordShortTermRecalls(params: {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
-      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
+      if (!rawSnippet || isUnpromotableShortTermSnippet(result.snippet)) {
         continue;
       }
       const claimHash = buildClaimHash(rawSnippet);
@@ -1543,7 +1577,7 @@ export async function recordGroundedShortTermCandidates(params: {
       const normalizedPath = normalizeMemoryPath(item.path);
       if (
         !rawSnippet ||
-        isContaminatedDreamingSnippet(rawSnippet) ||
+        isUnpromotableShortTermSnippet(item.snippet) ||
         !normalizedPath ||
         !isShortTermMemoryPath(normalizedPath) ||
         !Number.isFinite(item.startLine) ||
@@ -1807,7 +1841,7 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
-    if (isContaminatedDreamingSnippet(entry.snippet)) {
+    if (isUnpromotableShortTermSnippet(entry.snippet)) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {
@@ -2076,6 +2110,21 @@ function compareCandidateWindow(
   }
   if (windowSnippet === targetSnippet) {
     return { matched: true, quality: 3 };
+  }
+  // Substring matching can anchor onto markdown skeleton placeholders (a bare
+  // list marker window matches any target that contains "-", or a placeholder
+  // target matches a meaningful window). Require both sides to carry real
+  // content before accepting a partial match so candidates do not relocate
+  // onto empty bullet/heading ranges. The exact-match branch above is
+  // unaffected because equality already rules out a placeholder-vs-content
+  // pair. This placeholder-only guard is intentionally narrower than a token
+  // count: an ASCII-only token check would split CJK text into separators and
+  // reject legitimate non-English relocations.
+  if (
+    isPlaceholderShortTermSnippet(targetSnippet) ||
+    isPlaceholderShortTermSnippet(windowSnippet)
+  ) {
+    return { matched: false, quality: 0 };
   }
   if (windowSnippet.includes(targetSnippet)) {
     return { matched: true, quality: 2 };

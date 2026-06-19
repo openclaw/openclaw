@@ -448,6 +448,184 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("does not record bare markdown placeholder markers as short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "notes",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "-",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 2,
+            endLine: 2,
+            score: 0.9,
+            snippet: "*",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 3,
+            endLine: 3,
+            score: 0.9,
+            snippet: "Real actionable note about the deploy plan.",
+          },
+        ],
+      });
+
+      const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.snippet).toBe("Real actionable note about the deploy plan.");
+    });
+  });
+
+  it("does not record markdown skeleton ranges as short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "notes",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 4,
+            score: 0.9,
+            snippet: ["## Tagesnotizen", "-", "## Entscheidungen", "-"].join("\n"),
+          },
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 5,
+            endLine: 5,
+            score: 0.9,
+            snippet: "Heading with body - kept because it carries real content.",
+          },
+        ],
+      });
+
+      const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.snippet).toBe("Heading with body - kept because it carries real content.");
+    });
+  });
+
+  it("does not record bare markdown placeholders as grounded short-term candidates", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "notes",
+        items: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: "-",
+            score: 0.9,
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 2,
+            endLine: 2,
+            snippet: "Grounded note about the rollback runbook.",
+            score: 0.9,
+          },
+        ],
+      });
+
+      const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.snippet).toBe("Grounded note about the rollback runbook.");
+    });
+  });
+
+  it("drops markdown placeholder entries when loading the recall store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-03T00:00:00.000Z",
+        entries: {
+          "memory:memory/2026-04-03.md:1:1": {
+            key: "memory:memory/2026-04-03.md:1:1",
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "-",
+            recallCount: 3,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 2.7,
+            maxScore: 0.9,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-03T00:00:00.000Z",
+            queryHashes: ["a", "b", "c"],
+            recallDays: ["2026-04-01", "2026-04-02", "2026-04-03"],
+            conceptTags: [],
+          },
+        },
+      });
+
+      const store = await testing.readRecallStore(workspaceDir, "2026-04-03T00:00:00.000Z");
+      expect(Object.values(store.entries)).toHaveLength(0);
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(ranked).toEqual([]);
+    });
+  });
+
+  it("does not relocate a candidate onto a bare markdown placeholder line", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["unrelated shipping note", "-"]);
+      // The recorded snippet does not match its original line, forcing
+      // relocation to search the live note. Without the placeholder guard the
+      // bare "-" on line 2 substring-matches "deploy - done" (quality 1) and
+      // the candidate relocates onto the empty marker line.
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "deploy",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.94,
+            snippet: "deploy - done",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(applied.applied).toBe(0);
+    });
+  });
+
   it("records recalls and ranks candidates with weighted scores", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
