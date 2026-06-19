@@ -87,8 +87,8 @@ const qaScenarioExecutionSchema = z.union([
 const qaCoverageIdSchema = z
   .string()
   .trim()
-  .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
-    message: "coverage ids must use lowercase dotted or dashed tokens",
+  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
+    message: "coverage ids must use lowercase dotted tokens",
   });
 
 const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
@@ -124,6 +124,7 @@ const qaScenarioCoverageSchema = z
 
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
+  preserveDebugArtifacts: z.boolean().optional(),
 });
 
 export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;

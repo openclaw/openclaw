@@ -226,8 +226,9 @@ async function probeHealth(
   timeout.unref?.();
   const onAbort = () => controller.abort(toAbortError(signal));
   signal?.addEventListener("abort", onAbort, { once: true });
+  let response: Response | undefined;
   try {
-    const response = await fetch(url, { headers, signal: controller.signal });
+    response = await fetch(url, { headers, signal: controller.signal });
     return response.ok;
   } catch {
     if (signal?.aborted) {
@@ -237,6 +238,7 @@ async function probeHealth(
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
+    await response?.body?.cancel?.().catch(() => undefined);
   }
 }
 

@@ -136,46 +136,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
         detectTelegramAllowFromMigration({ cfg, env }),
       () => mockedChannelMigrationPlans.plans,
     ]),
-    listBundledChannelSetupPluginsByFeature: vi.fn((feature: string) => {
-      if (feature === "legacySessionSurfaces") {
-        return [
-          {
-            id: "whatsapp",
-            messaging: {
-              isLegacyGroupSessionKey: (key: string) => /^group:.+@g\.us$/i.test(key.trim()),
-              canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>
-                /^group:.+@g\.us$/i.test(key.trim())
-                  ? `agent:${agentId}:whatsapp:${key.trim().toLowerCase()}`
-                  : null,
-            },
-          },
-        ];
-      }
-      if (feature === "legacyStateMigrations") {
-        return [
-          {
-            id: "whatsapp",
-            lifecycle: {
-              detectLegacyStateMigrations: ({ oauthDir }: { oauthDir: string }) =>
-                detectWhatsAppLegacyStateMigrations({ oauthDir }),
-            },
-          },
-          {
-            id: "telegram",
-            lifecycle: {
-              detectLegacyStateMigrations: ({
-                cfg,
-                env,
-              }: {
-                cfg: OpenClawConfig;
-                env: NodeJS.ProcessEnv;
-              }) => detectTelegramAllowFromMigration({ cfg, env }),
-            },
-          },
-        ];
-      }
-      return [];
-    }),
   };
 });
 

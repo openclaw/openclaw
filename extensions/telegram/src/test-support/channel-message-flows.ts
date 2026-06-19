@@ -1,41 +1,26 @@
-#!/usr/bin/env -S node --import tsx
-// Channel Message Flows script supports OpenClaw repository automation.
+// Channel Message Flows runtime supports QA Lab channel delivery evidence.
 import { setTimeout as sleep } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
-import {
-  deleteMessageTelegram,
-  editMessageTelegram,
-  sendMessageTelegram,
-} from "../../extensions/telegram/runtime-api.js";
-import type { TelegramThreadSpec } from "../../extensions/telegram/src/bot/helpers.js";
-import {
-  createTelegramDraftStream,
-  type TelegramDraftStream,
-} from "../../extensions/telegram/src/draft-stream.js";
+import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
+import { formatChannelProgressDraftText } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { TelegramThreadSpec } from "../bot/helpers.js";
+import { createTelegramDraftStream, type TelegramDraftStream } from "../draft-stream.js";
 import {
   buildTelegramRichMarkdown,
+  type TelegramEditRichMessageTextParams,
   type TelegramInputRichMessage,
-} from "../../extensions/telegram/src/rich-message.js";
-import { formatReasoningMessage } from "../../src/agents/embedded-agent-utils.js";
-import { getRuntimeConfig } from "../../src/config/config.js";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { formatChannelProgressDraftText } from "../../src/plugin-sdk/channel-outbound.js";
+  type TelegramSendRichMessageParams,
+} from "../rich-message.js";
+import { deleteMessageTelegram, editMessageTelegram, sendMessageTelegram } from "../send.js";
 
-type SupportedChannel = "telegram";
+type TelegramApi = Bot["api"];
+type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>;
+type TelegramEditMessageTextParams = Parameters<TelegramApi["editMessageText"]>;
+type TelegramDeleteMessageParams = Parameters<TelegramApi["deleteMessage"]>;
+
 type SupportedFlow = "thinking-final" | "working-final";
-
-export type ChannelMessageFlowArgs = {
-  accountId?: string;
-  channel: SupportedChannel;
-  delayMs?: number;
-  durationMs?: number;
-  finalText?: string;
-  flow: SupportedFlow;
-  target: string;
-  threadId?: number;
-};
 
 type TelegramSendFinalParams = {
   accountId?: string;
@@ -50,19 +35,7 @@ type TelegramFlowResult = {
   previewUpdates: number;
 };
 
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
-}
-
-function requireFinalMessageId(final: { messageId?: string }, flow: SupportedFlow): string {
-  const messageId = final.messageId?.trim();
-  if (!messageId) {
-    throw new Error(`${flow} final send did not return a durable Telegram message id`);
-  }
-  return messageId;
-}
-
-type TelegramThinkingFinalDeps = {
+type TelegramFlowDeps = {
   createDraftStream?: (params: {
     accountId?: string;
     cfg: OpenClawConfig;
@@ -73,13 +46,18 @@ type TelegramThinkingFinalDeps = {
   sleep?: (ms: number) => Promise<void>;
 };
 
-export type TelegramThinkingFinalFlowOptions = ChannelMessageFlowArgs & {
+export type TelegramThinkingFinalFlowOptions = {
+  accountId?: string;
   cfg: OpenClawConfig;
+  delayMs?: number;
+  finalText?: string;
+  target: string;
+  threadId?: number;
   thinkingUpdates?: readonly string[];
 };
 
-export type TelegramWorkingFinalFlowOptions = ChannelMessageFlowArgs & {
-  cfg: OpenClawConfig;
+export type TelegramWorkingFinalFlowOptions = TelegramThinkingFinalFlowOptions & {
+  durationMs?: number;
 };
 
 const DEFAULT_THINKING_FINAL_UPDATES = [
@@ -123,71 +101,16 @@ const DEFAULT_WORKING_PROGRESS_TIMELINE = [
   },
 ] as const;
 
-function usage(): string {
-  return [
-    "Usage:",
-    "  node --import tsx scripts/dev/channel-message-flows.ts --channel telegram --target <chat-id> --flow <flow> [options]",
-    "",
-    "Flows:",
-    "  thinking-final      Reasoning/Thinking preview, then a final answer",
-    "  working-final       Editable tool-progress preview, then a final answer",
-    "",
-    "Options:",
-    "  --account <accountId>   Telegram account id to use",
-    "  --thread-id <id>        Telegram forum topic/message thread id",
-    "  --delay-ms <ms>         Delay between preview updates (default: flow-specific)",
-    "  --duration-ms <ms>      Simulated working duration for working-final (default: 12000)",
-    "  --final-text <text>     Override the final durable message",
-  ].join("\n");
+function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
 }
 
-function readFlagValue(args: readonly string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  if (index === -1) {
-    return undefined;
+function requireFinalMessageId(final: { messageId?: string }, flow: SupportedFlow): string {
+  const messageId = final.messageId?.trim();
+  if (!messageId) {
+    throw new Error(`${flow} final send did not return a durable Telegram message id`);
   }
-  return args[index + 1];
-}
-
-function parseIntegerFlag(raw: string | undefined, label: string): number | undefined {
-  if (raw == null) {
-    return undefined;
-  }
-  if (!/^\d+$/u.test(raw)) {
-    throw new Error(`${label} must be a non-negative integer.\n\n${usage()}`);
-  }
-  return Number(raw);
-}
-
-export function parseChannelMessageFlowArgs(args: readonly string[]): ChannelMessageFlowArgs {
-  if (args.includes("--help") || args.includes("-h")) {
-    throw new Error(usage());
-  }
-
-  const channel = readFlagValue(args, "--channel");
-  const flow = readFlagValue(args, "--flow");
-  const target = readFlagValue(args, "--target") ?? readFlagValue(args, "--chat");
-
-  if (channel !== "telegram") {
-    throw new Error(`Only --channel telegram is supported for now.\n\n${usage()}`);
-  }
-  if (flow !== "thinking-final" && flow !== "working-final") {
-    throw new Error(`Unsupported --flow ${flow ?? "<missing>"}.\n\n${usage()}`);
-  }
-  if (!target) {
-    throw new Error(`Missing --target <chat-id>.\n\n${usage()}`);
-  }
-
-  return {
-    accountId: readFlagValue(args, "--account") ?? readFlagValue(args, "--account-id"),
-    channel,
-    delayMs: parseIntegerFlag(readFlagValue(args, "--delay-ms"), "--delay-ms"),
-    durationMs: parseIntegerFlag(readFlagValue(args, "--duration-ms"), "--duration-ms"),
-    finalText: readFlagValue(args, "--final-text"),
-    flow,
-    target,
-    threadId: parseIntegerFlag(readFlagValue(args, "--thread-id"), "--thread-id"),
-  };
+  return messageId;
 }
 
 function resolveWorkingProgressLines(elapsedMs: number): string[] {
@@ -207,15 +130,15 @@ function richMessageText(richMessage: TelegramInputRichMessage): {
   text: string;
   textMode: "markdown" | "html";
 } {
-  return "html" in richMessage
+  return richMessage.html !== undefined
     ? { text: richMessage.html, textMode: "html" }
     : { text: richMessage.markdown, textMode: "markdown" };
 }
 
 function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig }): Bot["api"] {
-  return {
+  const api = {
     raw: {
-      sendRichMessage: async (sendParams) => {
+      sendRichMessage: async (sendParams: TelegramSendRichMessageParams) => {
         const richText = richMessageText(sendParams.rich_message);
         const result = await sendMessageTelegram(String(sendParams.chat_id), richText.text, {
           accountId: params.accountId,
@@ -225,7 +148,7 @@ function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig
         });
         return { message_id: Number(result.messageId) } as Message;
       },
-      editMessageText: async (editParams) => {
+      editMessageText: async (editParams: TelegramEditRichMessageTextParams) => {
         if (typeof editParams.message_id !== "number") {
           throw new Error("Telegram flow rich edit requires message_id.");
         }
@@ -243,7 +166,11 @@ function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig
         return true;
       },
     },
-    sendMessage: async (chatId, text, sendParams) => {
+    sendMessage: async (
+      chatId: TelegramSendMessageParams[0],
+      text: TelegramSendMessageParams[1],
+      sendParams: TelegramSendMessageParams[2],
+    ) => {
       const result = await sendMessageTelegram(String(chatId), text, {
         accountId: params.accountId,
         cfg: params.cfg,
@@ -252,7 +179,12 @@ function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig
       });
       return { message_id: Number(result.messageId) };
     },
-    editMessageText: async (chatId, messageId, text, editParams) => {
+    editMessageText: async (
+      chatId: TelegramEditMessageTextParams[0],
+      messageId: TelegramEditMessageTextParams[1],
+      text: TelegramEditMessageTextParams[2],
+      editParams: TelegramEditMessageTextParams[3],
+    ) => {
       await editMessageTelegram(String(chatId), messageId, text, {
         accountId: params.accountId,
         cfg: params.cfg,
@@ -260,14 +192,18 @@ function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig
       });
       return true;
     },
-    deleteMessage: async (chatId, messageId) => {
+    deleteMessage: async (
+      chatId: TelegramDeleteMessageParams[0],
+      messageId: TelegramDeleteMessageParams[1],
+    ) => {
       await deleteMessageTelegram(String(chatId), messageId, {
         accountId: params.accountId,
         cfg: params.cfg,
       });
       return true;
     },
-  } as Bot["api"];
+  };
+  return api as unknown as Bot["api"];
 }
 
 export function resolveTelegramFlowThreadSpec(threadId?: number): TelegramThreadSpec | undefined {
@@ -300,7 +236,7 @@ async function sendTelegramFinal(params: TelegramSendFinalParams): Promise<{ mes
 
 export async function runTelegramThinkingFinalFlow(
   options: TelegramThinkingFinalFlowOptions,
-  deps: TelegramThinkingFinalDeps = {},
+  deps: TelegramFlowDeps = {},
 ): Promise<TelegramFlowResult> {
   const delayMs = options.delayMs ?? 900;
   const thinkingUpdates = options.thinkingUpdates ?? DEFAULT_THINKING_FINAL_UPDATES;
@@ -358,7 +294,7 @@ export async function runTelegramThinkingFinalFlow(
 
 export async function runTelegramWorkingFinalFlow(
   options: TelegramWorkingFinalFlowOptions,
-  deps: TelegramThinkingFinalDeps = {},
+  deps: TelegramFlowDeps = {},
 ): Promise<TelegramFlowResult> {
   const delayMs = options.delayMs ?? 2_000;
   const durationMs = options.durationMs ?? 12_000;
@@ -420,29 +356,4 @@ export async function runTelegramWorkingFinalFlow(
     finalMessageId,
     previewUpdates,
   };
-}
-
-export async function main(args = process.argv.slice(2)): Promise<void> {
-  if (args.includes("--help") || args.includes("-h")) {
-    process.stdout.write(`${usage()}\n`);
-    return;
-  }
-
-  const parsed = parseChannelMessageFlowArgs(args);
-  const cfg = getRuntimeConfig();
-  const result =
-    parsed.flow === "working-final"
-      ? await runTelegramWorkingFinalFlow({ ...parsed, cfg })
-      : await runTelegramThinkingFinalFlow({ ...parsed, cfg });
-
-  process.stdout.write(
-    `Sent ${parsed.channel}/${parsed.flow} to ${parsed.target} (${result.previewUpdates} preview updates, final message ${result.finalMessageId ?? "unknown"}).\n`,
-  );
-}
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  main().catch((err: unknown) => {
-    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-    process.exitCode = 1;
-  });
 }

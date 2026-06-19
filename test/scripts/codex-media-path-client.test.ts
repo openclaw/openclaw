@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs";
-import { readPositiveIntEnv } from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
+import {
+  readPositiveIntEnv,
+  readTcpPortEnv,
+} from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const tempRoots: string[] = [];
@@ -104,6 +107,10 @@ describe("codex media path limits", () => {
         OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: "64bytes",
       }),
     ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: 64bytes");
+  });
+
+  it("rejects out-of-range TCP ports", () => {
+    expect(() => readTcpPortEnv("PORT", 18790, { PORT: "65536" })).toThrow("invalid PORT: 65536");
   });
 
   it("writes strict positive timeout and port values into generated config", () => {

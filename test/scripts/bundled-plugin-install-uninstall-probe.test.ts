@@ -266,6 +266,14 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stderr).toContain("invalid bundled plugin runtime index: 1e3");
   });
 
+  it("rejects unsafe bundled plugin runtime limit env values", async () => {
+    await expect(
+      importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: String(Number.MAX_SAFE_INTEGER + 1),
+      }),
+    ).rejects.toThrow("invalid OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: 9007199254740992");
+  });
+
   it("rejects bundled plugin runtime ports outside the TCP range", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const env = {
@@ -1049,6 +1057,34 @@ describe("bundled plugin install/uninstall probe", () => {
           port,
         }),
       ).rejects.toThrow('/readyz returned HTTP 503: "not json"');
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("bounds readyz diagnostic response bodies", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
+    });
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, {
+        "content-length": String(1024 * 1024 + 1),
+        "content-type": "application/json",
+      });
+      response.end();
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+
+      await expect(
+        runtimeSmoke.assertReadyzProbe({
+          allowedDegradedReadyzFailures: ["qa-channel"],
+          pluginId: "qa-channel",
+          port,
+        }),
+      ).rejects.toThrow("/readyz probe response body exceeded 1048576 bytes");
     } finally {
       await closeServer(server);
     }

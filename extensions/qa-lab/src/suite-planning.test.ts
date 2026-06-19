@@ -330,10 +330,15 @@ describe("qa suite planning helpers", () => {
         plugins: ["browser"],
         gatewayRuntime: { forwardHostHome: true },
       }),
+      makeQaSuiteTestScenario("otel-stdout", {
+        plugins: ["diagnostics-otel"],
+        gatewayRuntime: { preserveDebugArtifacts: true },
+      }),
     ];
 
     expect(collectQaSuiteGatewayRuntimeOptions(scenarios)).toEqual({
       forwardHostHome: true,
+      preserveDebugArtifacts: true,
     });
   });
 

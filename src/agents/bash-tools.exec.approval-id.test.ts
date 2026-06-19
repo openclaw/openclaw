@@ -35,22 +35,37 @@ vi.mock("../infra/outbound/message.js", () => ({
 }));
 
 vi.mock("../utils/message-channel.js", () => {
+  const INTERNAL_MESSAGE_CHANNEL = "webchat";
+  const NATIVE_APPROVAL_CHANNELS = new Set([
+    "webchat",
+    "discord",
+    "googlechat",
+    "imessage",
+    "matrix",
+    "qqbot",
+    "signal",
+    "slack",
+    "telegram",
+    "whatsapp",
+  ]);
   const normalizeMessageChannel = (raw?: string | null) => {
     const normalized = raw?.trim().toLowerCase();
     if (!normalized) {
       return undefined;
     }
-    if (normalized === "web" || normalized === "webchat") {
-      return "internal";
+    if (normalized === "web") {
+      return INTERNAL_MESSAGE_CHANNEL;
     }
     return normalized;
   };
   const isGatewayMessageChannel = (value: string) => Boolean(normalizeMessageChannel(value));
   return {
-    INTERNAL_MESSAGE_CHANNEL: "internal",
+    INTERNAL_MESSAGE_CHANNEL,
+    isNativeApprovalChannel: (value?: string | null) =>
+      typeof value === "string" && NATIVE_APPROVAL_CHANNELS.has(value),
     isDeliverableMessageChannel: (value: string) => {
       const channel = normalizeMessageChannel(value);
-      return Boolean(channel && channel !== "internal" && channel !== "tui");
+      return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL && channel !== "tui");
     },
     isGatewayMessageChannel,
     normalizeMessageChannel,
@@ -98,12 +113,12 @@ vi.mock("../infra/exec-approval-surface.js", () => ({
       kind: "enabled",
       channel,
       channelLabel:
-        channel === "tui" ? "terminal UI" : channel === "internal" ? "Web UI" : "this platform",
+        channel === "tui" ? "terminal UI" : channel === "webchat" ? "Web UI" : "this platform",
       accountId: params.accountId ?? undefined,
     };
   },
   supportsNativeExecApprovalClient: (channel?: string | null) =>
-    !channel || channel === "internal" || channel === "tui",
+    !channel || channel === "webchat" || channel === "tui",
 }));
 
 vi.mock("../infra/shell-env.js", () => ({
@@ -962,7 +977,7 @@ describe("exec approvals", () => {
     );
   });
 
-  it("continues the original agent session after approved gateway exec completes with an external route", async () => {
+  it("continues the original agent session after approved gateway exec completes with a non-native external route", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -975,15 +990,15 @@ describe("exec approvals", () => {
       host: "gateway",
       ask: "always",
       approvalRunningNoticeMs: 0,
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:feishu:channel:123",
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
-      messageProvider: "discord",
+      messageProvider: "feishu",
       currentChannelId: "123",
       accountId: "default",
       currentThreadTs: "456",
     });
 
-    const result = await tool.execute("call-gw-followup-discord", {
+    const result = await tool.execute("call-gw-followup-feishu", {
       command: "echo ok",
       workdir: process.cwd(),
     });
@@ -991,10 +1006,10 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
     expectRecordFields(agentCalls[0], {
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:feishu:channel:123",
       deliver: true,
       bestEffortDeliver: true,
-      channel: "discord",
+      channel: "feishu",
       to: "123",
       accountId: "default",
       threadId: "456",
@@ -1007,7 +1022,7 @@ describe("exec approvals", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("auto-continues the same Discord session after approval resolves without a second user turn", async () => {
+  it("waits inline for native Discord approval and resumes the same session without a second user turn", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
     let resolveDecision: ((value: { decision: string }) => void) | undefined;
     const decisionPromise = new Promise<{ decision: string }>((resolve) => {
@@ -1040,31 +1055,26 @@ describe("exec approvals", () => {
       currentThreadTs: "456",
     });
 
-    const result = await tool.execute("call-gw-followup-discord-delayed", {
+    let settled = false;
+    const resultPromise = tool.execute("call-gw-followup-discord-delayed", {
       command: "printf delayed-ok",
       workdir: process.cwd(),
     });
+    void resultPromise.then(() => {
+      settled = true;
+    });
 
-    expect(result.details.status).toBe("approval-pending");
+    await Promise.resolve();
+    expect(settled).toBe(false);
     expect(agentCalls).toHaveLength(0);
 
     resolveDecision?.({ decision: "allow-once" });
 
-    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expectRecordFields(agentCalls[0], {
-      sessionKey: "agent:main:discord:channel:123",
-      deliver: true,
-      bestEffortDeliver: true,
-      channel: "discord",
-      to: "123",
-      accountId: "default",
-      threadId: "456",
-    });
-    expect(typeof agentCalls[0]?.message).toBe("string");
-    expect(agentCalls[0]?.message).toContain(
-      "If the task requires more steps, continue from this result before replying to the user.",
-    );
-    expect(agentCalls[0]?.message).toContain("delayed-ok");
+    const result = await resultPromise;
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("delayed-ok");
+    expect(agentCalls).toHaveLength(0);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

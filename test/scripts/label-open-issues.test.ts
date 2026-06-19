@@ -72,7 +72,18 @@ describe("label-open-issues helpers", () => {
   });
 
   it("times out stalled OpenAI classification body reads", async () => {
-    const response = new Response(new ReadableStream({}), { status: 200 });
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200 },
+    );
     vi.useFakeTimers();
     const request = testing.classifyItem(labelItem, "issue", {
       apiKey: "test-key",
@@ -87,6 +98,39 @@ describe("label-open-issues helpers", () => {
     await vi.advanceTimersByTimeAsync(5);
 
     await rejection;
+    await Promise.resolve();
+    expect(canceled).toBe(true);
+  });
+
+  it("cancels stalled OpenAI classification error body reads", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 500 },
+    );
+    vi.useFakeTimers();
+    const request = testing.classifyItem(labelItem, "issue", {
+      apiKey: "test-key",
+      model: "test-model",
+      timeoutMs: 5,
+      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+    });
+    const rejection = expect(request).rejects.toThrow(
+      /OpenAI issue label classification request exceeded timeout/u,
+    );
+
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
+    await Promise.resolve();
+    expect(canceled).toBe(true);
   });
 
   it("bounds OpenAI error response bodies", async () => {
