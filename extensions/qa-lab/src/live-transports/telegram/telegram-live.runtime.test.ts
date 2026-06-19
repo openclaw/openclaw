@@ -660,6 +660,9 @@ describe("telegram live qa runtime", () => {
     expect(repeatedSteps[2]?.expectReply).toBe(true);
     expect(repeatedSteps[3]?.input).toBe("/commands@sut_bot");
     expect(repeatedSteps[3]?.expectReply).toBe(true);
+    const commandsStep = requireScenario(scenarios, "telegram-commands-command").buildRun("sut_bot")
+      .steps[0];
+    expect(commandsStep?.expectedTextIncludes).toEqual(["Commands (1/", "/session", "/stop"]);
     const otherBotStep = requireScenario(scenarios, "telegram-other-bot-command-gating").buildRun(
       "sut_bot",
     ).steps[0];
