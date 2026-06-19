@@ -42,6 +42,7 @@ export async function deliverMatrixReplies(params: {
   replyToId?: string;
   accountId?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   tableMode?: MarkdownTableMode;
 }): Promise<boolean> {
   const core = getMatrixRuntime();
@@ -126,6 +127,7 @@ export async function deliverMatrixReplies(params: {
         cfg: params.cfg,
         mediaUrl,
         mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
         replyToId: replyToIdForReply,
         threadId: params.threadId,
         audioAsVoice: reply.audioAsVoice,

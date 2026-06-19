@@ -16,10 +16,11 @@ import {
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { FsRoot } from "../../config/types.tools.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { Model } from "../../llm/types.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
-import { getDefaultLocalRoots } from "../../media/local-media-access.js";
+import { getDefaultLocalRoots, type LocalMediaRoot } from "../../media/local-media-access.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
@@ -573,12 +574,18 @@ export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: {
     workspaceOnly?: boolean;
+    roots?: FsRoot[];
     cfg?: OpenClawConfig;
     channelId?: string | null;
     accountId?: string | null;
   },
   _mediaSources?: readonly string[],
-): string[] {
+): LocalMediaRoot[] {
+  // Roots take precedence, including kind="file" exact-match roots.
+  // Empty roots array is a valid deny-all policy — return empty to block all media reads.
+  if (options?.roots) {
+    return [...options.roots];
+  }
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];

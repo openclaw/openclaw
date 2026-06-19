@@ -2,6 +2,7 @@
  * Builds and repairs prompt inputs for embedded-agent attempts.
  */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { FsRoot } from "../../../config/types.tools.js";
 import type {
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
@@ -24,7 +25,7 @@ import { wrapPluginSystemContextSection } from "../../hook-system-context-bounda
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
-import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
+import { resolveEffectiveToolFsWorkspaceOnly, resolveToolFsConfig } from "../../tool-fs-policy.js";
 import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
@@ -517,6 +518,17 @@ export function resolveAttemptFsWorkspaceOnly(params: {
     cfg: params.config,
     agentId: params.sessionAgentId,
   });
+}
+
+/** Resolve the host-mode tools.fs.roots allowlist for prompt-image auto-load. */
+export function resolveAttemptFsRoots(params: {
+  config?: OpenClawConfig;
+  sessionAgentId: string;
+}): FsRoot[] | undefined {
+  return resolveToolFsConfig({
+    cfg: params.config,
+    agentId: params.sessionAgentId,
+  }).roots;
 }
 
 export function prependSystemPromptAddition(params: {

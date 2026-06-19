@@ -4,7 +4,7 @@ import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveAgentScopedOutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -623,7 +623,12 @@ async function dispatchDiscordCommandInteraction(params: {
     targetSessionKey: effectiveRoute.sessionKey,
     boundSessionKey,
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg,
+    agentId: effectiveRoute.agentId,
+  });
+  const mediaLocalRoots = mediaAccess.localRoots;
+  const mediaReadFile = mediaAccess.readFile;
   const ctxPayload = buildDiscordNativeCommandContext({
     prompt,
     commandArgs: commandArgs ?? {},
@@ -671,6 +676,7 @@ async function dispatchDiscordCommandInteraction(params: {
       !isGuild ? "always" : channelConfig?.requireMention === false ? "always" : "mention",
     interaction,
     mediaLocalRoots,
+    mediaReadFile,
     preferFollowUp,
     responseEphemeral,
     effectiveRoute,
@@ -689,6 +695,7 @@ async function dispatchDiscordCommandInteraction(params: {
     effectiveRoute,
     channelConfig,
     mediaLocalRoots,
+    mediaReadFile,
     preferFollowUp,
     responseEphemeral,
     suppressReplies,

@@ -3,6 +3,7 @@
  */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { FsRoot } from "../../../config/types.tools.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { ImageContent } from "../../../llm/types.js";
@@ -469,6 +470,7 @@ export async function loadImageFromRef(
   options?: {
     maxBytes?: number;
     workspaceOnly?: boolean;
+    roots?: FsRoot[];
     localRoots?: readonly string[];
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
@@ -505,18 +507,24 @@ export async function loadImageFromRef(
     }
 
     // loadWebMedia handles local file paths and file:// URLs after the path policy above.
+    // tools.fs.roots (host mode) take precedence; otherwise workspaceOnly restricts to
+    // the caller's localRoots or the workspace dir; non-workspaceOnly stays unrestricted.
+    const effectiveLocalRoots = options?.roots
+      ? options.roots
+      : options?.workspaceOnly
+        ? (options.localRoots ?? [workspaceDir])
+        : undefined;
+
     const media = options?.sandbox
       ? await loadWebMedia(targetPath, {
           maxBytes: options.maxBytes,
           sandboxValidated: true,
           readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
         })
-      : await loadWebMedia(
-          targetPath,
-          options?.workspaceOnly
-            ? { maxBytes: options.maxBytes, localRoots: options.localRoots ?? [workspaceDir] }
-            : options?.maxBytes,
-        );
+      : await loadWebMedia(targetPath, {
+          maxBytes: options?.maxBytes,
+          ...(effectiveLocalRoots ? { localRoots: effectiveLocalRoots } : {}),
+        });
 
     if (media.kind !== "image") {
       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
@@ -555,6 +563,7 @@ export async function detectAndLoadPromptImages(params: {
   maxBytes?: number;
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
+  roots?: FsRoot[];
   localRoots?: readonly string[];
   sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
@@ -606,6 +615,7 @@ export async function detectAndLoadPromptImages(params: {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
+      roots: params.roots,
       localRoots: params.localRoots,
       sandbox: params.sandbox,
     });
@@ -622,6 +632,7 @@ export async function detectAndLoadPromptImages(params: {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
+      roots: params.roots,
       localRoots: params.localRoots,
       sandbox: params.sandbox,
     });

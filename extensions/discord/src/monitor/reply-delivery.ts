@@ -132,6 +132,7 @@ function resolveDiscordDeliveryOptions(params: {
   chunkMode?: ChunkMode;
   replyToMode?: ReplyToMode;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }): DiscordDeliveryOptions {
   const binding = resolveBoundThreadBinding({
     threadBindings: params.threadBindings,
@@ -143,9 +144,13 @@ function resolveDiscordDeliveryOptions(params: {
     threadId: binding?.threadId,
     agentId: binding?.agentId,
     identity: resolveBindingIdentity(params.cfg, binding),
-    mediaAccess: params.mediaLocalRoots?.length
-      ? { localRoots: params.mediaLocalRoots }
-      : undefined,
+    mediaAccess:
+      params.mediaLocalRoots !== undefined || params.mediaReadFile
+        ? {
+            ...(params.mediaLocalRoots !== undefined ? { localRoots: params.mediaLocalRoots } : {}),
+            ...(params.mediaReadFile ? { readFile: params.mediaReadFile } : {}),
+          }
+        : undefined,
     replyToMode: params.replyToMode ?? "all",
     formatting: {
       textLimit: params.textLimit,
@@ -173,6 +178,7 @@ export async function deliverDiscordReply(params: {
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   kind: "tool" | "block" | "final";
 }) {
   void params.runtime;

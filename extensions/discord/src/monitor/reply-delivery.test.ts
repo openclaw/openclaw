@@ -458,6 +458,7 @@ describe("deliverDiscordReply", () => {
   });
 
   it("passes media roots and explicit off-mode payload reply tags to shared outbound", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("media"));
     const replies = [
       {
         text: "explicit reply",
@@ -475,6 +476,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
       replyToMode: "off",
       mediaLocalRoots: ["/tmp/openclaw-media"],
+      mediaReadFile,
       kind: "final",
     });
 
@@ -482,7 +484,10 @@ describe("deliverDiscordReply", () => {
     expect(params.payloads).toEqual(replies);
     expect(params.replyToId).toBeUndefined();
     expect(params.replyToMode).toBe("off");
-    expect(params.mediaAccess).toEqual({ localRoots: ["/tmp/openclaw-media"] });
+    expect(params.mediaAccess).toEqual({
+      localRoots: ["/tmp/openclaw-media"],
+      readFile: mediaReadFile,
+    });
   });
 
   it("bridges Discord voice sends through the outbound dependency bag", async () => {

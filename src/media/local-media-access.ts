@@ -4,8 +4,11 @@ import path from "node:path";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { type LocalMediaRoot, resolveLocalMediaRoot } from "./local-media-root.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveInboundMediaReference } from "./media-reference.js";
+
+export type { LocalMediaRoot } from "./local-media-root.js";
 
 /** Machine-readable reasons local media path validation can fail. */
 export type LocalMediaAccessErrorCode =
@@ -37,7 +40,7 @@ export function getDefaultLocalRoots(): readonly string[] {
 /** Verifies that a local media path is managed inbound media or lives under allowed roots. */
 export async function assertLocalMediaAllowed(
   mediaPath: string,
-  localRoots: readonly string[] | "any" | undefined,
+  localRoots: readonly LocalMediaRoot[] | "any" | undefined,
   options?: { inboundRoots?: readonly string[] },
 ): Promise<void> {
   if (localRoots === "any") {
@@ -70,9 +73,11 @@ export async function assertLocalMediaAllowed(
 
   if (localRoots === undefined) {
     // Unscoped default roots include workspace, but not sibling workspace-* agent sandboxes.
-    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
+    const workspaceRoot = roots.find(
+      (root) => path.basename(resolveLocalMediaRoot(root).path) === "workspace",
+    );
     if (workspaceRoot) {
-      const stateDir = path.dirname(workspaceRoot);
+      const stateDir = path.dirname(resolveLocalMediaRoot(workspaceRoot).path);
       const rel = path.relative(stateDir, resolved);
       if (rel && isPathInside(stateDir, resolved)) {
         const firstSegment = rel.split(path.sep)[0] ?? "";
@@ -87,19 +92,21 @@ export async function assertLocalMediaAllowed(
   }
 
   for (const root of roots) {
+    const { path: rootPath, kind } = resolveLocalMediaRoot(root);
     let resolvedRoot: string;
     try {
-      resolvedRoot = await fs.realpath(root);
+      resolvedRoot = await fs.realpath(rootPath);
     } catch {
-      resolvedRoot = path.resolve(root);
+      resolvedRoot = path.resolve(rootPath);
     }
     if (resolvedRoot === path.parse(resolvedRoot).root) {
       throw new LocalMediaAccessError(
         "invalid-root",
-        `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
+        `Invalid localRoots entry (refuses filesystem root): ${rootPath}. Pass a narrower directory.`,
       );
     }
-    if (isPathInside(resolvedRoot, resolved)) {
+    // File roots match the exact path only; dir roots match the root or any descendant.
+    if (kind === "file" ? resolved === resolvedRoot : isPathInside(resolvedRoot, resolved)) {
       return;
     }
   }

@@ -70,6 +70,7 @@ export async function deliverDiscordInteractionReply(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   payload: ReplyPayload;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   textLimit: number;
   maxLinesPerMessage?: number;
   preferFollowUp: boolean;
@@ -134,6 +135,7 @@ export async function deliverDiscordInteractionReply(params: {
       reply.mediaUrls.map(async (url) => {
         const loaded = await loadWebMedia(url, {
           localRoots: params.mediaLocalRoots,
+          readFile: params.mediaReadFile,
         });
         return {
           name: loaded.fileName ?? "upload",

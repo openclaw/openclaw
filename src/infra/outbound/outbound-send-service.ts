@@ -49,6 +49,7 @@ export type OutboundSendContext = {
   senderIsOwner?: boolean;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
+  ignoreConfiguredRootsForMedia?: boolean;
   accountId?: string | null;
   sessionId?: string;
   inboundEventKind?: InboundEventKind;
@@ -120,6 +121,9 @@ async function sendCoreMessage(params: {
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
     mediaAccess: params.ctx.mediaAccess,
+    // Sandbox-originated sends ignore configured host-mode `tools.fs.roots` so
+    // sandbox-generated attachments are not rejected by host-root scoping.
+    sandboxed: params.ctx.ignoreConfiguredRootsForMedia,
   });
 }
 
@@ -151,6 +155,7 @@ async function tryHandleWithPluginAction(params: {
     requesterSenderE164: params.ctx.requesterSenderE164,
     mediaAccess: params.ctx.mediaAccess,
     mediaReadFile: params.ctx.mediaReadFile,
+    ignoreConfiguredRoots: params.ctx.ignoreConfiguredRootsForMedia,
   });
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,

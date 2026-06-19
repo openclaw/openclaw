@@ -72,6 +72,9 @@ const replyPipelineMocks = vi.hoisted(() => {
       ok: true,
     })) as unknown as EnsureConfiguredBindingRouteReadyFn),
     getAgentScopedMediaLocalRoots: vi.fn<GetAgentScopedMediaLocalRootsFn>(() => []),
+    resolveAgentScopedOutboundMediaAccess: vi.fn(({ agentId }: { agentId?: string }) => ({
+      localRoots: agentId ? [`/tmp/.openclaw/workspace-${agentId}`] : [],
+    })),
     resolveThreadSessionKeys: vi.fn<ResolveThreadSessionKeysFn>(
       ({ baseSessionKey, threadId, parentSessionKey, useSuffix = true, normalizeThreadId }) => {
         const normalizedThreadId =
@@ -100,6 +103,7 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
   resolveChunkMode: replyPipelineMocks.resolveChunkMode,
   ensureConfiguredBindingRouteReady: replyPipelineMocks.ensureConfiguredBindingRouteReady,
   getAgentScopedMediaLocalRoots: replyPipelineMocks.getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess: replyPipelineMocks.resolveAgentScopedOutboundMediaAccess,
   resolveThreadSessionKeys: replyPipelineMocks.resolveThreadSessionKeys,
 }));
 vi.mock("./bot-native-commands.delivery.runtime.js", () => ({

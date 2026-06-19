@@ -1,5 +1,6 @@
 // Outbound delivery core runs plugin hooks, queue durability, channel adapter
 // sends, commit hooks, diagnostics, transcript mirroring, and payload outcomes.
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -658,6 +659,8 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** Explicitly signal sandbox mode to bypass host-root media restrictions. */
+  sandboxed?: boolean;
 };
 
 type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParams & {
@@ -1417,6 +1420,17 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
+  // Sandbox-generated outbound media must ignore configured `tools.fs.roots`:
+  // host-mode roots should not reject attachments the sandbox produced. Host
+  // outbound local-media delivery still respects configured roots.
+  const ignoreConfiguredRoots =
+    params.sandboxed ??
+    (() => {
+      const sandboxSessionKey = params.session?.key ?? params.mirror?.sessionKey;
+      return sandboxSessionKey
+        ? resolveSandboxRuntimeStatus({ cfg, sessionKey: sandboxSessionKey }).sandboxed
+        : false;
+    })();
   const resolveMediaAccess = (mediaSources: readonly string[]): OutboundMediaAccess =>
     mediaSources.length > 0
       ? resolveAgentScopedOutboundMediaAccess({
@@ -1431,6 +1445,7 @@ async function deliverOutboundPayloadsCore(
           requesterSenderName: params.session?.requesterSenderName,
           requesterSenderUsername: params.session?.requesterSenderUsername,
           requesterSenderE164: params.session?.requesterSenderE164,
+          ignoreConfiguredRoots,
         })
       : (params.mediaAccess ?? {});
   const createHandler = (mediaSources: readonly string[]) =>

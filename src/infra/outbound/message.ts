@@ -90,6 +90,8 @@ type MessageSendParams = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /** Explicitly signal sandbox mode to bypass host-root media restrictions. */
+  sandboxed?: boolean;
   parseMode?: "HTML";
 };
 
@@ -391,6 +393,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         params.bestEffort || params.queuePolicy === "best_effort" ? "best_effort" : "required",
       signal: params.abortSignal,
       silent: params.silent,
+      sandboxed: params.sandboxed,
       mediaAccess: params.mediaAccess,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       mirror: params.mirror

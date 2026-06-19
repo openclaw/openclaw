@@ -34,7 +34,8 @@ export async function maybeDeliverDiscordDirectStatus(params: {
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
-  mediaLocalRoots: readonly string[];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   effectiveRoute: ResolvedAgentRoute;
@@ -58,6 +59,7 @@ export async function maybeDeliverDiscordDirectStatus(params: {
       interaction: params.interaction,
       payload: statusReply,
       mediaLocalRoots: params.mediaLocalRoots,
+      mediaReadFile: params.mediaReadFile,
       textLimit: resolveTextChunkLimit(params.cfg, "discord", params.accountId, {
         fallbackLimit: 2000,
       }),

@@ -19,6 +19,7 @@ import {
   getMediaUnderstandingProvider,
 } from "../../media-understanding/provider-registry.js";
 import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
+import type { LocalMediaRoot } from "../../media/local-media-access.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -94,7 +95,7 @@ type ImageToolLoadWebMediaOptions = {
   sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
   imageCompression?: ImageCompressionPolicy;
-  localRoots?: readonly string[] | "any";
+  localRoots?: readonly LocalMediaRoot[] | "any";
   inboundRoots?: readonly string[];
   ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
   readIdleTimeoutMs?: number;
@@ -992,6 +993,7 @@ export function createImageTool(options?: {
           options?.workspaceDir,
           {
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+            roots: options?.fsPolicy?.roots,
             cfg: options?.config,
             channelId: options?.agentChannel ?? options?.currentChannelId,
             accountId: options?.agentAccountId,

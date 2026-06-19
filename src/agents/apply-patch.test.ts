@@ -11,6 +11,7 @@ import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
 } from "../test-utils/symlink-rebind-race.js";
+import { resolveRoots } from "./agent-tools.fs-roots.js";
 import { applyPatch } from "./apply-patch.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -419,6 +420,100 @@ describe("applyPatch", () => {
       }
     });
   });
+
+  it("applies host-mode patches inside configured fs roots outside cwd", async () => {
+    await withTempDir(async (dir) => {
+      const allowedDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-roots-"));
+      const target = path.join(allowedDir, "source.txt");
+      await fs.writeFile(target, "before\n", "utf8");
+
+      const patch = `*** Begin Patch
+*** Update File: ${target}
+@@
+-before
++after
+*** End Patch`;
+
+      try {
+        const result = await applyPatch(patch, {
+          cwd: dir,
+          workspaceOnly: false,
+          roots: resolveRoots([{ path: allowedDir, kind: "dir", access: "rw" }]),
+        });
+        expect(await fs.readFile(target, "utf8")).toBe("after\n");
+        expect(result.summary.modified).toEqual([target]);
+      } finally {
+        await fs.rm(allowedDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "deletes symlink entries safely when host-mode roots are configured",
+    async () => {
+      await withTempDir(async (dir) => {
+        const allowedDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-roots-"));
+        const outsideDir = await fs.mkdtemp(
+          path.join(path.dirname(dir), "openclaw-patch-outside-"),
+        );
+        const outsideTarget = path.join(outsideDir, "keep.txt");
+        const linkPath = path.join(allowedDir, "link.txt");
+        await fs.writeFile(outsideTarget, "keep\n", "utf8");
+        await fs.symlink(outsideTarget, linkPath);
+
+        const patch = `*** Begin Patch
+*** Delete File: ${linkPath}
+*** End Patch`;
+
+        try {
+          const result = await applyPatch(patch, {
+            cwd: dir,
+            workspaceOnly: false,
+            roots: resolveRoots([{ path: allowedDir, kind: "dir", access: "rw" }]),
+          });
+          expect(result.summary.deleted).toEqual([linkPath]);
+          await expect(fs.lstat(linkPath)).rejects.toBeDefined();
+          expect(await fs.readFile(outsideTarget, "utf8")).toBe("keep\n");
+        } finally {
+          await fs.rm(allowedDir, { recursive: true, force: true });
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows deleting a symlink alias without mutating a canonical read-only file root",
+    async () => {
+      await withTempDir(async (dir) => {
+        const allowedDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-roots-"));
+        const secretFile = path.join(allowedDir, "secret.txt");
+        const linkPath = path.join(allowedDir, "link.txt");
+        await fs.writeFile(secretFile, "keep\n", "utf8");
+        await fs.symlink(secretFile, linkPath);
+
+        const patch = `*** Begin Patch
+*** Delete File: ${linkPath}
+*** End Patch`;
+
+        try {
+          const result = await applyPatch(patch, {
+            cwd: dir,
+            workspaceOnly: false,
+            roots: resolveRoots([
+              { path: allowedDir, kind: "dir", access: "rw" },
+              { path: secretFile, kind: "file", access: "ro" },
+            ]),
+          });
+          expect(result.summary.deleted).toEqual([linkPath]);
+          await expect(fs.lstat(linkPath)).rejects.toBeDefined();
+          expect(await fs.readFile(secretFile, "utf8")).toBe("keep\n");
+        } finally {
+          await fs.rm(allowedDir, { recursive: true, force: true });
+        }
+      });
+    },
+  );
 
   it("keeps dot-dot-prefixed filenames inside cwd and reports relative paths", async () => {
     await withTempDir(async (dir) => {

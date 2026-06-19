@@ -1,6 +1,5 @@
 // Mattermost plugin module implements reply delivery behavior.
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   deliverTextOrMediaReply,
   isReasoningReplyPayload,
@@ -15,6 +14,7 @@ import {
   resolveMattermostReplyDeliveryBarrierTimeoutMs,
   type CreateDmChannelRetryOptions,
 } from "./client.js";
+import { resolveAgentScopedOutboundMediaAccess } from "./runtime-api.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 
@@ -26,6 +26,7 @@ type SendMattermostMessage = (
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     replyToId?: string;
     onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
   },
@@ -110,7 +111,10 @@ export async function deliverMattermostReplyPayload(params: {
       params.tableMode,
     ),
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   const chunkMode = params.core.channel.text.resolveChunkMode(
     params.cfg,
     "mattermost",
@@ -136,7 +140,8 @@ export async function deliverMattermostReplyPayload(params: {
         cfg: params.cfg,
         accountId: params.accountId,
         mediaUrl,
-        mediaLocalRoots,
+        mediaLocalRoots: mediaAccess.localRoots,
+        mediaReadFile: mediaAccess.readFile,
         replyToId: params.replyToId,
         ...(params.onDmChannelResolution
           ? { onDmChannelResolution: params.onDmChannelResolution }

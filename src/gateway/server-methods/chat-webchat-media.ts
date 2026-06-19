@@ -7,7 +7,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { openLocalFileSafely } from "../../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../infra/local-file-access.js";
-import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
+import {
+  assertLocalMediaAllowed,
+  LocalMediaAccessError,
+  type LocalMediaRoot,
+} from "../../media/local-media-access.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
@@ -38,7 +42,7 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 type WebchatAudioEmbeddingOptions = {
-  localRoots?: readonly string[];
+  localRoots?: readonly LocalMediaRoot[];
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
 

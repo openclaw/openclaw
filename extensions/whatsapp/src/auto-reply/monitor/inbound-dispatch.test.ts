@@ -33,6 +33,7 @@ type CapturedDispatchParams = {
 const {
   dispatchReplyWithBufferedBlockDispatcherMock,
   deliverInboundReplyWithMessageSendContextMock,
+  resolveAgentScopedOutboundMediaAccessMock,
 } = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: CapturedDispatchParams) => {
     capturedDispatchParams = params;
@@ -41,6 +42,7 @@ const {
   deliverInboundReplyWithMessageSendContextMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(
     async () => null,
   ),
+  resolveAgentScopedOutboundMediaAccessMock: vi.fn(() => ({ localRoots: [] })),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
@@ -59,6 +61,7 @@ vi.mock("./runtime-api.js", async () => {
     dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherMock,
     finalizeInboundContext,
     getAgentScopedMediaLocalRoots: () => [],
+    resolveAgentScopedOutboundMediaAccess: resolveAgentScopedOutboundMediaAccessMock,
     jidToE164: (value: string) => {
       const phone = value.split("@")[0]?.replace(/[^\d]/g, "");
       return phone ? `+${phone}` : null;
@@ -334,6 +337,7 @@ describe("whatsapp inbound dispatch", () => {
   beforeEach(() => {
     capturedDispatchParams = undefined;
     dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
+    resolveAgentScopedOutboundMediaAccessMock.mockReset().mockReturnValue({ localRoots: [] });
     deliverInboundReplyWithMessageSendContextMock.mockReset();
     deliverInboundReplyWithMessageSendContextMock.mockResolvedValue({
       status: "unsupported",
@@ -681,6 +685,38 @@ describe("whatsapp inbound dispatch", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverReply).toHaveBeenCalledTimes(3);
     expect(rememberSentText).toHaveBeenCalledTimes(3);
+  });
+
+  it("passes route and sender context into outbound media access", async () => {
+    await dispatchBufferedReply({
+      msg: makeMsg({
+        admission: groupAdmission("123@g.us"),
+        platform: {
+          chatJid: "123@g.us",
+          recipientJid: "+2000",
+          senderJid: "15550002222@s.whatsapp.net",
+          senderE164: "+15550002222",
+          senderName: "Alice",
+        },
+      }),
+      route: makeRoute({
+        accountId: "work",
+        sessionKey: "agent:main:whatsapp:group:123@g.us",
+      }),
+    });
+
+    expect(resolveAgentScopedOutboundMediaAccessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:whatsapp:group:123@g.us",
+        messageProvider: undefined,
+        accountId: "work",
+        groupId: "123@g.us",
+        requesterSenderId: "15550002222@s.whatsapp.net",
+        requesterSenderName: "Alice",
+        requesterSenderE164: "+15550002222",
+      }),
+    );
   });
 
   it("queues final WhatsApp payloads through durable outbound delivery", async () => {

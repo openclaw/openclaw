@@ -37,7 +37,9 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
+import { resolveRoots, validatePathAgainstRoots } from "./agent-tools.fs-roots.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
+import { assertAliasSafe, wrapToolMultiRootGuard } from "./agent-tools.multi-root-guard.js";
 import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
@@ -48,6 +50,7 @@ import {
 import {
   assertRequiredParams,
   createHostWorkspaceEditTool,
+  createHostWorkspaceReadTool,
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
   createSandboxedEditTool,
@@ -731,6 +734,7 @@ export function createOpenClawCodingTools(options?: {
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
+    roots: fsConfig.roots,
   });
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
@@ -753,11 +757,26 @@ export function createOpenClawCodingTools(options?: {
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly = fsPolicy.workspaceOnly;
+  // tools.fs.roots applies to HOST-mode read/write/edit only. In sandbox mode the
+  // Docker boundary provides isolation and tool args are container-namespace paths,
+  // so host-path roots would cause false denials — ignore them (and warn).
+  if (sandboxRoot && fsPolicy.roots && fsPolicy.roots.length > 0) {
+    console.warn(
+      "[tools.fs.roots] Agent has roots configured but is running in sandbox mode. Roots are ignored for sandbox-mode tools — sandbox provides isolation via Docker.",
+    );
+  }
+  const resolvedRoots = !sandboxRoot && fsPolicy.roots ? resolveRoots(fsPolicy.roots) : undefined;
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options?.skillsSnapshot);
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
-  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
+  // When roots are configured in HOST mode, the rootsValidator handles containment,
+  // so disable the workspace guard (it would reject allowed roots outside the workspace).
+  // In SANDBOX mode roots are ignored, so the workspace guard stays active.
+  const applyPatchWorkspaceOnly =
+    resolvedRoots && !sandboxRoot
+      ? false
+      : workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
     applyPatchConfig?.enabled !== false &&
     isApplyPatchAllowedForModel({
@@ -793,6 +812,15 @@ export function createOpenClawCodingTools(options?: {
           );
           continue;
         }
+        if (resolvedRoots) {
+          const rooted = createHostWorkspaceReadTool(codingRoot, {
+            roots: resolvedRoots,
+            modelContextWindowTokens: options?.modelContextWindowTokens,
+            imageSanitization,
+          });
+          base.push(wrapToolMultiRootGuard(rooted, codingRoot, resolvedRoots));
+          continue;
+        }
         const freshReadTool = createReadTool(codingRoot);
         const wrapped = createOpenClawReadTool(freshReadTool, {
           modelContextWindowTokens: options?.modelContextWindowTokens,
@@ -814,12 +842,31 @@ export function createOpenClawCodingTools(options?: {
         if (sandboxRoot) {
           continue;
         }
+        if (resolvedRoots) {
+          // Roots handle containment via the multi-root guard, so disable the
+          // internal workspaceOnly guard (it would reject allowed roots outside
+          // the workspace).
+          const wrapped = createHostWorkspaceWriteTool(codingRoot, {
+            workspaceOnly: false,
+            roots: resolvedRoots,
+          });
+          base.push(wrapToolMultiRootGuard(wrapped, codingRoot, resolvedRoots));
+          continue;
+        }
         const wrapped = createHostWorkspaceWriteTool(codingRoot, { workspaceOnly });
         base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, codingRoot) : wrapped);
         continue;
       }
       if (tool.name === "edit") {
         if (sandboxRoot) {
+          continue;
+        }
+        if (resolvedRoots) {
+          const wrapped = createHostWorkspaceEditTool(codingRoot, {
+            workspaceOnly: false,
+            roots: resolvedRoots,
+          });
+          base.push(wrapToolMultiRootGuard(wrapped, codingRoot, resolvedRoots));
           continue;
         }
         const wrapped = createHostWorkspaceEditTool(codingRoot, { workspaceOnly });
@@ -893,6 +940,27 @@ export function createOpenClawCodingTools(options?: {
         scopeKey,
       })
     : null;
+  // Host-mode tools.fs.roots containment for memory-flush append-only writes:
+  // the flush target file must itself live inside an allowed root.
+  const memoryFlushRootsValidator =
+    resolvedRoots && !sandboxRoot
+      ? async (resolvedPath: string) => {
+          validatePathAgainstRoots(resolvedPath, "write", resolvedRoots);
+          await assertAliasSafe(resolvedPath, resolvedRoots, { operation: "write" });
+        }
+      : undefined;
+  // Host-mode apply_patch containment for tools.fs.roots: validate the resolved
+  // path against the allowlist (access mode included) and reject alias escapes.
+  const patchRootsValidator =
+    resolvedRoots && !sandboxRoot
+      ? async (resolvedPath: string, validatorOptions?: { isUnlink?: boolean }) => {
+          validatePathAgainstRoots(resolvedPath, "write", resolvedRoots);
+          await assertAliasSafe(resolvedPath, resolvedRoots, {
+            operation: "write",
+            allowFinalHardlinkForUnlink: validatorOptions?.isUnlink,
+          });
+        }
+      : undefined;
   const applyPatchTool =
     !includeShellTools || !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
       ? null
@@ -903,6 +971,8 @@ export function createOpenClawCodingTools(options?: {
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
+          roots: resolvedRoots && !sandboxRoot ? resolvedRoots : undefined,
+          rootsValidator: patchRootsValidator,
         });
   options?.recordToolPrepStage?.("shell-tools");
   const pluginToolAllowlist = collectExplicitAllowlist([
@@ -1113,6 +1183,7 @@ export function createOpenClawCodingTools(options?: {
           wrapToolMemoryFlushAppendOnlyWrite(tool, {
             root: memoryFlushWriteRoot,
             relativePath: memoryFlushWritePath,
+            targetValidator: memoryFlushRootsValidator,
             containerWorkdir: sandbox?.containerWorkdir,
             sandbox:
               sandboxRoot && sandboxFsBridge

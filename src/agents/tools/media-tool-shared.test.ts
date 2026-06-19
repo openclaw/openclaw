@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { LocalMediaRoot } from "../../media/local-media-access.js";
 import { withEnv } from "../../test-utils/env.js";
 import {
   hasGenerationToolAvailability,
@@ -39,8 +40,8 @@ vi.mock("../../media/channel-inbound-roots.js", () => ({
   },
 }));
 
-function normalizeHostPath(value: string): string {
-  return path.normalize(path.resolve(value));
+function normalizeHostPath(value: LocalMediaRoot): string {
+  return path.normalize(path.resolve(typeof value === "string" ? value : value.path));
 }
 
 function createModelRegistryStub(resolve: (provider: string, modelId: string) => unknown): {
@@ -75,7 +76,9 @@ describe("resolveMediaToolLocalRoots", () => {
       ]),
     );
 
-    const normalizedRoots = roots.map(normalizeHostPath);
+    const normalizedRoots = roots.map((root) =>
+      normalizeHostPath(typeof root === "string" ? root : root.path),
+    );
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace-agent")));
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace")));
     expect(normalizedRoots).not.toContain(normalizeHostPath(picturesDir));

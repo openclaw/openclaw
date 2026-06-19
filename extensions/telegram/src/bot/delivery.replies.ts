@@ -366,6 +366,7 @@ async function deliverMediaReply(params: {
   tableMode?: MarkdownTableMode;
   richMessages?: boolean;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   mediaMaxBytes?: number;
   chunkText: ChunkTextFn;
   mediaLoader: typeof loadWebMedia;
@@ -391,6 +392,7 @@ async function deliverMediaReply(params: {
       mediaUrl,
       buildOutboundMediaLoadOptions({
         mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
         maxBytes: params.mediaMaxBytes,
       }),
     );
@@ -738,6 +740,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   bot: Bot;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   mediaMaxBytes?: number;
   replyToMode: ReplyToMode;
   textLimit: number;
@@ -923,6 +926,7 @@ export async function deliverReplies(params: {
           tableMode: params.tableMode,
           richMessages: params.richMessages,
           mediaLocalRoots: params.mediaLocalRoots,
+          mediaReadFile: params.mediaReadFile,
           mediaMaxBytes: params.mediaMaxBytes,
           chunkText,
           mediaLoader,

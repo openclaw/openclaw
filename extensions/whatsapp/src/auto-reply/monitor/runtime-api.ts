@@ -12,7 +12,10 @@ export {
   shouldComputeCommandAuthorized,
 } from "openclaw/plugin-sdk/command-detection";
 export { resolveChannelContextVisibilityMode } from "../config.runtime.js";
-export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+export {
+  getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
 export type LoadConfigFn = typeof import("../config.runtime.js").getRuntimeConfig;
 export {
   buildHistoryContextFromEntries,

@@ -4,6 +4,7 @@ import path from "node:path";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  buildOutboundMediaLoadOptions,
   extensionForMime,
   maxBytesForKind,
   unlinkIfExists,
@@ -33,6 +34,10 @@ type VoiceMessageOpts = {
   replyTo?: string;
   retry?: RetryConfig;
   silent?: boolean;
+  /** Agent-scoped tools.fs.roots allowlist for local audio sources. */
+  mediaLocalRoots?: readonly string[];
+  /** Root-scoped reader so local audio reads honor the configured roots (TOCTOU-safe). */
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 function toDiscordSendResult(
@@ -48,10 +53,22 @@ function toDiscordSendResult(
 
 async function materializeVoiceMessageInput(
   mediaUrl: string,
+  mediaOptions?: {
+    mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  },
 ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
-  // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
-  // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
-  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
+  // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks,
+  // scoped to the agent's configured tools.fs.roots. Then write to a private temp file so
+  // ffmpeg/ffprobe never sees the original URL/path string.
+  const media = await loadWebMediaRaw(
+    mediaUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes: maxBytesForKind("audio"),
+      mediaLocalRoots: mediaOptions?.mediaLocalRoots,
+      mediaReadFile: mediaOptions?.mediaReadFile,
+    }),
+  );
   const extFromName = media.fileName ? path.extname(media.fileName) : "";
   const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
   const ext = extFromName || extFromMime || ".bin";
@@ -79,7 +96,10 @@ export async function sendVoiceMessageDiscord(
   opts: VoiceMessageOpts,
 ): Promise<DiscordSendResult> {
   const { filePath: localInputPath, cleanup: cleanupLocalInput } =
-    await materializeVoiceMessageInput(audioPath);
+    await materializeVoiceMessageInput(audioPath, {
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+    });
   let oggPath: string | null = null;
   let oggCleanup = false;
   let token: string | undefined;

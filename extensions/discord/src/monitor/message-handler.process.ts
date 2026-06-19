@@ -27,7 +27,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveAgentScopedOutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
@@ -265,7 +265,10 @@ async function processDiscordMessageInner(
     accountId,
   });
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg,
+    agentId: route.agentId,
+  });
   const isRoomEvent = ctx.inboundEventKind === "room_event";
   const shouldAckReaction = () =>
     Boolean(
@@ -809,7 +812,8 @@ async function processDiscordMessageInner(
               chunkMode,
               sessionKey: ctxPayload.SessionKey,
               threadBindings,
-              mediaLocalRoots,
+              mediaLocalRoots: mediaAccess.localRoots,
+              mediaReadFile: mediaAccess.readFile,
               kind: info.kind,
             });
             return true;
@@ -848,7 +852,8 @@ async function processDiscordMessageInner(
             chunkMode,
             sessionKey: ctxPayload.SessionKey,
             threadBindings,
-            mediaLocalRoots,
+            mediaLocalRoots: mediaAccess.localRoots,
+            mediaReadFile: mediaAccess.readFile,
             kind: info.kind,
           });
           return true;
@@ -896,7 +901,8 @@ async function processDiscordMessageInner(
       chunkMode,
       sessionKey: ctxPayload.SessionKey,
       threadBindings,
-      mediaLocalRoots,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile: mediaAccess.readFile,
       kind: info.kind,
     });
     replyReference.markSent();

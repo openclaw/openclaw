@@ -46,14 +46,16 @@ export function resolveOutboundMediaLocalRoots(
   if (mediaLocalRoots === "any") {
     return mediaLocalRoots;
   }
-  return mediaLocalRoots && mediaLocalRoots.length > 0 ? mediaLocalRoots : undefined;
+  // Preserve an explicit empty allowlist as deny-all instead of falling back
+  // to default local media roots.
+  return mediaLocalRoots === undefined ? undefined : mediaLocalRoots;
 }
 
 /** Collapses legacy read/root parameters into the current host media access shape. */
 export function resolveOutboundMediaAccess(
   params: {
     mediaAccess?: OutboundMediaAccess;
-    mediaLocalRoots?: readonly string[];
+    mediaLocalRoots?: readonly string[] | "any";
     mediaReadFile?: OutboundMediaReadFile;
   } = {},
 ): OutboundMediaAccess | undefined {
@@ -63,11 +65,11 @@ export function resolveOutboundMediaAccess(
   const localRoots = resolvedLocalRoots === "any" ? undefined : resolvedLocalRoots;
   const readFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
   const workspaceDir = params.mediaAccess?.workspaceDir;
-  if (!localRoots && !readFile && !workspaceDir) {
+  if (localRoots === undefined && !readFile && !workspaceDir) {
     return undefined;
   }
   return {
-    ...(localRoots ? { localRoots } : {}),
+    ...(localRoots !== undefined ? { localRoots } : {}),
     ...(readFile ? { readFile } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };
@@ -110,7 +112,7 @@ export function buildOutboundMediaLoadOptions(
   }
   return {
     ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
-    ...(localRoots ? { localRoots } : {}),
+    ...(localRoots !== undefined ? { localRoots } : {}),
     ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
     ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
     ...(params.requestInit ? { requestInit: params.requestInit } : {}),

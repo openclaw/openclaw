@@ -8,6 +8,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import {
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -446,6 +447,7 @@ type ResolvedActionContext = {
   params: Record<string, unknown>;
   channel: ChannelId;
   mediaAccess: OutboundMediaAccess;
+  ignoreConfiguredRootsForMedia?: boolean;
   extraActionMediaSourceParamKeys?: readonly string[];
   accountId?: string | null;
   dryRun: boolean;
@@ -1034,6 +1036,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     gateway,
     input,
     agentId,
+    ignoreConfiguredRootsForMedia,
     resolvedTarget,
     abortSignal,
   } = ctx;
@@ -1142,6 +1145,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderName: input.requesterSenderName ?? undefined,
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
+      ignoreConfiguredRootsForMedia,
       senderIsOwner: input.senderIsOwner,
       mediaAccess,
       accountId: accountId ?? undefined,
@@ -1438,6 +1442,14 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+  const ignoreConfiguredRootsForMedia =
+    Boolean(input.sandboxRoot) ||
+    (input.sessionKey
+      ? resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey: input.sessionKey,
+        }).sandboxed
+      : false);
   const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
@@ -1476,6 +1488,7 @@ export async function runMessageAction(
     requesterSenderName: input.requesterSenderName,
     requesterSenderUsername: input.requesterSenderUsername,
     requesterSenderE164: input.requesterSenderE164,
+    ignoreConfiguredRoots: ignoreConfiguredRootsForMedia,
   });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
@@ -1535,6 +1548,7 @@ export async function runMessageAction(
       params,
       channel,
       mediaAccess,
+      ignoreConfiguredRootsForMedia,
       extraActionMediaSourceParamKeys,
       accountId,
       dryRun,

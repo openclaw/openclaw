@@ -61,4 +61,24 @@ describe("sendVoiceMessageDiscord", () => {
     expect(voiceMocks.sendDiscordVoiceMessage).toHaveBeenCalledTimes(1);
     expect(voiceMocks.sendDiscordVoiceMessage.mock.calls[0]?.[1]).toBe("273512430271856640");
   });
+
+  it("threads agent tools.fs.roots into the local audio loader", async () => {
+    const { rest } = makeDiscordRest();
+    const mediaReadFile = vi.fn(async () => Buffer.from("voice"));
+
+    await sendVoiceMessageDiscord("273512430271856640", "/allowed/voice/clip.ogg", {
+      cfg: DISCORD_TEST_CFG,
+      rest,
+      token: "t",
+      mediaLocalRoots: ["/allowed/voice"],
+      mediaReadFile,
+    });
+
+    // Before the fix this was called with a bare maxBytes number, bypassing the
+    // agent's configured roots. It must now receive a load-options object scoped to them.
+    const loaderArg = loadWebMediaRawMock.mock.calls[0]?.[1];
+    expect(typeof loaderArg).toBe("object");
+    expect(loaderArg).toEqual(expect.objectContaining({ localRoots: ["/allowed/voice"] }));
+    expect(typeof loaderArg?.readFile).toBe("function");
+  });
 });

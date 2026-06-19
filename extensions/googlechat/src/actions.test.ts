@@ -247,6 +247,56 @@ describe("googlechat message actions", () => {
     });
   });
 
+  it("preserves explicit empty mediaLocalRoots for local uploads", async () => {
+    const { googlechatMessageActions: localUploadActions } = await import("./actions.js");
+
+    resolveGoogleChatAccount.mockReturnValue({
+      credentialSource: "service-account",
+      config: { mediaMaxMb: 5 },
+    });
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/CCC");
+    const loadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from("local-bytes"),
+      fileName: "local.txt",
+      contentType: "text/plain",
+    }));
+    getGoogleChatRuntime.mockReturnValue({
+      channel: {
+        media: {
+          fetchRemoteMedia: vi.fn(),
+        },
+      },
+      media: {
+        loadWebMedia,
+      },
+    });
+    uploadGoogleChatAttachment.mockResolvedValue({
+      attachmentUploadToken: "token-3",
+    });
+    sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/CCC/messages/msg-3",
+    });
+
+    if (!localUploadActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await localUploadActions.handleAction({
+      action: "upload-file",
+      params: {
+        to: "spaces/CCC",
+        path: "/tmp/local.txt",
+      },
+      cfg: {},
+      accountId: "default",
+      mediaLocalRoots: [],
+    } as never);
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "/tmp/local.txt",
+      expect.objectContaining({ localRoots: [] }),
+    );
+  });
+
   it("removes only matching app reactions on react remove", async () => {
     const account = buildAccount({
       config: { botUser: "users/app-bot" },

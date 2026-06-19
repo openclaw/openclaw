@@ -26,6 +26,7 @@ import {
   getDefaultLocalRoots,
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
+  type LocalMediaRoot,
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 import {
@@ -57,7 +58,7 @@ type WebMediaOptions = {
   trustExplicitProxyDns?: boolean;
   workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
-  localRoots?: readonly string[] | "any";
+  localRoots?: readonly LocalMediaRoot[] | "any";
   /** Channel inbound attachment root patterns checked with inbound path policy semantics. */
   inboundRoots?: readonly string[];
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
@@ -120,7 +121,7 @@ async function resolveHostedPluginMediaUrl(mediaUrl: string): Promise<string | n
 
 function resolveWebMediaOptions(params: {
   maxBytesOrOptions?: number | WebMediaOptions;
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" };
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly LocalMediaRoot[] | "any" };
   optimizeImages: boolean;
 }): WebMediaOptions {
   if (typeof params.maxBytesOrOptions === "number" || params.maxBytesOrOptions === undefined) {
@@ -1093,7 +1094,7 @@ async function loadWebMediaInternal(
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly LocalMediaRoot[] | "any" },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(
     mediaUrl,
@@ -1105,7 +1106,7 @@ export async function loadWebMedia(
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly LocalMediaRoot[] | "any" },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(
     mediaUrl,

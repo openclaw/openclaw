@@ -684,6 +684,7 @@ vi.mock("../../tool-fs-policy.js", () => ({
     workspaceOnly: params.workspaceOnly === true,
   }),
   resolveEffectiveToolFsWorkspaceOnly: () => false,
+  resolveToolFsConfig: () => ({ workspaceOnly: false }),
 }));
 
 vi.mock("../../tool-policy.js", async (importOriginal) => {

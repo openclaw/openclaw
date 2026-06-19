@@ -8,8 +8,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
-import { root as fsRoot } from "../infra/fs-safe.js";
+import { root as fsRoot, readFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
+import { resolveRootScopedPath, type FsRootResolved } from "./agent-tools.fs-roots.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import type { AgentTool } from "./runtime/index.js";
@@ -78,6 +79,10 @@ type ApplyPatchOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  /** Host-mode tools.fs.roots allowlist. When set, patch paths are scoped to these roots. */
+  roots?: FsRootResolved[];
+  /** Extra containment/alias check run on each resolved patch path before file ops. */
+  rootsValidator?: (resolvedPath: string, options?: { isUnlink?: boolean }) => Promise<void>;
   signal?: AbortSignal;
 };
 
@@ -89,11 +94,19 @@ const applyPatchSchema = Type.Object({
 
 /** Create the agent tool wrapper for applying patch-envelope input. */
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    workspaceOnly?: boolean;
+    roots?: FsRootResolved[];
+    rootsValidator?: (resolvedPath: string, options?: { isUnlink?: boolean }) => Promise<void>;
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
   const workspaceOnly = options.workspaceOnly !== false;
+  const roots = options.roots;
+  const rootsValidator = options.rootsValidator;
 
   return {
     name: "apply_patch",
@@ -117,6 +130,8 @@ export function createApplyPatchTool(
         cwd,
         sandbox,
         workspaceOnly,
+        roots,
+        rootsValidator,
         signal,
       });
 
@@ -258,6 +273,38 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
       remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
       mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
+    };
+  }
+  if (options.roots) {
+    const roots = options.roots;
+    return {
+      readFile: async (filePath) => {
+        const target = resolveRootScopedPath(filePath, "read", roots);
+        const safeRead = await readFileWithinRoot({
+          rootDir: target.rootDir,
+          relativePath: target.relativePath,
+          rejectHardlinks: true,
+        });
+        return safeRead.buffer.toString("utf8");
+      },
+      writeFile: async (filePath, content) => {
+        const target = resolveRootScopedPath(filePath, "write", roots);
+        await writeFileWithinRoot({
+          rootDir: target.rootDir,
+          relativePath: target.relativePath,
+          data: content,
+          encoding: "utf8",
+          mkdir: true,
+        });
+      },
+      remove: async (filePath) => {
+        const target = resolveRootScopedPath(filePath, "write", roots);
+        await (await fsRoot(target.rootDir)).remove(target.relativePath);
+      },
+      // Root-scoped writes create parents internally after re-resolving the
+      // target under the matched root, so a separate pathname-based mkdirp would
+      // only reopen the race the roots guard is meant to close.
+      mkdirp: async () => {},
     };
   }
   const workspaceOnly = options.workspaceOnly !== false;
@@ -407,6 +454,10 @@ async function resolvePatchPath(
         })
       ).resolved
     : resolvePathFromInput(filePath, options.cwd);
+  if (options.rootsValidator) {
+    const isUnlink = aliasPolicy.allowFinalSymlinkForUnlink === true;
+    await options.rootsValidator(resolved, { isUnlink });
+  }
   return {
     resolved,
     display: toDisplayPath(resolved, options.cwd),

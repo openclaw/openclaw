@@ -359,6 +359,39 @@ describe("googlechatPlugin outbound sendMedia", () => {
     expect(result.receipt.primaryPlatformMessageId).toBe("spaces/AAA/messages/msg-1");
   });
 
+  it("preserves explicit empty mediaLocalRoots for outbound local sends", async () => {
+    const { loadOutboundMediaFromUrl, readRemoteMediaBuffer } = setupRuntimeMediaMocks({
+      loadFileName: "image.png",
+      loadBytes: "image-bytes",
+    });
+
+    uploadGoogleChatAttachmentMock.mockResolvedValue({
+      attachmentUploadToken: "token-empty",
+    });
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-empty",
+    });
+
+    const cfg = createGoogleChatCfg();
+
+    await googlechatOutboundAdapter.attachedResults.sendMedia({
+      cfg,
+      to: "spaces/AAA",
+      text: "",
+      mediaUrl: "/tmp/workspace/image.png",
+      mediaLocalRoots: [],
+      accountId: "default",
+    });
+
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
+      "/tmp/workspace/image.png",
+      expect.objectContaining({
+        mediaLocalRoots: [],
+      }),
+    );
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
   it("keeps remote URL media fetch on readRemoteMediaBuffer with maxBytes cap", async () => {
     const { loadOutboundMediaFromUrl, readRemoteMediaBuffer } = setupRuntimeMediaMocks({
       loadFileName: "unused.png",

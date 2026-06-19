@@ -403,6 +403,7 @@ import {
   resolvePromptSubmissionSkipReason,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
+  resolveAttemptFsRoots,
 } from "./attempt.prompt-helpers.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
 import {
@@ -959,6 +960,10 @@ export async function runEmbeddedAttempt(
     agentId: params.agentId,
   });
   const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
+    config: params.config,
+    sessionAgentId,
+  });
+  const effectiveFsRoots = resolveAttemptFsRoots({
     config: params.config,
     sessionAgentId,
   });
@@ -4412,6 +4417,8 @@ export async function runEmbeddedAttempt(
                 maxBytes: MAX_IMAGE_BYTES,
                 maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
                 workspaceOnly: effectiveFsWorkspaceOnly,
+                // tools.fs.roots apply to host-mode auto-load only; sandbox ignores them.
+                roots: sandbox?.enabled ? undefined : effectiveFsRoots,
                 // Enforce sandbox path restrictions when sandbox is enabled
                 sandbox:
                   sandbox?.enabled && sandbox?.fsBridge

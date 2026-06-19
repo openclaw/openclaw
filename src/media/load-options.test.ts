@@ -22,7 +22,7 @@ describe("media load options", () => {
 
   it.each([
     { mediaLocalRoots: undefined, expectedLocalRoots: undefined },
-    { mediaLocalRoots: [], expectedLocalRoots: undefined },
+    { mediaLocalRoots: [], expectedLocalRoots: [] },
     { mediaLocalRoots: ["/tmp/workspace"], expectedLocalRoots: ["/tmp/workspace"] },
     { mediaLocalRoots: "any", expectedLocalRoots: "any" },
   ] as const)("resolves outbound local roots %#", ({ mediaLocalRoots, expectedLocalRoots }) => {
@@ -65,6 +65,10 @@ describe("media load options", () => {
         readFile: readLegacyMediaFile,
         hostReadCapability: true,
       },
+    },
+    {
+      params: { mediaLocalRoots: [] },
+      expected: { localRoots: [] },
     },
   ] as const)("builds outbound media load options %#", ({ params, expected }) => {
     expectBuiltOutboundMediaLoadOptions(params, expected);

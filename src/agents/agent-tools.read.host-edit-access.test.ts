@@ -39,7 +39,6 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
   let tmpDir = "";
 
   afterEach(async () => {
-    mocks.operations = undefined;
     if (tmpDir) {
       await fs.rm(tmpDir, { recursive: true, force: true });
       tmpDir = "";
@@ -47,7 +46,7 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "silently passes access for outside-workspace paths so readFile reports the real error",
+    "surfaces the real boundary error instead of collapsing outside-workspace edits into file-not-found",
     async () => {
       tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-access-test-"));
       const workspaceDir = path.join(tmpDir, "workspace");

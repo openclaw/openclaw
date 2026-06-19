@@ -44,6 +44,9 @@ export * from "@openclaw/media-core/mime";
 export * from "../media/outbound-attachment.js";
 export * from "../media/png-encode.ts";
 export * from "../media/qr-image.ts";
+// Channels need the agent-scoped outbound media access resolver; keep the rest of
+// read-capability internal so the plugin-sdk public surface stays narrow.
+export { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.js";
 export * from "../media/qr-terminal.ts";
 export * from "@openclaw/media-core/read-byte-stream-with-limit";
 export * from "@openclaw/media-core/read-response-with-limit";

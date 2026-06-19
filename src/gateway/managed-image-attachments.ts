@@ -12,6 +12,7 @@ import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { tryReadJson, writeJson } from "../infra/json-files.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { assertLocalMediaAllowed } from "../media/local-media-access.js";
+import type { LocalMediaRoot } from "../media/local-media-root.js";
 import {
   createImageProcessor,
   getImageMetadata,
@@ -846,7 +847,7 @@ export async function createManagedOutgoingImageBlocks(params: {
   stateDir?: string;
   messageId?: string | null;
   limits?: ManagedImageAttachmentLimitsConfig | null;
-  localRoots?: readonly string[] | "any";
+  localRoots?: readonly LocalMediaRoot[] | "any";
   continueOnPrepareError?: boolean;
   onPrepareError?: (error: Error) => void;
 }): Promise<ManagedImageBlock[]> {

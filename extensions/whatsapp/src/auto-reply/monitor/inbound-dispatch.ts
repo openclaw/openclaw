@@ -28,9 +28,9 @@ import {
   createChannelMessageReplyPipeline,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContext,
-  getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,
+  resolveAgentScopedOutboundMediaAccess,
   resolveChannelMessageSourceReplyDeliveryMode,
   resolveChunkMode,
   resolveIdentityNamePrefix,
@@ -513,6 +513,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
     msg: AdmittedWebInboundMessage;
     mediaLocalRoots: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     maxMediaBytes: number;
     textLimit: number;
     chunkMode?: ReturnType<typeof resolveChunkMode>;
@@ -558,7 +559,24 @@ export async function dispatchWhatsAppBufferedReply(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
+  const requesterSenderId =
+    params.msg.platform.senderJid ??
+    params.msg.platform.senderE164 ??
+    (conversationKind === "direct" ? conversationId : undefined);
+  const requesterSenderE164 =
+    params.msg.platform.senderE164 ?? (conversationKind === "direct" ? conversationId : undefined);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg: params.cfg,
+    agentId: params.route.agentId,
+    sessionKey: params.route.sessionKey,
+    messageProvider: params.route.sessionKey ? undefined : "whatsapp",
+    accountId: params.route.accountId ?? admission.accountId,
+    groupId: conversationKind === "group" ? conversationId : undefined,
+    requesterSenderId,
+    requesterSenderName: params.msg.platform.senderName ?? params.msg.platform.pushName,
+    requesterSenderE164,
+  });
+  const mediaLocalRoots = mediaAccess.localRoots ?? [];
   const sourceReplyChatType =
     typeof params.context.ChatType === "string" ? params.context.ChatType : conversationKind;
   const sourceReplyCommandSource =
@@ -602,6 +620,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
       normalizedReplyResult: normalizedDeliveryPayload,
       msg: params.msg,
       mediaLocalRoots,
+      mediaReadFile: mediaAccess.readFile,
       maxMediaBytes: params.maxMediaBytes,
       textLimit,
       chunkMode,
@@ -691,6 +710,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
               payload: normalizedDeliveryPayload,
               info,
               to: conversationId,
+              mediaAccess,
               formatting: {
                 textLimit,
                 tableMode,

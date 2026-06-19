@@ -69,9 +69,9 @@ import {
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 import {
   generateTopicLabel,
-  getAgentScopedMediaLocalRoots,
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,
+  resolveAgentScopedOutboundMediaAccess,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
@@ -994,7 +994,11 @@ export const dispatchTelegramMessage = async ({
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg,
+    agentId: route.agentId,
+  });
+  const mediaLocalRoots = mediaAccess.localRoots;
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
@@ -1521,6 +1525,7 @@ export const dispatchTelegramMessage = async ({
     runtime,
     bot,
     mediaLocalRoots,
+    mediaReadFile: mediaAccess.readFile,
     mediaMaxBytes: (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024,
     replyToMode,
     textLimit,
