@@ -520,7 +520,7 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     params.model,
   );
   if (isCliProvider(params.provider, params.cfg)) {
-    return { skipsProviderAuthCooldown: false };
+    return { skipsProviderAuthCooldown: true };
   }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
