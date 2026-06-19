@@ -478,11 +478,13 @@ export const buildTelegramMessageContext = async ({
 
   if (shouldSendDirectAudioTypingBeforeBodyResolution({ msg, allMedia, isGroup })) {
     initialTypingCueSent = true;
-    void sendTyping().catch((err: unknown) => {
+    try {
+      await sendTyping();
+    } catch (err) {
       logVerbose(
         `telegram audio preflight direct typing cue failed for chat ${chatId}: ${String(err)}`,
       );
-    });
+    }
   }
 
   const originatingTo = buildTelegramInboundOriginTarget(chatId, threadSpec);

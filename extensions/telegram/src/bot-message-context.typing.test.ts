@@ -20,6 +20,17 @@ function createSendChatActionHandler(
   };
 }
 
+async function waitForSendChatActionCall(sendChatAction: ReturnType<typeof vi.fn>) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (sendChatAction.mock.calls.length > 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+}
+
 describe("buildTelegramMessageContext typing", () => {
   it("sends direct typing after body resolution and before session context construction", async () => {
     const buildInboundContext = vi.fn(
@@ -51,23 +62,35 @@ describe("buildTelegramMessageContext typing", () => {
 
   it("sends direct typing before voice transcription starts", async () => {
     transcribeFirstAudio.mockClear();
-    const sendChatActionHandler = createSendChatActionHandler();
+    let resolveSendChatAction!: () => void;
+    const sendChatAction = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSendChatAction = resolve;
+        }),
+    );
+    const sendChatActionHandler = createSendChatActionHandler(sendChatAction);
 
-    await expect(
-      buildTelegramMessageContextForTest({
-        message: {
-          chat: { id: 42, type: "private", first_name: "Pat" },
-          from: { id: 42, first_name: "Pat" },
-          text: undefined,
-          voice: { file_id: "voice-1", duration: 1 },
-        },
-        allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
-        sendChatActionHandler,
-      }),
-    ).resolves.not.toBeNull();
+    const contextPromise = buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        text: undefined,
+        voice: { file_id: "voice-1", duration: 1 },
+      },
+      allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
+      sendChatActionHandler,
+    });
+
+    await waitForSendChatActionCall(sendChatActionHandler.sendChatAction);
 
     expect(sendChatActionHandler.sendChatAction).toHaveBeenCalledTimes(1);
     expect(sendChatActionHandler.sendChatAction).toHaveBeenCalledWith(42, "typing", undefined);
+    expect(transcribeFirstAudio).not.toHaveBeenCalled();
+
+    resolveSendChatAction();
+
+    await expect(contextPromise).resolves.not.toBeNull();
     expect(transcribeFirstAudio).toHaveBeenCalledTimes(1);
     expect(sendChatActionHandler.sendChatAction.mock.invocationCallOrder[0]).toBeLessThan(
       transcribeFirstAudio.mock.invocationCallOrder[0],
