@@ -22,7 +22,7 @@ import {
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { buildStatusReply, buildStatusText } from "./commands-status.js";
+import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
   baseCommandTestConfig,
   buildCommandTestParams,
@@ -38,6 +38,29 @@ const providerUsageMock = vi.hoisted(() => ({
     providers: [],
   })),
 }));
+type StatusPluginHealthSnapshot =
+  import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
+
+const pluginHealthRuntimeMock = vi.hoisted(() => ({
+  collectInstalledPluginHealthSnapshot: vi.fn(
+    async (): Promise<StatusPluginHealthSnapshot> => ({
+      plugins: [],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeToolQuarantines: [],
+      channelPluginFailures: [],
+    }),
+  ),
+  collectRuntimePluginHealthSnapshot: vi.fn(
+    (): StatusPluginHealthSnapshot => ({
+      plugins: [],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeToolQuarantines: [],
+      channelPluginFailures: [],
+    }),
+  ),
+}));
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
@@ -46,6 +69,8 @@ vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
     loadProviderUsageSummary: providerUsageMock.loadProviderUsageSummary,
   };
 });
+
+vi.mock("../../status/status-plugin-health.runtime.js", () => pluginHealthRuntimeMock);
 
 vi.mock("../../agents/harness/builtin-openclaw.js", () => ({
   createOpenClawAgentHarness: () => ({
@@ -171,6 +196,22 @@ afterEach(() => {
   providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
     updatedAt: Date.now(),
     providers: [],
+  });
+  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockReset();
+  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockResolvedValue({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  });
+  pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReset();
+  pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReturnValue({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
   });
 });
 
@@ -604,6 +645,71 @@ describe("buildStatusReply subagent summary", () => {
     });
   });
 
+  it("ignores stale live contextTokens when /status displays the current default model", async () => {
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        models: {
+          providers: {
+            "ollama-cloud": {
+              baseUrl: "https://ollama.com",
+              models: [
+                {
+                  id: "deepseek-v4-pro",
+                  name: "DeepSeek V4 Pro",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000_000,
+                  maxTokens: 128_000,
+                },
+                {
+                  id: "kimi-k2.7-code",
+                  name: "Kimi K2.7 Code",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 262_144,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-stale-live-context",
+        updatedAt: 0,
+        modelProvider: "ollama-cloud",
+        model: "kimi-k2.7-code",
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "ollama-cloud",
+      model: "deepseek-v4-pro",
+      contextTokens: 262_144,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: ollama-cloud/deepseek-v4-pro");
+    expect(normalized).toContain("Context: 0/1.0m");
+    expect(normalized).not.toContain("kimi-k2.7-code");
+    expect(normalized).not.toContain("Context: 0/262k");
+    expect(normalized).not.toContain("/262k");
+  });
+
   it("shows gateway and system uptime in /status output", async () => {
     vi.spyOn(process, "uptime").mockReturnValue(2 * 60 * 60 + 5 * 60);
     vi.spyOn(os, "uptime").mockReturnValue(4 * 24 * 60 * 60 + 3 * 60 * 60);
@@ -633,6 +739,70 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Uptime: gateway 2h 5m · system 4d 3h");
+  });
+
+  it("renders compact plugin health from the runtime snapshot", async () => {
+    pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeToolQuarantines: [],
+      channelPluginFailures: [
+        {
+          channelId: "broken",
+          message: "failed to load setup entry: boom",
+          source: "diagnostic",
+        },
+      ],
+    });
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-plugin-health",
+        updatedAt: 0,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      workspaceDir: "/tmp/status-plugin-health-workspace",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    // Compact status reads only the runtime snapshot; no config-driven
+    // channel inspection happens on this path.
+    expect(pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot).toHaveBeenCalledWith();
+    expect(normalizeTestText(text)).toContain("Plugins: 1 channel plugin failure");
+  });
+
+  it("gates /status plugins behind the plugin command flag", async () => {
+    const commandParams = buildCommandTestParams("/status plugins", {
+      ...baseCfg,
+      commands: { text: true, plugins: false },
+    });
+
+    const reply = await buildStatusPluginsReply({
+      cfg: commandParams.cfg,
+      command: commandParams.command,
+      workspaceDir: commandParams.workspaceDir,
+    });
+
+    expect(reply?.text).toBe(
+      "⚠️ /status plugins is disabled. Set commands.plugins=true to enable.",
+    );
+    expect(pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot).not.toHaveBeenCalled();
   });
 
   it("shows the effective non-OpenClaw embedded harness in /status", async () => {

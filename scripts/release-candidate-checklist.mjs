@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
@@ -14,6 +15,7 @@ const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
 const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+const DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const WINDOWS_NODE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u;
 const WINDOWS_NODE_REPO = "openclaw/openclaw-windows-node";
 const WINDOWS_NODE_REQUIRED_ASSETS = [
@@ -239,26 +241,44 @@ function githubApiTimedOut(error) {
 export async function githubApi(path, options = {}) {
   const token = options.token ?? run("gh", ["auth", "token"], { capture: true }).trim();
   const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
-  let response;
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES;
+  const controller = new AbortController();
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(new DOMException("request timed out", "TimeoutError"));
+      reject(new DOMException("request timed out", "TimeoutError"));
+    }, timeoutMs);
+    timeout.unref?.();
+  });
   try {
-    response = await (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${token}`,
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
+    const response = await Promise.race([
+      (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
+        signal: controller.signal,
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${token}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      }),
+      timeoutPromise,
+    ]);
+    const text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+      signal: controller.signal,
+      timeoutPromise,
     });
+    if (!response.ok) {
+      throw new Error(`GitHub API ${path} failed with ${response.status}: ${text}`);
+    }
+    return JSON.parse(text);
   } catch (error) {
     if (githubApiTimedOut(error)) {
       throw new Error(`GitHub API ${path} timed out after ${timeoutMs}ms`, { cause: error });
     }
     throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  if (!response.ok) {
-    throw new Error(`GitHub API ${path} failed with ${response.status}: ${await response.text()}`);
-  }
-  return response.json();
 }
 
 /**
@@ -641,7 +661,7 @@ function validatePreflightManifest(manifest, params) {
   }
 }
 
-function validateFullManifest(manifest, params) {
+export function validateFullManifest(manifest, params) {
   if (manifest.workflowName !== "Full Release Validation") {
     throw new Error(`full validation workflow mismatch: ${manifest.workflowName}`);
   }
@@ -657,6 +677,17 @@ function validateFullManifest(manifest, params) {
   }
   if (manifest.rerunGroup !== "all") {
     throw new Error(`full validation must use rerun_group=all, got ${manifest.rerunGroup}`);
+  }
+  if (
+    (params.releaseProfile === "stable" || params.releaseProfile === "full") &&
+    manifest.runReleaseSoak !== "true"
+  ) {
+    throw new Error(
+      `full validation must record runReleaseSoak=true for ${params.releaseProfile} release candidates`,
+    );
+  }
+  if (manifest.controls?.performanceBlocking !== true) {
+    throw new Error("full validation manifest must record blocking product performance evidence");
   }
 }
 
@@ -746,7 +777,8 @@ async function main() {
       provider: options.provider,
       mode: options.mode,
       release_profile: options.releaseProfile,
-      run_release_soak: options.releaseProfile === "full" ? "true" : "false",
+      run_release_soak:
+        options.releaseProfile === "stable" || options.releaseProfile === "full" ? "true" : "false",
       rerun_group: "all",
     });
     options.fullReleaseRunId =
@@ -846,6 +878,7 @@ async function main() {
     windowsNodeTag: options.windowsNodeTag || undefined,
     windowsNodeSourceRelease,
     fullReleaseValidationUrl: fullRun.url,
+    fullReleaseValidationControls: fullManifest.controls,
     npmPreflightUrl: npmRun.url,
     artifacts: {
       npmPreflight: npmArtifactName,

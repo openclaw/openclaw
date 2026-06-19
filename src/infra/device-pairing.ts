@@ -233,21 +233,8 @@ function normalizeRole(role: string | undefined): string | null {
 function mergeRoles(...items: Array<string | string[] | undefined>): string[] | undefined {
   const roles = new Set<string>();
   for (const item of items) {
-    if (!item) {
-      continue;
-    }
-    if (Array.isArray(item)) {
-      for (const role of item) {
-        const trimmed = role.trim();
-        if (trimmed) {
-          roles.add(trimmed);
-        }
-      }
-    } else {
-      const trimmed = item.trim();
-      if (trimmed) {
-        roles.add(trimmed);
-      }
+    for (const role of normalizeUniqueSingleOrTrimmedStringList(item)) {
+      roles.add(role);
     }
   }
   if (roles.size === 0) {
@@ -310,15 +297,12 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
   const scopes = new Set<string>();
   let sawExplicitScopeList = false;
   for (const item of items) {
-    if (!item) {
+    if (!Array.isArray(item)) {
       continue;
     }
     sawExplicitScopeList = true;
-    for (const scope of item) {
-      const trimmed = scope.trim();
-      if (trimmed) {
-        scopes.add(trimmed);
-      }
+    for (const scope of normalizeUniqueSingleOrTrimmedStringList(item)) {
+      scopes.add(scope);
     }
   }
   if (scopes.size === 0) {
@@ -1243,19 +1227,5 @@ export async function revokeDeviceToken(params: {
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir, "paired");
     return { ok: true, entry };
-  });
-}
-
-/** Delete a paired device record without touching unrelated pending requests. */
-export async function clearDevicePairing(deviceId: string, baseDir?: string): Promise<boolean> {
-  return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const normalizedId = normalizeDeviceId(deviceId);
-    if (!state.pairedByDeviceId[normalizedId]) {
-      return false;
-    }
-    delete state.pairedByDeviceId[normalizedId];
-    await persistState(state, baseDir, "paired");
-    return true;
   });
 }

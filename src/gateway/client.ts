@@ -80,6 +80,11 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
+export type GatewayClientCloseInfo = {
+  phase: "pre-hello" | "post-hello";
+  transientPreHelloCleanClose: boolean;
+};
+
 type GatewayClientErrorShape = {
   message: string;
   code?: string;
@@ -147,7 +152,7 @@ export type GatewayClientOptions = {
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
-  onClose?: (code: number, reason: string) => void;
+  onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
@@ -183,7 +188,7 @@ function createOpenClawGatewayClientHostDeps(
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
   return baseResolveGatewayClientConnectChallengeTimeoutMs(opts);

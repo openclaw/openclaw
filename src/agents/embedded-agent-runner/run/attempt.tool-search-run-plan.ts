@@ -24,7 +24,7 @@ export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
 
 /** Derived tool allowlists used for visible prompt tools, replay tools, and empty-allowlist checks. */
-export type ToolSearchRunPlan = {
+type ToolSearchRunPlan = {
   visibleAllowedToolNames: Set<string>;
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;

@@ -28,7 +28,7 @@ export function shouldShowChannelInSetup(
   return isChannelVisibleInSetup(meta);
 }
 
-export type ResolvedChannelSetupEntries = {
+type ResolvedChannelSetupEntries = {
   entries: ChannelCatalogEntry[];
   installedCatalogEntries: ChannelPluginCatalogEntry[];
   installableCatalogEntries: ChannelPluginCatalogEntry[];

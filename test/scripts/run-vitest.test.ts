@@ -426,6 +426,12 @@ describe("scripts/run-vitest", () => {
     expect(
       resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" }),
     ).toBeNull();
+    expect(
+      resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "1e3" }),
+    ).toBeNull();
+    expect(
+      resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500ms" }),
+    ).toBeNull();
   });
 
   it("defaults direct non-watch runs to the stall watchdog", () => {
@@ -758,6 +764,25 @@ describe("scripts/run-vitest", () => {
       PATH: "/usr/bin",
       RAYON_NUM_THREADS: "8",
       TOKIO_WORKER_THREADS: "6",
+    });
+  });
+
+  it("does not truncate malformed native worker budgets", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+          OPENCLAW_VITEST_MAX_WORKERS: "8x",
+          PATH: "/usr/bin",
+        },
+        "darwin",
+      ).env,
+    ).toEqual({
+      OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "8x",
+      PATH: "/usr/bin",
+      RAYON_NUM_THREADS: "1",
+      TOKIO_WORKER_THREADS: "1",
     });
   });
 

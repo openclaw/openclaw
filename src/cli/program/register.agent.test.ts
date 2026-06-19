@@ -1,7 +1,8 @@
 // Register agent tests cover agent command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAgentCommands } from "./register.agent.js";
+import { registerAgentTurnCommand } from "./register.agent-turn.js";
+import { registerAgentsCommands } from "./register.agent.js";
 
 const mocks = vi.hoisted(() => ({
   agentCliCommandMock: vi.fn(),
@@ -65,10 +66,11 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
 }));
 
-describe("registerAgentCommands", () => {
+describe("agent command registration", () => {
   async function runCli(args: string[]) {
     const program = new Command();
-    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentsCommands(program);
     await program.parseAsync(args, { from: "user" });
   }
 
@@ -220,7 +222,7 @@ describe("registerAgentCommands", () => {
 
   it("documents bind accountId resolution behavior in help text", () => {
     const program = new Command();
-    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentsCommands(program);
     const agents = program.commands.find((command) => command.name() === "agents");
     const bind = agents?.commands.find((command) => command.name() === "bind");
     const help = bind?.helpInformation() ?? "";

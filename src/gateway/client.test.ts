@@ -748,6 +748,22 @@ describe("GatewayClient close handling", () => {
     client.stop();
   });
 
+  it("keeps close callback errors inside websocket dispatch", () => {
+    const onClose = vi.fn(() => {
+      throw new Error("close callback failed");
+    });
+    const client = createClientWithIdentity("dev-4", onClose);
+
+    client.start();
+    expect(() => getLatestWs().emitClose(1008, "unauthorized: signature invalid")).not.toThrow();
+
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "gateway client close handler error: Error: close callback failed",
+    );
+    client.stop();
+  });
+
   it("keeps a managed reconnect timer after gateway restart closes", async () => {
     vi.useFakeTimers();
     try {
@@ -767,6 +783,139 @@ describe("GatewayClient close handling", () => {
       expect(wsInstances).toHaveLength(2);
       client.stop();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects quietly after one clean pre-hello close with a pending connect", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const onHelloOk = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      token: "shared-token",
+      onClose,
+      onConnectError,
+      onHelloOk,
+    });
+    try {
+      client.start();
+      const firstWs = getLatestWs();
+      firstWs.emitOpen();
+      firstWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-1" },
+        }),
+      );
+      expect(firstWs.sent.some((frame) => frame.includes('"method":"connect"'))).toBe(true);
+
+      firstWs.emitClose(1000, "");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed:"),
+      );
+      expect(onClose).toHaveBeenCalledWith(1000, "", {
+        phase: "pre-hello",
+        transientPreHelloCleanClose: true,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(wsInstances).toHaveLength(2);
+      const secondWs = getLatestWs();
+      secondWs.emitOpen();
+      secondWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-2" },
+        }),
+      );
+      const connectFrame = JSON.parse(
+        secondWs.sent.find((frame) => frame.includes('"method":"connect"')) ?? "{}",
+      ) as { id?: string };
+      secondWs.emitMessage(
+        JSON.stringify({
+          type: "res",
+          id: connectFrame.id,
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            auth: { role: "operator", scopes: ["operator.admin"] },
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onHelloOk).toHaveBeenCalledOnce();
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces repeated clean pre-hello closes with a pending connect", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      token: "shared-token",
+      onClose,
+      onConnectError,
+    });
+    try {
+      client.start();
+      const firstWs = getLatestWs();
+      firstWs.emitOpen();
+      firstWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-1" },
+        }),
+      );
+      firstWs.emitClose(1000, "");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed:"),
+      );
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const secondWs = getLatestWs();
+      secondWs.emitOpen();
+      secondWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-2" },
+        }),
+      );
+      secondWs.emitClose(1000, "");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onClose).toHaveBeenNthCalledWith(1, 1000, "", {
+        phase: "pre-hello",
+        transientPreHelloCleanClose: true,
+      });
+      expect(onClose).toHaveBeenNthCalledWith(2, 1000, "");
+      expect(onConnectError).toHaveBeenCalledOnce();
+      expect(onConnectError.mock.calls[0]?.[0]).toMatchObject({
+        message: "gateway closed (1000): ",
+      });
+      expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+    } finally {
+      client.stop();
       vi.useRealTimers();
     }
   });
@@ -1085,6 +1234,35 @@ describe("GatewayClient connect auth payload", () => {
       });
       expect(logDebugMock).toHaveBeenCalledWith(
         "gateway client connect error handler error: Error: connect callback failed",
+      );
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("keeps hello callback errors inside connect dispatch", async () => {
+    const onHelloOk = vi.fn(() => {
+      throw new Error("hello callback failed");
+    });
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      onHelloOk,
+      onConnectError,
+    });
+
+    try {
+      const { ws, connect } = startClientAndConnect({ client });
+
+      expect(() => emitHelloOk(ws, connect.id)).not.toThrow();
+      await vi.waitFor(() => {
+        expect(onHelloOk).toHaveBeenCalledOnce();
+      });
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(ws.lastClose).toBeNull();
+      expect(logDebugMock).toHaveBeenCalledWith(
+        "gateway client hello-ok handler error: Error: hello callback failed",
       );
     } finally {
       client.stop();
@@ -1593,6 +1771,37 @@ describe("GatewayClient connect auth payload", () => {
       reason: "connect failed",
       detailCode: "AUTH_TOKEN_MISSING",
     });
+  });
+
+  it("keeps reconnect paused callback errors inside close dispatch", async () => {
+    const onReconnectPaused = vi.fn(() => {
+      throw new Error("paused callback failed");
+    });
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onReconnectPaused,
+      onClose,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISSING" },
+    });
+
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_TOKEN_MISSING",
+    });
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "gateway client reconnect paused handler error: Error: paused callback failed",
+    );
+    expect(onClose).toHaveBeenCalledWith(1008, "connect failed");
   });
 
   it("does not auto-reconnect on CLIENT_VERSION_MISMATCH connect failures", async () => {

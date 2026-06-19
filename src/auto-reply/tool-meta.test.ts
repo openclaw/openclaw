@@ -2,7 +2,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { formatToolAggregate, formatToolPrefix, shortenMeta, shortenPath } from "./tool-meta.js";
+import { formatToolAggregate, shortenMeta } from "./tool-meta.js";
 
 // Use path.resolve so inputs match the resolved HOME on every platform.
 const home = path.resolve("/Users/test");
@@ -12,14 +12,6 @@ function withHome<T>(run: () => T): T {
 }
 
 describe("tool meta formatting", () => {
-  it("shortens paths under HOME", () => {
-    withHome(() => {
-      expect(shortenPath(home)).toBe("~");
-      expect(shortenPath(`${home}/a/b.txt`)).toBe("~/a/b.txt");
-      expect(shortenPath("/opt/x")).toBe("/opt/x");
-    });
-  });
-
   it("shortens meta strings with optional colon suffix", () => {
     withHome(() => {
       expect(shortenMeta(`${home}/a.txt`)).toBe("~/a.txt");
@@ -62,13 +54,6 @@ describe("tool meta formatting", () => {
         markdown: true,
       });
       expect(out).toBe("🛠️ elevated · `cd ~/dir && gemini 2>&1`");
-    });
-  });
-
-  it("formats prefixes with default labels", () => {
-    withHome(() => {
-      expect(formatToolPrefix(undefined, undefined)).toBe("🧩 Tool");
-      expect(formatToolPrefix("x", `${home}/a.txt`)).toBe("🧩 X: ~/a.txt");
     });
   });
 });

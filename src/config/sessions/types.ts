@@ -53,6 +53,7 @@ export type CliSessionBinding = {
   authEpoch?: string;
   authEpochVersion?: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   cwdHash?: string;
   mcpConfigHash?: string;
@@ -635,12 +636,6 @@ export function resolveFreshSessionTotalTokens(
   return total;
 }
 
-export function isSessionTotalTokensFresh(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): boolean {
-  return resolveFreshSessionTotalTokens(entry) !== undefined;
-}
-
 export type GroupKeyResolution = {
   key: string;
   channel?: string;
@@ -735,6 +730,5 @@ export type SessionSystemPromptReport = {
   };
 };
 
-export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
 export const DEFAULT_IDLE_MINUTES = 0;

@@ -15,7 +15,13 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+  type ReplyOptionsWithOperationRunState,
+} from "./reply-operation-run-state.js";
 import { createReplyOperation, testing as replyRunTesting } from "./reply-run-registry.js";
+import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -93,6 +99,7 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
   }) => ({
+    outcome: "completed" as const,
     result: await run(provider, model),
     provider,
     model,
@@ -143,14 +150,14 @@ beforeEach(() => {
   });
   state.queueEmbeddedAgentMessageMock.mockReset();
   state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
-  vi.mocked(enqueueFollowupRun).mockClear();
-  vi.mocked(refreshQueuedFollowupSession).mockClear();
-  vi.mocked(scheduleFollowupDrain).mockClear();
+  vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
+  vi.mocked(refreshQueuedFollowupSession).mockReset();
+  vi.mocked(scheduleFollowupDrain).mockReset();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
 function createMinimalRun(params?: {
-  opts?: GetReplyOptions;
+  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
@@ -243,13 +250,14 @@ function createMinimalRun(params?: {
 
 describe("runReplyAgent heartbeat followup guard", () => {
   it("drops heartbeat runs when reply-lane admission finds an active owner", async () => {
+    const runState: ReplyOperationRunState = {};
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "active-session",
       resetTriggered: false,
     });
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true },
+      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: false,
       shouldFollowup: false,
     });
@@ -259,7 +267,19 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(runState.admission).toEqual({ status: "skipped", reason: "active-run" });
     active.complete();
+  });
+
+  it("records the operation owned by an admitted heartbeat run", async () => {
+    const runState: ReplyOperationRunState = {};
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
+    });
+
+    await run();
+
+    expect(runState.admission).toEqual({ status: "owned" });
   });
 
   it("runs visible turns with the session id returned by admission", async () => {
@@ -313,8 +333,12 @@ describe("runReplyAgent heartbeat followup guard", () => {
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
     const abortController = new AbortController();
     abortController.abort();
+    const runState: ReplyOperationRunState = {};
     const { run, typing } = createMinimalRun({
-      opts: { abortSignal: abortController.signal },
+      opts: {
+        abortSignal: abortController.signal,
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
       isActive: false,
       shouldFollowup: false,
     });
@@ -324,11 +348,13 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(runState.admission).toEqual({ status: "skipped", reason: "aborted" });
   });
 
   it("drops heartbeat runs when another run is active", async () => {
+    const runState: ReplyOperationRunState = {};
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true },
+      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
       shouldFollowup: true,
       resolvedQueueMode: "collect",
@@ -340,6 +366,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(runState.admission).toEqual({ status: "skipped", reason: "active-run" });
   });
 
   it("drops heartbeat runs before steering active streams", async () => {
@@ -375,6 +402,25 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("cleans up typing when followup admission is rejected", async () => {
+    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("keeps typing alive when a followup is queued behind a live active run", async () => {
@@ -1112,6 +1158,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           fallbackStepFinalOutcome: "succeeded",
         });
         return {
+          outcome: "completed" as const,
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -1155,6 +1202,84 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("does not report an exhausted fallback candidate as a successful winner", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-exhausted-trace-"));
+    const storePath = join(root, "sessions.json");
+    const sessionFile = join(root, "session.jsonl");
+    const runId = "run-exhausted-trace";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      traceLevel: "raw",
+    };
+    await saveSessionStore(storePath, { main: sessionEntry }, { skipMaintenance: true });
+    try {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "Terminal tool summary", isError: true }],
+        meta: {
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent ended incomplete",
+            fallbackSafe: true,
+            terminalPresentation: true,
+          },
+          executionTrace: {
+            winnerProvider: "anthropic",
+            winnerModel: "claude",
+            attempts: [{ provider: "anthropic", model: "claude", result: "success" }],
+            fallbackUsed: false,
+            runner: "embedded",
+          },
+          agentMeta: {
+            sessionId: "session",
+            provider: "anthropic",
+            model: "claude",
+            usage: { input: 10, output: 2 },
+          },
+        },
+      });
+      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(
+        async (args) => ({
+          outcome: "exhausted",
+          result: await args.run("anthropic", "claude"),
+          provider: "anthropic",
+          model: "claude",
+          attempts: [
+            {
+              provider: "anthropic",
+              model: "claude",
+              error: "Agent ended incomplete",
+              reason: "format",
+            },
+          ],
+        }),
+      );
+
+      const { run } = createMinimalRun({
+        opts: { runId },
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath,
+        runOverrides: {
+          sessionFile,
+          traceAuthorized: true,
+        },
+      });
+      const result = await run();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text ?? "")
+        .join("\n");
+
+      expect(text).not.toContain("winner=anthropic/claude");
+      expect(text).not.toContain("result=success");
+      expect(text).toContain("Summary: fallback=yes attempts=1");
+      expect(consumeReplyUsageState(runId)?.resolvedRef).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not persist active fallback state for internal subagent announce fallback", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1189,6 +1314,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           fallbackStepFinalOutcome: "succeeded",
         });
         return {
+          outcome: "completed" as const,
           result: await run("google", "gemini-2.5-flash"),
           provider: "google",
           model: "gemini-2.5-flash",
@@ -1265,6 +1391,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         fallbackStepFinalOutcome: "succeeded",
       });
       return {
+        outcome: "completed" as const,
         result: await run("google", "gemini-2.5-flash"),
         provider: "google",
         model: "gemini-2.5-flash",
@@ -1323,6 +1450,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -1371,6 +1499,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -1421,6 +1550,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1468,6 +1598,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1555,6 +1686,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1596,6 +1728,55 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("does not report silent fallback failure after a did-send-only side effect", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      didSendViaMessagingTool: true,
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).not.toBe(true);
+      expect(payload?.text).toContain("Model Fallback:");
+      expect(payload?.text).not.toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
   it("does not treat whitespace-only messaging evidence as fallback delivery", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
@@ -1610,6 +1791,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1660,6 +1842,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1711,6 +1894,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1762,6 +1946,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1809,6 +1994,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1861,6 +2047,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementation(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -1928,6 +2115,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           callCount += 1;
           if (callCount === 2) {
             return {
+              outcome: "completed" as const,
               result: await run(provider, model),
               provider,
               model,
@@ -1935,6 +2123,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
             };
           }
           return {
+            outcome: "completed" as const,
             result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
             provider: "deepinfra",
             model: "moonshotai/Kimi-K2.5",
@@ -1998,6 +2187,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           callCount += 1;
           if (callCount === 1) {
             return {
+              outcome: "completed" as const,
               result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
               provider: "deepinfra",
               model: "moonshotai/Kimi-K2.5",
@@ -2012,6 +2202,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
             };
           }
           return {
+            outcome: "completed" as const,
             result: await run(provider, model),
             provider,
             model,
@@ -2078,6 +2269,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           callCount += 1;
           if (callCount === 1) {
             return {
+              outcome: "completed" as const,
               result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
               provider: "deepinfra",
               model: "moonshotai/Kimi-K2.5",
@@ -2092,6 +2284,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
             };
           }
           return {
+            outcome: "completed" as const,
             result: await run(provider, model),
             provider,
             model,
@@ -2167,6 +2360,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         .spyOn(modelFallbackModule, "runWithModelFallback")
         .mockImplementation(
           async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+            outcome: "completed" as const,
             result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
             provider: "deepinfra",
             model: "moonshotai/Kimi-K2.5",

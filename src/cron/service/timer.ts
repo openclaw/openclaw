@@ -1,7 +1,6 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
-import { readSessionEntry } from "../../config/sessions/store-load.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
@@ -228,7 +227,9 @@ export async function executeJobCoreWithTimeout(
     const triggerTimeout = (reason: string) => {
       timeoutReason = reason;
       if (!runAbortController.signal.aborted) {
-        runAbortController.abort(reason);
+        const timeoutError = new Error(reason);
+        timeoutError.name = "TimeoutError";
+        runAbortController.abort(timeoutError);
       }
       resolveTimeout?.(timeoutMarker);
     };
@@ -372,7 +373,11 @@ function resolveMainSessionCronDeliveryContext(
     return undefined;
   }
   try {
-    const sessionEntry = readSessionEntry(storePath, targetSessionKey) as SessionEntry | undefined;
+    const sessionEntry = loadSessionEntry({
+      agentId,
+      sessionKey: targetSessionKey,
+      storePath,
+    });
     return deliveryContextFromSession(sessionEntry);
   } catch {
     return undefined;
@@ -1592,13 +1597,13 @@ function deferPendingBackoffMissedCronSlots(
 export async function runMissedJobs(
   state: CronServiceState,
   opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
-) {
+): Promise<ReadonlySet<string>> {
   if (state.stopped) {
-    return;
+    return new Set();
   }
   const plan = await planStartupCatchup(state, opts);
   if (plan.candidates.length === 0 && plan.deferredJobs.length === 0) {
-    return;
+    return new Set();
   }
 
   const outcomes = await executeStartupCatchupPlan(state, plan);
@@ -1606,6 +1611,7 @@ export async function runMissedJobs(
   for (const outcome of finalizedOutcomes) {
     maybeNotifyIsolatedAgentSetupTimeout(state, outcome);
   }
+  return new Set(plan.deferredJobs.map((deferred) => deferred.jobId));
 }
 
 async function planStartupCatchup(

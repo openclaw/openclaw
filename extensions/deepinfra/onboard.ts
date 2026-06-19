@@ -7,7 +7,7 @@ import { DEEPINFRA_BASE_URL, DEEPINFRA_DEFAULT_MODEL_REF } from "./provider-mode
 
 export { DEEPINFRA_BASE_URL, DEEPINFRA_DEFAULT_MODEL_REF };
 
-export function applyDeepInfraProviderConfig(
+export function applyDeepInfraConfig(
   cfg: OpenClawConfig,
   modelRef: string = DEEPINFRA_DEFAULT_MODEL_REF,
 ): OpenClawConfig {
@@ -17,21 +17,17 @@ export function applyDeepInfraProviderConfig(
     alias: models[modelRef]?.alias ?? "DeepInfra",
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
+  return applyAgentDefaultModelPrimary(
+    {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          models,
+        },
       },
     },
-  };
-}
-
-export function applyDeepInfraConfig(
-  cfg: OpenClawConfig,
-  modelRef: string = DEEPINFRA_DEFAULT_MODEL_REF,
-): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(applyDeepInfraProviderConfig(cfg, modelRef), modelRef);
+    modelRef,
+  );
 }

@@ -436,6 +436,31 @@ export function readCodexNotificationItem(
     : undefined;
 }
 
+/** Reads the stable call id from a model-emitted raw tool item. */
+export function readRawResponseToolCallId(
+  notification: CodexServerNotification,
+): string | undefined {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return undefined;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  if (!item) {
+    return undefined;
+  }
+  switch (readString(item, "type")) {
+    case "custom_tool_call":
+    case "function_call":
+    case "local_shell_call":
+    case "tool_search_call":
+      return readString(item, "call_id");
+    case "image_generation_call":
+    case "web_search_call":
+      return readString(item, "id");
+    default:
+      return undefined;
+  }
+}
+
 /** Maps Codex item types to the tool name shown in execution progress. */
 export function codexExecutionToolName(item: CodexThreadItem): string | undefined {
   if (item.type === "dynamicToolCall" && typeof item.tool === "string") {

@@ -560,6 +560,22 @@ describe("isMaintainerTeamMember", () => {
     expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
   });
 
+  it("cancels 404 membership response bodies", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 404 },
+    );
+    const fetch = vi.fn().mockResolvedValue(response);
+
+    expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
+    expect(canceled).toBe(true);
+  });
+
   it("returns false when the token, org, or login is missing", async () => {
     const fetch = vi.fn();
     expect(await isMaintainerTeamMember({ org: "o", login: "u", fetch })).toBe(false);
@@ -573,6 +589,24 @@ describe("isMaintainerTeamMember", () => {
     await expect(
       isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
     ).rejects.toThrow(/500/);
+  });
+
+  it("cancels unexpected HTTP error response bodies", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 500 },
+    );
+    const fetch = vi.fn().mockResolvedValue(response);
+
+    await expect(
+      isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
+    ).rejects.toThrow(/500/);
+    expect(canceled).toBe(true);
   });
 
   it("aborts stalled membership fetches", async () => {

@@ -416,6 +416,7 @@ export function createSessionsSpawnTool(
           },
           {
             agentSessionKey: opts?.agentSessionKey,
+            requesterAgentIdOverride: opts?.requesterAgentIdOverride,
             agentChannel: opts?.agentChannel,
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
@@ -466,6 +467,7 @@ export function createSessionsSpawnTool(
               requesterDisplayKey: ownership.completionRequesterDisplayKey,
               task,
               taskName,
+              requesterAgentId: opts?.requesterAgentIdOverride,
               cleanup: trackedCleanup,
               label:
                 (isSpawnAcpAcceptedResult(result) ? result.label : undefined) ??

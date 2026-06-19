@@ -29,9 +29,8 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
-  applySessionStoreEntryPatch,
-  updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -64,6 +63,15 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 type EmbeddedAgentRuntime = typeof import("../../agents/embedded-agent.js");
+type UpdateSessionEntryParams = {
+  storePath: string;
+  sessionKey: string;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+  update: (
+    entry: SessionEntry,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+};
 
 const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 const MAX_FLUSH_FAILURES = 3;
@@ -91,6 +99,22 @@ async function runEmbeddedAgentDefault(
 ): Promise<Awaited<ReturnType<typeof import("../../agents/embedded-agent.js").runEmbeddedAgent>>> {
   const { runEmbeddedAgent } = await loadEmbeddedAgentRuntime();
   return await runEmbeddedAgent(...args);
+}
+
+async function updateSessionEntryDefault(
+  params: UpdateSessionEntryParams,
+): Promise<SessionEntry | null> {
+  return await updateSessionEntry(
+    {
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+    },
+    params.update,
+    {
+      skipMaintenance: params.skipMaintenance,
+      takeCacheOwnership: params.takeCacheOwnership,
+    },
+  );
 }
 
 async function ensureMemoryFlushTargetFile(params: {
@@ -126,7 +150,7 @@ const memoryDeps = {
   registerAgentRunContext,
   refreshQueuedFollowupSession,
   incrementCompactionCount,
-  updateSessionStoreEntry,
+  updateSessionEntry: updateSessionEntryDefault,
   emitAgentEvent,
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
@@ -143,7 +167,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
     registerAgentRunContext,
     refreshQueuedFollowupSession,
     incrementCompactionCount,
-    updateSessionStoreEntry,
+    updateSessionEntry: updateSessionEntryDefault,
     emitAgentEvent,
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
@@ -779,10 +803,24 @@ export async function runPreflightCompactionIfNeeded(params: {
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
+  const serverCompactionThreshold = resolveResponsesServerCompactionThreshold({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+  });
+  const threshold = Math.max(
+    contextWindowTokens - reserveTokensFloor - softThresholdTokens,
+    serverCompactionThreshold ?? 0,
+  );
+  const freshNeedsOutputRead =
+    typeof freshPersistedTokens === "number" &&
+    typeof promptTokenEstimate === "number" &&
+    threshold > 0 &&
+    freshPersistedTokens + promptTokenEstimate >= threshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
   const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptUsageTokens =
-    typeof freshPersistedTokens === "number"
+    typeof freshPersistedTokens === "number" && !freshNeedsOutputRead
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           sessionId: entry.sessionId,
@@ -811,9 +849,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof activeTranscriptBytes === "number" &&
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
-  const stalePersistedPromptTokens = hasPersistedTotalTokens
-    ? Math.floor(persistedTotalTokens)
-    : undefined;
+  const stalePersistedPromptTokens =
+    hasPersistedTotalTokens && entry.totalTokensFresh !== false
+      ? Math.floor(persistedTotalTokens)
+      : undefined;
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
   const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
   const usageProjectedTokenCount =
@@ -824,8 +863,17 @@ export async function runPreflightCompactionIfNeeded(params: {
           promptTokenEstimate,
         )
       : undefined;
+  const freshProjectedTokenCount =
+    typeof freshPersistedTokens === "number"
+      ? resolveEffectivePromptTokens(
+          freshPersistedTokens,
+          transcriptOutputTokens,
+          promptTokenEstimate,
+        )
+      : undefined;
   const projectedTokenCount = Math.max(
     usageProjectedTokenCount ?? 0,
+    freshProjectedTokenCount ?? 0,
     stalePersistedPromptTokens ?? 0,
   );
   const tokenCountForCompaction =
@@ -833,15 +881,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const serverCompactionThreshold = resolveResponsesServerCompactionThreshold({
-    cfg: params.cfg,
-    provider: params.followupRun.run.provider,
-    modelId: params.followupRun.run.model ?? params.defaultModel,
-  });
-  const threshold = Math.max(
-    contextWindowTokens - reserveTokensFloor - softThresholdTokens,
-    serverCompactionThreshold ?? 0,
-  );
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
@@ -1150,13 +1189,17 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     if (params.storePath && params.sessionKey) {
       try {
-        const updatedEntry = await applySessionStoreEntryPatch({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: { totalTokens: transcriptPromptTokens, totalTokensFresh: true },
-        });
+        const updatedEntry = await updateSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey: params.sessionKey,
+          },
+          () => ({ totalTokens: transcriptPromptTokens, totalTokensFresh: true }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
+          },
+        );
         if (updatedEntry) {
           entry = updatedEntry;
           if (params.sessionStore) {
@@ -1295,6 +1338,7 @@ export async function runMemoryFlushIfNeeded(params: {
       run: async (provider, model, runOptions) => {
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,
+          replyRoute: params.followupRun,
           sessionCtx: params.sessionCtx,
           hasRepliedRef: params.opts?.hasRepliedRef,
           provider,
@@ -1380,7 +1424,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     if (params.storePath && params.sessionKey) {
       try {
-        const updatedEntry = await memoryDeps.updateSessionStoreEntry({
+        const updatedEntry = await memoryDeps.updateSessionEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
           skipMaintenance: true,
@@ -1410,7 +1454,7 @@ export async function runMemoryFlushIfNeeded(params: {
     if (!isAbortError(err) && params.storePath && params.sessionKey) {
       try {
         const failedAt = memoryDeps.now();
-        const failedEntry = await memoryDeps.updateSessionStoreEntry({
+        const failedEntry = await memoryDeps.updateSessionEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
           skipMaintenance: true,
@@ -1458,7 +1502,7 @@ export async function runMemoryFlushIfNeeded(params: {
               maxAttempts: MAX_FLUSH_FAILURES,
             },
           });
-          const exhaustedEntry = await memoryDeps.updateSessionStoreEntry({
+          const exhaustedEntry = await memoryDeps.updateSessionEntry({
             storePath: params.storePath,
             sessionKey: params.sessionKey,
             skipMaintenance: true,

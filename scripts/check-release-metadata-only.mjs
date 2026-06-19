@@ -6,7 +6,8 @@ import path from "node:path";
 import { RELEASE_METADATA_PATHS } from "./changed-lanes.mjs";
 
 const VERSION_ONLY_TEXT_PATHS = new Set([
-  "apps/android/app/build.gradle.kts",
+  "apps/android/Config/Version.properties",
+  "apps/android/version.json",
   "apps/ios/Config/Version.xcconfig",
   "apps/ios/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",

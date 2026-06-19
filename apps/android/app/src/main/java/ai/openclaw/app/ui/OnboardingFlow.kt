@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
+import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
@@ -139,6 +140,7 @@ fun OnboardingFlow(
     val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
     val isNodeConnected by viewModel.isNodeConnected.collectAsState()
+    val nodeCapabilityApprovalState by viewModel.nodeCapabilityApprovalState.collectAsState()
     val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
     val serverName by viewModel.serverName.collectAsState()
     val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -147,7 +149,12 @@ fun OnboardingFlow(
     val savedToken by viewModel.gatewayToken.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
-    val ready = canFinishOnboarding(isConnected = isConnected, isNodeConnected = isNodeConnected)
+    val ready =
+      canFinishOnboarding(
+        isConnected = isConnected,
+        isNodeConnected = isNodeConnected,
+        nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+      )
 
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
     var setupCode by rememberSaveable { mutableStateOf("") }
@@ -327,6 +334,7 @@ fun OnboardingFlow(
           attemptedGatewayName = attemptedGatewayName,
           remoteAddress = remoteAddress,
           ready = ready,
+          nodeCapabilityApprovalState = nodeCapabilityApprovalState,
           gatewayConnectionProblem = gatewayConnectionProblem,
           connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
           onBack = { step = OnboardingStep.Gateway },
@@ -609,6 +617,7 @@ private fun GatewayRecoveryScreen(
   attemptedGatewayName: String?,
   remoteAddress: String?,
   ready: Boolean,
+  nodeCapabilityApprovalState: GatewayNodeApprovalState,
   gatewayConnectionProblem: GatewayConnectionProblem?,
   connectSettling: Boolean,
   onBack: () -> Unit,
@@ -617,7 +626,14 @@ private fun GatewayRecoveryScreen(
   onContinue: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val recoveryState = gatewayRecoveryUiState(ready = ready, statusText = statusText, connectSettling = connectSettling, gatewayConnectionProblem = gatewayConnectionProblem)
+  val recoveryState =
+    gatewayRecoveryUiState(
+      ready = ready,
+      statusText = statusText,
+      connectSettling = connectSettling,
+      nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+      gatewayConnectionProblem = gatewayConnectionProblem,
+    )
   val context = LocalContext.current
 
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
@@ -629,6 +645,7 @@ private fun GatewayRecoveryScreen(
           imageVector =
             when (recoveryState) {
               GatewayRecoveryUiState.Connected -> Icons.Default.CheckCircle
+              GatewayRecoveryUiState.NodeCapabilityApprovalPending -> Icons.Default.WifiTethering
               GatewayRecoveryUiState.ApprovalRequired -> Icons.Default.WifiTethering
               GatewayRecoveryUiState.Pairing -> Icons.Default.WifiTethering
               GatewayRecoveryUiState.Finishing -> Icons.Default.WifiTethering
@@ -639,6 +656,7 @@ private fun GatewayRecoveryScreen(
           tint =
             when (recoveryState) {
               GatewayRecoveryUiState.Connected -> ClawTheme.colors.success
+              GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawTheme.colors.warning
               GatewayRecoveryUiState.ApprovalRequired -> ClawTheme.colors.warning
               GatewayRecoveryUiState.Pairing -> ClawTheme.colors.text
               GatewayRecoveryUiState.Finishing -> ClawTheme.colors.text
@@ -658,7 +676,18 @@ private fun GatewayRecoveryScreen(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
           Text(text = "Last gateway", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
           Text(text = recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = recoveryGatewayDetail(ready = ready, remoteAddress = remoteAddress, statusText = statusText, gatewayConnectionProblem = gatewayConnectionProblem), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          Text(
+            text =
+              recoveryGatewayDetail(
+                ready = ready,
+                remoteAddress = remoteAddress,
+                statusText = statusText,
+                nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+                gatewayConnectionProblem = gatewayConnectionProblem,
+              ),
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+          )
           recoveryGatewayApprovalCommand(gatewayConnectionProblem)?.let { command ->
             ApprovalCommandBlock(command = command, onCopy = { copyApprovalCommand(context, command) })
           }
@@ -666,6 +695,7 @@ private fun GatewayRecoveryScreen(
             text =
               when (recoveryState) {
                 GatewayRecoveryUiState.Connected -> "Healthy"
+                GatewayRecoveryUiState.NodeCapabilityApprovalPending -> "Node approval"
                 GatewayRecoveryUiState.ApprovalRequired -> "Needs approval"
                 GatewayRecoveryUiState.Pairing -> "Pairing"
                 GatewayRecoveryUiState.Finishing -> "Connecting"
@@ -674,6 +704,7 @@ private fun GatewayRecoveryScreen(
             status =
               when (recoveryState) {
                 GatewayRecoveryUiState.Connected -> ClawStatus.Success
+                GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawStatus.Warning
                 GatewayRecoveryUiState.ApprovalRequired -> ClawStatus.Warning
                 GatewayRecoveryUiState.Pairing -> ClawStatus.Neutral
                 GatewayRecoveryUiState.Finishing -> ClawStatus.Neutral
@@ -1022,6 +1053,10 @@ internal enum class GatewayRecoveryUiState(
     title = "Pairing Gateway",
     message = "Approve this phone on the gateway.\nThen retry the connection.",
   ),
+  NodeCapabilityApprovalPending(
+    title = "Node Approval Pending",
+    message = "Gateway pairing worked.\nApprove this phone's node capabilities from an operator UI.",
+  ),
   Pairing(
     title = "Pairing Gateway",
     message = "Approval is in progress.\nOpenClaw will reconnect automatically.",
@@ -1079,14 +1114,19 @@ internal fun gatewayRecoveryUiState(
   ready: Boolean,
   statusText: String,
   connectSettling: Boolean,
+  nodeCapabilityApprovalState: GatewayNodeApprovalState,
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): GatewayRecoveryUiState =
   when {
     ready -> GatewayRecoveryUiState.Connected
+    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
+      nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
+      nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved -> GatewayRecoveryUiState.NodeCapabilityApprovalPending
     gatewayConnectionProblem?.isPairingRequired == true &&
       !gatewayConnectionProblem.canAutoRetry -> GatewayRecoveryUiState.ApprovalRequired
     gatewayConnectionProblem?.isPairingRequired == true -> GatewayRecoveryUiState.Pairing
     gatewayConnectionProblem?.pauseReconnect == true -> GatewayRecoveryUiState.Failed
+    nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading -> GatewayRecoveryUiState.Finishing
     connectSettling -> GatewayRecoveryUiState.Finishing
     gatewayStatusLooksLikePairing(statusText) -> GatewayRecoveryUiState.Pairing
     gatewayStatusLooksLikePartialConnect(statusText) -> GatewayRecoveryUiState.Finishing
@@ -1170,12 +1210,21 @@ private fun recoveryGatewayDetail(
   ready: Boolean,
   remoteAddress: String?,
   statusText: String,
+  nodeCapabilityApprovalState: GatewayNodeApprovalState,
   gatewayConnectionProblem: GatewayConnectionProblem?,
 ): String =
   remoteAddress
     ?.takeIf { it.isNotBlank() }
     ?: if (ready) {
       "Ready for chat and voice"
+    } else if (
+      nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
+      nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
+      nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
+    ) {
+      "Gateway paired. Waiting for node capability approval."
+    } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
+      "Gateway paired. Checking node capability approval."
     } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
       recoveryGatewayApprovalCommand(gatewayConnectionProblem)
         ?.let { "Gateway approval is pending. Run this on the gateway host:" }
@@ -1248,11 +1297,24 @@ private class PermissionState(
   val applyToViewModel: () -> Unit,
 )
 
-/** Onboarding can finish only after gateway and node channels are both ready. */
+/** Onboarding finishes only after the gateway resolves node capability approval. */
 internal fun canFinishOnboarding(
   isConnected: Boolean,
   isNodeConnected: Boolean,
-): Boolean = isConnected && isNodeConnected
+  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+): Boolean =
+  isConnected &&
+    isNodeConnected &&
+    when (nodeCapabilityApprovalState) {
+      GatewayNodeApprovalState.PendingApproval,
+      GatewayNodeApprovalState.PendingReapproval,
+      GatewayNodeApprovalState.Unapproved,
+      GatewayNodeApprovalState.Loading,
+      -> false
+      GatewayNodeApprovalState.Approved,
+      GatewayNodeApprovalState.Unsupported,
+      -> true
+    }
 
 /** Builds permission rows and applies granted feature toggles after onboarding. */
 @Composable

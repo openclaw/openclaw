@@ -46,6 +46,17 @@ public enum NodePresenceAliveReason: String, Codable, Sendable {
     case connect = "connect"
 }
 
+public enum SessionFileKind: String, Codable, Sendable {
+    case modified = "modified"
+    case read = "read"
+}
+
+public enum SessionFileRelevance: String, Codable, Sendable {
+    case modified = "modified"
+    case read = "read"
+    case mixed = "mixed"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
@@ -1761,6 +1772,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     public let hubdelegatedowner: String?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
+    public let allowmissing: Bool?
 
     public init(
         key: String?,
@@ -1770,7 +1782,8 @@ public struct SessionsResolveParams: Codable, Sendable {
         spawnedby: String?,
         hubdelegatedowner: String? = nil,
         includeglobal: Bool?,
-        includeunknown: Bool?)
+        includeunknown: Bool?,
+        allowmissing: Bool? = nil)
     {
         self.key = key
         self.sessionid = sessionid
@@ -1780,6 +1793,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         self.hubdelegatedowner = hubdelegatedowner
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
+        self.allowmissing = allowmissing
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1791,6 +1805,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         case hubdelegatedowner = "hubDelegatedOwner"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
+        case allowmissing = "allowMissing"
     }
 }
 
@@ -6157,6 +6172,7 @@ public struct CronListParams: Codable, Sendable {
     public let sortby: AnyCodable?
     public let sortdir: AnyCodable?
     public let agentid: String?
+    public let compact: Bool?
 
     public init(
         includedisabled: Bool?,
@@ -6168,7 +6184,8 @@ public struct CronListParams: Codable, Sendable {
         lastrunstatus: AnyCodable?,
         sortby: AnyCodable?,
         sortdir: AnyCodable?,
-        agentid: String? = nil)
+        agentid: String? = nil,
+        compact: Bool? = nil)
     {
         self.includedisabled = includedisabled
         self.limit = limit
@@ -6180,6 +6197,7 @@ public struct CronListParams: Codable, Sendable {
         self.sortby = sortby
         self.sortdir = sortdir
         self.agentid = agentid
+        self.compact = compact
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6193,6 +6211,7 @@ public struct CronListParams: Codable, Sendable {
         case sortby = "sortBy"
         case sortdir = "sortDir"
         case agentid = "agentId"
+        case compact
     }
 }
 
@@ -6576,6 +6595,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let security: AnyCodable?
     public let ask: AnyCodable?
     public let warningtext: AnyCodable?
+    public let unavailabledecisions: [String]?
     public let commandspans: [[String: AnyCodable]]?
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
@@ -6601,6 +6621,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         security: AnyCodable?,
         ask: AnyCodable?,
         warningtext: AnyCodable?,
+        unavailabledecisions: [String]?,
         commandspans: [[String: AnyCodable]]?,
         agentid: AnyCodable? = nil,
         resolvedpath: AnyCodable?,
@@ -6625,6 +6646,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.security = security
         self.ask = ask
         self.warningtext = warningtext
+        self.unavailabledecisions = unavailabledecisions
         self.commandspans = commandspans
         self.agentid = agentid
         self.resolvedpath = resolvedpath
@@ -6651,6 +6673,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case security
         case ask
         case warningtext = "warningText"
+        case unavailabledecisions = "unavailableDecisions"
         case commandspans = "commandSpans"
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"

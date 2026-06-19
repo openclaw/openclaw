@@ -393,7 +393,43 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.message).toBe(IMAGE_ONLY_USER_MESSAGE);
     });
 
-    it("keeps an empty message when the active turn has neither text nor image", () => {
+    it("substitutes a placeholder for a file-only active user turn", () => {
+      const result = buildAgentPrompt([
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [
+            {
+              type: "input_file" as const,
+              source: { type: "url" as const, url: "https://example.com/report.pdf" },
+            },
+          ],
+        },
+      ]);
+
+      expect(result.message).not.toBe("");
+      expect(result.message.toLowerCase()).toContain("file");
+    });
+
+    it("keeps the user text when a file-only turn also carries text", () => {
+      const result = buildAgentPrompt([
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [
+            { type: "input_text" as const, text: "summarize this" },
+            {
+              type: "input_file" as const,
+              source: { type: "url" as const, url: "https://example.com/report.pdf" },
+            },
+          ],
+        },
+      ]);
+
+      expect(result.message).toBe("summarize this");
+    });
+
+    it("keeps an empty message when the active turn has neither text, image, nor file", () => {
       const result = buildAgentPrompt([
         { type: "message" as const, role: "user" as const, content: [] },
       ]);

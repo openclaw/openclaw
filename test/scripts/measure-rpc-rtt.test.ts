@@ -22,6 +22,7 @@ class FakeWebSocket extends EventEmitter {
   closed = false;
   readyState = 0;
   sent: string[] = [];
+  terminated = false;
 
   constructor(
     readonly url: string,
@@ -41,6 +42,15 @@ class FakeWebSocket extends EventEmitter {
     this.readyState = 3;
     this.emit("close", 1000, "closed");
   }
+
+  terminate(): void {
+    this.terminated = true;
+    this.close();
+  }
+}
+
+function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(body), init);
 }
 
 describe("scripts/measure-rpc-rtt.mjs", () => {
@@ -54,6 +64,22 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
 
     await expect(client.waitOpen()).rejects.toThrow("gateway websocket open timeout");
     expect(FakeWebSocket.instances[0]?.closed).toBe(true);
+    expect(FakeWebSocket.instances[0]?.terminated).toBe(true);
+  });
+
+  it("rejects websocket closes before opening", async () => {
+    FakeWebSocket.instances = [];
+    const client = createGatewayClient({
+      WebSocket: FakeWebSocket,
+      openTimeoutMs: 10_000,
+      url: "ws://127.0.0.1:12345",
+    });
+
+    const opened = client.waitOpen();
+    FakeWebSocket.instances[0]?.emit("close", 1006, Buffer.from("bye"));
+
+    await expect(opened).rejects.toThrow("closed before open (1006): bye");
+    expect(FakeWebSocket.instances[0]?.closed).toBe(false);
   });
 
   it("rejects pending websocket requests when cleanup closes the client", async () => {
@@ -315,7 +341,42 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12346, 0);
       expect(kill).toHaveBeenNthCalledWith(2, -12346, "SIGTERM");
-      expect(kill).toHaveBeenLastCalledWith(-12346, "SIGKILL");
+      expect(kill).toHaveBeenCalledWith(-12346, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+    }
+  });
+
+  it("waits for the process group to disappear after force kill", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      pid: 12350,
+      signalCode: null,
+    });
+    let sawForceKill = false;
+    let postKillLivenessChecks = 0;
+    const kill = vi.fn((_pid: number, signal: number | NodeJS.Signals) => {
+      if (signal === "SIGKILL") {
+        sawForceKill = true;
+        return true;
+      }
+      if (signal === 0 && sawForceKill) {
+        postKillLivenessChecks += 1;
+        if (postKillLivenessChecks >= 2) {
+          throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+        }
+      }
+      return true;
+    });
+
+    await stopGateway(child, { forceKillGraceMs: 50, killGraceMs: 1, killProcess: kill });
+
+    if (process.platform === "win32") {
+      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+    } else {
+      expect(kill).toHaveBeenCalledWith(-12350, "SIGKILL");
+      expect(postKillLivenessChecks).toBe(2);
       expect(child.kill).not.toHaveBeenCalled();
     }
   });
@@ -336,7 +397,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12347, 0);
       expect(kill).toHaveBeenNthCalledWith(2, -12347, "SIGTERM");
-      expect(kill).toHaveBeenLastCalledWith(-12347, "SIGKILL");
+      expect(kill).toHaveBeenCalledWith(-12347, "SIGKILL");
       expect(child.kill).not.toHaveBeenCalled();
     }
   });
@@ -440,12 +501,9 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const child = new EventEmitter();
     const fetchImpl = vi
       .fn()
-      .mockRejectedValueOnce(new DOMException("request timed out", "TimeoutError"))
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValue({ ready: true }),
-        ok: true,
-      });
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ start() {} })))
+      .mockResolvedValueOnce(jsonResponse({ ok: true, status: "live" }))
+      .mockResolvedValueOnce(jsonResponse({ failing: [], ready: true }));
 
     await waitForGatewayReady({
       child,
@@ -485,21 +543,9 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const child = new EventEmitter();
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValue({ failing: ["gateway"], ready: false }),
-        ok: false,
-        status: 503,
-      })
-      .mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValue({ ok: true, status: "live" }),
-        ok: true,
-        status: 200,
-      })
-      .mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValue({ failing: [], ready: true }),
-        ok: true,
-        status: 200,
-      });
+      .mockResolvedValueOnce(jsonResponse({ failing: ["gateway"], ready: false }, { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true, status: "live" }))
+      .mockResolvedValueOnce(jsonResponse({ failing: [], ready: true }));
 
     await waitForGatewayReady({
       child,
@@ -533,5 +579,46 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+  });
+
+  it("cancels unconsumed readiness probe response bodies", async () => {
+    const child = new EventEmitter();
+    let readyzCanceled = false;
+    let healthzCanceled = false;
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        body: {
+          async cancel() {
+            readyzCanceled = true;
+          },
+        },
+        ok: false,
+        status: 503,
+      })
+      .mockResolvedValueOnce({
+        body: {
+          async cancel() {
+            healthzCanceled = true;
+          },
+        },
+        ok: true,
+        status: 200,
+      })
+      .mockResolvedValueOnce(jsonResponse({ failing: [], ready: true }));
+
+    await waitForGatewayReady({
+      child,
+      fetchImpl,
+      port: 12345,
+      probeTimeoutMs: 7,
+      readyTimeoutMs: 50,
+      sleepMs: 1,
+      stderrPath: "/no/such/stderr.log",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(readyzCanceled).toBe(true);
+    expect(healthzCanceled).toBe(true);
   });
 });

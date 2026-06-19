@@ -105,6 +105,21 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+  it("cancels failed OpenRouter catalog response bodies", async () => {
+    await withOpenRouterStateDir(async () => {
+      const response = new Response("temporarily unavailable", { status: 503 });
+      const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+      const fetchSpy = vi.fn(async () => response);
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const module = await importOpenRouterModelCapabilities("failed-catalog-response");
+      await module.loadOpenRouterModelCapabilities("acme/missing-model");
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+  });
+
   it("uses endpoint-specific OpenRouter context length when top_provider reports one", async () => {
     await withOpenRouterStateDir(async () => {
       vi.stubGlobal(

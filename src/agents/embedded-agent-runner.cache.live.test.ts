@@ -6,6 +6,7 @@ import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionDirect } from "./embedded-agent-runner/compact.runtime.js";
 import {
@@ -771,11 +772,11 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
       prompt: process.env.OPENCLAW_CACHE_TRACE_PROMPT,
       system: process.env.OPENCLAW_CACHE_TRACE_SYSTEM,
     };
-    process.env.OPENCLAW_CACHE_TRACE = "1";
-    process.env.OPENCLAW_CACHE_TRACE_FILE = liveCacheTraceFile;
-    process.env.OPENCLAW_CACHE_TRACE_MESSAGES = "0";
-    process.env.OPENCLAW_CACHE_TRACE_PROMPT = "0";
-    process.env.OPENCLAW_CACHE_TRACE_SYSTEM = "0";
+    setTestEnvValue("OPENCLAW_CACHE_TRACE", "1");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_FILE", liveCacheTraceFile);
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_MESSAGES", "0");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_PROMPT", "0");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_SYSTEM", "0");
   }, 120_000);
 
   afterAll(async () => {
@@ -790,9 +791,9 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         value: string | undefined,
       ) => {
         if (value === undefined) {
-          delete process.env[key];
+          deleteTestEnvValue(key);
         } else {
-          process.env[key] = value;
+          setTestEnvValue(key, value);
         }
       };
       restore("OPENCLAW_CACHE_TRACE", previousCacheTraceEnv.enabled);

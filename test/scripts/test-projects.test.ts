@@ -14,6 +14,7 @@ import {
   buildFullSuiteVitestRunPlans,
   buildVitestArgs,
   buildVitestRunPlans,
+  createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
   listFullExtensionVitestProjectConfigs,
@@ -305,6 +306,566 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes nested e2e library helpers through owner tests", () => {
+    const expectedTargets = new Map([
+      [
+        "scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs",
+        ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs",
+        ["test/scripts/browser-cdp-snapshot.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs",
+        ["test/scripts/browser-cdp-snapshot.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs",
+        ["test/scripts/codex-media-path-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/codex-media-path/scenario.sh",
+        ["test/scripts/codex-media-path-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs",
+        ["test/scripts/codex-media-path-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/codex-media-path/limits.mjs",
+        ["test/scripts/codex-media-path-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/codex-media-path/write-config.mjs",
+        ["test/scripts/codex-media-path-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/gateway-network/limits.mjs",
+        ["test/scripts/gateway-network-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/gateway-network/ws-frames.mjs",
+        ["test/scripts/gateway-network-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/npm-telegram-live/prepare-package.mjs",
+        ["test/scripts/npm-telegram-live.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs",
+        ["test/scripts/kitchen-sink-plugin-assertions.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/live-plugin-tool/assertions.mjs",
+        ["test/scripts/live-plugin-tool-assertions.test.ts"],
+      ],
+      ["scripts/e2e/lib/plugins/assertions.mjs", ["test/scripts/plugins-assertions.test.ts"]],
+      [
+        "scripts/e2e/lib/release-user-journey/assertions.mjs",
+        ["test/scripts/release-user-journey-assertions.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/release-assertion-files.mjs",
+        [
+          "test/scripts/release-scenarios-assertions.test.ts",
+          "test/scripts/release-user-journey-assertions.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/lib/openai-chat-tools/write-config.mjs",
+        ["test/scripts/openai-chat-tools-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/openai-chat-tools/scenario.sh",
+        ["test/scripts/openai-chat-tools-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/openai-chat-tools-docker.sh",
+        ["test/scripts/openai-chat-tools-client.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs",
+        [
+          "test/scripts/openai-web-search-minimal-client.test.ts",
+          "test/scripts/openai-web-search-minimal-assertions.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/openai-web-search-minimal-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/openai-web-search-minimal-client.test.ts",
+          "test/scripts/openai-web-search-minimal-assertions.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/openwebui-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/openwebui-probe.test.ts",
+          "test/scripts/fixture-config.test.ts",
+        ],
+      ],
+      ["scripts/e2e/lib/openwebui/http-probe.mjs", ["test/scripts/openwebui-probe.test.ts"]],
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        ["test/scripts/plugins-assertions.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs",
+        ["test/scripts/release-scenarios-assertions.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs",
+        ["test/scripts/release-user-journey-assertions.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/upgrade-survivor/run.sh",
+        ["test/scripts/upgrade-survivor-assertions.test.ts"],
+      ],
+      ["scripts/e2e/lib/run-with-pty.mjs", ["test/scripts/e2e-run-with-pty.test.ts"]],
+    ]);
+
+    for (const [source, targets] of expectedTargets) {
+      expect(resolveChangedTestTargetPlan([source]), source).toEqual({
+        mode: "targets",
+        targets,
+      });
+    }
+  });
+
+  it("routes nested e2e shell helpers through their sourced owner tests", () => {
+    const expectedTargets = new Map([
+      [
+        "scripts/e2e/lib/bun-global-install/assertions.mjs",
+        ["test/scripts/test-install-sh-docker.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
+        ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh",
+        ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
+        ["test/scripts/docker-build-helper.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/config-reload/assert-log.mjs",
+        ["test/scripts/e2e-mock-config-limits.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs",
+        ["test/scripts/docker-stats-resource-ceiling.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/doctor-install-switch/scenario.sh",
+        ["test/scripts/docker-build-helper.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/fixture.mjs",
+        ["test/scripts/fixture-config.test.ts", "test/scripts/fixtures-workspace.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh",
+        ["test/scripts/kitchen-sink-plugin-assertions.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/mcp-code-mode-validation.ts",
+        ["test/scripts/mcp-code-mode-gateway-client.test.ts"],
+      ],
+      [
+        "scripts/e2e/codex-media-path-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/codex-media-path-client.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/codex-npm-plugin-live-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/codex-on-demand-docker.sh",
+        ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
+      ],
+      [
+        "scripts/e2e/crestodian-first-run-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/docker-e2e-crestodian.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-first-run-docker-client.ts",
+        [
+          "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/cli/run-main.test.ts",
+          "src/cli/run-main.exit.test.ts",
+          "src/crestodian/crestodian.test.ts",
+          "src/crestodian/operations.test.ts",
+          "src/crestodian/overview.test.ts",
+          "src/crestodian/audit.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-first-run-spec.json",
+        [
+          "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/crestodian/operations.test.ts",
+          "src/crestodian/audit.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-planner-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/docker-e2e-crestodian.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-planner-docker-client.mjs",
+        [
+          "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/crestodian/assistant.test.ts",
+          "src/crestodian/crestodian.test.ts",
+          "src/crestodian/operations.test.ts",
+          "src/crestodian/audit.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-rescue-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/docker-e2e-crestodian.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-rescue-docker-client.ts",
+        [
+          "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/crestodian/rescue-policy.test.ts",
+          "src/crestodian/rescue-message.test.ts",
+          "src/crestodian/operations.test.ts",
+          "src/crestodian/audit.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/commitments-safety-docker-client.ts",
+        [
+          "test/scripts/docker-e2e-clients.test.ts",
+          "src/commitments/runtime.test.ts",
+          "src/commitments/store.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/commitments-safety-docker.sh",
+        [
+          "test/scripts/docker-e2e-clients.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "src/commitments/runtime.test.ts",
+          "src/commitments/store.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/session-runtime-context-docker-client.ts",
+        [
+          "test/scripts/docker-e2e-clients.test.ts",
+          "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
+          "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/session-runtime-context-docker.sh",
+        [
+          "test/scripts/docker-e2e-clients.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
+          "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
+        ],
+      ],
+      ["scripts/e2e/mcp-channels-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
+      ["scripts/e2e/docker-openai-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
+      ["scripts/e2e/mcp-code-mode-gateway-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
+      [
+        "scripts/e2e/cron-mcp-cleanup-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-observability.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+          "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+          "test/scripts/docker-e2e-seeds.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
+        [
+          "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+          "src/gateway/server.cron.test.ts",
+          "src/gateway/server-methods/agent.test.ts",
+          "src/cron/isolated-agent/run.fast-mode.test.ts",
+          "src/cron/active-jobs-manual-run.test.ts",
+        ],
+      ],
+      ["scripts/e2e/cron-mcp-cleanup-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
+      [
+        "scripts/e2e/lib/onboard/scenario.sh",
+        ["test/scripts/e2e-shell-tempfiles.test.ts", "test/scripts/openclaw-test-state.test.ts"],
+      ],
+      ["scripts/e2e/lib/package-compat.mjs", ["test/scripts/docker-build-helper.test.ts"]],
+      [
+        "scripts/e2e/agents-delete-shared-workspace-docker.sh",
+        [
+          "test/scripts/docker-e2e-plan.test.ts",
+          "src/scripts/ci-changed-scope.test.ts",
+          "src/commands/agents.delete.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/browser-cdp-snapshot-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/browser-cdp-snapshot.test.ts",
+          "test/scripts/e2e-helper-env-limits.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/channel-plugin-trust-docker.sh",
+        ["test/scripts/docker-build-helper.test.ts", "test/scripts/test-projects.test.ts"],
+      ],
+      [
+        "scripts/e2e/config-reload-source-docker.sh",
+        [
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/fixture-config.test.ts",
+          "test/scripts/e2e-mock-config-limits.test.ts",
+          "src/gateway/config-reload.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/gateway-network-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/gateway-network-client.test.ts",
+          "src/scripts/ci-changed-scope.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/npm-onboard-channel-agent-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/npm-onboard-channel-agent-assertions.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+        ],
+      ],
+      ["scripts/e2e/npm-telegram-live-docker.sh", ["test/scripts/npm-telegram-live.test.ts"]],
+      [
+        "scripts/e2e/multi-node-update-docker.sh",
+        ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
+      ],
+      [
+        "scripts/e2e/doctor-install-switch-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/update-channel-switch-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/skill-install-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/e2e-shell-tempfiles.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/upgrade-survivor-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/upgrade-survivor-probe-gateway.test.ts",
+          "test/scripts/upgrade-survivor-assertions.test.ts",
+          "test/scripts/openclaw-test-state.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+          "test/scripts/bundled-plugin-install-uninstall-probe.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh",
+        ["test/scripts/plugin-update-unchanged-docker.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/plugin-update/probe.mjs",
+        ["test/scripts/plugin-update-unchanged-docker.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/plugin-update/unchanged-scenario.sh",
+        ["test/scripts/plugin-update-unchanged-docker.test.ts"],
+      ],
+      [
+        "scripts/e2e/plugin-update-unchanged-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+          "test/scripts/plugin-update-unchanged-docker.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/update-corrupt-plugin-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/plugin-update-unchanged-docker.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/plugins-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugins-assertions.test.ts",
+        ],
+      ],
+      ["scripts/e2e/lib/plugins/clawhub.sh", ["test/scripts/plugins-assertions.test.ts"]],
+      ["scripts/e2e/lib/plugins/fixtures.sh", ["test/scripts/plugins-assertions.test.ts"]],
+      ["scripts/e2e/lib/plugins/marketplace.sh", ["test/scripts/plugins-assertions.test.ts"]],
+      ["scripts/e2e/lib/plugins/sweep.sh", ["test/scripts/plugins-assertions.test.ts"]],
+      [
+        "scripts/e2e/lib/release-plugin-marketplace/scenario.sh",
+        ["test/scripts/docker-build-helper.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
+        ["test/scripts/docker-build-helper.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh",
+        ["test/scripts/docker-build-helper.test.ts"],
+      ],
+      [
+        "scripts/e2e/release-plugin-marketplace-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/release-typed-onboarding-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/release-upgrade-user-journey-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/release-user-journey-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/release-user-journey-assertions.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/lib/skills/clawhub-install-proof.sh",
+        ["test/scripts/e2e-shell-tempfiles.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/update-channel-switch/assertions.mjs",
+        ["test/scripts/docker-build-helper.test.ts"],
+      ],
+      [
+        "scripts/e2e/live-plugin-tool-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/live-plugin-tool-assertions.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/openai-image-auth-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/openai-image-auth-docker-client.test.ts",
+          "extensions/openai/image-generation-provider.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/openai-image-auth-docker-client.ts",
+        [
+          "test/scripts/openai-image-auth-docker-client.test.ts",
+          "extensions/openai/image-generation-provider.test.ts",
+          "src/image-generation/openai-compatible-image-provider.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/plugin-binding-command-escape-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      ["scripts/e2e/qr-import-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
+    ]);
+
+    for (const [source, targets] of expectedTargets) {
+      expect(resolveChangedTestTargetPlan([source]), source).toEqual({
+        mode: "targets",
+        targets,
+      });
+    }
+  });
+
   it("routes unmatched script changes to the tooling suite instead of skipping tests", () => {
     const targets = [
       "scripts/check-no-raw-http2-imports.mjs",
@@ -332,6 +893,25 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(resolveChangedTestTargetPlan(["scripts/zai-fallback-repro.ts"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/zai-fallback-repro.test.ts"],
+    });
+  });
+
+  it("routes code-mode namespace live repro changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/code-mode-namespace-live.test.ts"],
+    });
+  });
+
+  it("routes code-mode namespace live Docker repro changes through its regression tests", () => {
+    expect(
+      resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live-docker.sh"]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/code-mode-namespace-live.test.ts",
+        "test/scripts/docker-build-helper.test.ts",
+      ],
     });
   });
 
@@ -484,6 +1064,22 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps CI workflow edits on workflow guard tests", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/ci.yml"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-workflow-guards.test.ts"],
+    });
+  });
+
+  it("keeps security-sensitive guard workflow edits on guard workflow tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([".github/workflows/security-sensitive-guard.yml"]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/security-sensitive-guard-workflow.test.ts"],
+    });
+  });
+
   it("keeps Crabbox and Testbox workflow edits on workflow regression tests", () => {
     for (const workflowPath of [
       ".github/workflows/ci-check-testbox.yml",
@@ -556,6 +1152,11 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: ["test/scripts/dependency-changes-report.test.ts"],
     });
 
+    expect(resolveChangedTestTargetPlan(["scripts/github/security-sensitive-guard.mjs"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/security-sensitive-guard-script.test.ts"],
+    });
+
     expect(
       resolveChangedTestTargetPlan(["scripts/dependency-ownership-surface-report.mjs"]),
     ).toEqual({
@@ -579,8 +1180,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
       [
         "scripts/package-openclaw-for-docker.mjs",
-        ["test/scripts/package-openclaw-for-docker.test.ts"],
+        ["test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts"],
       ],
+      ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
+      ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
       ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
       ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
       ["scripts/package-changelog.mjs", ["test/scripts/package-changelog.test.ts"]],
@@ -590,6 +1193,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/openclaw-npm-postpublish-verify.ts",
         ["test/openclaw-npm-postpublish-verify.test.ts"],
       ],
+      ["scripts/verify-pr-hosted-gates.mjs", ["test/scripts/verify-pr-hosted-gates.test.ts"]],
       [
         "scripts/postinstall-bundled-plugins.mjs",
         ["test/scripts/postinstall-bundled-plugins.test.ts"],
@@ -607,6 +1211,13 @@ describe("scripts/test-projects changed-target routing", () => {
         targets,
       });
     }
+  });
+
+  it("keeps QA Lab gateway smoke script edits on QA e2e tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/dev/gateway-smoke.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"],
+    });
   });
 
   it("keeps shared script library edits on owner tests", () => {
@@ -891,11 +1502,17 @@ describe("scripts/test-projects changed-target routing", () => {
     const targets = [
       "scripts/e2e/mcp-channels-docker.sh",
       "scripts/e2e/mcp-channels-docker-client.ts",
+      "scripts/e2e/mcp-channels-seed.ts",
+      "scripts/e2e/docker-openai-seed.ts",
       "scripts/e2e/mcp-code-mode-gateway-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
+      "scripts/e2e/mcp-code-mode-gateway-seed.ts",
       "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
       "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
       "scripts/mcp-code-mode-gateway-e2e.ts",
+      "scripts/e2e/cron-mcp-cleanup-docker.sh",
+      "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
+      "scripts/e2e/cron-mcp-cleanup-seed.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -906,10 +1523,89 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-e2e-observability.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/scripts/docker-e2e-seeds.test.ts",
         "test/scripts/mcp-code-mode-gateway-client.test.ts",
         "test/scripts/session-log-mentions.test.ts",
         "src/agents/agent-bundle-mcp-runtime.test.ts",
         "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+        "src/gateway/server.cron.test.ts",
+        "src/gateway/server-methods/agent.test.ts",
+        "src/cron/isolated-agent/run.fast-mode.test.ts",
+        "src/cron/active-jobs-manual-run.test.ts",
+      ],
+    });
+  });
+
+  it("routes OpenAI image auth Docker E2E script targets instead of skipping changed tests", () => {
+    const targets = [
+      "scripts/e2e/openai-image-auth-docker.sh",
+      "scripts/e2e/openai-image-auth-docker-client.ts",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/openai-image-auth-docker-client.test.ts",
+        "extensions/openai/image-generation-provider.test.ts",
+        "src/image-generation/openai-compatible-image-provider.test.ts",
+      ],
+    });
+  });
+
+  it("routes package-backed Docker shell targets instead of skipping changed tests", () => {
+    const targets = [
+      "scripts/e2e/codex-media-path-docker.sh",
+      "scripts/e2e/codex-npm-plugin-live-docker.sh",
+      "scripts/e2e/codex-on-demand-docker.sh",
+      "scripts/e2e/live-plugin-tool-docker.sh",
+      "scripts/e2e/plugin-binding-command-escape-docker.sh",
+      "scripts/e2e/qr-import-docker.sh",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/codex-media-path-client.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/live-plugin-tool-assertions.test.ts",
+      ],
+    });
+  });
+
+  it("routes Crestodian Docker E2E script targets instead of skipping changed tests", () => {
+    const targets = [
+      "scripts/e2e/crestodian-first-run-docker.sh",
+      "scripts/e2e/crestodian-first-run-docker-client.ts",
+      "scripts/e2e/crestodian-first-run-spec.json",
+      "scripts/e2e/crestodian-planner-docker.sh",
+      "scripts/e2e/crestodian-planner-docker-client.mjs",
+      "scripts/e2e/crestodian-rescue-docker.sh",
+      "scripts/e2e/crestodian-rescue-docker-client.ts",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/docker-e2e-crestodian.test.ts",
+        "src/cli/run-main.test.ts",
+        "src/cli/run-main.exit.test.ts",
+        "src/crestodian/crestodian.test.ts",
+        "src/crestodian/operations.test.ts",
+        "src/crestodian/overview.test.ts",
+        "src/crestodian/audit.test.ts",
+        "src/crestodian/assistant.test.ts",
+        "src/crestodian/rescue-policy.test.ts",
+        "src/crestodian/rescue-message.test.ts",
       ],
     });
   });
@@ -932,6 +1628,95 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
         includePatterns: ["test/scripts/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes the src scripts test root to the tooling shard", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/scripts"], process.cwd())).toEqual([]);
+    expect(buildVitestRunPlans(["src/scripts"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/scripts/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes exact source directory roots to their owning shards", () => {
+    const cases = [
+      ["src/acp", "test/vitest/vitest.acp.config.ts"],
+      ["src/agents", "test/vitest/vitest.agents.config.ts"],
+      ["src/auto-reply", "test/vitest/vitest.auto-reply.config.ts"],
+      ["src/channels", "test/vitest/vitest.channels.config.ts"],
+      ["src/cli", "test/vitest/vitest.cli.config.ts"],
+      ["src/config", "test/vitest/vitest.runtime-config.config.ts"],
+      ["src/cron", "test/vitest/vitest.cron.config.ts"],
+      ["src/daemon", "test/vitest/vitest.daemon.config.ts"],
+      ["src/gateway", "test/vitest/vitest.gateway.config.ts"],
+      ["src/hooks", "test/vitest/vitest.hooks.config.ts"],
+      ["src/infra", "test/vitest/vitest.infra.config.ts"],
+      ["src/logging", "test/vitest/vitest.logging.config.ts"],
+      ["src/media", "test/vitest/vitest.media.config.ts"],
+      ["src/media-understanding", "test/vitest/vitest.media-understanding.config.ts"],
+      ["src/plugin-sdk", "test/vitest/vitest.plugin-sdk.config.ts"],
+      ["src/plugins", "test/vitest/vitest.plugins.config.ts"],
+      ["src/process", "test/vitest/vitest.process.config.ts"],
+      ["src/secrets", "test/vitest/vitest.secrets.config.ts"],
+      ["src/shared", "test/vitest/vitest.shared-core.config.ts"],
+      ["src/tasks", "test/vitest/vitest.tasks.config.ts"],
+      ["src/tui", "test/vitest/vitest.tui.config.ts"],
+      ["src/utils", "test/vitest/vitest.utils.config.ts"],
+      ["src/wizard", "test/vitest/vitest.wizard.config.ts"],
+      ["ui/src", "test/vitest/vitest.ui.config.ts"],
+    ] as const;
+
+    for (const [target, config] of cases) {
+      expect(buildVitestRunPlans([target], process.cwd()).at(-1)).toEqual({
+        config,
+        forwardedArgs: [],
+        includePatterns: [`${target}/**/*.test.ts`],
+        watchMode: false,
+      });
+    }
+
+    expect(buildVitestRunPlans(["src/plugin-sdk"], process.cwd())).toEqual([
+      expect.objectContaining({
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        includePatterns: expect.arrayContaining(["src/plugin-sdk/access-groups.test.ts"]),
+      }),
+      expect.objectContaining({
+        config: "test/vitest/vitest.plugin-sdk-light.config.ts",
+        includePatterns: expect.arrayContaining(["src/plugin-sdk/acp-runtime.test.ts"]),
+      }),
+      {
+        config: "test/vitest/vitest.plugin-sdk.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugin-sdk/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+    expect(buildVitestRunPlans(["src/shared"], process.cwd()).map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.shared-core.config.ts",
+    ]);
+    expect(buildVitestRunPlans(["src/utils"], process.cwd()).map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.utils.config.ts",
+    ]);
+    expect(buildVitestRunPlans(["src/commands"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.commands-light.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
         watchMode: false,
       },
     ]);
@@ -1111,11 +1896,19 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps shared test helpers cheap by default when no precise target exists", () => {
-    expect(
-      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "test/helpers/poll.ts",
-      ]),
-    ).toStrictEqual([]);
+    let args: string[] | null = null;
+    withTinyGitRepo(
+      {
+        "test/helpers/unmapped-helper.ts": "export const unmapped = true;\n",
+      },
+      (cwd) => {
+        args = resolveChangedTargetArgs(["--changed", "origin/main"], cwd, () => [
+          "test/helpers/unmapped-helper.ts",
+        ]);
+      },
+    );
+
+    expect(args).toStrictEqual([]);
   });
 
   it("routes imported shared test helpers through affected tests", () => {
@@ -1123,6 +1916,8 @@ describe("scripts/test-projects changed-target routing", () => {
     withTinyGitRepo(
       {
         "test/helpers/temp-dir.ts": "export const tempDir = 'x';\n",
+        "test/helpers/temp-dir.test.ts":
+          "import { tempDir } from './temp-dir.js';\nvoid tempDir;\n",
         "src/foo.test.ts":
           "import { tempDir } from '../test/helpers/temp-dir.js';\nvoid tempDir;\n",
       },
@@ -1131,18 +1926,26 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     );
 
-    expect(targets).toEqual(["src/foo.test.ts"]);
+    expect(targets).toEqual(["test/helpers/temp-dir.test.ts", "src/foo.test.ts"]);
   });
 
   it("keeps the broad changed run available for shared test helpers", () => {
-    expect(
-      resolveChangedTargetArgs(
-        ["--changed", "origin/main"],
-        process.cwd(),
-        () => ["test/helpers/poll.ts"],
-        { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
-      ),
-    ).toBeNull();
+    let args: string[] | null = [];
+    withTinyGitRepo(
+      {
+        "test/helpers/unmapped-helper.ts": "export const unmapped = true;\n",
+      },
+      (cwd) => {
+        args = resolveChangedTargetArgs(
+          ["--changed", "origin/main"],
+          cwd,
+          () => ["test/helpers/unmapped-helper.ts"],
+          { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+        );
+      },
+    );
+
+    expect(args).toBeNull();
   });
 
   it("routes channel contract helper edits through the tests that import them", () => {
@@ -1671,6 +2474,20 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("uses collision-resistant include-file names for scoped Vitest specs", () => {
+    const tempDir = path.join("tmp", "openclaw-vitest-specs");
+    const [spec] = createVitestRunSpecs(["src/plugin-sdk/temp-path.test.ts"], {
+      baseEnv: {},
+      tempDir,
+    });
+
+    expect(path.dirname(spec?.includeFilePath ?? "")).toBe(tempDir);
+    expect(path.basename(spec?.includeFilePath ?? "")).toMatch(
+      /^openclaw-vitest-include-[0-9a-f-]{36}-0\.json$/u,
+    );
+    expect(spec?.includeFilePath).not.toMatch(new RegExp(`${process.pid}-\\d+-0\\.json$`, "u"));
+  });
+
   it("routes explicit commands light tests to the lighter commands lane", () => {
     const plans = buildVitestRunPlans(["src/commands/status-json-runtime.test.ts"], process.cwd());
 
@@ -1679,6 +2496,24 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.commands-light.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/status-json-runtime.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes the full commands test root to both command shards", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/commands"])).toEqual([]);
+    expect(buildVitestRunPlans(["src/commands"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.commands-light.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
         watchMode: false,
       },
     ]);

@@ -11,6 +11,7 @@ import { collectReleaseVersionFloorErrors, resolveNpmPublishPlan } from "./npm-p
 export type PluginPackageJson = {
   name?: string;
   version?: string;
+  type?: string;
   private?: boolean;
   repository?:
     | string
@@ -80,12 +81,21 @@ export type PublishablePluginPackageCandidate<
   extensionId: string;
   packageDir: string;
   packageJson: TPackageJson;
+  readmeText?: string;
 };
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 
 function readPluginPackageJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function readOptionalTextFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 export function collectExtensionPackageJsonCandidates<
@@ -106,6 +116,7 @@ export function collectExtensionPackageJsonCandidates<
         extensionId: dir.name,
         packageDir,
         packageJson: readPluginPackageJson(packageJsonPath) as TPackageJson,
+        readmeText: readOptionalTextFile(join(absolutePackageDir, "README.md")),
       });
     } catch {
       continue;
@@ -241,6 +252,12 @@ export function collectPublishablePluginPackageErrors(
   }
   if (packageJson.private === true) {
     errors.push("package.json private must not be true.");
+  }
+  if (packageJson.type !== "module") {
+    errors.push('package.json type must be "module" so built .js runtime entries load as ESM.');
+  }
+  if (!candidate.readmeText?.trim()) {
+    errors.push("README.md must exist and contain package documentation.");
   }
   if (repositoryUrl !== OPENCLAW_PLUGIN_NPM_REPOSITORY_URL) {
     errors.push(
