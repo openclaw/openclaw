@@ -56,5 +56,10 @@ export function resolveThinkingProfile({
 }: {
   reasoning?: boolean;
 }): ProviderThinkingProfile {
-  return reasoning ? OLLAMA_REASONING_THINKING_PROFILE : OLLAMA_NON_REASONING_THINKING_PROFILE;
+  // reasoning=true  -> known reasoning model, show full thinking menu
+  // reasoning=false -> known non-reasoning model, show only "off"
+  // reasoning=undefined -> live-discovered / no catalog entry, assume capable
+  return reasoning !== false
+    ? OLLAMA_REASONING_THINKING_PROFILE
+    : OLLAMA_NON_REASONING_THINKING_PROFILE;
 }

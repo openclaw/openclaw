@@ -61,13 +61,17 @@ describe("ollama provider policy public artifact", () => {
   });
 
   it("exposes max thinking for reasoning-capable models without full plugin activation", () => {
-    expect(resolveThinkingProfile({ reasoning: true })).toEqual({
+    const reasoningProfile = {
       levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
       defaultLevel: "off",
-    });
+    };
+    expect(resolveThinkingProfile({ reasoning: true })).toEqual(reasoningProfile);
     expect(resolveThinkingProfile({ reasoning: false })).toEqual({
       levels: [{ id: "off" }],
       defaultLevel: "off",
     });
+    // Live-discovered models without catalog entry default to capable.
+    expect(resolveThinkingProfile({})).toEqual(reasoningProfile);
+    expect(resolveThinkingProfile({ reasoning: undefined })).toEqual(reasoningProfile);
   });
 });
