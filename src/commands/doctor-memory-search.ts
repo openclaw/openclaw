@@ -472,6 +472,13 @@ export async function noteMemorySearchHealth(
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
+    // When the probe was intentionally skipped (non-deep doctor run), the
+    // gateway returns checked: false / skipped: true — this means the probe
+    // was not performed, not that embeddings are unavailable. Suppress the
+    // false-positive warning, matching the isKeyOptionalMemoryProvider path.
+    if (opts?.gatewayMemoryProbe?.skipped) {
+      return;
+    }
     const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
     const detail = opts?.gatewayMemoryProbe?.error?.trim();
     note(
