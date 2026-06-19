@@ -10,8 +10,6 @@ import {
   providerContractPluginIds,
 } from "./registry.js";
 
-const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
-
 describe("plugin contract registry", () => {
   function expectUniqueIds(ids: readonly string[]) {
     expect(ids).toEqual([...new Set(ids)]);
@@ -248,20 +246,13 @@ describe("plugin contract registry", () => {
       contract: "webSearchProviders",
       origin: "bundled",
     });
-    const expectedPluginIds = uniqueSortedStrings([
-      ...bundledWebSearchPluginIds,
-      ...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
-    ]);
     const actualPluginIds = uniqueSortedStrings(
       pluginRegistrationContractRegistry
         .filter((entry) => entry.webSearchProviderIds.length > 0)
         .map((entry) => entry.pluginId),
     );
 
-    expect(actualPluginIds).toEqual(expectedPluginIds);
-    expect(
-      actualPluginIds.filter((pluginId) => !bundledWebSearchPluginIds.includes(pluginId)),
-    ).toEqual([...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS]);
+    expect(actualPluginIds).toEqual(uniqueSortedStrings(bundledWebSearchPluginIds));
   });
 
   it("covers every bundled migration provider plugin discovered from manifests", () => {

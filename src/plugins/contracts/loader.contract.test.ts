@@ -10,8 +10,6 @@ function resolveBundledManifestProviderPluginIds() {
   return uniqueSortedStrings(resolveBundledContractSnapshotPluginIds("providerIds"));
 }
 
-const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
-
 function expectPluginAllowlistEquals(
   allow: string[] | undefined,
   pluginIds: string[],
@@ -61,13 +59,6 @@ describe("plugin loader contract", () => {
   });
 
   it("keeps bundled web search loading scoped to the web search registry", () => {
-    const expectedPluginIds = uniqueSortedStrings([
-      ...bundledWebSearchPluginIds,
-      ...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
-    ]);
-    expect(webSearchPluginIds).toEqual(expectedPluginIds);
-    expect(
-      webSearchPluginIds.filter((pluginId) => !bundledWebSearchPluginIds.includes(pluginId)),
-    ).toEqual([...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS]);
+    expect(webSearchPluginIds).toEqual(uniqueSortedStrings(bundledWebSearchPluginIds));
   });
 });
