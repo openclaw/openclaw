@@ -28,7 +28,7 @@ import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getPairedDevice,
-  hasEffectivePairedDeviceRole,
+  listApprovedPairedDeviceRoles,
   listDevicePairing,
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
@@ -413,7 +413,7 @@ async function removePairedDeviceBackedNode(params: {
     return { status: "unknown" };
   }
   const paired = await getPairedDevice(nodeId);
-  if (!paired || !hasEffectivePairedDeviceRole(paired, "node")) {
+  if (!paired || !listApprovedPairedDeviceRoles(paired).includes("node")) {
     return { status: "unknown" };
   }
 
@@ -1055,24 +1055,37 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deviceBacked.message));
         return;
       }
-      const legacyNodeId =
-        deviceBacked.status === "removed" ? deviceBacked.nodeId : requestedNodeId;
-      const removed = await removePairedNode(legacyNodeId);
-      const removedNodeId =
-        removed?.nodeId ?? (deviceBacked.status === "removed" ? deviceBacked.nodeId : undefined);
-      if (!removedNodeId) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
-        return;
-      }
-      clearRemovedNodeRuntimeState({ nodeId: removedNodeId, context });
-      broadcastRemovedNodePairing({ nodeId: removedNodeId, context });
-      respond(true, { nodeId: removedNodeId }, undefined);
-      if (deviceBacked.status === "removed") {
-        queueMicrotask(() => {
-          context.disconnectClientsForDevice?.(deviceBacked.disconnectDeviceId, {
-            role: "node",
+      const removedDeviceNodeId =
+        deviceBacked.status === "removed" ? deviceBacked.nodeId : undefined;
+      try {
+        // Device pairing removal is already durable. Clear the live node surface
+        // before touching the independent legacy store so a cleanup failure
+        // cannot leave the revoked session invokable.
+        if (removedDeviceNodeId) {
+          clearRemovedNodeRuntimeState({ nodeId: removedDeviceNodeId, context });
+        }
+        const legacyNodeId = removedDeviceNodeId ?? requestedNodeId;
+        const removed = await removePairedNode(legacyNodeId);
+        const removedNodeId = removed?.nodeId ?? removedDeviceNodeId;
+        if (!removedNodeId) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+          return;
+        }
+        if (!removedDeviceNodeId) {
+          clearRemovedNodeRuntimeState({ nodeId: removedNodeId, context });
+        }
+        broadcastRemovedNodePairing({ nodeId: removedNodeId, context });
+        respond(true, { nodeId: removedNodeId }, undefined);
+      } finally {
+        if (deviceBacked.status === "removed") {
+          // Preserve response-first shutdown on success, while guaranteeing the
+          // hard close when legacy-store cleanup or later bookkeeping throws.
+          queueMicrotask(() => {
+            context.disconnectClientsForDevice?.(deviceBacked.disconnectDeviceId, {
+              role: "node",
+            });
           });
-        });
+        }
       }
     });
   },

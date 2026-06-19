@@ -1,6 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { approveDevicePairing, requestDevicePairing } from "../../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  requestDevicePairing,
+  revokeDeviceToken,
+} from "../../infra/device-pairing.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -230,6 +234,33 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(JSON.stringify(captured.events)).not.toContain(nodeId);
   });
 
+  it.each(["revoked", "tokenless"] as const)(
+    "removes %s device-backed node approvals",
+    async (tokenState) => {
+      const state = await createState(`node-remove-${tokenState}-device-backed`);
+      const nodeId = `${tokenState}-android-node-1`;
+      await pairAndroidNodeDevice(state.stateDir, nodeId);
+
+      if (tokenState === "revoked") {
+        const revoked = await revokeDeviceToken({ deviceId: nodeId, role: "node" }, state.stateDir);
+        expect(revoked.ok).toBe(true);
+      } else {
+        const { pairedPath } = resolvePairingPaths(state.stateDir, "devices");
+        const paired = await readPaired(state.stateDir, "devices");
+        delete (paired[nodeId] as { tokens?: Record<string, unknown> }).tokens;
+        await writeFile(pairedPath, `${JSON.stringify(paired, null, 2)}\n`, "utf8");
+      }
+
+      const { context, opts } = createOptions({ nodeId });
+      await nodeHandlers["node.pair.remove"](opts);
+      await Promise.resolve();
+
+      expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
+      expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(false);
+      expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
+    },
+  );
+
   it("removes both backing records when a node row is merged from node and device stores", async () => {
     const state = await createState("node-remove-merged-backing-stores");
     const nodeId = "merged-android-node-1";
@@ -274,6 +305,36 @@ describe("nodeHandlers node.pair.remove", () => {
       }),
       { dropIfSlow: true },
     );
+  });
+
+  it("clears and disconnects a removed device-backed node when legacy cleanup fails", async () => {
+    const state = await createState("node-remove-legacy-cleanup-failure");
+    const nodeId = "legacy-cleanup-failure-node-1";
+    await pairLegacyNode(state.stateDir, nodeId);
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    const { pairedPath: legacyPairedPath } = resolvePairingPaths(state.stateDir, "nodes");
+    await writeFile(legacyPairedPath, "{invalid-json", "utf8");
+
+    const { context, opts } = createOptions({ nodeId });
+    await nodeHandlers["node.pair.remove"](opts);
+    await Promise.resolve();
+
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("Failed to parse JSON file") }),
+    );
+    expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(false);
+    expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
+      role: "node",
+      reason: "device-pair-removed",
+    });
+    expect(context.nodeRegistry.updateSurface).toHaveBeenCalledWith(nodeId, {
+      caps: [],
+      commands: [],
+      permissions: undefined,
+    });
+    expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
   });
 
   it("preserves non-node device roles when removing a mixed-role node row", async () => {

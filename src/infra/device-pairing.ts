@@ -909,7 +909,7 @@ export async function removePairedDevice(
   });
 }
 
-/** Remove one active paired-device role while preserving unrelated role tokens. */
+/** Remove one approved paired-device role while preserving unrelated role tokens. */
 export async function removePairedDeviceRole(params: {
   deviceId: string;
   role: string;
@@ -920,7 +920,7 @@ export async function removePairedDeviceRole(params: {
     const normalizedDeviceId = normalizeDeviceId(params.deviceId);
     const role = normalizeRole(params.role);
     const device = state.pairedByDeviceId[normalizedDeviceId];
-    if (!device || !role || !hasEffectivePairedDeviceRole(device, role)) {
+    if (!device || !role || !listApprovedPairedDeviceRoles(device).includes(role)) {
       return null;
     }
 
