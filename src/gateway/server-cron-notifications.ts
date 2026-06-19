@@ -15,7 +15,11 @@ import {
 } from "../cron/delivery.js";
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
-import type { CronJob, CronMessageChannel } from "../cron/types.js";
+import type {
+  CronFailureNotificationDelivery,
+  CronJob,
+  CronMessageChannel,
+} from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -100,7 +104,7 @@ async function postCronWebhook(params: {
   blockedLog: string;
   failedLog: string;
   logger: CronLogger;
-}): Promise<void> {
+}): Promise<CronFailureNotificationDelivery> {
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
     abortController.abort();
@@ -116,13 +120,32 @@ async function postCronWebhook(params: {
         signal: abortController.signal,
       },
     });
+    const { response } = result;
+    const statusText = response.statusText.trim();
     await result.release();
+    if (!response.ok) {
+      const error = `failure alert webhook returned HTTP ${response.status}${
+        statusText ? ` ${statusText}` : ""
+      }`;
+      params.logger.warn(
+        {
+          ...params.logContext,
+          status: response.status,
+          ...(statusText ? { statusText } : {}),
+          webhookUrl: redactWebhookUrl(params.webhookUrl),
+        },
+        params.failedLog,
+      );
+      return { delivered: false, status: "not-delivered", error };
+    }
+    return { delivered: true, status: "delivered" };
   } catch (err) {
+    const error = formatErrorMessage(err);
     if (err instanceof SsrFBlockedError) {
       params.logger.warn(
         {
           ...params.logContext,
-          reason: formatErrorMessage(err),
+          reason: error,
           webhookUrl: redactWebhookUrl(params.webhookUrl),
         },
         params.blockedLog,
@@ -131,12 +154,13 @@ async function postCronWebhook(params: {
       params.logger.warn(
         {
           ...params.logContext,
-          err: formatErrorMessage(err),
+          err: error,
           webhookUrl: redactWebhookUrl(params.webhookUrl),
         },
         params.failedLog,
       );
     }
+    return { delivered: false, status: "not-delivered", error };
   } finally {
     clearTimeout(timeout);
   }
@@ -154,22 +178,23 @@ export async function sendGatewayCronFailureAlert(params: {
   to?: string;
   mode?: "announce" | "webhook";
   accountId?: string;
-}): Promise<void> {
+}): Promise<CronFailureNotificationDelivery> {
   const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
   const webhookToken = normalizeOptionalString(params.webhookToken);
 
   if (params.mode === "webhook" && !params.to) {
+    const error = "failure alert webhook mode requires URL";
     params.logger.warn(
       { jobId: params.job.id },
       "cron: failure alert webhook mode requires URL, skipping",
     );
-    return;
+    return { delivered: false, status: "not-delivered", error };
   }
 
   if (params.mode === "webhook" && params.to) {
     const webhookUrl = normalizeHttpWebhookUrl(params.to);
     if (webhookUrl) {
-      await postCronWebhook({
+      return await postCronWebhook({
         webhookUrl,
         webhookToken,
         payload: {
@@ -182,33 +207,38 @@ export async function sendGatewayCronFailureAlert(params: {
         failedLog: "cron: failure alert webhook failed",
         logger: params.logger,
       });
-    } else {
-      params.logger.warn(
-        {
-          jobId: params.job.id,
-          webhookUrl: redactWebhookUrl(params.to),
-        },
-        "cron: failure alert webhook URL is invalid, skipping",
-      );
     }
-    return;
+    const error = "failure alert webhook URL is invalid";
+    params.logger.warn(
+      {
+        jobId: params.job.id,
+        webhookUrl: redactWebhookUrl(params.to),
+      },
+      "cron: failure alert webhook URL is invalid, skipping",
+    );
+    return { delivered: false, status: "not-delivered", error };
   }
 
   const abortController = new AbortController();
-  await sendCronAnnouncePayloadStrict({
-    deps: params.deps,
-    cfg: runtimeConfig,
-    agentId,
-    jobId: params.job.id,
-    target: {
-      channel: params.channel,
-      to: params.to,
-      accountId: params.accountId,
-      sessionKey: resolveCronDeliverySessionKey(params.job),
-    },
-    message: params.text,
-    abortSignal: abortController.signal,
-  });
+  try {
+    await sendCronAnnouncePayloadStrict({
+      deps: params.deps,
+      cfg: runtimeConfig,
+      agentId,
+      jobId: params.job.id,
+      target: {
+        channel: params.channel,
+        to: params.to,
+        accountId: params.accountId,
+        sessionKey: resolveCronDeliverySessionKey(params.job),
+      },
+      message: params.text,
+      abortSignal: abortController.signal,
+    });
+    return { delivered: true, status: "delivered" };
+  } catch (err) {
+    return { delivered: false, status: "not-delivered", error: formatErrorMessage(err) };
+  }
 }
 
 /** Dispatches completion and failure-destination notifications after a cron run finishes. */

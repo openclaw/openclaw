@@ -53,6 +53,7 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
+  maybeEmitPostRunFailureAlert,
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
   runMissedJobs,
@@ -661,6 +662,10 @@ async function skipInvalidPersistedManualRun(params: {
     },
     { preserveSchedule: params.mode === "force" },
   );
+  await maybeEmitPostRunFailureAlert(params.state, params.job, {
+    status: "skipped",
+    error: errorText,
+  });
 
   emit(params.state, {
     jobId: params.job.id,
@@ -947,6 +952,7 @@ async function finishPreparedManualRun(
         },
         { preserveSchedule: mode === "force" },
       );
+      await maybeEmitPostRunFailureAlert(state, job, coreResult);
 
       emit(state, {
         jobId: job.id,

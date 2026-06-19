@@ -6,6 +6,7 @@ import type { CronServiceState } from "./state.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
+const FAILURE_ALERT_DELIVERY_TIMEOUT_MS = 10_000;
 
 type ResolvedFailureAlert = {
   after: number;
@@ -98,7 +99,16 @@ export function resolveFailureAlert(
   };
 }
 
-function emitFailureAlert(
+function setFailureNotificationDelivery(
+  job: CronJob,
+  delivery: CronFailureNotificationDelivery,
+): void {
+  job.state.lastFailureNotificationDelivered = delivery.delivered;
+  job.state.lastFailureNotificationDeliveryStatus = delivery.status;
+  job.state.lastFailureNotificationDeliveryError = delivery.error;
+}
+
+async function emitFailureAlert(
   state: CronServiceState,
   params: {
     job: CronJob;
@@ -111,7 +121,7 @@ function emitFailureAlert(
     status: "error" | "skipped";
     provider?: string;
   },
-) {
+): Promise<CronFailureNotificationDelivery> {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
   const errorReason =
@@ -129,22 +139,48 @@ function emitFailureAlert(
   ].join("\n");
 
   if (state.deps.sendCronFailureAlert) {
-    void state.deps
-      .sendCronFailureAlert({
-        job: params.job,
-        text,
-        channel: params.channel,
-        to: params.to,
-        mode: params.mode,
-        accountId: params.accountId,
-      })
-      .catch((err: unknown) => {
-        state.deps.log.warn(
-          { jobId: params.job.id, err: String(err) },
-          "cron: failure alert delivery failed",
-        );
-      });
-    return;
+    const deliveryPromise = state.deps.sendCronFailureAlert({
+      job: params.job,
+      text,
+      channel: params.channel,
+      to: params.to,
+      mode: params.mode,
+      accountId: params.accountId,
+    });
+    const timeoutToken = Symbol("failure-alert-timeout");
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const delivery = await Promise.race([
+        deliveryPromise,
+        new Promise<typeof timeoutToken>((resolve) => {
+          timeout = setTimeout(() => resolve(timeoutToken), FAILURE_ALERT_DELIVERY_TIMEOUT_MS);
+        }),
+      ]);
+      if (delivery === timeoutToken) {
+        void deliveryPromise.catch((err: unknown) => {
+          state.deps.log.warn(
+            { jobId: params.job.id, err: String(err) },
+            "cron: failure alert delivery failed after timeout",
+          );
+        });
+        return {
+          status: "unknown",
+          error: `failure alert delivery timed out after ${FAILURE_ALERT_DELIVERY_TIMEOUT_MS}ms`,
+        };
+      }
+      return delivery ?? { delivered: true, status: "delivered" };
+    } catch (err: unknown) {
+      const error = String(err);
+      state.deps.log.warn(
+        { jobId: params.job.id, err: error },
+        "cron: failure alert delivery failed",
+      );
+      return { delivered: false, status: "not-delivered", error };
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   state.deps.enqueueSystemEvent(text, { agentId: params.job.agentId });
@@ -155,10 +191,11 @@ function emitFailureAlert(
       reason: `cron:${params.job.id}:failure-alert`,
     });
   }
+  return { status: "unknown" };
 }
 
 /** Emits a failure alert when threshold, best-effort, and cooldown policy allow it. */
-export function maybeEmitFailureAlert(
+export async function maybeEmitFailureAlert(
   state: CronServiceState,
   params: {
     job: CronJob;
@@ -168,7 +205,7 @@ export function maybeEmitFailureAlert(
     provider?: string;
     consecutiveCount: number;
   },
-) {
+): Promise<void> {
   if (!params.alertConfig || params.consecutiveCount < params.alertConfig.after) {
     return;
   }
@@ -185,7 +222,8 @@ export function maybeEmitFailureAlert(
   if (inCooldown) {
     return;
   }
-  emitFailureAlert(state, {
+  params.job.state.lastFailureAlertAtMs = now;
+  const delivery = await emitFailureAlert(state, {
     job: params.job,
     error: params.error,
     consecutiveErrors: params.consecutiveCount,
@@ -196,5 +234,5 @@ export function maybeEmitFailureAlert(
     status: params.status,
     provider: params.provider,
   });
-  params.job.state.lastFailureAlertAtMs = now;
+  setFailureNotificationDelivery(params.job, delivery);
 }

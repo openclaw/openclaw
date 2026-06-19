@@ -179,7 +179,7 @@ export type CronServiceDeps = {
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
-  }) => Promise<void>;
+  }) => Promise<CronFailureNotificationDelivery | void>;
   onEvent?: (evt: CronEvent) => void;
 };
 
