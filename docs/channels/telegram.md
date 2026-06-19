@@ -761,6 +761,7 @@ Primary reference:
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
+- `channels.telegram.markdown.enabled`: toggle Markdown rendering for outbound messages (default: true). Set to `false` to send plain text. `channels.telegram.richMessages` (legacy alias, accepted for compatibility) maps to the same flag.
 - `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). In DMs, `partial` uses native `sendMessageDraft` when available.
 - `channels.telegram.mediaMaxMb`: inbound Telegram media download/processing cap (MB).
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).

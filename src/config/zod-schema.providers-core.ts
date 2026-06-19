@@ -133,6 +133,23 @@ function normalizeTelegramStreamingConfig(value: { streaming?: unknown; streamMo
   delete value.streamMode;
 }
 
+function normalizeTelegramRichMessagesAlias(value: {
+  richMessages?: unknown;
+  markdown?: { enabled?: unknown } | undefined;
+}) {
+  // `richMessages` was historically described in third-party docs as a way to
+  // toggle Telegram "rich output". It maps directly to `markdown.enabled` so
+  // users following older guidance get the expected behavior. Prefer
+  // `markdown.enabled` in new configs.
+  if (value.richMessages === undefined) return;
+  const next = value.richMessages === false ? false : Boolean(value.richMessages);
+  const md = (value.markdown ?? {}) as { enabled?: unknown };
+  if (md.enabled === undefined) {
+    value.markdown = { ...md, enabled: next };
+  }
+  delete value.richMessages;
+}
+
 function normalizeDiscordStreamingConfig(value: { streaming?: unknown; streamMode?: unknown }) {
   value.streaming = resolveDiscordPreviewStreamMode(value);
   delete value.streamMode;
@@ -235,11 +252,16 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    // Legacy alias for `markdown.enabled`. Documented in older guides; keep
+    // accepting it and normalize it to `markdown.enabled` so existing configs
+    // do not fail schema validation.
+    richMessages: z.boolean().optional(),
   })
   .strict();
 
 export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
   normalizeTelegramStreamingConfig(value);
+  normalizeTelegramRichMessagesAlias(value);
   // Account-level schemas skip allowFrom validation because accounts inherit
   // allowFrom from the parent channel config at runtime (resolveTelegramAccount
   // shallow-merges top-level and account values in src/telegram/accounts.ts).
@@ -252,6 +274,7 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   normalizeTelegramStreamingConfig(value);
+  normalizeTelegramRichMessagesAlias(value);
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,

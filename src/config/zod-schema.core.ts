@@ -348,6 +348,7 @@ export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
 
 export const MarkdownConfigSchema = z
   .object({
+    enabled: z.boolean().optional(),
     tables: MarkdownTableModeSchema.optional(),
   })
   .strict()
