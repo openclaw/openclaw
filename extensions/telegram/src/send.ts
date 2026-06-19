@@ -697,6 +697,8 @@ export async function sendMessageTelegram(
       supportsBlockTables: useRichMessages,
     });
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
+  // Message render mode. auto (default) = render markdown as rich HTML; raw = plain text only.
+  const renderMode = account.config.renderMode ?? "auto";
   // Resolve link preview setting from config (default: enabled).
   const linkPreviewEnabled = account.config.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
@@ -841,10 +843,17 @@ export async function sendMessageTelegram(
     }));
   };
 
-  const sendChunkedText = async (rawText: string, context: string) =>
-    useRichMessages
+  const sendChunkedText = async (rawText: string, context: string) => {
+    if (renderMode === "raw") {
+      return await sendTelegramTextChunks(
+        splitTelegramPlainTextChunks(rawText, 4000).map((plainText) => ({ plainText })),
+        context,
+      );
+    }
+    return useRichMessages
       ? await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context)
       : await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+  };
 
   const buildRichTextPlan = (rawText: string): TelegramRichTextChunk[] => {
     const textLimit = Math.min(
@@ -1561,6 +1570,7 @@ export async function editMessageTelegram(
   ) => requestWithDiag(fn, label, shouldLog ? { shouldLog } : undefined);
 
   const textMode = opts.textMode ?? "markdown";
+  const renderMode = account.config.renderMode ?? "auto";
   const useRichMessages = account.config.richMessages === true;
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -1617,6 +1627,16 @@ export async function editMessageTelegram(
   }
 
   const performTextEdit = () => {
+    if (renderMode === "raw") {
+      return requestWithEditShouldLog(
+        () =>
+          Object.keys(plainTextParams).length > 0
+            ? api.editMessageText(chatId, messageId, plainText, plainTextParams)
+            : api.editMessageText(chatId, messageId, plainText),
+        "editMessage",
+        (err) => !isTelegramMessageNotModifiedError(err),
+      );
+    }
     if (richRawApi && richMessage) {
       const richEditParams: Pick<TelegramEditRichMessageTextParams, "reply_markup"> =
         replyMarkup === undefined ? {} : { reply_markup: replyMarkup };

@@ -603,3 +603,27 @@ describe("telegram webhook schema", () => {
     );
   });
 });
+
+describe("telegram renderMode schema", () => {
+  it('accepts renderMode "auto"', () => {
+    expectTelegramConfigValid({ renderMode: "auto" });
+  });
+
+  it('accepts renderMode "raw"', () => {
+    expectTelegramConfigValid({ renderMode: "raw" });
+  });
+
+  it("defaults renderMode to auto when not set", () => {
+    const res = TelegramConfigSchema.safeParse({});
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.renderMode).toBeUndefined();
+    }
+  });
+
+  it("rejects invalid renderMode values", () => {
+    expectTelegramConfigIssue({ renderMode: "card" }, "renderMode");
+    expectTelegramConfigIssue({ renderMode: "html" }, "renderMode");
+    expectTelegramConfigIssue({ renderMode: 42 }, "renderMode");
+  });
+});
