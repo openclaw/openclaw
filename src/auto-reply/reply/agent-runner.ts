@@ -39,6 +39,11 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import {
+  formatUsageWindowSummary,
+  loadProviderUsageSummary,
+  resolveUsageProviderId,
+} from "../../infra/provider-usage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -2265,6 +2270,46 @@ export async function runReplyAgent(params: {
         formatted = renderedUsageLine;
       } else if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session \`${sessionKey}\``;
+      }
+      // Extend the full usage footer with provider quota windows (premium
+      // requests, chat quota, etc.) so users do not need a separate /status
+      // command to check quota. Best-effort with a short timeout; failures
+      // silently fall back to the token/cost-only footer.
+      if (formatted && responseUsageMode === "full" && providerUsed) {
+        const quotaProvider = resolveUsageProviderId(providerUsed);
+        if (quotaProvider) {
+          try {
+            const footerQuotaTimeoutMs = 2000;
+            const quotaSummary = await Promise.race([
+              loadProviderUsageSummary({
+                timeoutMs: footerQuotaTimeoutMs,
+                providers: [quotaProvider],
+                config: cfg,
+              }),
+              new Promise<never>((_, reject) =>
+                setTimeout(
+                  () => reject(new Error("usage footer quota timeout")),
+                  footerQuotaTimeoutMs,
+                ),
+              ),
+            ]);
+            const quotaEntry = quotaSummary.providers.find(
+              (p) => p.windows.length > 0 && !p.error,
+            );
+            if (quotaEntry) {
+              const windowLine = formatUsageWindowSummary(quotaEntry, {
+                now: Date.now(),
+                maxWindows: 2,
+                includeResets: false,
+              });
+              if (windowLine) {
+                formatted = `${formatted} · ${windowLine}`;
+              }
+            }
+          } catch {
+            // Provider quota fetch is best-effort.
+          }
+        }
       }
       if (formatted) {
         responseUsageLine = formatted;
