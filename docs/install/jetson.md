@@ -41,7 +41,7 @@ Run a persistent, always-on OpenClaw Gateway on an NVIDIA Jetson module. Jetson 
     Use **NVIDIA SDK Manager** or the **SD card image** method to flash your Jetson module with the latest JetPack release.
 
     1. Download [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager) (host PC required) or use a pre-built [JetPack SD card image](https://developer.nvidia.com/embedded/jetpack).
-    2. Choose the latest stable JetPack release for your module (6.x for Orin series, 5.x for Xavier series).
+    2. Choose the latest stable JetPack release for your module (7.x for Orin series, 5.x for Xavier series).
     3. Pre-configure:
        - Hostname: `gateway-host`
        - Enable SSH
