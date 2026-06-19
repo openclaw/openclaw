@@ -79,6 +79,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
   }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
+  // Outbound media-root resolution now reads per-agent tools.fs config, which
+  // flows through resolveAgentConfig; provide it so the mocked module is complete.
+  resolveAgentConfig: () => undefined,
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
