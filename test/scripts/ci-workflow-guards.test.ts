@@ -577,7 +577,9 @@ describe("ci workflow guards", () => {
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
-    expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
+    expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe(
+      "${{ matrix.shard_name == 'core-tooling' && '1' || '2' }}",
+    );
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.run).toContain("env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON");
     expect(runStep.run).toContain('if (plan.env && typeof plan.env === "object"');
