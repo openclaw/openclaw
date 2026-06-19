@@ -16,11 +16,12 @@ import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
+  safeTrajectorySessionFileName,
 } from "../trajectory/paths.js";
 
 type ArchiveFileReason = SessionArchiveReason;
@@ -377,6 +378,49 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
   return archived;
 }
 
+// Validate that a pointer-resolved runtime file path is actually a trajectory
+// runtime file for the given session. The pointer JSON shape/session checks in
+// readArchiveTrajectoryPointerRuntimeFile confirm the pointer is well-formed, but
+// the runtimeFile field can name any writable path. This gate requires the
+// resolved basename to match the expected session-scoped trajectory name and the
+// first line to carry a matching session event before the file is trusted.
+function isValidPointerResolvedTrajectoryRuntime(
+  filePath: string,
+  sessionId: string,
+): boolean {
+  const expectedName = `${safeTrajectorySessionFileName(sessionId)}.jsonl`;
+  if (path.basename(path.resolve(filePath)) !== expectedName) {
+    return false;
+  }
+  try {
+    const fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(64 * 1024);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    fs.closeSync(fd);
+    if (bytesRead <= 0) {
+      return false;
+    }
+    const firstLine = buffer
+      .subarray(0, bytesRead)
+      .toString("utf8")
+      .split(/\r?\n/u)
+      .find((line) => line.trim());
+    if (!firstLine) {
+      return false;
+    }
+    const parsed: unknown = JSON.parse(firstLine.trim());
+    return (
+      isRecord(parsed) &&
+      parsed.traceSchema === "openclaw-trajectory" &&
+      parsed.schemaVersion === 1 &&
+      parsed.source === "runtime" &&
+      parsed.sessionId === sessionId
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Rename the trajectory runtime file and its pointer sidecar next to a reset
 // transcript into `.reset.<ts>` archives. A reset preserves the transcript as
 // `.jsonl.reset.<ts>`, but the sibling trajectory (assistant tool calls/results)
@@ -414,20 +458,37 @@ function readArchiveTrajectoryPointerRuntimeFile(
   }
 }
 
-function archiveResetTrajectorySiblings(transcriptPath: string, sessionId: string): void {
+function archiveResetTrajectorySiblings(
+  transcriptPath: string,
+  sessionId: string,
+): ArchivedSessionTranscript[] {
   const ts = formatSessionArchiveTimestamp();
   const pointerPath = resolveTrajectoryPointerFilePath(transcriptPath);
-  const runtimeTargets = new Set<string>([
-    resolveTrajectoryFilePath({ env: process.env, sessionFile: transcriptPath, sessionId }),
-  ]);
+  const defaultRuntimePath = resolveTrajectoryFilePath({
+    env: process.env,
+    sessionFile: transcriptPath,
+    sessionId,
+  });
+  const runtimeTargets = new Set<string>([defaultRuntimePath]);
   const pointerRuntime = readArchiveTrajectoryPointerRuntimeFile(pointerPath, sessionId);
-  if (pointerRuntime) {
-    runtimeTargets.add(pointerRuntime);
+  if (
+    pointerRuntime &&
+    canonicalizePathForComparison(pointerRuntime) !==
+      canonicalizePathForComparison(defaultRuntimePath)
+  ) {
+    // The pointer can name any writable path; only trust it when the resolved
+    // file looks like a session-owned trajectory runtime.
+    if (isValidPointerResolvedTrajectoryRuntime(pointerRuntime, sessionId)) {
+      runtimeTargets.add(pointerRuntime);
+    }
   }
+  const archived: ArchivedSessionTranscript[] = [];
   const renameArchive = (filePath: string) => {
     try {
       if (fs.existsSync(filePath)) {
-        fs.renameSync(filePath, `${filePath}.reset.${ts}`);
+        const archivedPath = `${filePath}.reset.${ts}`;
+        fs.renameSync(filePath, archivedPath);
+        archived.push({ sourcePath: filePath, archivedPath });
       }
     } catch {
       // Ignore: the transcript reset is the source of truth; a trajectory
@@ -438,6 +499,7 @@ function archiveResetTrajectorySiblings(transcriptPath: string, sessionId: strin
     renameArchive(runtimePath);
   }
   renameArchive(pointerPath);
+  return archived;
 }
 
 export function archiveSessionTranscripts(opts: {
@@ -500,7 +562,7 @@ export function archiveSessionTranscriptsDetailed(opts: {
       // Only a reset preserves the transcript; a deleted/pruned session still
       // hands its trajectory to the existing removal path, so keep that as-is.
       if (opts.reason === "reset") {
-        archiveResetTrajectorySiblings(candidatePath, opts.sessionId);
+        archived.push(...archiveResetTrajectorySiblings(candidatePath, opts.sessionId));
       }
     } catch (err) {
       opts.onArchiveError?.(err, candidatePath);
@@ -568,7 +630,17 @@ export async function cleanupArchivedSessionTranscripts(opts: {
     return { removed: 0, scanned: 0 };
   }
   const now = opts.nowMs ?? Date.now();
-  const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
+  // Reset-archived trajectory runtime files may live in the
+  // OPENCLAW_TRAJECTORY_DIR override directory, which is not part of the
+  // session store directory tree. Include it so
+  // `.trajectory.jsonl.reset.<ts>` archives are pruned by the existing reset
+  // retention rule (#90707).
+  const trajectoryDirOverride = process.env.OPENCLAW_TRAJECTORY_DIR?.trim();
+  const dirs = opts.directories.map((dir) => path.resolve(dir));
+  if (trajectoryDirOverride) {
+    dirs.push(path.resolve(resolveHomeRelativePath(trajectoryDirOverride)));
+  }
+  const directories = uniqueStrings(dirs);
   let removed = 0;
   let scanned = 0;
 
