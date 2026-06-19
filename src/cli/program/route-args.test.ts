@@ -54,6 +54,28 @@ describe("route-args", () => {
       expect(parseStatusRouteArgs(["node", "openclaw", "status", "--timeout", bad])).toBeNull();
       expect(parseHealthRouteArgs(["node", "openclaw", "health", "--timeout", bad])).toBeNull();
     }
+    expect(
+      parseStatusRouteArgs([
+        "node",
+        "openclaw",
+        "status",
+        "--timeout",
+        "5000",
+        "--timeout",
+        "nope",
+      ]),
+    ).toBeNull();
+    expect(
+      parseHealthRouteArgs([
+        "node",
+        "openclaw",
+        "health",
+        "--timeout",
+        "nope",
+        "--timeout",
+        "5000",
+      ]),
+    ).toMatchObject({ timeoutMs: 5000 });
     // A valid positive integer still parses on the fast path.
     expect(parseStatusRouteArgs(["node", "openclaw", "status", "--timeout", "5000"])).toMatchObject(
       { timeoutMs: 5000 },
