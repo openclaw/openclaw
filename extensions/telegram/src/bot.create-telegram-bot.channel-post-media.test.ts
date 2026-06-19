@@ -488,6 +488,44 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
+  it("does not skip unaddressed group media when ingest is enabled (#92067)", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true, ingest: true } },
+        },
+      },
+    });
+    saveRemoteMedia.mockResolvedValueOnce({
+      mediaId: "inbound-ingest-test",
+      relativePath: "media/inbound/inbound-ingest-test.jpg",
+    });
+    const getFile = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
+        message_id: 92067,
+        date: 1736380800,
+        photo: [{ file_id: "p1" }],
+        from: { id: 55, is_bot: false, first_name: "u" },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile,
+    });
+
+    // When ingest is enabled, the media should NOT be skipped even if the bot
+    // is not mentioned — the ingest config overrides the mention skip so that
+    // plugins can receive all messages (including media-bearing ones) via
+    // message:received hooks.
+    expect(saveRemoteMedia).toHaveBeenCalled();
+    expect(getFile).toHaveBeenCalled();
+  });
+
   it("notifies mentioned requireMention groups when media download fails", async () => {
     loadConfig.mockReturnValue({
       channels: {

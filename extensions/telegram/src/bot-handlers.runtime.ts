@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import {
   buildMentionRegexes,
   implicitMentionKindWhen,
@@ -887,6 +888,23 @@ export const registerTelegramHandlers = ({
       },
     });
     if (mentionDecision.shouldSkip) {
+      // When ingest is explicitly enabled for this group/topic, don't skip
+      // media-bearing messages. The ingest config exists so that plugins can
+      // receive ALL messages (including unaddressed media) via message:received
+      // hooks. Skipping media before download defeats that intent — the text-
+      // message path already respects ingest (bot-message-context.body.ts:438).
+      const telegramGroupPolicy = resolveChannelGroupPolicy({
+        cfg: runtimeCfg,
+        channel: "telegram",
+        groupId: String(chatId),
+        accountId,
+      });
+      const ingestEnabled =
+        topicConfig?.ingest ?? telegramGroupPolicy.groupConfig?.ingest ?? telegramGroupPolicy.defaultConfig?.ingest;
+      if (ingestEnabled === true) {
+        logger.info({ chatId, reason: "ingest-enabled" }, "not skipping group media: ingest overrides mention skip");
+        return false;
+      }
       logger.info({ chatId, reason: "no-mention" }, "skipping group media before download");
       return true;
     }
