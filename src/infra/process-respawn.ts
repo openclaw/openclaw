@@ -61,6 +61,7 @@ function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
  * Attempt to restart this process with a fresh PID.
  * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
  * - OPENCLAW_NO_RESPAWN=1: caller should keep in-process restart behavior (tests/dev)
+ * - Windows (no supervisor): attempts detached respawn so /restart actually restarts
  * - unmanaged environments: caller should keep in-process restart behavior so
  *   custom supervisors keep tracking the same gateway PID
  */
@@ -87,12 +88,19 @@ export function restartGatewayProcessWithFreshPid(
     return { mode: "supervised" };
   }
   if (process.platform === "win32") {
-    // Detached respawn is unsafe on Windows without an identified Scheduled Task:
-    // the child becomes orphaned if the original process exits.
-    return {
-      mode: "disabled",
-      detail: "win32: detached respawn unsupported without Scheduled Task markers",
-    };
+    // Try detached respawn on Windows. Without a Scheduled Task supervisor the
+    // child is technically orphaned, but a clean exit followed by spawn is the
+    // only way to actually restart the process. The update path already allows
+    // this — apply the same behaviour to normal restarts so /restart works.
+    try {
+      const { child, pid } = spawnDetachedGatewayProcess(_opts);
+      return { mode: "spawned", pid, detail: "win32: detached respawn" };
+    } catch (err) {
+      return {
+        mode: "failed",
+        detail: `win32: detached respawn failed: ${formatErrorMessage(err)}`,
+      };
+    }
   }
   if (isContainerEnvironment()) {
     return {
