@@ -513,6 +513,11 @@ function resolveChannelModelNote(params: {
     groupChannel: params.entry.groupChannel,
     groupSubject: params.entry.subject,
     parentSessionKey: params.parentSessionKey,
+    directUserIds: [
+      params.entry.origin?.nativeDirectUserId,
+      params.entry.origin?.from,
+      params.entry.origin?.to,
+    ],
   });
   if (!channelOverride) {
     return undefined;
