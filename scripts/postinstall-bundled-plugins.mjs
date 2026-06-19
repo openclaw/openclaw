@@ -23,7 +23,10 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
+import {
+  collectPackageDistImportErrors,
+  expandPackageDistImportClosure,
+} from "./lib/package-dist-imports.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
@@ -607,6 +610,33 @@ export function pruneInstalledPackageDist(params = {}) {
       },
     }),
   );
+  // Safety: skip pruning if any dist JS file imports a missing chunk,
+  // which can happen during npm global upgrade on WSL2 when files are
+  // partially replaced (see #94570, #72042).
+  const importErrors = collectPackageDistImportErrors({
+    files: installedFiles,
+    readText(relativePath) {
+      try {
+        return readFile(join(packageRoot, relativePath), "utf8");
+      } catch (error) {
+        if (error?.code === "ENOENT") {
+          return "";
+        }
+        throw error;
+      }
+    },
+  });
+  if (importErrors.length > 0) {
+    log.warn(
+      `[postinstall] skipping dist prune: ${importErrors.length} import(s) ` +
+        `resolve to missing files (partial install or upgrade state)`,
+    );
+    for (const error of importErrors.slice(0, 10)) {
+      log.warn(`  ${error}`);
+    }
+    return [];
+  }
+
   const removed = [];
 
   for (const relativePath of installedFiles) {

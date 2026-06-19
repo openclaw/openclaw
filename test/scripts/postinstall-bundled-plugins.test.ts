@@ -826,6 +826,33 @@ describe("bundled plugin postinstall", () => {
     await expectPathMissing(staleFile);
   });
 
+  it("skips dist pruning when a JS file imports a missing chunk (partial upgrade guard)", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-missing-import-");
+    const entryFile = path.join(packageRoot, "dist", "server-runtime-subscriptions-CxKq-Z61.js");
+    const staleFile = path.join(packageRoot, "dist", "stale.js");
+    await fs.mkdir(path.dirname(entryFile), { recursive: true });
+    await fs.writeFile(entryFile, 'import "./server-chat-DVXWYmKw.js";\n');
+    await writePackageDistInventory(packageRoot);
+    await fs.writeFile(staleFile, "export {};\n");
+    const warn = vi.fn();
+
+    const result = pruneInstalledPackageDist({
+      packageRoot,
+      log: { log: vi.fn(), warn },
+    });
+
+    expect(result).toEqual([]);
+    await expectPathExists(staleFile);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("skipping dist prune: 1 import(s) resolve to missing files"),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "server-runtime-subscriptions-CxKq-Z61.js imports missing dist/server-chat-DVXWYmKw.js",
+      ),
+    );
+  });
+
   it("prunes stale private QA files without restoring compat sidecars", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
     const currentFile = path.join(packageRoot, "dist", "entry.js");
