@@ -2282,8 +2282,10 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("9000")?.media_path).toMatch(/^media:\/\/inbound\//);
     expect(messagesById.get("9000")?.media_path).not.toBe(payload.ReplyChain?.[1]?.mediaPath);
     expect(messagesById.get("9000")?.media_ref).toBeUndefined();
-    expect(getFileSpy).toHaveBeenCalledWith("root-photo-1");
-    expect(mediaFetch).toHaveBeenCalledTimes(1);
+    // root-photo-1 was already downloaded when message 9000 was processed, so
+    // reply-context hydration reuses the cached saved path without re-downloading.
+    expect(getFileSpy).not.toHaveBeenCalledWith("root-photo-1");
+    expect(mediaFetch).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -2441,8 +2443,10 @@ describe("createTelegramBot", () => {
       is_reply_target: true,
     });
     if (expectHydrated) {
-      expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1");
-      expect(mediaFetch).toHaveBeenCalledTimes(1);
+      // generated-photo-1 was already hydrated when message 102 was processed,
+      // so this reply-context hydration reuses the cached saved path.
+      expect(getFileSpy).not.toHaveBeenCalledWith("generated-photo-1");
+      expect(mediaFetch).not.toHaveBeenCalled();
     } else {
       expect(getFileSpy).not.toHaveBeenCalled();
       expect(mediaFetch).not.toHaveBeenCalled();

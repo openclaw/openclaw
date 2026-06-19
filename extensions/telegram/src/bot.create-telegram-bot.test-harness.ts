@@ -7,6 +7,7 @@ import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { resetTelegramMediaResolutionCacheForTest } from "./bot/delivery.resolve-media.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
@@ -559,6 +560,7 @@ beforeEach(() => {
   getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
   rmSync(`${sessionStorePath}.telegram-messages.json`, { force: true });
+  resetTelegramMediaResolutionCacheForTest();
   clearTelegramDispatchDedupeFilesForTest();
   loadSessionStoreMock.mockReset();
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);

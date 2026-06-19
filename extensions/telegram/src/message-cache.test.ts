@@ -555,6 +555,14 @@ describe("telegram message cache", () => {
       limit: 2,
     });
     expect(recent.map((entry) => entry.messageId)).toEqual(["42", "43"]);
+
+    const chatWide = await cache.recentBefore({
+      accountId: "default",
+      chatId: 7,
+      messageId: "143",
+      limit: 10,
+    });
+    expect(chatWide.map((entry) => entry.messageId)).toEqual(["41", "42", "43", "44", "142"]);
   });
 
   it("preserves rich-message placeholders in subsequent conversation context", async () => {

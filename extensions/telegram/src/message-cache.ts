@@ -69,8 +69,20 @@ export type TelegramMessageCache = {
 
 type MessageWithExternalReply = Message & { external_reply?: Message };
 
+type TelegramMessageCacheScopeIndex = {
+  messages: Map<string, TelegramCachedMessageNode>;
+  sorted?: TelegramCachedMessageNode[];
+};
+
+type TelegramMessageCacheIndexes = {
+  scopeKey: string | undefined;
+  keyScopes: Map<string, string[]>;
+  scopedIndexes: Map<string, TelegramMessageCacheScopeIndex>;
+};
+
 type TelegramMessageCacheBucket = {
   messages: Map<string, TelegramCachedMessageNode>;
+  indexes: TelegramMessageCacheIndexes;
   hydrated: boolean;
   hydratePromise?: Promise<void>;
   persistentStore?: TelegramMessageCachePersistentStore;
@@ -126,6 +138,142 @@ function telegramMessageCacheKeyPrefix(params: {
 }) {
   const prefix = `${params.accountId}:${params.chatId}:`;
   return params.scopeKey ? `${params.scopeKey}:${prefix}` : prefix;
+}
+
+function createMessageCacheIndexes(scopeKey: string | undefined): TelegramMessageCacheIndexes {
+  return {
+    scopeKey,
+    keyScopes: new Map<string, string[]>(),
+    scopedIndexes: new Map<string, TelegramMessageCacheScopeIndex>(),
+  };
+}
+
+function parseScopedMessageKey(
+  key: string,
+  scopeKey: string | undefined,
+): { accountId: string; chatId: string; messageId: string } | null {
+  let rest = key;
+  if (scopeKey) {
+    const prefix = `${scopeKey}:`;
+    if (!rest.startsWith(prefix)) {
+      return null;
+    }
+    rest = rest.slice(prefix.length);
+  }
+  const messageSeparator = rest.lastIndexOf(":");
+  if (messageSeparator <= 0) {
+    return null;
+  }
+  const beforeMessage = rest.slice(0, messageSeparator);
+  const chatSeparator = beforeMessage.lastIndexOf(":");
+  if (chatSeparator <= 0) {
+    return null;
+  }
+  return {
+    accountId: beforeMessage.slice(0, chatSeparator),
+    chatId: beforeMessage.slice(chatSeparator + 1),
+    messageId: rest.slice(messageSeparator + 1),
+  };
+}
+
+function messageCacheIndexScopeKey(params: {
+  accountId: string;
+  chatId: string | number;
+  threadId?: string;
+}): string {
+  return `${params.accountId}:${params.chatId}:${params.threadId ?? ""}`;
+}
+
+function getOrCreateScopeIndex(
+  indexes: TelegramMessageCacheIndexes,
+  scopeKey: string,
+): TelegramMessageCacheScopeIndex {
+  let index = indexes.scopedIndexes.get(scopeKey);
+  if (!index) {
+    index = { messages: new Map<string, TelegramCachedMessageNode>() };
+    indexes.scopedIndexes.set(scopeKey, index);
+  }
+  return index;
+}
+
+function removeMessageFromIndexes(indexes: TelegramMessageCacheIndexes, key: string): void {
+  const scopeKeys = indexes.keyScopes.get(key);
+  if (!scopeKeys) {
+    return;
+  }
+  indexes.keyScopes.delete(key);
+  const parsed = parseScopedMessageKey(key, indexes.scopeKey);
+  if (!parsed) {
+    return;
+  }
+  for (const scopeKey of scopeKeys) {
+    const index = indexes.scopedIndexes.get(scopeKey);
+    if (!index) {
+      continue;
+    }
+    index.messages.delete(parsed.messageId);
+    index.sorted = undefined;
+    if (index.messages.size === 0) {
+      indexes.scopedIndexes.delete(scopeKey);
+    }
+  }
+}
+
+function indexMessage(
+  indexes: TelegramMessageCacheIndexes,
+  key: string,
+  node: TelegramCachedMessageNode,
+): void {
+  removeMessageFromIndexes(indexes, key);
+  const parsed = parseScopedMessageKey(key, indexes.scopeKey);
+  if (!parsed) {
+    return;
+  }
+  const scopeKeys = [
+    messageCacheIndexScopeKey({ accountId: parsed.accountId, chatId: parsed.chatId }),
+  ];
+  if (node.threadId != null) {
+    scopeKeys.push(
+      messageCacheIndexScopeKey({
+        accountId: parsed.accountId,
+        chatId: parsed.chatId,
+        threadId: node.threadId,
+      }),
+    );
+  }
+  indexes.keyScopes.set(key, scopeKeys);
+  for (const scopeKey of scopeKeys) {
+    const index = getOrCreateScopeIndex(indexes, scopeKey);
+    index.messages.set(parsed.messageId, node);
+    index.sorted = undefined;
+  }
+}
+
+function getSortedScopeMessages(
+  index?: TelegramMessageCacheScopeIndex,
+): TelegramCachedMessageNode[] {
+  if (!index) {
+    return [];
+  }
+  if (!index.sorted) {
+    index.sorted = Array.from(index.messages.values()).toSorted(compareCachedMessageNodes);
+  }
+  return index.sorted;
+}
+
+function lowerBoundMessageId(entries: TelegramCachedMessageNode[], targetId: number): number {
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const mid = low + Math.floor((high - low) / 2);
+    const entryId = parseSafeMessageId(entries[mid].messageId);
+    if (entryId !== undefined && entryId < targetId) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
 }
 
 export function resolveTelegramMessageCachePath(storePath: string): string {
@@ -394,13 +542,18 @@ function readPersistedEntryValues(raw: string): unknown[] {
   return values;
 }
 
-function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessages: number): void {
+function trimMessages(
+  messages: Map<string, TelegramCachedMessageNode>,
+  maxMessages: number,
+  onDelete?: (key: string) => void,
+): void {
   while (messages.size > maxMessages) {
     const oldest = messages.keys().next().value;
     if (oldest === undefined) {
       break;
     }
     messages.delete(oldest);
+    onDelete?.(oldest);
   }
 }
 
@@ -450,11 +603,15 @@ function upsertCachedMessageNode(params: {
   key: string;
   node: TelegramCachedMessageNode;
   mode: TelegramMessageObservationMode;
+  indexes?: TelegramMessageCacheIndexes;
 }): TelegramCachedMessageNode {
   const existing = params.messages.get(params.key);
   const node = existing ? mergeCachedMessageNode(existing, params.node, params.mode) : params.node;
   params.messages.delete(params.key);
   params.messages.set(params.key, node);
+  if (params.indexes) {
+    indexMessage(params.indexes, params.key, node);
+  }
   return node;
 }
 
@@ -531,12 +688,14 @@ function resolveDefaultPersistentStore(): TelegramMessageCachePersistentStore | 
 function resolveMessageCacheBucket(params: {
   bucketKey?: string;
   maxMessages: number;
+  scopeKey?: string;
   persistentStore?: TelegramMessageCachePersistentStore;
 }): TelegramMessageCacheBucket {
   const { bucketKey } = params;
   if (!bucketKey) {
     return {
       messages: new Map<string, TelegramCachedMessageNode>(),
+      indexes: createMessageCacheIndexes(params.scopeKey),
       hydrated: true,
     };
   }
@@ -547,6 +706,7 @@ function resolveMessageCacheBucket(params: {
   }
   const bucket = {
     messages: new Map<string, TelegramCachedMessageNode>(),
+    indexes: createMessageCacheIndexes(params.scopeKey),
     hydrated: false,
     ...(params.persistentStore ? { persistentStore: params.persistentStore } : {}),
   };
@@ -584,8 +744,11 @@ async function hydrateMessageCacheBucket(
           key: entry.key,
           node: entry.node,
           mode: entry.mode,
+          indexes: bucket.indexes,
         });
-        trimMessages(bucket.messages, maxMessages);
+        trimMessages(bucket.messages, maxMessages, (deletedKey) =>
+          removeMessageFromIndexes(bucket.indexes, deletedKey),
+        );
       }
     }
     bucket.hydrated = true;
@@ -629,6 +792,7 @@ export function createTelegramMessageCache(params?: {
   const bucket = resolveMessageCacheBucket({
     bucketKey,
     maxMessages,
+    ...(scopeKey ? { scopeKey } : {}),
     ...(persistentStore ? { persistentStore } : {}),
   });
   const { messages } = bucket;
@@ -654,21 +818,16 @@ export function createTelegramMessageCache(params?: {
     threadId?: number;
   }) => {
     await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
-    const prefix = telegramMessageCacheKeyPrefix({ scopeKey, ...paramsLocal });
     const normalizedThreadId = normalizeTelegramCacheThreadId(paramsLocal.threadId);
     if (paramsLocal.threadId != null && normalizedThreadId === undefined) {
       return [];
     }
-    const threadId = normalizedThreadId !== undefined ? String(normalizedThreadId) : undefined;
-    return Array.from(messages, ([key, node]) => ({ key, node }))
-      .filter(({ key, node }) => {
-        if (!key.startsWith(prefix)) {
-          return false;
-        }
-        return threadId === undefined || node.threadId === threadId;
-      })
-      .map(({ node }) => node)
-      .toSorted(compareCachedMessageNodes);
+    const scopeIndexKey = messageCacheIndexScopeKey({
+      accountId: paramsLocal.accountId,
+      chatId: paramsLocal.chatId,
+      ...(normalizedThreadId !== undefined ? { threadId: String(normalizedThreadId) } : {}),
+    });
+    return getSortedScopeMessages(bucket.indexes.scopedIndexes.get(scopeIndexKey));
   };
 
   return {
@@ -686,11 +845,19 @@ export function createTelegramMessageCache(params?: {
           continue;
         }
         const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId });
-        const cachedNode = upsertCachedMessageNode({ messages, key, node, mode });
+        const cachedNode = upsertCachedMessageNode({
+          messages,
+          key,
+          node,
+          mode,
+          indexes: bucket.indexes,
+        });
         if (messageId === currentObservation.node.messageId) {
           recordedEntry = cachedNode;
         }
-        trimMessages(messages, maxMessages);
+        trimMessages(messages, maxMessages, (deletedKey) =>
+          removeMessageFromIndexes(bucket.indexes, deletedKey),
+        );
         await persistCachedNode({ bucket, key, node: cachedNode });
       }
       return recordedEntry ?? currentObservation.node;
@@ -704,20 +871,21 @@ export function createTelegramMessageCache(params?: {
       if (targetId === undefined) {
         return [];
       }
-      return (await listChatMessages({ accountId, chatId, threadId }))
-        .filter((entry) => {
-          const entryId = parseSafeMessageId(entry.messageId);
-          return entryId !== undefined && entryId < targetId;
-        })
-        .slice(-limit);
+      const entries = await listChatMessages({ accountId, chatId, threadId });
+      const endIndex = lowerBoundMessageId(entries, targetId);
+      return entries.slice(Math.max(0, endIndex - limit), endIndex);
     },
     around: async ({ accountId, chatId, messageId, threadId, before, after }) => {
       if (!messageId) {
         return [];
       }
       const entries = await listChatMessages({ accountId, chatId, threadId });
-      const targetIndex = entries.findIndex((entry) => entry.messageId === messageId);
-      if (targetIndex === -1) {
+      const targetId = parseSafeMessageId(messageId);
+      const targetIndex =
+        targetId !== undefined
+          ? lowerBoundMessageId(entries, targetId)
+          : entries.findIndex((entry) => entry.messageId === messageId);
+      if (targetIndex === -1 || entries[targetIndex]?.messageId !== messageId) {
         return [];
       }
       return entries.slice(
