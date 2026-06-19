@@ -439,7 +439,9 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
+  const commandToSplit =
+    process.platform === "win32" ? rawCommand.replace(/\\/g, "\\\\") : rawCommand;
+  const parsedCommand = splitShellArgs(commandToSplit);
   const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
     command,

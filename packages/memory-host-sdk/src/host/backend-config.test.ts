@@ -166,6 +166,24 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdConfig(resolved).command).toBe("/Applications/QMD Tools/qmd");
   });
 
+  it("preserves Windows backslashes in qmd command paths on Windows", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: "C:\\Users\\ANIRUDDHA\\qmd.exe --flag",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    if (process.platform === "win32") {
+      expect(requireQmdConfig(resolved).command).toBe("C:\\Users\\ANIRUDDHA\\qmd.exe");
+    } else {
+      expect(requireQmdConfig(resolved).command).toBe("C:UsersANIRUDDHAqmd.exe");
+    }
+  });
+
   it("resolves custom paths relative to workspace", () => {
     const cfg = {
       agents: {
