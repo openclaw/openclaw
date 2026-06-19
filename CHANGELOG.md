@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 - Dashboard and mobile: add a session workspace rail, plugin health in status, compact cron lists, and iOS Watch controls. (#92856, #91952, #93395, #93387) Thanks @Solvely-Colin, @jalehman, @yu-xin-c, @centralpc, @joshavant, and @vincentkoc.
 - Codex and skills: add automatic plugin approvals, preserve ClawHub skill provenance, and expose remote-node execution to Codex when a node is connected. (#92625, #93283, #93654) Thanks @kevinslin, @momothemage, @nmccready-tars, @vincentkoc, and @JPKay-AI.
 - QA and release engineering: QA scenarios now use YAML, with broader profile evidence and release coverage for the plugin and channel matrix.
+- Policy doctor: split registration into scope-owned modules while preserving the existing check catalog and metadata exports. (#94314) Thanks @giodl73-repo.
 
 ### Fixes
 
