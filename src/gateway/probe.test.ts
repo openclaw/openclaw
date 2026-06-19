@@ -12,6 +12,8 @@ const gatewayClientState = vi.hoisted(() => ({
     | "connect-error-close"
     | "defer"
     | "startup-retry-then-hello",
+  socketOpened: true,
+  transportValidated: true,
   close: { code: 1008, reason: "pairing required" },
   helloAuth: {
     role: "operator",
@@ -89,7 +91,12 @@ class MockGatewayClient {
   private emitClose(): void {
     const onClose = this.opts.onClose;
     if (typeof onClose === "function") {
-      onClose(gatewayClientState.close.code, gatewayClientState.close.reason);
+      onClose(gatewayClientState.close.code, gatewayClientState.close.reason, {
+        phase: "pre-hello",
+        socketOpened: gatewayClientState.socketOpened,
+        transportValidated: gatewayClientState.transportValidated,
+        transientPreHelloCleanClose: false,
+      });
     }
   }
 
@@ -288,6 +295,8 @@ describe("probeGateway", () => {
     deviceIdentityState.identityPaths = [];
     deviceIdentityState.tokenParams = [];
     gatewayClientState.startMode = "hello";
+    gatewayClientState.socketOpened = true;
+    gatewayClientState.transportValidated = true;
     gatewayClientState.options = null;
     gatewayClientState.requests = [];
     gatewayClientState.startCalls = 0;
@@ -613,6 +622,7 @@ describe("probeGateway", () => {
 
   it("prefers the structured connect error over the generic close reason", async () => {
     gatewayClientState.startMode = "connect-error-close";
+    gatewayClientState.socketOpened = true;
 
     const result = await runTokenLightweightProbe({
       timeoutMs: 5_000,
@@ -623,6 +633,17 @@ describe("probeGateway", () => {
       error: "scope upgrade pending approval (requestId: req-123)",
       close: { code: 1008, reason: "pairing required" },
     });
+    expect(result.connectLatencyMs).not.toBeNull();
+  });
+
+  it("keeps latency unknown when the opened transport fails validation", async () => {
+    gatewayClientState.startMode = "connect-error-close";
+    gatewayClientState.socketOpened = true;
+    gatewayClientState.transportValidated = false;
+
+    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
+
+    expect(result.connectLatencyMs).toBeNull();
   });
 
   it("keeps probing through internally retried startup-unavailable handshakes", async () => {
