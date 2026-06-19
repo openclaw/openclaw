@@ -43,6 +43,16 @@ type OpenAIHttpOptions = {
   timeoutMs?: number;
 };
 
+type OpenAIRealtimeBrowserResponseReader = (
+  response: Response,
+  label: string,
+  maxBytes: number,
+) => Promise<string>;
+
+type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
+  openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
+};
+
 function getEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value ? value : undefined;
@@ -112,6 +122,63 @@ function printResult(result: SmokeResult): void {
 
 function compareStrings(left: string | undefined, right: string | undefined): number {
   return (left ?? "").localeCompare(right ?? "");
+}
+
+async function readOpenAIRealtimeBrowserResponseText(
+  response: Response,
+  label: string,
+  maxBytes: number,
+): Promise<string> {
+  const responseBodyTooLargeError = (errorLabel: string, errorMaxBytes: number): Error =>
+    new Error(`${errorLabel} response body exceeded ${errorMaxBytes} bytes`);
+  const rawContentLength = response.headers.get("content-length");
+  if (rawContentLength && /^\d+$/u.test(rawContentLength)) {
+    const contentLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
+      await response.body?.cancel().catch(() => undefined);
+      throw responseBodyTooLargeError(label, maxBytes);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalBytes = 0;
+  let canceled = false;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        const tail = decoder.decode();
+        if (tail) {
+          chunks.push(tail);
+        }
+        break;
+      }
+
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        canceled = true;
+        await reader.cancel().catch(() => undefined);
+        throw responseBodyTooLargeError(label, maxBytes);
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+
+  return chunks.join("");
+}
+
+function openAIRealtimeBrowserResponseReaderInitScript(): string {
+  return `globalThis.openclawReadBoundedRealtimeResponseText = ${readOpenAIRealtimeBrowserResponseText.toString()};`;
 }
 
 async function createOpenAIClientSecret(
@@ -219,57 +286,14 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
     try {
       const page = await context.newPage();
       await page.evaluate("globalThis.__name = (fn) => fn");
+      await page.evaluate(openAIRealtimeBrowserResponseReaderInitScript());
       const result = await page.evaluate(
         async ({ clientSecret: secret, sdpAnswerMaxBytes, timeoutMs }) => {
-          const responseBodyTooLargeError = (label: string, maxBytes: number): Error =>
-            new Error(`${label} response body exceeded ${maxBytes} bytes`);
-          const readBoundedTextLocal = async (
-            response: Response,
-            label: string,
-            maxBytes: number,
-          ): Promise<string> => {
-            const contentLength = Number(response.headers.get("content-length") ?? "");
-            if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
-              await response.body?.cancel().catch(() => undefined);
-              throw responseBodyTooLargeError(label, maxBytes);
-            }
-            if (!response.body) {
-              return "";
-            }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            const chunks: string[] = [];
-            let totalBytes = 0;
-            let canceled = false;
-
-            try {
-              for (;;) {
-                const { done, value } = await reader.read();
-                if (done) {
-                  const tail = decoder.decode();
-                  if (tail) {
-                    chunks.push(tail);
-                  }
-                  break;
-                }
-
-                totalBytes += value.byteLength;
-                if (totalBytes > maxBytes) {
-                  canceled = true;
-                  await reader.cancel().catch(() => undefined);
-                  throw responseBodyTooLargeError(label, maxBytes);
-                }
-                chunks.push(decoder.decode(value, { stream: true }));
-              }
-            } finally {
-              if (!canceled) {
-                reader.releaseLock();
-              }
-            }
-
-            return chunks.join("");
-          };
+          const readBoundedTextLocal = (globalThis as OpenAIWebRtcSmokeGlobal)
+            .openclawReadBoundedRealtimeResponseText;
+          if (!readBoundedTextLocal) {
+            throw new Error("OpenAI Realtime bounded response reader was not installed");
+          }
           const withBrowserTimeout = async <T>(
             label: string,
             run: (signal: AbortSignal) => Promise<T>,
@@ -327,12 +351,16 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
             });
             const offer = await peer.createOffer();
             await peer.setLocalDescription(offer);
+            const offerSdp = offer.sdp;
+            if (!offerSdp) {
+              throw new Error("OpenAI Realtime SDP offer did not include SDP");
+            }
             const answer = await withBrowserTimeout(
               "OpenAI Realtime SDP offer request",
               async (signal) => {
                 const response = await fetch("https://api.openai.com/v1/realtime/calls", {
                   method: "POST",
-                  body: offer.sdp,
+                  body: offerSdp,
                   headers: {
                     Authorization: `Bearer ${secret}`,
                     "Content-Type": "application/sdp",
@@ -761,6 +789,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 export const testing = {
   OPENAI_HTTP_RESPONSE_MAX_BYTES,
   createOpenAIClientSecret,
+  readOpenAIRealtimeBrowserResponseText,
   readBoundedText,
   resolveOpenAIHttpTimeoutMs,
 };

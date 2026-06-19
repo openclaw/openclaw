@@ -80,6 +80,10 @@ import { writeJsonlLines } from "./transcript-jsonl.js";
 import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
 import {
+  scanSessionTranscriptTree,
+  selectSessionTranscriptTreePathNodes,
+} from "./transcript-tree.js";
+import {
   type OwnedSessionTranscriptPublishedEntry,
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
@@ -276,6 +280,12 @@ export type SessionTranscriptManualTrimResult =
       archived: string;
       compacted: true;
       kept: number;
+    };
+
+export type SessionTranscriptManualTrimPreflightResult =
+  | Extract<SessionTranscriptManualTrimResult, { compacted: false }>
+  | {
+      compacted: true;
     };
 
 export type SessionEntryUpdateOptions = {
@@ -944,6 +954,33 @@ export async function publishTranscriptUpdate(
  * This is one storage-sized mutation: future stores can trim transcript rows and
  * update entry metadata inside the same backend transaction.
  */
+export async function preflightSessionTranscriptForManualCompact(
+  scope: SessionTranscriptRuntimeScope,
+  params: { maxLines: number; sessionFile?: string },
+): Promise<SessionTranscriptManualTrimPreflightResult> {
+  const transcript = await resolveManualCompactTranscriptTarget(scope, params.sessionFile);
+  if (!transcript) {
+    return { compacted: false, reason: "no transcript" };
+  }
+
+  const maxLines = Math.max(1, Math.floor(params.maxLines));
+  let totalLines = 0;
+  try {
+    for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
+      if (!line) {
+        continue;
+      }
+      totalLines += 1;
+      if (totalLines > maxLines) {
+        return { compacted: true };
+      }
+    }
+  } catch {
+    return { compacted: false, kept: 0 };
+  }
+  return { compacted: false, kept: totalLines };
+}
+
 export async function trimSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; nowMs?: number; sessionFile?: string },
@@ -954,14 +991,20 @@ export async function trimSessionTranscriptForManualCompact(
   }
 
   const maxLines = Math.max(1, Math.floor(params.maxLines));
-  const lines: string[] = [];
+  let headerLine: string | undefined;
+  const tailLines: string[] = [];
+  const maxTailLines = Math.max(0, maxLines - 1);
   let totalLines = 0;
   try {
     for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
       totalLines += 1;
-      lines.push(line);
-      if (lines.length > maxLines) {
-        lines.shift();
+      if (totalLines === 1) {
+        headerLine = line;
+        continue;
+      }
+      tailLines.push(line);
+      if (tailLines.length > maxTailLines) {
+        tailLines.shift();
       }
     }
   } catch {
@@ -971,8 +1014,11 @@ export async function trimSessionTranscriptForManualCompact(
     return { compacted: false, kept: totalLines };
   }
 
-  const archived = await archiveTranscriptFileForManualCompact(transcript.sessionFile);
-  await writeJsonlLines(transcript.sessionFile, lines);
+  const lines = normalizeManualCompactTranscriptLines(headerLine, tailLines);
+  if (!lines) {
+    return { compacted: false, kept: 0 };
+  }
+  const archived = await replaceTranscriptForManualCompact(transcript.sessionFile, lines);
   await patchSessionEntry(
     {
       ...scope,
@@ -994,10 +1040,115 @@ export async function trimSessionTranscriptForManualCompact(
   return { archived, compacted: true, kept: lines.length };
 }
 
-async function archiveTranscriptFileForManualCompact(filePath: string): Promise<string> {
+function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeManualCompactTranscriptLines(
+  headerLine: string | undefined,
+  tailLines: readonly string[],
+): string[] | null {
+  if (!headerLine) {
+    return null;
+  }
+  const header = parseManualCompactTranscriptRecord(headerLine);
+  if (header?.type !== "session" || typeof header.id !== "string") {
+    return null;
+  }
+
+  const records = tailLines
+    .map(parseManualCompactTranscriptRecord)
+    .filter((record): record is Record<string, unknown> => record !== null);
+  const retainedIds = new Set<string>();
+  const transparentParents = new Map<string, string | null>();
+  const normalizedRecords: Record<string, unknown>[] = [];
+  for (const record of records) {
+    let parentId = record.parentId;
+    const seenTransparentParents = new Set<string>();
+    while (
+      typeof parentId === "string" &&
+      transparentParents.has(parentId) &&
+      !seenTransparentParents.has(parentId)
+    ) {
+      seenTransparentParents.add(parentId);
+      parentId = transparentParents.get(parentId) ?? null;
+    }
+    let next =
+      typeof parentId === "string" && !retainedIds.has(parentId)
+        ? { ...record, parentId: null }
+        : parentId !== record.parentId
+          ? { ...record, parentId }
+          : record;
+    if (next.type === "leaf") {
+      const targetId = next.targetId;
+      const validTargetId =
+        targetId === null || (typeof targetId === "string" && targetId.trim().length > 0);
+      if (!validTargetId && typeof next.id === "string") {
+        transparentParents.set(
+          next.id,
+          next.parentId === null || typeof next.parentId === "string" ? next.parentId : null,
+        );
+      }
+      if (typeof targetId === "string" && targetId.trim() && !retainedIds.has(targetId)) {
+        // The selected branch fell outside the retained window. Select an
+        // empty root instead of accidentally activating abandoned or side rows.
+        next = { ...next, targetId: null, appendParentId: null };
+      } else if (
+        validTargetId &&
+        typeof next.appendParentId === "string" &&
+        !retainedIds.has(next.appendParentId)
+      ) {
+        next = { ...next, appendParentId: targetId };
+      }
+    }
+    if (next.type === "compaction" && typeof next.id === "string") {
+      const firstKeptEntryId = next.firstKeptEntryId;
+      if (typeof firstKeptEntryId === "string" && firstKeptEntryId !== next.id) {
+        const tree = scanSessionTranscriptTree([...normalizedRecords, next]);
+        const branchPath = selectSessionTranscriptTreePathNodes(tree, next.id);
+        if (!branchPath.some((node) => node.id === firstKeptEntryId)) {
+          // Replay starts at the earliest retained entry on this compaction's
+          // normalized branch, never at an abandoned row earlier in file order.
+          next = { ...next, firstKeptEntryId: branchPath[0]?.id ?? next.id };
+        }
+      }
+    }
+    normalizedRecords.push(next);
+    if (typeof next.id === "string" && next.id.trim()) {
+      retainedIds.add(next.id);
+    }
+  }
+  return [JSON.stringify(header), ...normalizedRecords.map((record) => JSON.stringify(record))];
+}
+
+async function replaceTranscriptForManualCompact(
+  filePath: string,
+  lines: readonly string[],
+): Promise<string> {
   const archived = `${filePath}.bak.${formatSessionArchiveTimestamp()}`;
-  await fs.promises.rename(filePath, archived);
+  const replacement = `${filePath}.compact.${randomUUID()}.tmp`;
+  try {
+    await writeJsonlLines(replacement, lines, { flag: "wx", mode: 0o600 });
+    await fs.promises.rename(filePath, archived);
+    try {
+      await fs.promises.rename(replacement, filePath);
+    } catch (err) {
+      await fs.promises.rename(archived, filePath).catch(() => undefined);
+      throw err;
+    }
+  } catch (err) {
+    await fs.promises.unlink(replacement).catch(() => undefined);
+    throw err;
+  }
   emitSessionTranscriptUpdate({ sessionFile: archived });
+  emitSessionTranscriptUpdate({ sessionFile: filePath });
   return archived;
 }
 

@@ -3,6 +3,7 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import {
@@ -171,6 +172,27 @@ describe("config schema", () => {
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("clientCert");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("toolFilter");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
+  });
+
+  it("accepts explicit stdio transport for command MCP servers", () => {
+    const config = {
+      mcp: {
+        servers: {
+          local: {
+            command: "node",
+            args: ["server.mjs"],
+            transport: "stdio",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(OpenClawSchema.safeParse(config).success).toBe(true);
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: { servers: { local: { command: "node", transport: "websocket" } } },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects empty Codex MCP agent scopes", () => {

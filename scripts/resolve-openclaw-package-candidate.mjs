@@ -1209,7 +1209,10 @@ export async function downloadUrl(url, target, options = {}) {
     const rawContentLength = responseHeader(response, "content-length");
     const contentLength =
       rawContentLength && /^\d+$/u.test(rawContentLength) ? Number(rawContentLength) : undefined;
-    if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+    if (
+      contentLength !== undefined &&
+      (!Number.isSafeInteger(contentLength) || contentLength > maxBytes)
+    ) {
       throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
     }
     await fs.rm(tempTarget, { force: true });

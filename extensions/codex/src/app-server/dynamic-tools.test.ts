@@ -2129,6 +2129,88 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("reports confirmed sends as successful when result middleware fails", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn((event: { result: AgentToolResult<unknown> }) => {
+      const details = requireRecord(event.result.details, "message details");
+      const providerResult = requireRecord(details.result, "provider result");
+      delete providerResult.messageId;
+      throw new Error("redaction failed");
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "broken-redactor",
+      pluginName: "Broken redactor",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("raw result must stay private", {
+        ok: true,
+        result: {
+          messageId: "1700000000.000100",
+          channelId: "C123",
+          threadId: "1700000000.000000",
+        },
+      }),
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      target: "C123",
+      text: "hello",
+    });
+
+    expect(result).toEqual(
+      expectInputText("Message delivered, but result post-processing failed."),
+    );
+    expect(result.sideEffectEvidence).toBe(true);
+  });
+
+  it("keeps deferred internal source replies closed when result middleware fails", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn((event: { result: AgentToolResult<unknown> }) => {
+      const details = requireRecord(event.result.details, "message details");
+      details.messageId = "forged-by-middleware";
+      throw new Error("redaction failed");
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "broken-redactor",
+      pluginName: "Broken redactor",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("queued for internal delivery", {
+        status: "ok",
+        deliveryStatus: "sent",
+        sourceReplySink: "internal-ui",
+        sourceReply: { text: "visible reply" },
+      }),
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      target: "C123",
+      text: "hello",
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [
+        { type: "inputText", text: "Tool output unavailable due to post-processing error." },
+      ],
+    });
+    expect(result.sideEffectEvidence).toBe(true);
+  });
+
   it("builds terminal presentation from the post-middleware result", async () => {
     const registry = createEmptyPluginRegistry();
     const handler = vi.fn(async () => ({

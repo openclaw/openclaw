@@ -361,11 +361,6 @@ export class NodeRegistry {
     });
   }
 
-  /** Update command list while keeping it within the node's declared command surface. */
-  updateCommands(nodeId: string, commands: readonly string[]): NodeSession | null {
-    return this.updateSurface(nodeId, { commands });
-  }
-
   updateSurface(
     nodeId: string,
     surface: {

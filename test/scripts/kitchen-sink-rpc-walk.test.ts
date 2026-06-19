@@ -1976,6 +1976,30 @@ describe("kitchen-sink RPC process sampling", () => {
     );
   });
 
+  it("releases HTTP probe response stream readers after bounded reads", async () => {
+    const releaseLock = vi.fn();
+    const response = {
+      headers: new Headers(),
+      body: {
+        getReader() {
+          return {
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("ok") })
+              .mockResolvedValueOnce({ done: true }),
+            releaseLock,
+          };
+        },
+      },
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).resolves.toBe("ok");
+
+    expect(releaseLock).toHaveBeenCalledOnce();
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
   it("cancels stalled HTTP probe response streams when the timeout wins", async () => {
     let canceled = false;
     const timeoutError = Object.assign(new Error("fetch probe timed out"), {

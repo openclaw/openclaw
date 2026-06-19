@@ -996,25 +996,31 @@ export async function readBoundedResponseText(response, byteLimit, timeoutPromis
   }
   const chunks = [];
   let totalBytes = 0;
-  for (;;) {
-    const read = reader.read();
-    const { done, value } = await withOptionalTimeout(
-      read,
-      timeoutPromise?.catch((error) => {
-        cancelReaderSoon(reader);
-        throw error;
-      }),
-    );
-    if (done) {
-      break;
+  try {
+    for (;;) {
+      const read = reader.read();
+      const { done, value } = await withOptionalTimeout(
+        read,
+        timeoutPromise?.catch((error) => {
+          cancelReaderSoon(reader);
+          throw error;
+        }),
+      );
+      if (done) {
+        break;
+      }
+      const chunk = Buffer.from(value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > resolvedByteLimit) {
+        await reader.cancel().catch(() => undefined);
+        throw createFetchBodyTooLargeError(resolvedByteLimit);
+      }
+      chunks.push(chunk);
     }
-    const chunk = Buffer.from(value);
-    totalBytes += chunk.byteLength;
-    if (totalBytes > resolvedByteLimit) {
-      await reader.cancel().catch(() => undefined);
-      throw createFetchBodyTooLargeError(resolvedByteLimit);
-    }
-    chunks.push(chunk);
+  } finally {
+    try {
+      reader.releaseLock?.();
+    } catch {}
   }
   return Buffer.concat(chunks, totalBytes).toString("utf8");
 }

@@ -2970,17 +2970,6 @@ export class WorkboardStore {
     return await this.promoteDependencyReady(nextChild.id);
   }
 
-  async linkParents(childId: string, parentIds: readonly string[]): Promise<WorkboardCard> {
-    let child = await this.get(childId);
-    if (!child) {
-      throw new Error(`card not found: ${childId}`);
-    }
-    for (const parentId of parentIds) {
-      child = await this.linkCards(parentId, child.id);
-    }
-    return child;
-  }
-
   private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
     const scheduledAt = card.metadata?.automation?.scheduledAt;
     const parents = cardParentIds(card);
