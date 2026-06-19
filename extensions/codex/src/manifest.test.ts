@@ -1,0 +1,35 @@
+// Codex tests cover manifest plugin behavior.
+import fs from "node:fs";
+import { describe, expect, it } from "vitest";
+import { MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION } from "./app-server/version.js";
+
+type CodexPackageManifest = {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  openclaw?: {
+    install?: {
+      requiredPlatformPackages?: string[];
+    };
+  };
+};
+
+describe("codex package manifest", () => {
+  it("keeps runtime dependencies in the package manifest", () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as CodexPackageManifest;
+
+    expect(packageJson.devDependencies).toHaveProperty("@openclaw/plugin-sdk");
+    expect(packageJson.dependencies?.["@openai/codex"]).toBe(
+      MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION,
+    );
+    expect(packageJson.openclaw?.install?.requiredPlatformPackages).toEqual([
+      "@openai/codex-linux-x64",
+      "@openai/codex-linux-arm64",
+      "@openai/codex-darwin-x64",
+      "@openai/codex-darwin-arm64",
+      "@openai/codex-win32-x64",
+      "@openai/codex-win32-arm64",
+    ]);
+  });
+});

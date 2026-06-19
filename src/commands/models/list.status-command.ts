@@ -1,0 +1,1406 @@
+/** Implementation of `openclaw models status`. */
+import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  resolveAgentDir,
+  resolveAgentExplicitModelPrimary,
+  resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
+import {
+  buildAuthHealthSummary,
+  DEFAULT_OAUTH_WARN_MS,
+  formatRemainingShort,
+} from "../../agents/auth-health.js";
+import { evaluateStoredCredentialEligibility } from "../../agents/auth-profiles/credential-state.js";
+import {
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "../../agents/auth-profiles/order.js";
+import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthLookupMaps,
+} from "../../agents/model-auth-env-vars.js";
+import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import {
+  buildModelAliasIndex,
+  isCliProvider,
+  modelKey,
+  normalizeProviderId,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
+  openAIProviderUsesCodexRuntimeByDefault,
+} from "../../agents/openai-routing.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { createConfigIO } from "../../config/config.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "../../infra/parse-finite-number.js";
+import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
+import {
+  captureCurrentPluginMetadataSnapshotState,
+  getCurrentPluginMetadataSnapshot,
+  restoreCurrentPluginMetadataSnapshotState,
+  setCurrentPluginMetadataSnapshot,
+} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
+import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveUserPath, shortenHomePath } from "../../utils.js";
+import { resolveProviderAuthOverview } from "./list.auth-overview.js";
+import { isRich } from "./list.format.js";
+import type { AuthProbeSummary } from "./list.probe.js";
+import type { ProviderAuthOverview } from "./list.types.js";
+import { loadModelsConfig } from "./load-config.js";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+  ensureFlagCompatibility,
+  resolveKnownAgentId,
+} from "./shared.js";
+
+type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
+type ProgressRuntime = typeof import("../../cli/progress.js");
+
+function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  return override ? resolveUserPath(override, env) : undefined;
+}
+type TerminalTableRuntime = typeof import("../../../packages/terminal-core/src/table.js");
+type ListProbeRuntime = typeof import("./list.probe.js");
+
+const providerUsageRuntimeLoader = createLazyImportLoader<ProviderUsageRuntime>(
+  () => import("../../infra/provider-usage.js"),
+);
+const progressRuntimeLoader = createLazyImportLoader<ProgressRuntime>(
+  () => import("../../cli/progress.js"),
+);
+const terminalTableRuntimeLoader = createLazyImportLoader<TerminalTableRuntime>(
+  () => import("../../../packages/terminal-core/src/table.js"),
+);
+const listProbeRuntimeLoader = createLazyImportLoader<ListProbeRuntime>(
+  () => import("./list.probe.js"),
+);
+
+const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
+
+type StatusSyntheticAuth = {
+  value: string;
+  source: string;
+  credential?: string;
+  mode?: ProviderSyntheticAuthResult["mode"];
+  expiresAt?: number;
+};
+
+function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
+  return providerUsageRuntimeLoader.load();
+}
+
+function loadProgressRuntime(): Promise<ProgressRuntime> {
+  return progressRuntimeLoader.load();
+}
+
+function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
+  return terminalTableRuntimeLoader.load();
+}
+
+function loadListProbeRuntime(): Promise<ListProbeRuntime> {
+  return listProbeRuntimeLoader.load();
+}
+
+function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback: number): number {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed <= 0) {
+    throw new Error(`${label} must be a positive number.`);
+  }
+  return parsed;
+}
+
+function parseOptionalPositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function isCompletePluginMetadataSnapshot(value: unknown): value is PluginMetadataSnapshot {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const snapshot = value as Partial<PluginMetadataSnapshot>;
+  return (
+    typeof snapshot.policyHash === "string" &&
+    snapshot.index !== undefined &&
+    snapshot.manifestRegistry !== undefined
+  );
+}
+
+function installCommandPluginMetadataSnapshot(params: {
+  snapshot: PluginMetadataSnapshot;
+  config: Awaited<ReturnType<typeof loadModelsConfig>>;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): () => void {
+  if (!isCompletePluginMetadataSnapshot(params.snapshot)) {
+    return () => {};
+  }
+  const current = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (current) {
+    return () => {};
+  }
+  const previousState = captureCurrentPluginMetadataSnapshotState();
+  setCurrentPluginMetadataSnapshot(params.snapshot, {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return () => {
+    restoreCurrentPluginMetadataSnapshotState(previousState);
+  };
+}
+
+function resolveProviderConfigForStatus(
+  cfg: Awaited<ReturnType<typeof loadModelsConfig>>,
+  provider: string,
+) {
+  const providers = cfg.models?.providers ?? {};
+  const direct = providers[provider];
+  if (direct) {
+    return direct;
+  }
+  const normalized = normalizeProviderId(provider);
+  return (
+    providers[normalized] ??
+    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
+  );
+}
+
+function syntheticAuthCredential(
+  provider: string,
+  auth: StatusSyntheticAuth,
+): AuthProfileCredential | undefined {
+  if (!auth.mode) {
+    return undefined;
+  }
+  if (auth.mode === "api-key") {
+    return {
+      type: "api_key",
+      provider,
+      key: auth.credential,
+    };
+  }
+  if (auth.mode === "token") {
+    return {
+      type: "token",
+      provider,
+      token: auth.credential,
+      expires: auth.expiresAt,
+    };
+  }
+  if (auth.expiresAt === undefined) {
+    return undefined;
+  }
+  return {
+    type: "oauth",
+    provider,
+    access: auth.credential ?? "",
+    refresh: "",
+    expires: auth.expiresAt,
+  };
+}
+
+/** Prints model default, auth, provider, and optional probe status. */
+export async function modelsStatusCommand(
+  opts: {
+    json?: boolean;
+    plain?: boolean;
+    check?: boolean;
+    probe?: boolean;
+    probeProvider?: string;
+    probeProfile?: string | string[];
+    probeTimeout?: string;
+    probeConcurrency?: string;
+    probeMaxTokens?: string;
+    agent?: string;
+  },
+  runtime: RuntimeEnv,
+) {
+  ensureFlagCompatibility(opts);
+  if (opts.plain && opts.probe) {
+    throw new Error("--probe cannot be used with --plain output.");
+  }
+  const configPath = createConfigIO().configPath;
+  const cfg = await loadModelsConfig({ commandName: "models status", runtime });
+  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
+  const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
+  const agentDir = agentId
+    ? resolveAgentDir(cfg, agentId)
+    : (resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, workspaceAgentId));
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
+  const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
+  const agentFallbacksOverride = agentId
+    ? resolveAgentModelFallbacksOverride(cfg, agentId)
+    : undefined;
+  const resolvedConfig =
+    agentModelPrimary && agentModelPrimary.length > 0
+      ? {
+          ...cfg,
+          agents: {
+            ...cfg.agents,
+            defaults: {
+              ...cfg.agents?.defaults,
+              model: {
+                ...(typeof cfg.agents?.defaults?.model === "object"
+                  ? cfg.agents.defaults.model
+                  : {}),
+                primary: agentModelPrimary,
+              },
+            },
+          },
+        }
+      : cfg;
+  const metadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
+  const cleanupPluginMetadataSnapshot = installCommandPluginMetadataSnapshot({
+    snapshot: metadataSnapshot,
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
+  try {
+    const resolved = resolveConfiguredModelRef({
+      cfg: resolvedConfig,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
+    });
+
+    const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
+    const rawModel = agentModelPrimary ?? rawDefaultsModel;
+    const resolvedLabel = modelKey(resolved.provider, resolved.model);
+    const defaultLabel = rawModel || resolvedLabel;
+    const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+    const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
+    const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
+    const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
+    const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<
+      Record<string, string>
+    >((acc, [key, entry]) => {
+      const alias = normalizeOptionalString(entry?.alias);
+      if (alias) {
+        acc[alias] = key;
+      }
+      return acc;
+    }, {});
+    const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
+
+    const store = ensureAuthProfileStore(agentDir);
+    const modelsPath = path.join(agentDir, "models.json");
+
+    const providersFromStore = new Set(
+      Object.values(store.profiles)
+        .map((profile) => normalizeProviderId(profile.provider))
+        .filter((p): p is string => Boolean(p)),
+    );
+    const providersFromConfig = new Set(
+      Object.keys(cfg.models?.providers ?? {})
+        .map((p) => (typeof p === "string" ? normalizeProviderId(p) : ""))
+        .filter(Boolean),
+    );
+    const aliasIndex = buildModelAliasIndex({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
+    });
+    const resolveStatusModelRef = (raw: string | undefined) => {
+      const modelRef = raw?.trim();
+      if (!modelRef) {
+        return undefined;
+      }
+      return resolveModelRefFromString({
+        cfg,
+        raw: modelRef,
+        defaultProvider: DEFAULT_PROVIDER,
+        aliasIndex,
+        ...DISPLAY_MODEL_PARSE_OPTIONS,
+      })?.ref;
+    };
+    const providersFromModels = new Set<string>();
+    const providerUses: Array<{
+      provider: string;
+      model: string;
+      allowCodexRuntimeFallback: boolean;
+    }> = [];
+    const addProviderUse = (raw: string | undefined, allowCodexRuntimeFallback: boolean) => {
+      const ref = resolveStatusModelRef(raw);
+      if (ref?.provider) {
+        providerUses.push({
+          provider: normalizeProviderId(ref.provider),
+          model: ref.model,
+          allowCodexRuntimeFallback,
+        });
+      }
+    };
+    for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
+      const ref = resolveStatusModelRef(raw);
+      if (ref?.provider) {
+        providersFromModels.add(normalizeProviderId(ref.provider));
+      }
+    }
+    for (const raw of [defaultLabel, ...fallbacks]) {
+      addProviderUse(raw, true);
+    }
+    for (const raw of [imageModel, ...imageFallbacks]) {
+      addProviderUse(raw, false);
+    }
+
+    const providersFromEnv = new Set<string>();
+    // Use the shared provider-env registry so `models status` stays aligned with
+    // env-backed providers beyond the text-model defaults (for example image-gen).
+    const envLookupParams = {
+      config: cfg,
+      workspaceDir,
+      env: process.env,
+      metadataSnapshot,
+    };
+    const { aliasMap, envCandidateMap, authEvidenceMap } =
+      resolveProviderEnvAuthLookupMaps(envLookupParams);
+    for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
+      if (
+        resolveEnvApiKey(provider, process.env, {
+          config: cfg,
+          workspaceDir,
+          aliasMap,
+          candidateMap: envCandidateMap,
+          authEvidenceMap,
+          skipSetupProviderFallback: true,
+        })
+      ) {
+        providersFromEnv.add(provider);
+      }
+    }
+    const syntheticAuthProviderRefs = new Set(
+      resolveRuntimeSyntheticAuthProviderRefs({
+        index: metadataSnapshot.index,
+        registryDiagnostics: metadataSnapshot.registryDiagnostics,
+      }).map((provider) => normalizeProviderId(provider)),
+    );
+    const syntheticAuthByProvider = new Map<string, StatusSyntheticAuth>();
+    const cliRuntimeAuthUsages = providerUses
+      .filter((usage) => usage.allowCodexRuntimeFallback)
+      .map((usage) => {
+        const runtimeProvider = resolveCliRuntimeExecutionProvider({
+          provider: usage.provider,
+          modelId: usage.model,
+          cfg,
+          agentId: workspaceAgentId,
+        });
+        const normalizedRuntime = runtimeProvider
+          ? normalizeProviderId(runtimeProvider)
+          : undefined;
+        return normalizedRuntime && normalizedRuntime !== usage.provider
+          ? {
+              provider: usage.provider,
+              model: usage.model,
+              allowCodexRuntimeFallback: usage.allowCodexRuntimeFallback,
+              runtime: normalizedRuntime,
+            }
+          : undefined;
+      })
+      .filter((usage): usage is NonNullable<typeof usage> => Boolean(usage));
+
+    const providers = Array.from(
+      new Set([
+        ...providersFromStore,
+        ...providersFromConfig,
+        ...providersFromModels,
+        ...providersFromEnv,
+        ...cliRuntimeAuthUsages.map((usage) => usage.runtime),
+      ]),
+    )
+      .map((p) => normalizeOptionalString(p) ?? "")
+      .filter(Boolean)
+      .toSorted((a, b) => a.localeCompare(b));
+    const syntheticProvidersToProbe = new Set(
+      providers.map((provider) => normalizeProviderId(provider)),
+    );
+    const codexProvider = normalizeProviderId(OPENAI_PROVIDER_ID);
+    const codexProviderAlias = aliasMap[codexProvider] ?? codexProvider;
+    const codexRuntimeAuthUsages = providerUses.filter(
+      (usage) =>
+        usage.allowCodexRuntimeFallback &&
+        openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }),
+    );
+    if (codexRuntimeAuthUsages.length > 0) {
+      syntheticProvidersToProbe.add(codexProvider);
+      syntheticProvidersToProbe.add(codexProviderAlias);
+      syntheticProvidersToProbe.add("codex");
+    }
+    for (const provider of syntheticProvidersToProbe) {
+      const normalized = normalizeProviderId(provider);
+      if (!syntheticAuthProviderRefs.has(normalized)) {
+        continue;
+      }
+      const resolvedLocal = resolveProviderSyntheticAuthWithPlugin({
+        provider: normalized,
+        config: cfg,
+        context: {
+          config: cfg,
+          provider: normalized,
+          providerConfig: resolveProviderConfigForStatus(cfg, normalized),
+        },
+      });
+      if (!resolvedLocal) {
+        continue;
+      }
+      const syntheticAuth: StatusSyntheticAuth = {
+        value: "plugin-owned",
+        source: resolvedLocal.source,
+        credential: resolvedLocal.apiKey,
+        mode: resolvedLocal.mode,
+        expiresAt: resolvedLocal.expiresAt,
+      };
+      syntheticAuthByProvider.set(normalized, syntheticAuth);
+      if (normalized === "codex" || normalized === codexProviderAlias) {
+        syntheticAuthByProvider.set(codexProvider, syntheticAuth);
+      }
+    }
+    const runtimeCredentialsByProvider = new Map(
+      Array.from(syntheticAuthByProvider.entries())
+        .map(([provider, auth]) => [provider, syntheticAuthCredential(provider, auth)] as const)
+        .filter((entry): entry is readonly [string, AuthProfileCredential] => Boolean(entry[1])),
+    );
+
+    const applied = getShellEnvAppliedKeys();
+    const shellFallbackEnabled =
+      shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
+
+    const providerAuth = Array.from(
+      new Set([
+        ...providers,
+        ...(codexRuntimeAuthUsages.length > 0 && syntheticAuthByProvider.has(codexProvider)
+          ? [codexProvider]
+          : []),
+      ]),
+    )
+      .toSorted((a, b) => a.localeCompare(b))
+      .map((provider) =>
+        resolveProviderAuthOverview({
+          provider,
+          cfg,
+          store,
+          modelsPath,
+          agentDir,
+          workspaceDir,
+          syntheticAuth: syntheticAuthByProvider.get(provider),
+          aliasMap,
+          envCandidateMap,
+          authEvidenceMap,
+        }),
+      )
+      .filter((entry) => {
+        const hasAny =
+          entry.profiles.count > 0 ||
+          Boolean(entry.env) ||
+          Boolean(entry.modelsJson) ||
+          Boolean(entry.syntheticAuth);
+        return hasAny;
+      });
+    const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
+    const missingProviderAuthEffective: ProviderAuthOverview["effective"] = {
+      kind: "missing",
+      detail: "missing",
+    };
+    const authHealth = buildAuthHealthSummary({
+      store,
+      cfg,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      runtimeCredentialsByProvider,
+      allowKeychainPrompt: false,
+    });
+    const authProfileHealthById = new Map(
+      authHealth.profiles.map((profile) => [profile.profileId, profile]),
+    );
+    const hasUsableAuthProfile = (
+      profileId: string,
+      credential: AuthProfileCredential,
+    ): boolean => {
+      if (credential.type === "api_key") {
+        return evaluateStoredCredentialEligibility({ credential }).eligible;
+      }
+      const health = authProfileHealthById.get(profileId);
+      if (health) {
+        return health.status === "ok" || health.status === "expiring" || health.status === "static";
+      }
+      return evaluateStoredCredentialEligibility({ credential }).eligible;
+    };
+    const resolveProviderAuthHealthId = (provider: string): string =>
+      resolveProviderIdForAuth(provider, envLookupParams);
+    const resolveStatusAuthOrder = (
+      order: Record<string, string[]> | undefined,
+      provider: string,
+    ): string[] | undefined => {
+      if (!order) {
+        return undefined;
+      }
+      const providerKey = normalizeProviderId(provider);
+      for (const [key, value] of Object.entries(order)) {
+        if (normalizeProviderId(key) === providerKey) {
+          return value;
+        }
+      }
+      return undefined;
+    };
+    const listRuntimeAuthProviderCandidates = (
+      provider: string,
+      options?: { includeLegacyOpenAICodex?: boolean },
+    ): string[] => {
+      const normalizedProvider = normalizeProviderId(provider);
+      const candidates = [normalizedProvider, resolveProviderAuthHealthId(normalizedProvider)];
+      if (
+        options?.includeLegacyOpenAICodex === true &&
+        openAIProviderUsesCodexRuntimeByDefault({
+          provider: normalizedProvider,
+          config: cfg,
+        })
+      ) {
+        candidates.push(OPENAI_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID);
+      }
+      return Array.from(new Set(candidates));
+    };
+    const listProviderProfileCandidates = (provider: string): string[] => {
+      const orderedProfiles = resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider,
+      });
+      const providerKey = normalizeProviderId(provider);
+      const providerAuthKey = resolveProviderAuthHealthId(providerKey);
+      const explicitOrder =
+        resolveStatusAuthOrder(store.order, providerAuthKey) ??
+        resolveStatusAuthOrder(store.order, providerKey) ??
+        resolveStatusAuthOrder(cfg.auth?.order, providerAuthKey) ??
+        resolveStatusAuthOrder(cfg.auth?.order, providerKey);
+      const isEligibleOrHealthRescued = (profileId: string): boolean => {
+        const credential = store.profiles[profileId];
+        if (!credential) {
+          return false;
+        }
+        const eligibility = resolveAuthProfileEligibility({
+          cfg,
+          store,
+          provider,
+          profileId,
+        });
+        if (eligibility.eligible) {
+          return true;
+        }
+        return (
+          eligibility.reasonCode === "missing_credential" &&
+          credential.type !== "api_key" &&
+          hasUsableAuthProfile(profileId, credential)
+        );
+      };
+      if (explicitOrder !== undefined) {
+        return Array.from(
+          new Set([...orderedProfiles, ...explicitOrder.filter(isEligibleOrHealthRescued)]),
+        );
+      }
+      const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
+        .filter(([, profile]) => {
+          const profileProvider = normalizeProviderId(profile.provider);
+          return (
+            profileProvider === providerKey ||
+            resolveProviderAuthHealthId(profileProvider) === providerAuthKey
+          );
+        })
+        .map(([profileId]) => profileId);
+      if (configuredProfiles.length > 0) {
+        return Array.from(
+          new Set([...orderedProfiles, ...configuredProfiles.filter(isEligibleOrHealthRescued)]),
+        );
+      }
+      const sameProviderProfiles = Object.entries(store.profiles)
+        .filter(([, credential]) => {
+          const credentialProvider = normalizeProviderId(credential.provider);
+          return (
+            credentialProvider === providerKey ||
+            resolveProviderAuthHealthId(credentialProvider) === providerAuthKey
+          );
+        })
+        .map(([profileId]) => profileId)
+        .filter(isEligibleOrHealthRescued);
+      return Array.from(new Set([...orderedProfiles, ...sameProviderProfiles]));
+    };
+    const resolveRuntimeAuthRouteEffective = (
+      provider: string,
+    ): ProviderAuthOverview["effective"] => {
+      const candidates = listRuntimeAuthProviderCandidates(provider, {
+        includeLegacyOpenAICodex: true,
+      });
+      for (const candidate of candidates) {
+        const direct = providerAuthMap.get(candidate)?.effective;
+        if (
+          direct &&
+          direct.kind !== "missing" &&
+          (direct.kind !== "profiles" || hasUsableProviderAuth(candidate))
+        ) {
+          return direct;
+        }
+      }
+      for (const candidate of candidates) {
+        const profileId = listProviderProfileCandidates(candidate).find((candidateProfileId) => {
+          const candidateCredential = store.profiles[candidateProfileId];
+          return candidateCredential
+            ? hasUsableAuthProfile(candidateProfileId, candidateCredential)
+            : false;
+        });
+        const credential = profileId ? store.profiles[profileId] : undefined;
+        if (profileId && credential) {
+          const sourceProvider = resolveProviderAuthHealthId(credential.provider);
+          const source = providerAuthMap.get(sourceProvider)?.effective;
+          return source && source.kind !== "missing"
+            ? source
+            : {
+                kind: "profiles",
+                detail: `${profileId} (${credential.provider})`,
+              };
+        }
+      }
+      const direct = providerAuthMap.get(provider)?.effective;
+      return direct?.kind === "profiles"
+        ? missingProviderAuthEffective
+        : (direct ?? missingProviderAuthEffective);
+    };
+    const hasUsableNonProfileAuth = (
+      provider: string,
+      options?: { includeLegacyOpenAICodex?: boolean },
+    ): boolean => {
+      for (const candidate of listRuntimeAuthProviderCandidates(provider, options)) {
+        const auth = providerAuthMap.get(candidate);
+        if (
+          auth?.env ||
+          auth?.syntheticAuth ||
+          syntheticAuthByProvider.has(candidate) ||
+          resolveUsableCustomProviderApiKey({ cfg, provider: candidate })
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
+    const hasUsableDirectProviderAuth = (provider: string): boolean => {
+      const normalized = normalizeProviderId(provider);
+      const hasUsableProfile = listProviderProfileCandidates(normalized).some((profileId) => {
+        const credential = store.profiles[profileId];
+        return credential ? hasUsableAuthProfile(profileId, credential) : false;
+      });
+      return hasUsableProfile || hasUsableNonProfileAuth(normalized);
+    };
+    const hasUsableProviderAuth = (
+      provider: string,
+      options?: { includeLegacyOpenAICodex?: boolean },
+    ): boolean => {
+      for (const candidate of listRuntimeAuthProviderCandidates(provider, options)) {
+        if (hasUsableDirectProviderAuth(candidate)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    const resolveCliRuntimeAuthProvider = (usage: (typeof providerUses)[number]) =>
+      cliRuntimeAuthUsages.find(
+        (candidate) =>
+          candidate.provider === usage.provider &&
+          candidate.model === usage.model &&
+          candidate.allowCodexRuntimeFallback === usage.allowCodexRuntimeFallback,
+      )?.runtime;
+    const hasUsableAuthForProviderInUse = (
+      usage: (typeof providerUses)[number],
+      options: { allowCodexRuntimeFallback: boolean },
+    ): boolean => {
+      const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
+      if (cliRuntimeAuthProvider) {
+        return hasUsableDirectProviderAuth(cliRuntimeAuthProvider);
+      }
+      const { provider } = usage;
+      if (hasUsableProviderAuth(provider)) {
+        return true;
+      }
+      if (!options.allowCodexRuntimeFallback) {
+        return false;
+      }
+      return (
+        openAIProviderUsesCodexRuntimeByDefault({ provider, config: cfg }) &&
+        hasUsableProviderAuth(OPENAI_PROVIDER_ID, { includeLegacyOpenAICodex: true })
+      );
+    };
+    const runtimeAuthRoutes = Array.from(
+      new Map([
+        ...codexRuntimeAuthUsages.map((usage) => {
+          const effective = resolveRuntimeAuthRouteEffective(codexProvider);
+          return [
+            `${usage.provider}:codex:${codexProvider}`,
+            {
+              provider: usage.provider,
+              runtime: "codex",
+              authProvider: codexProvider,
+              status: hasUsableProviderAuth(codexProvider, {
+                includeLegacyOpenAICodex: true,
+              })
+                ? "usable"
+                : "missing",
+              effective,
+            },
+          ] as const;
+        }),
+        ...cliRuntimeAuthUsages.map((usage) => {
+          const effective = resolveRuntimeAuthRouteEffective(usage.runtime);
+          return [
+            `${usage.provider}:${usage.runtime}:${usage.runtime}`,
+            {
+              provider: usage.provider,
+              runtime: usage.runtime,
+              authProvider: usage.runtime,
+              status: hasUsableDirectProviderAuth(usage.runtime) ? "usable" : "missing",
+              effective,
+            },
+          ] as const;
+        }),
+      ]).values(),
+    ).toSorted((a, b) => a.provider.localeCompare(b.provider));
+    const missingProvidersInUse = Array.from(
+      new Set(
+        providerUses
+          .filter(
+            (usage) =>
+              !hasUsableAuthForProviderInUse(usage, {
+                allowCodexRuntimeFallback: usage.allowCodexRuntimeFallback,
+              }),
+          )
+          .map((usage) => resolveCliRuntimeAuthProvider(usage) ?? usage.provider),
+      ),
+    )
+      .filter(
+        (provider) =>
+          !isCliProvider(provider, cfg) ||
+          cliRuntimeAuthUsages.some((usage) => usage.runtime === provider),
+      )
+      .toSorted((a, b) => a.localeCompare(b));
+
+    const probeProfileIds = (() => {
+      if (!opts.probeProfile) {
+        return [];
+      }
+      const raw = Array.isArray(opts.probeProfile) ? opts.probeProfile : [opts.probeProfile];
+      return raw
+        .flatMap((value) => (value ?? "").split(","))
+        .map((value) => value.trim())
+        .filter(Boolean);
+    })();
+    const probeTimeoutMs = parseOptionalPositiveFiniteOption(
+      opts.probeTimeout,
+      "--probe-timeout",
+      8000,
+    );
+    const probeConcurrency = parseOptionalPositiveIntegerOption(
+      opts.probeConcurrency,
+      "--probe-concurrency",
+      2,
+    );
+    const probeMaxTokens = parseOptionalPositiveIntegerOption(
+      opts.probeMaxTokens,
+      "--probe-max-tokens",
+      8,
+    );
+
+    const rawCandidates = [
+      rawModel || resolvedLabel,
+      ...fallbacks,
+      imageModel,
+      ...imageFallbacks,
+      ...allowed,
+    ].filter(Boolean);
+    const resolvedCandidates = rawCandidates
+      .map(
+        (raw) =>
+          resolveModelRefFromString({
+            raw: raw ?? "",
+            defaultProvider: DEFAULT_PROVIDER,
+            aliasIndex,
+            ...DISPLAY_MODEL_PARSE_OPTIONS,
+          })?.ref,
+      )
+      .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
+    const modelCandidates = resolvedCandidates.map((ref) => `${ref.provider}/${ref.model}`);
+
+    let probeSummary: AuthProbeSummary | undefined;
+    if (opts.probe) {
+      const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
+        loadProgressRuntime(),
+        loadListProbeRuntime(),
+      ]);
+      probeSummary = await withProgressTotals(
+        { label: "Probing auth profiles…", total: 1 },
+        async (update) => {
+          return await runAuthProbes({
+            cfg,
+            agentId: workspaceAgentId,
+            agentDir,
+            workspaceDir,
+            providers,
+            modelCandidates,
+            options: {
+              provider: opts.probeProvider,
+              profileIds: probeProfileIds,
+              timeoutMs: probeTimeoutMs,
+              concurrency: probeConcurrency,
+              maxTokens: probeMaxTokens,
+            },
+            onProgress: update,
+          });
+        },
+      );
+    }
+
+    const providersWithOauth = providerAuth
+      .filter(
+        (entry) =>
+          entry.profiles.oauth > 0 ||
+          entry.profiles.token > 0 ||
+          entry.env?.value === "OAuth (env)",
+      )
+      .map((entry) => {
+        const count =
+          entry.profiles.oauth +
+          entry.profiles.token +
+          (entry.env?.value === "OAuth (env)" ? 1 : 0);
+        return `${entry.provider} (${count})`;
+      });
+
+    const oauthProfiles = authHealth.profiles.filter(
+      (profile) => profile.type === "oauth" || profile.type === "token",
+    );
+
+    const unusableProfiles = (() => {
+      const now = Date.now();
+      const out: Array<{
+        profileId: string;
+        provider?: string;
+        kind: "cooldown" | "disabled";
+        reason?: string;
+        until: number;
+        remainingMs: number;
+      }> = [];
+      for (const profileId of Object.keys(store.usageStats ?? {})) {
+        const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
+        if (!unusableUntil || now >= unusableUntil) {
+          continue;
+        }
+        const stats = store.usageStats?.[profileId];
+        const kind =
+          typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
+            ? "disabled"
+            : "cooldown";
+        out.push({
+          profileId,
+          provider: store.profiles[profileId]?.provider,
+          kind,
+          reason: stats?.disabledReason,
+          until: unusableUntil,
+          remainingMs: unusableUntil - now,
+        });
+      }
+      return out.toSorted((a, b) => a.remainingMs - b.remainingMs);
+    })();
+
+    const checkStatus = (() => {
+      const providersInUse = new Set<string>();
+      for (const usage of providerUses) {
+        const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
+        if (cliRuntimeAuthProvider) {
+          providersInUse.add(cliRuntimeAuthProvider);
+          providersInUse.add(resolveProviderAuthHealthId(cliRuntimeAuthProvider));
+          continue;
+        }
+        providersInUse.add(usage.provider);
+        providersInUse.add(resolveProviderAuthHealthId(usage.provider));
+        if (
+          usage.allowCodexRuntimeFallback &&
+          openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }) &&
+          hasUsableProviderAuth(OPENAI_PROVIDER_ID, { includeLegacyOpenAICodex: true })
+        ) {
+          for (const candidate of listRuntimeAuthProviderCandidates(OPENAI_PROVIDER_ID, {
+            includeLegacyOpenAICodex: true,
+          })) {
+            providersInUse.add(candidate);
+          }
+        }
+      }
+      const hasExpiredOrMissing =
+        authHealth.providers.some(
+          (provider) =>
+            providersInUse.has(provider.provider) &&
+            ["expired", "missing"].includes(provider.status) &&
+            !hasUsableNonProfileAuth(provider.provider),
+        ) || missingProvidersInUse.length > 0;
+      const hasExpiring = authHealth.providers.some(
+        (provider) =>
+          providersInUse.has(provider.provider) &&
+          provider.status === "expiring" &&
+          !hasUsableNonProfileAuth(provider.provider),
+      );
+      if (hasExpiredOrMissing) {
+        return 1;
+      }
+      if (hasExpiring) {
+        return 2;
+      }
+      return 0;
+    })();
+
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        configPath,
+        ...(agentId ? { agentId } : {}),
+        agentDir,
+        defaultModel: defaultLabel,
+        resolvedDefault: resolvedLabel,
+        fallbacks,
+        imageModel: imageModel || null,
+        imageFallbacks,
+        ...(agentId
+          ? {
+              modelConfig: {
+                defaultSource: agentModelPrimary ? "agent" : "defaults",
+                fallbacksSource: agentFallbacksOverride !== undefined ? "agent" : "defaults",
+              },
+            }
+          : {}),
+        aliases,
+        allowed,
+        auth: {
+          storePath: resolveAuthStorePathForDisplay(agentDir),
+          shellEnvFallback: {
+            enabled: shellFallbackEnabled,
+            appliedKeys: applied,
+          },
+          providersWithOAuth: providersWithOauth,
+          missingProvidersInUse,
+          runtimeAuthRoutes,
+          providers: providerAuth,
+          unusableProfiles,
+          oauth: {
+            warnAfterMs: authHealth.warnAfterMs,
+            profiles: authHealth.profiles,
+            providers: authHealth.providers,
+          },
+          probes: probeSummary,
+        },
+      });
+      if (opts.check) {
+        runtime.exit(checkStatus);
+      }
+      return;
+    }
+
+    if (opts.plain) {
+      runtime.log(resolvedLabel);
+      if (opts.check) {
+        runtime.exit(checkStatus);
+      }
+      return;
+    }
+
+    const rich = isRich(opts);
+    type ModelConfigSource = "agent" | "defaults";
+    const label = (value: string) => colorize(rich, theme.accent, value.padEnd(14));
+    const labelWithSource = (value: string, source?: ModelConfigSource) =>
+      label(source ? `${value} (${source})` : value);
+    const displayDefault =
+      rawModel && rawModel !== resolvedLabel
+        ? `${resolvedLabel} (from ${rawModel})`
+        : resolvedLabel;
+
+    runtime.log(
+      `${label("Config")}${colorize(rich, theme.muted, ":")} ${colorize(rich, theme.info, shortenHomePath(configPath))}`,
+    );
+    runtime.log(
+      `${label("Agent dir")}${colorize(rich, theme.muted, ":")} ${colorize(
+        rich,
+        theme.info,
+        shortenHomePath(agentDir),
+      )}`,
+    );
+    runtime.log(
+      `${labelWithSource("Default", agentId ? (agentModelPrimary ? "agent" : "defaults") : undefined)}${colorize(
+        rich,
+        theme.muted,
+        ":",
+      )} ${colorize(rich, theme.success, displayDefault)}`,
+    );
+    runtime.log(
+      `${labelWithSource(
+        `Fallbacks (${fallbacks.length || 0})`,
+        agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
+      )}${colorize(rich, theme.muted, ":")} ${colorize(
+        rich,
+        fallbacks.length ? theme.warn : theme.muted,
+        fallbacks.length ? fallbacks.join(", ") : "-",
+      )}`,
+    );
+    runtime.log(
+      `${labelWithSource("Image model", agentId ? "defaults" : undefined)}${colorize(
+        rich,
+        theme.muted,
+        ":",
+      )} ${colorize(rich, imageModel ? theme.accentBright : theme.muted, imageModel || "-")}`,
+    );
+    runtime.log(
+      `${labelWithSource(
+        `Image fallbacks (${imageFallbacks.length || 0})`,
+        agentId ? "defaults" : undefined,
+      )}${colorize(rich, theme.muted, ":")} ${colorize(
+        rich,
+        imageFallbacks.length ? theme.accentBright : theme.muted,
+        imageFallbacks.length ? imageFallbacks.join(", ") : "-",
+      )}`,
+    );
+    runtime.log(
+      `${label(`Aliases (${Object.keys(aliases).length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
+        rich,
+        Object.keys(aliases).length ? theme.accent : theme.muted,
+        Object.keys(aliases).length
+          ? Object.entries(aliases)
+              .map(([alias, target]) =>
+                rich
+                  ? `${theme.accentDim(alias)} ${theme.muted("->")} ${theme.info(target)}`
+                  : `${alias} -> ${target}`,
+              )
+              .join(", ")
+          : "-",
+      )}`,
+    );
+    runtime.log(
+      `${label(`Configured models (${allowed.length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
+        rich,
+        allowed.length ? theme.info : theme.muted,
+        allowed.length ? allowed.join(", ") : "all",
+      )}`,
+    );
+
+    runtime.log("");
+    runtime.log(colorize(rich, theme.heading, "Auth overview"));
+    runtime.log(
+      `${label("Auth store")}${colorize(rich, theme.muted, ":")} ${colorize(
+        rich,
+        theme.info,
+        shortenHomePath(resolveAuthStorePathForDisplay(agentDir)),
+      )}`,
+    );
+    runtime.log(
+      `${label("Shell env")}${colorize(rich, theme.muted, ":")} ${colorize(
+        rich,
+        shellFallbackEnabled ? theme.success : theme.muted,
+        shellFallbackEnabled ? "on" : "off",
+      )}${applied.length ? colorize(rich, theme.muted, ` (applied: ${applied.join(", ")})`) : ""}`,
+    );
+    runtime.log(
+      `${label(`Providers w/ OAuth/tokens (${providersWithOauth.length || 0})`)}${colorize(
+        rich,
+        theme.muted,
+        ":",
+      )} ${colorize(
+        rich,
+        providersWithOauth.length ? theme.info : theme.muted,
+        providersWithOauth.length ? providersWithOauth.join(", ") : "-",
+      )}`,
+    );
+
+    const formatKey = (key: string) => colorize(rich, theme.warn, key);
+    const formatKeyValue = (key: string, value: string) =>
+      `${formatKey(key)}=${colorize(rich, theme.info, value)}`;
+    const formatSeparator = () => colorize(rich, theme.muted, " | ");
+
+    for (const entry of providerAuth) {
+      const separator = formatSeparator();
+      const bits: string[] = [];
+      bits.push(
+        formatKeyValue(
+          "effective",
+          `${colorize(rich, theme.accentBright, entry.effective.kind)}:${colorize(
+            rich,
+            theme.muted,
+            entry.effective.detail,
+          )}`,
+        ),
+      );
+      if (entry.profiles.count > 0) {
+        bits.push(
+          formatKeyValue(
+            "profiles",
+            `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey})`,
+          ),
+        );
+        if (entry.profiles.labels.length > 0) {
+          bits.push(colorize(rich, theme.info, entry.profiles.labels.join(", ")));
+        }
+      }
+      if (entry.env) {
+        bits.push(
+          formatKeyValue(
+            "env",
+            `${entry.env.value}${separator}${formatKeyValue("source", entry.env.source)}`,
+          ),
+        );
+      }
+      if (entry.modelsJson) {
+        bits.push(
+          formatKeyValue(
+            "models.json",
+            `${entry.modelsJson.value}${separator}${formatKeyValue("source", entry.modelsJson.source)}`,
+          ),
+        );
+      }
+      if (entry.syntheticAuth) {
+        bits.push(
+          formatKeyValue(
+            "synthetic",
+            `${entry.syntheticAuth.value}${separator}${formatKeyValue("source", entry.syntheticAuth.source)}`,
+          ),
+        );
+      }
+      runtime.log(`- ${theme.heading(entry.provider)} ${bits.join(separator)}`);
+    }
+
+    if (runtimeAuthRoutes.length > 0) {
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Runtime auth"));
+      for (const route of runtimeAuthRoutes) {
+        runtime.log(
+          `- ${theme.heading(route.provider)} via ${colorize(
+            rich,
+            theme.accentBright,
+            route.runtime,
+          )} uses ${theme.heading(route.authProvider)} ${formatKeyValue(
+            "effective",
+            `${colorize(rich, theme.accentBright, route.effective.kind)}:${colorize(
+              rich,
+              theme.muted,
+              route.effective.detail,
+            )}`,
+          )}${formatSeparator()}${formatKeyValue("status", route.status)}`,
+        );
+      }
+    }
+
+    if (missingProvidersInUse.length > 0) {
+      const { buildProviderAuthRecoveryHint } =
+        await import("../../agents/provider-auth-recovery-hint.js");
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Missing auth"));
+      for (const provider of missingProvidersInUse) {
+        const hint = buildProviderAuthRecoveryHint({
+          provider,
+          config: cfg,
+          includeEnvVar: true,
+        });
+        runtime.log(`- ${theme.heading(provider)} ${hint}`);
+      }
+    }
+
+    runtime.log("");
+    runtime.log(colorize(rich, theme.heading, "OAuth/token status"));
+    if (oauthProfiles.length === 0) {
+      runtime.log(colorize(rich, theme.muted, "- none"));
+    } else {
+      const { formatUsageWindowSummary, loadProviderUsageSummary, resolveUsageProviderId } =
+        await loadProviderUsageRuntime();
+      const usageByProvider = new Map<string, string>();
+      const usageProviders = Array.from(
+        new Set(
+          oauthProfiles
+            .map((profile) =>
+              resolveUsageProviderId(profile.provider, { credentialType: profile.type }),
+            )
+            .filter((provider): provider is NonNullable<typeof provider> => Boolean(provider)),
+        ),
+      );
+      if (usageProviders.length > 0) {
+        try {
+          const usageSummary = await loadProviderUsageSummary({
+            providers: usageProviders,
+            agentDir,
+            timeoutMs: 3500,
+          });
+          for (const snapshot of usageSummary.providers) {
+            const formatted = formatUsageWindowSummary(snapshot, {
+              now: Date.now(),
+              maxWindows: 2,
+              includeResets: true,
+            });
+            if (formatted) {
+              usageByProvider.set(snapshot.provider, formatted);
+            }
+          }
+        } catch {
+          // ignore usage failures
+        }
+      }
+
+      const formatStatus = (status: string) => {
+        if (status === "ok") {
+          return colorize(rich, theme.success, "ok");
+        }
+        if (status === "static") {
+          return colorize(rich, theme.muted, "static");
+        }
+        if (status === "expiring") {
+          return colorize(rich, theme.warn, "expiring");
+        }
+        if (status === "missing") {
+          return colorize(rich, theme.warn, "unknown");
+        }
+        return colorize(rich, theme.error, "expired");
+      };
+
+      const profilesByProvider = new Map<string, typeof oauthProfiles>();
+      for (const profile of oauthProfiles) {
+        const current = profilesByProvider.get(profile.provider);
+        if (current) {
+          current.push(profile);
+        } else {
+          profilesByProvider.set(profile.provider, [profile]);
+        }
+      }
+
+      for (const [provider, profiles] of profilesByProvider) {
+        const usageProfile = profiles.find(
+          (profile) => profile.type === "oauth" || profile.type === "token",
+        );
+        const usageKey = resolveUsageProviderId(provider, {
+          credentialType: usageProfile?.type,
+        });
+        const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
+        const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
+        runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
+        for (const profile of profiles) {
+          const labelText = profile.label || profile.profileId;
+          const labelLocal = colorize(rich, theme.accent, labelText);
+          const status = formatStatus(profile.status);
+          const expiry =
+            profile.status === "static"
+              ? ""
+              : profile.expiresAt
+                ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
+                : " expires unknown";
+          runtime.log(`  - ${labelLocal} ${status}${expiry}`);
+        }
+      }
+    }
+
+    if (probeSummary) {
+      const [
+        { getTerminalTableWidth, renderTable },
+        { describeProbeSummary, formatProbeLatency, sortProbeResults },
+      ] = await Promise.all([loadTerminalTableRuntime(), loadListProbeRuntime()]);
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Auth probes"));
+      if (probeSummary.results.length === 0) {
+        runtime.log(colorize(rich, theme.muted, "- none"));
+      } else {
+        const tableWidth = getTerminalTableWidth();
+        const sorted = sortProbeResults(probeSummary.results);
+        const statusColor = (status: string) => {
+          if (status === "ok") {
+            return theme.success;
+          }
+          if (status === "rate_limit") {
+            return theme.warn;
+          }
+          if (status === "timeout" || status === "billing") {
+            return theme.warn;
+          }
+          if (status === "auth" || status === "format") {
+            return theme.error;
+          }
+          if (status === "no_model") {
+            return theme.muted;
+          }
+          return theme.muted;
+        };
+        const rows = sorted.map((result) => {
+          const status = colorize(rich, statusColor(result.status), result.status);
+          const latency = formatProbeLatency(result.latencyMs);
+          const modelLabel = result.model ?? `${result.provider}/-`;
+          const modeLabel = result.mode
+            ? ` ${colorize(rich, theme.muted, `(${result.mode})`)}`
+            : "";
+          const profile = `${colorize(rich, theme.accent, result.label)}${modeLabel}`;
+          const detail = result.error?.trim();
+          const detailLabel = detail ? `\n${colorize(rich, theme.muted, `↳ ${detail}`)}` : "";
+          const statusLabel = `${status}${colorize(rich, theme.muted, ` · ${latency}`)}${detailLabel}`;
+          return {
+            Model: colorize(rich, theme.heading, modelLabel),
+            Profile: profile,
+            Status: statusLabel,
+          };
+        });
+        runtime.log(
+          renderTable({
+            width: tableWidth,
+            columns: [
+              { key: "Model", header: "Model", minWidth: 18 },
+              { key: "Profile", header: "Profile", minWidth: 24 },
+              { key: "Status", header: "Status", minWidth: 12 },
+            ],
+            rows,
+          }).trimEnd(),
+        );
+        runtime.log(colorize(rich, theme.muted, describeProbeSummary(probeSummary)));
+      }
+    }
+
+    if (opts.check) {
+      runtime.exit(checkStatus);
+    }
+  } finally {
+    cleanupPluginMetadataSnapshot();
+  }
+}

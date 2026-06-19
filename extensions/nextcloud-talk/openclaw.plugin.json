@@ -1,0 +1,17 @@
+{
+  "id": "nextcloud-talk",
+  "name": "Nextcloud Talk",
+  "description": "OpenClaw Nextcloud Talk channel plugin for conversations.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["nextcloud-talk"],
+  "channelEnvVars": {
+    "nextcloud-talk": ["NEXTCLOUD_TALK_BOT_SECRET", "NEXTCLOUD_TALK_API_PASSWORD"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

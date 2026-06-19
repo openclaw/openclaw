@@ -1,0 +1,94 @@
+/** Formats and appends token/cost usage lines to reply payloads. */
+import {
+  estimateUsageCost,
+  formatTokenCount,
+  formatUsd,
+  type ModelCostConfig,
+} from "../../utils/usage-format.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
+
+/** Formats the optional usage/cost summary appended to agent replies. */
+export const formatResponseUsageLine = (params: {
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
+  showCost: boolean;
+  costConfig?: ModelCostConfig;
+}): string | null => {
+  const usage = params.usage;
+  if (!usage) {
+    return null;
+  }
+  const input = usage.input;
+  const output = usage.output;
+  if (typeof input !== "number" && typeof output !== "number") {
+    return null;
+  }
+  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
+  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
+  const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : undefined;
+  const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
+  const cost =
+    params.showCost && typeof input === "number" && typeof output === "number"
+      ? estimateUsageCost({
+          usage: {
+            input,
+            output,
+            cacheRead: usage.cacheRead,
+            cacheWrite: usage.cacheWrite,
+          },
+          cost: params.costConfig,
+        })
+      : undefined;
+  const costLabel = params.showCost ? formatUsd(cost) : undefined;
+  const cacheSuffix =
+    (typeof cacheRead === "number" && cacheRead > 0) ||
+    (typeof cacheWrite === "number" && cacheWrite > 0)
+      ? ` · cache ${formatTokenCount(cacheRead ?? 0)} cached / ${formatTokenCount(cacheWrite ?? 0)} new`
+      : "";
+  const suffix = costLabel ? ` · est ${costLabel}` : "";
+  return `Usage: ${inputLabel} in / ${outputLabel} out${cacheSuffix}${suffix}`;
+};
+
+/** Appends a usage line to the last text payload while preserving payload metadata. */
+export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
+  let index = -1;
+  for (let i = payloads.length - 1; i >= 0; i -= 1) {
+    if (payloads[i]?.text) {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) {
+    return [...payloads, { text: line }];
+  }
+  const existing = payloads[index];
+  const existingText = existing.text ?? "";
+  const separator = existingText.endsWith("\n") ? "" : "\n";
+  const next = {
+    ...existing,
+    text: `${existingText}${separator}${line}`,
+  };
+  const metadata = getReplyPayloadMetadata(existing);
+  // Transcript mirrors must track the mutated text or source-reply delivery drifts.
+  const nextWithMetadata = metadata
+    ? setReplyPayloadMetadata(next, {
+        ...metadata,
+        ...(metadata.sourceReplyTranscriptMirror
+          ? {
+              sourceReplyTranscriptMirror: {
+                ...metadata.sourceReplyTranscriptMirror,
+                text: next.text,
+              },
+            }
+          : {}),
+      })
+    : next;
+  const updated = payloads.slice();
+  updated[index] = nextWithMetadata;
+  return updated;
+};

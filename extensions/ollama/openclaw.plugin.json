@@ -1,0 +1,164 @@
+{
+  "id": "ollama",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["ollama", "ollama-cloud"],
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "providerRequest": {
+    "providers": {
+      "ollama": {
+        "family": "ollama"
+      },
+      "ollama-cloud": {
+        "family": "ollama-cloud"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "ollama": {
+        "external": false
+      },
+      "ollama-cloud": {
+        "external": true
+      }
+    }
+  },
+  "syntheticAuthRefs": ["ollama"],
+  "nonSecretAuthMarkers": ["ollama-local"],
+  "setup": {
+    "providers": [
+      {
+        "id": "ollama",
+        "envVars": ["OLLAMA_API_KEY"]
+      },
+      {
+        "id": "ollama-cloud",
+        "envVars": ["OLLAMA_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "ollama",
+      "method": "local",
+      "choiceId": "ollama",
+      "choiceLabel": "Ollama",
+      "choiceHint": "Cloud and local open models",
+      "groupId": "ollama",
+      "groupLabel": "Ollama",
+      "groupHint": "Cloud and local open models"
+    },
+    {
+      "provider": "ollama-cloud",
+      "method": "api-key",
+      "choiceId": "ollama-cloud",
+      "choiceLabel": "Ollama Cloud",
+      "choiceHint": "Hosted models via ollama.com",
+      "groupId": "ollama",
+      "groupLabel": "Ollama",
+      "groupHint": "Cloud and local open models",
+      "optionKey": "ollamaCloudApiKey",
+      "cliFlag": "--ollama-cloud-api-key",
+      "cliOption": "--ollama-cloud-api-key <key>",
+      "cliDescription": "Ollama Cloud API key"
+    }
+  ],
+  "modelCatalog": {
+    "runtimeAugment": true,
+    "providers": {
+      "ollama-cloud": {
+        "baseUrl": "https://ollama.com",
+        "api": "ollama",
+        "models": [
+          {
+            "id": "kimi-k2.5:cloud",
+            "name": "kimi-k2.5:cloud",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "minimax-m2.7:cloud",
+            "name": "minimax-m2.7:cloud",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "glm-5.1:cloud",
+            "name": "glm-5.1:cloud",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "ollama-cloud": "refreshable"
+    }
+  },
+  "contracts": {
+    "memoryEmbeddingProviders": ["ollama"],
+    "webSearchProviders": ["ollama"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "discovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "discovery": {
+      "label": "Model Discovery",
+      "help": "Plugin-owned controls for Ollama model auto-discovery."
+    },
+    "discovery.enabled": {
+      "label": "Enable Discovery",
+      "help": "When false, OpenClaw keeps the Ollama plugin available but skips implicit startup discovery of ambient local or remote Ollama models."
+    }
+  }
+}
