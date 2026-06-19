@@ -24,6 +24,7 @@ import {
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
   trimSessionTranscriptForManualCompact,
@@ -1473,6 +1474,44 @@ describe("session accessor file-backed seam", () => {
     expect(readTarget.sessionFile).toBe(explicitSessionFile);
     expect(writeTarget.sessionFile).toBe(explicitSessionFile);
     expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
+  });
+
+  it("uses a supplied read session entry without loading the store", () => {
+    const explicitSessionFile = path.join(tempDir, "entry-session.jsonl");
+    fs.writeFileSync(explicitSessionFile, "", "utf8");
+    fs.writeFileSync(storePath, "{not-json", "utf8");
+
+    const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
+      sessionEntry: {
+        sessionFile: explicitSessionFile,
+        sessionId: "session-1",
+      },
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    });
+
+    expect(target).toMatchObject({
+      agentId: "main",
+      sessionFile: fs.realpathSync(explicitSessionFile),
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("resolves an explicit read transcript file without agent identity", () => {
+    const explicitSessionFile = path.join(tempDir, "explicit-read-session.jsonl");
+
+    const target = resolveSessionTranscriptReadTarget({
+      sessionFile: explicitSessionFile,
+      sessionId: "session-1",
+    });
+
+    expect(target).toEqual({
+      sessionFile: explicitSessionFile,
+      sessionId: "session-1",
+    });
   });
 
   it("keeps read and write runtime targets aligned for new topic sessions", async () => {

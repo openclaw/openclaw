@@ -244,8 +244,12 @@ describe("artifacts RPC handlers", () => {
     expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
-        sessionFile: "/tmp/sess-main.jsonl",
+        sessionEntry: {
+          sessionFile: "/tmp/sess-main.jsonl",
+          sessionId: "sess-main",
+        },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: "/tmp/sessions.json",
       },
       expect.any(Function),
