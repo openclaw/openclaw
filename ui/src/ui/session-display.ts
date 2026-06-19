@@ -29,6 +29,14 @@ function capitalize(s: string): string {
 }
 
 /**
+ * Shortens long identifiers for display. Short IDs (<=20 chars)
+ * are returned as-is. Long IDs are truncated to first 6 chars + "..." + last 4.
+ */
+function shortenDirectIdentifier(id: string): string {
+  return id.length <= 20 ? id : `${id.slice(0, 6)}...${id.slice(-4)}`;
+}
+
+/**
  * Parse a session key to extract type information and a human-readable
  * fallback display name. Exported for testing.
  */
@@ -55,8 +63,9 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   if (directMatch) {
     const channel = directMatch[1];
     const identifier = directMatch[2];
+    const shortIdentifier = shortenDirectIdentifier(identifier);
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}` };
+    return { prefix: "", fallbackName: `${channelLabel} · ${shortIdentifier}` };
   }
 
   // Group chat: agent:<x>:<channel>:group:<id>.
