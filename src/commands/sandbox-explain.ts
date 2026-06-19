@@ -184,6 +184,11 @@ export async function sandboxExplainCommand(
   });
   const mainSessionKey = sandboxRuntime.mainSessionKey;
   const sessionIsSandboxed = sandboxRuntime.sandboxed;
+  const toolActivationIsSandboxed = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey,
+    activation: "tool",
+  }).sandboxed;
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: resolvedAgentId,
   });
@@ -325,6 +330,7 @@ export async function sandboxExplainCommand(
       workspaceMounts,
       workspaceSource,
       sessionIsSandboxed,
+      toolActivationIsSandboxed,
       tools: {
         allow: toolPolicy.allow,
         deny: toolPolicy.deny,
@@ -360,13 +366,16 @@ export async function sandboxExplainCommand(
   const bool = (flag: boolean) => (flag ? ok("true") : err("false"));
 
   const lines: string[] = [];
+  const runtimeLabel = payload.sandbox.sessionIsSandboxed
+    ? warn("sandboxed")
+    : payload.sandbox.toolActivationIsSandboxed
+      ? warn("direct (sandbox-on-tool)")
+      : ok("direct");
   lines.push(heading("Effective sandbox:"));
   lines.push(`  ${key("agentId:")} ${value(payload.agentId)}`);
   lines.push(`  ${key("sessionKey:")} ${value(payload.sessionKey)}`);
   lines.push(`  ${key("mainSessionKey:")} ${value(payload.mainSessionKey)}`);
-  lines.push(
-    `  ${key("runtime:")} ${payload.sandbox.sessionIsSandboxed ? warn("sandboxed") : ok("direct")}`,
-  );
+  lines.push(`  ${key("runtime:")} ${runtimeLabel}`);
   lines.push(
     `  ${key("mode:")} ${value(payload.sandbox.mode)} ${key("scope:")} ${value(
       payload.sandbox.scope,
@@ -425,6 +434,12 @@ export async function sandboxExplainCommand(
       `${warn("Hint:")} sandbox mode is non-main; use main session key to run direct: ${value(
         payload.mainSessionKey,
       )}`,
+    );
+  }
+  if (payload.sandbox.mode === "needed" && payload.sandbox.toolActivationIsSandboxed) {
+    lines.push("");
+    lines.push(
+      `${warn("Hint:")} sandbox mode is needed; chat-only turns run direct, and sandbox-bound tools start the sandbox when called.`,
     );
   }
   lines.push("");

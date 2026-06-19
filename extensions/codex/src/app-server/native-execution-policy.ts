@@ -28,6 +28,7 @@ export type CodexNativeExecutionPolicy = {
   requestedExecHost: ExecTarget;
   effectiveExecHost: ExecHost;
   node?: string;
+  blockKind?: "node-exec" | "sandbox-activation-required";
   blockReason?: string;
 };
 
@@ -64,14 +65,13 @@ export function resolveCodexNativeExecutionPolicy(params: {
     (canReadSessionEntry && sessionKey
       ? readRuntimeSessionEntryBestEffort({ sessionKey, agentId })
       : undefined);
+  const sandboxRuntime = resolveSandboxRuntimeStatus({
+    cfg: config,
+    sessionKey,
+    agentId,
+  });
   const sandboxAvailable =
-    params.sandboxAvailable ??
-    (sessionKey
-      ? resolveSandboxRuntimeStatus({
-          cfg: config,
-          sessionKey,
-        }).sandboxed
-      : false);
+    params.sandboxAvailable ?? (sessionKey ? sandboxRuntime.sandboxed : false);
   const agentExec = resolvePolicyAgentExec({ config, agentId });
   const globalExec = config.tools?.exec;
   const requestedExecHost =
@@ -86,6 +86,21 @@ export function resolveCodexNativeExecutionPolicy(params: {
   });
   const node =
     params.execOverrides?.node ?? sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node;
+  const sandboxActivationRequired =
+    sandboxRuntime.mode === "needed" &&
+    !sandboxAvailable &&
+    (requestedExecHost === "auto" || requestedExecHost === "sandbox");
+  if (sandboxActivationRequired) {
+    return {
+      nativeToolSurfaceAllowed: false,
+      requestedExecHost,
+      effectiveExecHost,
+      node,
+      blockKind: "sandbox-activation-required",
+      blockReason:
+        "OpenClaw sandbox mode=needed has not activated the configured sandbox backend. Codex app-server native shell, filesystem, MCP, and app-backed work cannot be routed through the pending OpenClaw sandbox.",
+    };
+  }
   if (effectiveExecHost !== "node") {
     return {
       nativeToolSurfaceAllowed: true,
@@ -99,19 +114,28 @@ export function resolveCodexNativeExecutionPolicy(params: {
     requestedExecHost,
     effectiveExecHost,
     node,
+    blockKind: "node-exec",
     blockReason:
       "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node.",
   };
 }
 
-/** Formats the user-facing explanation shown when native tools are blocked by exec host=node. */
-export function formatCodexNativeNodeExecBlock(params: {
+/** Formats the user-facing explanation shown when native execution cannot honor OpenClaw policy. */
+export function formatCodexNativeExecutionBlock(params: {
   surface: string;
-  reason?: string;
+  policy: CodexNativeExecutionPolicy;
 }): string {
+  if (params.policy.blockKind === "sandbox-activation-required") {
+    return [
+      `Codex-native ${params.surface} is unavailable because OpenClaw sandbox mode=needed has not activated its sandbox backend for this turn.`,
+      params.policy.blockReason ??
+        "Codex app-server native execution cannot route through a pending OpenClaw sandbox.",
+      "Use a normal Codex harness turn so sandbox-bound OpenClaw tools can activate the backend; native execution will not fall back to the host.",
+    ].join(" ");
+  }
   return [
     `Codex-native ${params.surface} is unavailable because OpenClaw exec host=node is active for this session.`,
-    params.reason ??
+    params.policy.blockReason ??
       "Codex app-server native execution cannot route execution through the selected OpenClaw node.",
     "Use a normal Codex harness turn so OpenClaw exec/process tools run on the node, or switch exec host to gateway for native Codex app-server execution.",
   ].join(" ");

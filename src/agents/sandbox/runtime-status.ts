@@ -18,14 +18,23 @@ import {
   classifyToolAgainstSandboxToolPolicy,
   resolveSandboxToolPolicyForAgent,
 } from "./tool-policy.js";
-import type { SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
+import type { SandboxActivation, SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
 
-function shouldSandboxSession(cfg: SandboxConfig, sessionKey: string, mainSessionKey: string) {
+function shouldSandboxSession(params: {
+  cfg: SandboxConfig;
+  sessionKey: string;
+  mainSessionKey: string;
+  activation: SandboxActivation;
+}) {
+  const { cfg, sessionKey, mainSessionKey, activation } = params;
   if (cfg.mode === "off") {
     return false;
   }
   if (cfg.mode === "all") {
     return true;
+  }
+  if (cfg.mode === "needed") {
+    return activation === "tool";
   }
   return sessionKey.trim() !== mainSessionKey.trim();
 }
@@ -60,15 +69,18 @@ export function resolveSandboxRuntimeStatus(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
+  activation?: SandboxActivation;
 }): {
   agentId: string;
   sessionKey: string;
   mainSessionKey: string;
   mode: SandboxConfig["mode"];
+  activation: SandboxActivation;
   sandboxed: boolean;
   toolPolicy: SandboxToolPolicyResolved;
 } {
   const sessionKey = params.sessionKey?.trim() ?? "";
+  const activation = params.activation ?? "run";
   const agentId = resolveSessionAgentId({
     sessionKey,
     config: params.cfg,
@@ -78,17 +90,19 @@ export function resolveSandboxRuntimeStatus(params: {
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, agentId);
   const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId });
   const sandboxed = sessionKey
-    ? shouldSandboxSession(
-        sandboxCfg,
-        resolveComparableSessionKeyForSandbox({ cfg, agentId, sessionKey }),
+    ? shouldSandboxSession({
+        cfg: sandboxCfg,
+        sessionKey: resolveComparableSessionKeyForSandbox({ cfg, agentId, sessionKey }),
         mainSessionKey,
-      )
+        activation,
+      })
     : false;
   return {
     agentId,
     sessionKey,
     mainSessionKey,
     mode: sandboxCfg.mode,
+    activation,
     sandboxed,
     toolPolicy: resolveSandboxToolPolicyForAgent(cfg, agentId),
   };

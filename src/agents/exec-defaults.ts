@@ -156,6 +156,7 @@ export function resolveExecDefaults(params: {
       ? resolveSandboxRuntimeStatus({
           cfg,
           sessionKey: params.sessionKey,
+          activation: "tool",
         }).sandboxed
       : false);
   const resolved = resolveExecTarget({

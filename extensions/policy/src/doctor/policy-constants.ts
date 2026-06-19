@@ -73,4 +73,4 @@ export const SUPPORTED_TOOL_EXEC_HOST = ["auto", "sandbox", "gateway", "node"] a
 
 export const SUPPORTED_EXEC_APPROVAL_SECURITY = ["deny", "allowlist", "full"] as const;
 
-export const SUPPORTED_SANDBOX_MODES = ["off", "non-main", "all"] as const;
+export const SUPPORTED_SANDBOX_MODES = ["off", "non-main", "needed", "all"] as const;

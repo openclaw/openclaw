@@ -47,6 +47,77 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     });
   });
 
+  it("blocks native execution while needed mode is waiting for tool activation", () => {
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          agents: { defaults: { sandbox: { mode: "needed" } } },
+          tools: { exec: { host: "auto" } },
+        },
+        sessionKey: "agent:main:main",
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      requestedExecHost: "auto",
+      effectiveExecHost: "gateway",
+      blockKind: "sandbox-activation-required",
+    });
+  });
+
+  it("allows native execution after needed mode has an active sandbox", () => {
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          agents: { defaults: { sandbox: { mode: "needed" } } },
+          tools: { exec: { host: "auto" } },
+        },
+        sessionKey: "agent:main:main",
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "auto",
+      effectiveExecHost: "sandbox",
+    });
+  });
+
+  it("keeps an explicit gateway host available in needed mode", () => {
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          agents: { defaults: { sandbox: { mode: "needed" } } },
+          tools: { exec: { host: "gateway" } },
+        },
+        sessionKey: "agent:main:main",
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "gateway",
+      effectiveExecHost: "gateway",
+    });
+  });
+
+  it("keeps node routing blocked as node execution in needed mode", () => {
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          agents: { defaults: { sandbox: { mode: "needed" } } },
+          tools: { exec: { host: "node", node: "worker-needed" } },
+        },
+        sessionKey: "agent:main:main",
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      requestedExecHost: "node",
+      effectiveExecHost: "node",
+      blockKind: "node-exec",
+      node: "worker-needed",
+    });
+  });
+
   it("resolves auto to sandbox when a sandbox is active", () => {
     expect(
       resolveCodexNativeExecutionPolicy({

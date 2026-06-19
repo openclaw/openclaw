@@ -433,7 +433,23 @@ describe("exec host env validation", () => {
       tool.execute("call1", {
         command: "echo ok",
       }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
+    ).rejects.toThrow(/no sandbox runtime is available/);
+  });
+
+  it("fails closed instead of falling back to gateway when lazy sandbox is unavailable", async () => {
+    const resolveSandbox = vi.fn(async () => undefined);
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+      resolveSandbox,
+    });
+
+    await expect(
+      tool.execute("call-lazy-sandbox", {
+        command: "echo ok",
+      }),
+    ).rejects.toThrow(/resolved to sandbox/);
+    expect(resolveSandbox).toHaveBeenCalledTimes(1);
   });
 
   it.each([

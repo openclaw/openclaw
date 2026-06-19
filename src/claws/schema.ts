@@ -73,7 +73,7 @@ const agentSchema = z
       .optional(),
     sandbox: z
       .object({
-        mode: z.enum(["off", "non-main", "all"]).optional(),
+        mode: z.enum(["off", "non-main", "needed", "all"]).optional(),
         scope: z.enum(["session", "agent", "shared"]).optional(),
         workspaceAccess: z.enum(["none", "ro", "rw"]).optional(),
       })

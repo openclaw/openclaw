@@ -639,7 +639,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         "tools.exec.host is explicitly set to sandbox while agents.defaults.sandbox.mode=off. " +
         "In this mode, exec fails closed because no sandbox runtime is available.",
       remediation:
-        'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway" with approvals.',
+        'Enable sandbox mode (`agents.defaults.sandbox.mode="needed"`, `"non-main"`, or `"all"`) or set tools.exec.host to "gateway" with approvals.',
     });
   }
 

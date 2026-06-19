@@ -88,6 +88,7 @@ import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.j
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
+import { resolveSandboxExecRuntime } from "./sandbox/exec-runtime.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { createCodingTools, createReadTool } from "./sessions/index.js";
@@ -594,6 +595,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
+  const sandboxExecRuntime = resolveSandboxExecRuntime({
+    config: options?.config,
+    agentId,
+    execOverrides: options?.exec,
+    sessionKey: options?.sessionKey,
+    workspaceDir: options?.workspaceDir,
+    sandbox,
+    resolveSandbox: options?.exec?.resolveSandbox,
+  });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
@@ -755,22 +765,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
         notifyOnExitEmptySuccess:
           options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
-        sandbox: sandbox
-          ? {
-              containerName: sandbox.containerName,
-              workspaceDir: sandbox.workspaceDir,
-              containerWorkdir: sandbox.containerWorkdir,
-              workdirValidation: sandbox.backend?.workdirValidation,
-              validateWorkdir: sandbox.backend?.validateWorkdir?.bind(sandbox.backend),
-              discardPreparedWorkdir: sandbox.backend?.discardPreparedWorkdir?.bind(
-                sandbox.backend,
-              ),
-              workdirRoots: sandbox.backend?.workdirRoots,
-              env: sandbox.backend?.env ?? sandbox.docker.env,
-              buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
-              finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
-            }
-          : undefined,
+        ...(sandboxExecRuntime.kind === "active"
+          ? { sandbox: sandboxExecRuntime.sandbox }
+          : sandboxExecRuntime.kind === "lazy"
+            ? { resolveSandbox: sandboxExecRuntime.resolveSandbox }
+            : {}),
       })
     : null;
   const processTool = includeShellTools

@@ -35,6 +35,10 @@ export type SandboxToolPolicyResolved = {
 
 export type SandboxWorkspaceAccess = "none" | "ro" | "rw";
 
+export type SandboxActivation = "run" | "tool";
+
+export type SandboxMode = "off" | "non-main" | "all" | "needed";
+
 export type SandboxBrowserConfig = {
   enabled: boolean;
   image: string;
@@ -74,7 +78,7 @@ export type SandboxSshConfig = {
 export type SandboxScope = "session" | "agent" | "shared";
 
 export type SandboxConfig = {
-  mode: "off" | "non-main" | "all";
+  mode: SandboxMode;
   backend: SandboxBackendId;
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;

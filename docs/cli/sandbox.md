@@ -47,6 +47,8 @@ For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the re
 
 Inspect the effective sandbox mode/scope/workspace access, sandbox tool policy, and elevated-tool gates (with fix-it config key paths).
 
+For `mode: "needed"`, the report distinguishes the direct chat runtime from the sandbox that activates only when a sandbox-bound tool runs.
+
 The report keeps `workspaceRoot` as the configured sandbox root and separately shows the effective host workspace, backend runtime workdir, and Docker mount table. For `workspaceAccess: "rw"`, the effective host workspace is the agent workspace rather than a directory below `workspaceRoot`.
 
 ```bash
@@ -99,7 +101,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
   "agents": {
     "defaults": {
       "sandbox": {
-        "mode": "all", // off, non-main, all
+        "mode": "all", // off, non-main, needed, all
         "backend": "docker", // docker, ssh, openshell (plugin-provided)
         "scope": "agent", // session, agent, shared
         "docker": {

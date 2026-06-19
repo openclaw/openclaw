@@ -67,7 +67,7 @@ const SANDBOX_POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policySandboxModeUnapproved],
     emptyList: "disabled",
-    allowedValues: ["off", "non-main", "all"],
+    allowedValues: ["off", "non-main", "needed", "all"],
     scopeSelectors: ["agentIds"],
   },
   {

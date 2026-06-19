@@ -95,11 +95,21 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
           accountId: attempt.agentAccountId,
         })
       : undefined;
+  const sandboxAvailableOnToolActivation = resolveSandboxRuntimeStatus({
+    cfg: attempt.config,
+    agentId: params.sessionAgentId,
+    sessionKey: params.sandboxSessionKey,
+    activation: "tool",
+  }).sandboxed;
   const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
     config: attempt.config,
     agentId: params.sessionAgentId,
-    sessionKey: attempt.sessionKey,
-    sandboxAvailable: params.sandbox?.enabled === true,
+    sessionKey: params.sandboxSessionKey,
+    ...(params.sandbox?.enabled === true
+      ? { sandboxAvailable: true }
+      : sandboxAvailableOnToolActivation
+        ? {}
+        : { sandboxAvailable: false }),
     execOverrides: attempt.execOverrides,
   });
   const sandboxInfo = buildEmbeddedSandboxInfo(
