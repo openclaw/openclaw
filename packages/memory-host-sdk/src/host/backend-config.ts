@@ -29,6 +29,23 @@ function escapeQmdExactFilePattern(fileName: string): string {
   return fileName.replace(/[\\*?[\]{}()!+@]/g, "\\$&");
 }
 
+// Drive-letter ("C:\\...") and UNC ("\\\\server\\...") absolute paths use
+// backslashes as separators, not POSIX shell escapes; splitShellArgs would
+// strip them and produce an unspawnable command. Detect these forms so the
+// configured binary path stays intact at spawn time.
+function isWindowsAbsoluteCommandPath(raw: string): boolean {
+  return /^[A-Za-z]:[/\\]/.test(raw) || raw.startsWith("\\\\");
+}
+
+function extractQmdCommandToken(rawCommand: string): string {
+  if (isWindowsAbsoluteCommandPath(rawCommand)) {
+    const firstSpace = rawCommand.search(/\s/);
+    return firstSpace >= 0 ? rawCommand.slice(0, firstSpace) : rawCommand;
+  }
+  const parsedCommand = splitShellArgs(rawCommand);
+  return parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+}
+
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
@@ -439,8 +456,7 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  const command = extractQmdCommandToken(rawCommand);
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
