@@ -987,7 +987,7 @@ export const dispatchTelegramMessage = async ({
   const streamReasoningInProgressDraft =
     streamReasoningDraft && streamMode === "progress" && canStreamAnswerDraft;
   const canStreamReasoningDraft =
-    !isRoomEvent && streamReasoningDraft && !streamReasoningInProgressDraft;
+    !isRoomEvent && (streamReasoningDraft || resolvedReasoningLevel === "on") && !streamReasoningInProgressDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number"
       ? (replyQuoteMessageId ?? msg.message_id)
