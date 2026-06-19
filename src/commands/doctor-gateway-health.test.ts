@@ -126,9 +126,12 @@ describe("checkGatewayHealth", () => {
   });
 
   it("reports the typed close reason instead of claiming the gateway is not running", async () => {
-    const error = Object.assign(new Error("gateway closed (1008): protocol version mismatch"), {
-      kind: "closed",
-    });
+    const error = Object.assign(
+      new Error("gateway closed (1008): \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
+      {
+        kind: "closed",
+      },
+    );
     callGateway.mockRejectedValueOnce(error);
     isGatewayTransportError.mockImplementation((value) => value === error);
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };

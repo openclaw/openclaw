@@ -715,6 +715,7 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(
       1008,
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
+      { phase: "pre-hello", socketOpened: false, transientPreHelloCleanClose: false },
     );
     client.stop();
   });
@@ -732,7 +733,11 @@ describe("GatewayClient close handling", () => {
     expect(logDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("failed clearing stale device-auth token"),
     );
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transientPreHelloCleanClose: false,
+    });
     client.stop();
   });
 
@@ -744,7 +749,11 @@ describe("GatewayClient close handling", () => {
     getLatestWs().emitClose(1008, "unauthorized: signature invalid");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transientPreHelloCleanClose: false,
+    });
     client.stop();
   });
 
@@ -757,7 +766,11 @@ describe("GatewayClient close handling", () => {
     client.start();
     expect(() => getLatestWs().emitClose(1008, "unauthorized: signature invalid")).not.toThrow();
 
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transientPreHelloCleanClose: false,
+    });
     expect(logDebugMock).toHaveBeenCalledWith(
       "gateway client close handler error: Error: close callback failed",
     );
@@ -910,7 +923,11 @@ describe("GatewayClient close handling", () => {
         socketOpened: true,
         transientPreHelloCleanClose: true,
       });
-      expect(onClose).toHaveBeenNthCalledWith(2, 1000, "");
+      expect(onClose).toHaveBeenNthCalledWith(2, 1000, "", {
+        phase: "pre-hello",
+        socketOpened: true,
+        transientPreHelloCleanClose: true,
+      });
       expect(onConnectError).toHaveBeenCalledOnce();
       expect(onConnectError.mock.calls[0]?.[0]).toMatchObject({
         message: "gateway closed (1000): ",
@@ -1037,7 +1054,11 @@ describe("GatewayClient close handling", () => {
     getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transientPreHelloCleanClose: false,
+    });
     client.stop();
   });
 });
@@ -1803,7 +1824,11 @@ describe("GatewayClient connect auth payload", () => {
     expect(logDebugMock).toHaveBeenCalledWith(
       "gateway client reconnect paused handler error: Error: paused callback failed",
     );
-    expect(onClose).toHaveBeenCalledWith(1008, "connect failed");
+    expect(onClose).toHaveBeenCalledWith(1008, "connect failed", {
+      phase: "pre-hello",
+      socketOpened: true,
+      transientPreHelloCleanClose: false,
+    });
   });
 
   it("does not auto-reconnect on CLIENT_VERSION_MISMATCH connect failures", async () => {

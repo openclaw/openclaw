@@ -752,11 +752,11 @@ export class GatewayClient {
           reason: reasonText,
           detailCode: connectErrorDetailCode,
         });
-        this.notifyClose(code, reasonText);
+        this.notifyClose(code, reasonText, closeInfo);
         return;
       }
       this.scheduleReconnect();
-      this.notifyClose(code, reasonText);
+      this.notifyClose(code, reasonText, closeInfo);
     });
     ws.on("error", (err) => {
       this.logDebug(`gateway client error: ${formatGatewayClientErrorForLog(err)}`);
