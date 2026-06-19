@@ -411,6 +411,13 @@ export async function enableTailscaleServe(
   serviceName?: string,
 ) {
   const tailscaleBin = await getTailscaleBinary();
+  // Reset stale serve entries first to prevent duplicates on restart (#93936)
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    serviceName ? ["serve", "clear", serviceName] : ["serve", "reset"],
+    { maxBuffer: 200_000, timeoutMs: 15_000 },
+  ).catch(() => {});
   await execWithSudoFallback(
     exec,
     tailscaleBin,
