@@ -99,7 +99,12 @@ describe("buildTelegramMessageContext typing", () => {
 
   it("continues voice transcription when preflight typing does not settle", async () => {
     transcribeFirstAudio.mockClear();
-    const sendChatAction = vi.fn(() => new Promise<undefined>(() => undefined));
+    const sendChatAction = vi.fn(
+      () =>
+        new Promise<undefined>(() => {
+          // Intentionally left pending to exercise the bounded preflight wait.
+        }),
+    );
     const sendChatActionHandler = createSendChatActionHandler(sendChatAction);
 
     const contextPromise = buildTelegramMessageContextForTest({
