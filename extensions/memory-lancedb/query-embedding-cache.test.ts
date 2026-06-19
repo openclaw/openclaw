@@ -21,7 +21,7 @@ describe("QueryEmbeddingCache", () => {
   });
 
   test("evicts the oldest entry past capacity", async () => {
-    const cache = new QueryEmbeddingCache(2);
+    const cache = new QueryEmbeddingCache({ maxEntries: 2 });
     const make = (v: number) => vi.fn(async () => [v]);
     const a = make(1);
     const b = make(2);
@@ -70,12 +70,26 @@ describe("QueryEmbeddingCache", () => {
     expect(zero).toHaveBeenCalledTimes(2);
   });
 
+  test("when disabled, never memoizes and recomputes every call", async () => {
+    const cache = new QueryEmbeddingCache({ enabled: false });
+    const compute = vi.fn(async () => [0.1, 0.2, 0.3]);
+    const first = await cache.getOrCompute("k", compute);
+    const second = await cache.getOrCompute("k", compute);
+    // Disabled cache is a pass-through: identical keys still recompute.
+    expect(compute).toHaveBeenCalledTimes(2);
+    expect(first).toEqual([0.1, 0.2, 0.3]);
+    expect(second).toEqual(first);
+  });
+
   test("collapses concurrent identical embeds to one compute call", async () => {
     const cache = new QueryEmbeddingCache();
     // The value cached is the in-flight promise, so two embeds launched before
     // the first resolves still share a single compute.
     const compute = vi.fn(
-      () => new Promise<number[]>((resolve) => setTimeout(() => resolve([1, 2]), 5)),
+      () =>
+        new Promise<number[]>((resolve) => {
+          setTimeout(() => resolve([1, 2]), 5);
+        }),
     );
     const [a, b] = await Promise.all([
       cache.getOrCompute("k", compute),

@@ -1,4 +1,11 @@
-// Memory Lancedb helper module implements per-instance query-embedding caching.
+// Memory Lancedb helper module implements the per-instance Query Embedding
+// Recall Cache.
+//
+// NOTE ON NAMING: this is NOT the host's "Memory Search Embedding Cache"
+// (`agents.defaults.memorySearch.cache`), which caches CHUNK embeddings in
+// SQLite at index time inside memory-core. This cache lives in memory-lancedb,
+// is an in-memory LRU of QUERY (recall) embeddings, and operates at recall time.
+// Different layer, different cost, different lifecycle.
 //
 // The query-embedding round-trip dominates the LanceDB vector scan (a remote
 // embed is ~50-300ms vs a few ms for a flat scan over a typical store), and a
@@ -53,10 +60,20 @@ export function isCacheableEmbeddingVector(vector: number[]): boolean {
  */
 export class QueryEmbeddingCache {
   private readonly entries = new Map<string, Promise<number[]>>();
+  private readonly maxEntries: number;
+  private readonly enabled: boolean;
 
-  constructor(private readonly maxEntries = QUERY_EMBED_CACHE_MAX_ENTRIES) {}
+  constructor(options?: { maxEntries?: number; enabled?: boolean }) {
+    this.maxEntries = options?.maxEntries ?? QUERY_EMBED_CACHE_MAX_ENTRIES;
+    this.enabled = options?.enabled ?? true;
+  }
 
   async getOrCompute(key: string, compute: () => Promise<number[]>): Promise<number[]> {
+    // When disabled, behave as a pass-through: never store, always recompute, so
+    // the embed() call sites stay identical regardless of configuration.
+    if (!this.enabled) {
+      return compute();
+    }
     const existing = this.entries.get(key);
     if (existing) {
       // Bump recency: delete + re-set moves the key to the most-recent slot.

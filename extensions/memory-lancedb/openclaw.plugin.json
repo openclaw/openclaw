@@ -144,6 +144,26 @@
         "additionalProperties": {
           "type": "string"
         }
+      },
+      "query": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "embeddingCache": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "maxEntries": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              }
+            }
+          }
+        }
       }
     }
   }

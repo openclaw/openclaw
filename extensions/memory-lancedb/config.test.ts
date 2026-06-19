@@ -213,4 +213,95 @@ describe("memory-lancedb config", () => {
       });
     }).toThrow("dreaming config must be an object");
   });
+
+  it("defaults the query embedding recall cache to enabled with no maxEntries override", () => {
+    const parsed = memoryConfigSchema.parse({
+      embedding: {
+        apiKey: "sk-test",
+      },
+    });
+    expect(parsed.queryEmbeddingCache).toEqual({ enabled: true });
+  });
+
+  it("surfaces query.embeddingCache in the manifest schema and runtime parser", () => {
+    const value = {
+      embedding: {
+        apiKey: "sk-test",
+      },
+      query: {
+        embeddingCache: {
+          enabled: false,
+          maxEntries: 64,
+        },
+      },
+    };
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.query-embedding-cache",
+      value,
+    });
+    const parsed = memoryConfigSchema.parse(value);
+
+    expect(manifestResult.ok).toBe(true);
+    expect(parsed.queryEmbeddingCache).toEqual({ enabled: false, maxEntries: 64 });
+  });
+
+  it("treats an omitted enabled flag as enabled while honoring maxEntries", () => {
+    const parsed = memoryConfigSchema.parse({
+      embedding: {
+        apiKey: "sk-test",
+      },
+      query: {
+        embeddingCache: {
+          maxEntries: 128,
+        },
+      },
+    });
+    expect(parsed.queryEmbeddingCache).toEqual({ enabled: true, maxEntries: 128 });
+  });
+
+  it("rejects a non-integer or out-of-range query.embeddingCache.maxEntries", () => {
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        query: { embeddingCache: { maxEntries: 0 } },
+      });
+    }).toThrow("query.embeddingCache.maxEntries must be between 1 and 1000000");
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        query: { embeddingCache: { maxEntries: "64" } },
+      });
+    }).toThrow("query.embeddingCache.maxEntries must be between 1 and 1000000");
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        query: { embeddingCache: { maxEntries: 1.5 } },
+      });
+    }).toThrow("query.embeddingCache.maxEntries must be between 1 and 1000000");
+  });
+
+  it("rejects unknown keys under query and query.embeddingCache", () => {
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        query: { embeddingCache: { ttlMs: 1000 } },
+      });
+    }).toThrow("query.embeddingCache has unknown keys: ttlMs");
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        query: { hybrid: {} },
+      });
+    }).toThrow("query config has unknown keys: hybrid");
+  });
+
+  it("rejects a non-boolean query.embeddingCache.enabled", () => {
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        query: { embeddingCache: { enabled: "yes" } },
+      });
+    }).toThrow("query.embeddingCache.enabled must be a boolean");
+  });
 });

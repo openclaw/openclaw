@@ -379,7 +379,7 @@ type Embeddings = {
 
 class OpenAiCompatibleEmbeddings implements Embeddings {
   private clientPromise: Promise<OpenAiEmbeddingClient>;
-  private readonly cache = new QueryEmbeddingCache();
+  private readonly cache: QueryEmbeddingCache;
   // Identity is fixed for this instance's lifetime; encode it in the key anyway
   // as a defensive guard so a cached vector can never be served under a
   // different model/dims/endpoint.
@@ -395,7 +395,9 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     private model: string,
     private baseUrl?: string,
     private dimensions?: number,
+    cacheOptions?: { enabled?: boolean; maxEntries?: number },
   ) {
+    this.cache = new QueryEmbeddingCache(cacheOptions);
     this.clientPromise = loadOpenAiModule().then(
       ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }) as OpenAiEmbeddingClient,
     );
@@ -431,7 +433,7 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
 
 class ProviderAdapterEmbeddings implements Embeddings {
   private providerPromise: Promise<MemoryEmbeddingProvider> | undefined;
-  private readonly cache = new QueryEmbeddingCache();
+  private readonly cache: QueryEmbeddingCache;
   // Resolved once the provider is created. `cacheKeyData` is the adapter's own
   // identity (provider/baseUrl/model/outputDimensionality/headers); when an
   // adapter does not supply it we fall back to the configured provider/model/dims
@@ -441,7 +443,10 @@ class ProviderAdapterEmbeddings implements Embeddings {
   constructor(
     private api: OpenClawPluginApi,
     private embedding: MemoryConfig["embedding"],
-  ) {}
+    cacheOptions?: { enabled?: boolean; maxEntries?: number },
+  ) {
+    this.cache = new QueryEmbeddingCache(cacheOptions);
+  }
 
   private getProvider(): Promise<MemoryEmbeddingProvider> {
     // Auth profiles and local providers can be repaired while the Gateway stays up.
@@ -596,10 +601,11 @@ export const testing = {
 
 function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
   const { provider, model, dimensions, apiKey, baseUrl } = cfg.embedding;
+  const cacheOptions = cfg.queryEmbeddingCache;
   if (provider === "openai" && apiKey) {
-    return new OpenAiCompatibleEmbeddings(apiKey, model, baseUrl, dimensions);
+    return new OpenAiCompatibleEmbeddings(apiKey, model, baseUrl, dimensions, cacheOptions);
   }
-  return new ProviderAdapterEmbeddings(api, cfg.embedding);
+  return new ProviderAdapterEmbeddings(api, cfg.embedding, cacheOptions);
 }
 
 type EmbeddingCreateResponse = {

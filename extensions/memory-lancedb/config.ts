@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { QUERY_EMBED_CACHE_MAX_ENTRIES as DEFAULT_QUERY_EMBED_CACHE_MAX_ENTRIES } from "./query-embedding-cache.js";
 
 export type MemoryConfig = {
   embedding: {
@@ -20,6 +21,15 @@ export type MemoryConfig = {
   customTriggers?: string[];
   recallMaxChars?: number;
   storageOptions?: Record<string, string>;
+  // Resolved query-embedding recall cache settings (always present after parse).
+  // This is the in-memory LRU that collapses repeated recall-query embeds within
+  // a turn; it is distinct from the host's `memorySearch.cache` (chunk embeddings
+  // in SQLite). maxEntries is left undefined when unset so the cache applies its
+  // own default capacity (QUERY_EMBED_CACHE_MAX_ENTRIES).
+  queryEmbeddingCache: {
+    enabled: boolean;
+    maxEntries?: number;
+  };
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -122,6 +132,58 @@ function resolveBoundedIntegerConfig(params: {
   return resolved;
 }
 
+// Upper bound for the configurable query-embedding cache capacity. Generous on
+// purpose: the cache is a small per-instance LRU of recall-query vectors, so the
+// only real constraint is memory, and the sane default (when unset) is the
+// QUERY_EMBED_CACHE_MAX_ENTRIES constant applied by the cache itself.
+const MAX_QUERY_EMBED_CACHE_ENTRIES = 1_000_000;
+
+function resolveQueryEmbeddingCacheConfig(query: unknown): MemoryConfig["queryEmbeddingCache"] {
+  if (query === undefined) {
+    return { enabled: true };
+  }
+  if (!query || typeof query !== "object" || Array.isArray(query)) {
+    throw new Error("query config must be an object");
+  }
+  const queryCfg = query as Record<string, unknown>;
+  assertAllowedKeys(queryCfg, ["embeddingCache"], "query config");
+
+  const rawCache = queryCfg.embeddingCache;
+  if (rawCache === undefined) {
+    return { enabled: true };
+  }
+  if (!rawCache || typeof rawCache !== "object" || Array.isArray(rawCache)) {
+    throw new Error("query.embeddingCache must be an object");
+  }
+  const cache = rawCache as Record<string, unknown>;
+  assertAllowedKeys(cache, ["enabled", "maxEntries"], "query.embeddingCache");
+
+  if (cache.enabled !== undefined && typeof cache.enabled !== "boolean") {
+    throw new Error("query.embeddingCache.enabled must be a boolean");
+  }
+  // Default-on, matching the host memorySearch.cache convention.
+  const enabled = cache.enabled !== false;
+
+  let maxEntries: number | undefined;
+  if (cache.maxEntries !== undefined) {
+    const parsedMaxEntries =
+      typeof cache.maxEntries === "number" ? parseFiniteNumber(cache.maxEntries) : undefined;
+    if (
+      parsedMaxEntries === undefined ||
+      !Number.isInteger(parsedMaxEntries) ||
+      parsedMaxEntries < 1 ||
+      parsedMaxEntries > MAX_QUERY_EMBED_CACHE_ENTRIES
+    ) {
+      throw new Error(
+        `query.embeddingCache.maxEntries must be between 1 and ${MAX_QUERY_EMBED_CACHE_ENTRIES}`,
+      );
+    }
+    maxEntries = parsedMaxEntries;
+  }
+
+  return maxEntries === undefined ? { enabled } : { enabled, maxEntries };
+}
+
 function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number | undefined {
   if (embedding.dimensions === undefined) {
     return undefined;
@@ -152,6 +214,7 @@ export const memoryConfigSchema = {
         "customTriggers",
         "recallMaxChars",
         "storageOptions",
+        "query",
       ],
       "memory config",
     );
@@ -209,6 +272,8 @@ export const memoryConfigSchema = {
       }
     }
 
+    const queryEmbeddingCache = resolveQueryEmbeddingCacheConfig(cfg.query);
+
     const dreaming =
       cfg.dreaming === undefined
         ? undefined
@@ -252,6 +317,7 @@ export const memoryConfigSchema = {
       ...(customTriggers ? { customTriggers } : {}),
       recallMaxChars,
       ...(storageOptions ? { storageOptions } : {}),
+      queryEmbeddingCache,
     };
   },
   uiHints: {
@@ -319,6 +385,17 @@ export const memoryConfigSchema = {
       sensitive: true,
       advanced: true,
       help: "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values",
+    },
+    "query.embeddingCache.enabled": {
+      label: "Query Embedding Recall Cache",
+      advanced: true,
+      help: "Reuse the embedding vector for an identical recall query within a turn (memory_recall, auto-recall, and capture can otherwise embed the same query several times). In-memory only; distinct from the host Memory Search Embedding Cache, which caches chunk embeddings in SQLite.",
+    },
+    "query.embeddingCache.maxEntries": {
+      label: "Query Embedding Cache Max Entries",
+      advanced: true,
+      placeholder: String(DEFAULT_QUERY_EMBED_CACHE_MAX_ENTRIES),
+      help: "Maximum number of recall-query embeddings kept in the in-memory LRU before the least-recently-used entry is evicted.",
     },
   },
 };
