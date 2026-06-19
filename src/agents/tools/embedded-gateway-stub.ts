@@ -13,7 +13,6 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { dropPreSessionStartAnnouncePairs } from "../../gateway/chat-display-projection.js";
-import { resolveSessionHistoryTranscriptPathAsync } from "../../gateway/session-utils.fs.js";
 import {
   resolveSessionTranscriptCandidates,
   resolveSessionTranscriptResetArchiveCandidatesAsync,
@@ -22,6 +21,7 @@ import type {
   ReadSessionMessagesAsyncOptions,
   SessionTranscriptReadScope,
 } from "../../gateway/session-transcript-readers.js";
+import { resolveSessionHistoryTranscriptPathAsync } from "../../gateway/session-utils.fs.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import {
@@ -104,6 +104,7 @@ type SessionTranscriptReadTarget = {
   sessionFile?: string;
   applySessionStartedAtFilter?: boolean;
   isCurrentActive?: boolean;
+  useStoreEntryFallback?: boolean;
 };
 
 const MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS = 32;
@@ -246,6 +247,20 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
               allowResetArchiveFallback: true,
             },
           );
+    if (!params.includeFamily && familySessionId === currentSessionId && !activeFile) {
+      if (
+        !pushTarget({
+          sessionId: familySessionId,
+          sessionFile: params.entry?.sessionFile,
+          applySessionStartedAtFilter: true,
+          isCurrentActive: true,
+          useStoreEntryFallback: true,
+        })
+      ) {
+        return finalizeTargets();
+      }
+      continue;
+    }
     if (familySessionId === currentSessionId && activeFile) {
       if (
         !pushTarget({
@@ -329,10 +344,20 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
       ? (
           await Promise.all(
             transcriptTargets.map(async (target) => {
+              const sessionEntry =
+                target.useStoreEntryFallback && typeof entry?.sessionId === "string"
+                  ? {
+                      sessionId: entry.sessionId,
+                      ...(typeof entry.sessionFile === "string"
+                        ? { sessionFile: entry.sessionFile }
+                        : {}),
+                    }
+                  : undefined;
               const messages = await rt.readSessionMessagesAsync(
                 {
                   agentId: sessionAgentId,
-                  sessionFile: target.sessionFile,
+                  ...(sessionEntry ? { sessionEntry, sessionKey } : {}),
+                  ...(target.sessionFile ? { sessionFile: target.sessionFile } : {}),
                   sessionId: target.sessionId,
                   storePath,
                 },
