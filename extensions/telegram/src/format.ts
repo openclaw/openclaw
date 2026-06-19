@@ -146,6 +146,76 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
   return out.join("\n");
 }
 
+
+/**
+ * Simple regex-based HTML table to pre-formatted text converter.
+ * Detects raw HTML <table> blocks in the input and replaces them
+ * with a monospace code block that Telegram can display.
+ *
+ * Telegram Bot API HTML mode does not support <table>, <tr>, <td>, <th>,
+ * so raw HTML tables would otherwise be escaped and shown as literal
+ * entity characters (e.g. &lt;table&gt;).
+ */
+function convertHtmlTableToPreformatted(text: string): string {
+  // Match HTML table blocks: <table ...> ... </table> (non-greedy, case-insensitive)
+  const TABLE_BLOCK_RE = /<table\b[^>]*>([\s\S]*?)<\/table\s*>/gi;
+  return text.replace(TABLE_BLOCK_RE, (_full, body: string) => {
+    // Extract header rows (<thead>) and body rows (<tr>)
+    const theadMatch = body.match(/<thead\b[^>]*>([\s\S]*?)<\/thead\s*>/i);
+    const headerRows = theadMatch ? extractTableRows(theadMatch[1]) : [];
+    // Exclude <thead> content from body extraction to avoid duplicates
+    const bodyContent = theadMatch ? body.replace(/<thead\b[^>]*>[\s\S]*?<\/thead\s*>/gi, "") : body;
+    const bodyRows = extractTableRows(bodyContent);
+
+    // Gather all rows (headers first, then body)
+    const allRows = [...headerRows, ...bodyRows];
+    if (allRows.length === 0) {
+      // No parsable table structure; fall back to raw text
+      return _full.replace(/<[^>]+>/g, "").trim() || "(empty table)";
+    }
+
+    // Build a pipe-separated text representation
+    const lines: string[] = [];
+    for (let ri = 0; ri < allRows.length; ri++) {
+      const cells = allRows[ri];
+      lines.push(`| ${cells.join(" | ")} |`);
+      // Add separator after header row (first row if <thead> was present)
+      if (ri === 0 && headerRows.length > 0) {
+        lines.push(`| ${cells.map(() => "---").join(" | ")} |`);
+      }
+    }
+
+    // If no <thead> was present but we have at least 2 rows, treat first row as header
+    if (headerRows.length === 0 && allRows.length >= 2) {
+      lines.splice(1, 0, `| ${allRows[0].map(() => "---").join(" | ")} |`);
+    }
+
+    return `\`\`\`\n${lines.join("\n")}\n\`\`\``;
+  });
+}
+
+/** Extract table row cells from an HTML fragment containing <tr> elements. */
+function extractTableRows(html: string): string[][] {
+  const rows: string[][] = [];
+  const TR_RE = /<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi;
+  let trMatch: RegExpExecArray | null;
+  while ((trMatch = TR_RE.exec(html)) !== null) {
+    const cells: string[] = [];
+    // Match both <td> and <th> cells
+    const CELL_RE = /<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]\s*>/gi;
+    let cellMatch: RegExpExecArray | null;
+    while ((cellMatch = CELL_RE.exec(trMatch[1])) !== null) {
+      // Strip inner HTML tags from cell content
+      const cellText = cellMatch[1].replace(/<[^>]+>/g, "").trim();
+      cells.push(cellText || " ");
+    }
+    if (cells.length > 0) {
+      rows.push(cells);
+    }
+  }
+  return rows;
+}
+
 export function markdownToTelegramHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},

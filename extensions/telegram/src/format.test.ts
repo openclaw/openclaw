@@ -448,7 +448,31 @@ describe("markdownToTelegramHtml", () => {
       expect(containsLoneSurrogate(chunk.html)).toBe(false);
       expect(containsLoneSurrogate(chunk.text)).toBe(false);
     }
+  
+  describe("HTML table conversion", () => {
+    it("converts a simple HTML table to a pipe-formatted code block", () => {
+      const input = "Here is data:\n<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>";
+      const result = markdownToTelegramHtml(input);
+      expect(result).toContain("<pre><code>");
+      expect(result).toContain("| Name | Age |");
+      expect(result).toContain("| Alice | 30 |");
+      expect(result).not.toContain("&lt;table&gt;");
+    });
+
+    it("converts table with thead/tbody to pipe format", () => {
+      const input = "<table><thead><tr><th>Col A</th><th>Col B</th></tr></thead><tbody><tr><td>X</td><td>Y</td></tr></tbody></table>";
+      const result = markdownToTelegramHtml(input);
+      expect(result).toContain("| Col A | Col B |");
+      expect(result).toContain("---");
+    });
+
+    it("falls back to stripped text when table has no rows", () => {
+      const input = "<table><caption>empty</caption></table>";
+      const result = markdownToTelegramHtml(input);
+      expect(result).not.toContain("&lt;table&gt;");
+    });
   });
+});
 });
 
 function containsLoneSurrogate(text: string): boolean {
