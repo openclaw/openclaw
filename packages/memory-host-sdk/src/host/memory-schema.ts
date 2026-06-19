@@ -491,8 +491,10 @@ function ensureFtsSchema(
     .prepare(`SELECT COUNT(*) AS count FROM ${MEMORY_INDEX_CHUNKS_TABLE}`)
     .get() as { count?: number | bigint } | undefined;
   const chunkCount = readCount(chunkRows);
-  const shouldRebuildText = readCount(textRows) !== chunkCount;
-  const shouldRebuildPath = readCount(pathRows) !== chunkCount;
+  const shouldRebuildText =
+    readCount(textRows) !== chunkCount || hasTextFtsDrift(db, textTableName);
+  const shouldRebuildPath =
+    readCount(pathRows) !== chunkCount || hasPathFtsDrift(db, pathTableName);
   if (!shouldRebuildText && !shouldRebuildPath) {
     return;
   }
@@ -566,4 +568,86 @@ function readCount(row: { count?: number | bigint } | undefined): number {
     return row.count;
   }
   return 0;
+}
+
+function hasTextFtsDrift(db: DatabaseSync, tableName: string): boolean {
+  const staleFtsRow = db
+    .prepare(
+      `SELECT 1 AS drift FROM ${tableName} AS f
+       WHERE NOT EXISTS (
+         SELECT 1 FROM ${MEMORY_INDEX_CHUNKS_TABLE} AS c
+         WHERE c.id = f.id
+           AND c.path IS f.path
+           AND c.source IS f.source
+           AND c.model IS f.model
+           AND c.start_line IS f.start_line
+           AND c.end_line IS f.end_line
+           AND c.text IS f.text
+       )
+       LIMIT 1`,
+    )
+    .get();
+  if (staleFtsRow) {
+    return true;
+  }
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 AS drift FROM ${MEMORY_INDEX_CHUNKS_TABLE} AS c
+         WHERE NOT EXISTS (
+           SELECT 1 FROM ${tableName} AS f
+           WHERE f.id = c.id
+             AND f.path IS c.path
+             AND f.source IS c.source
+             AND f.model IS c.model
+             AND f.start_line IS c.start_line
+             AND f.end_line IS c.end_line
+             AND f.text IS c.text
+         )
+         LIMIT 1`,
+      )
+      .get(),
+  );
+}
+
+function hasPathFtsDrift(db: DatabaseSync, tableName: string): boolean {
+  const staleFtsRow = db
+    .prepare(
+      `SELECT 1 AS drift FROM ${tableName} AS f
+       WHERE NOT EXISTS (
+         SELECT 1 FROM ${MEMORY_INDEX_CHUNKS_TABLE} AS c
+         WHERE c.id = f.id
+           AND c.path IS f.path
+           AND c.source IS f.source
+           AND c.model IS f.model
+           AND c.start_line IS f.start_line
+           AND c.end_line IS f.end_line
+           AND c.text IS f.text
+           AND c.path IS f.path_text
+       )
+       LIMIT 1`,
+    )
+    .get();
+  if (staleFtsRow) {
+    return true;
+  }
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 AS drift FROM ${MEMORY_INDEX_CHUNKS_TABLE} AS c
+         WHERE NOT EXISTS (
+           SELECT 1 FROM ${tableName} AS f
+           WHERE f.id = c.id
+             AND f.path IS c.path
+             AND f.source IS c.source
+             AND f.model IS c.model
+             AND f.start_line IS c.start_line
+             AND f.end_line IS c.end_line
+             AND f.text IS c.text
+             AND f.path_text IS c.path
+         )
+         LIMIT 1`,
+      )
+      .get(),
+  );
 }

@@ -261,4 +261,103 @@ describe("memory index schema", () => {
       db.close();
     }
   });
+
+  it("rebuilds body FTS rows when same-count text drifts from canonical chunks", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: true,
+      });
+      db.prepare(
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "body-strong-long-path",
+        "memory/segment0/segment1/body-source.md",
+        "memory",
+        1,
+        3,
+        "strong-hash",
+        "mock-embed",
+        "alpha alpha alpha alpha",
+        "[0]",
+        1,
+      );
+      db.prepare(
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "body-weak-short-path",
+        "memory/a.md",
+        "memory",
+        1,
+        1,
+        "weak-hash",
+        "mock-embed",
+        "alpha",
+        "[0]",
+        1,
+      );
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "memory/segment0/segment1/body-source.md\nalpha alpha alpha alpha",
+        "body-strong-long-path",
+        "memory/segment0/segment1/body-source.md",
+        "memory",
+        "mock-embed",
+        1,
+        3,
+      );
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "memory/a.md\nalpha",
+        "body-weak-short-path",
+        "memory/a.md",
+        "memory",
+        "mock-embed",
+        1,
+        1,
+      );
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts_path (path_text, text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "memory/segment0/segment1/body-source.md",
+        "alpha alpha alpha alpha",
+        "body-strong-long-path",
+        "memory/segment0/segment1/body-source.md",
+        "memory",
+        "mock-embed",
+        1,
+        3,
+      );
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts_path (path_text, text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "memory/a.md",
+        "alpha",
+        "body-weak-short-path",
+        "memory/a.md",
+        "memory",
+        "mock-embed",
+        1,
+        1,
+      );
+
+      ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: true,
+      });
+
+      expect(
+        db
+          .prepare("SELECT text FROM memory_index_chunks_fts WHERE id = ?")
+          .get("body-strong-long-path"),
+      ).toEqual({ text: "alpha alpha alpha alpha" });
+    } finally {
+      db.close();
+    }
+  });
 });
