@@ -98,27 +98,29 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
   return value === "raw" || value === "status" ? value : undefined;
 }
 
+// Neutral default labels — mascot/novelty labels must be explicit opt-in
+// via streaming.progress.label / streaming.progress.labels config.
 export const DEFAULT_PROGRESS_DRAFT_LABELS = [
   "Working",
-  "Shelling",
-  "Scuttling",
-  "Clawing",
-  "Pinching",
-  "Molting",
-  "Bubbling",
-  "Tiding",
-  "Reefing",
-  "Cracking",
-  "Sifting",
-  "Brining",
-  "Nautiling",
-  "Krilling",
-  "Barnacling",
-  "Lobstering",
-  "Tidepooling",
-  "Pearling",
-  "Snapping",
-  "Surfacing",
+  "Thinking",
+  "Reading",
+  "Checking",
+  "Running",
+  "Analyzing",
+  "Processing",
+  "Computing",
+  "Compiling",
+  "Searching",
+  "Fetching",
+  "Reviewing",
+  "Indexing",
+  "Scanning",
+  "Formatting",
+  "Summarizing",
+  "Planning",
+  "Evaluating",
+  "Generating",
+  "Synthesizing",
 ] as const;
 
 export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;

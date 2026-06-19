@@ -249,6 +249,40 @@ describe("channel-streaming", () => {
     ).toBe(DEFAULT_PROGRESS_DRAFT_LABELS[0]);
   });
 
+  it("uses only neutral default progress labels, never mascot or novelty terms", () => {
+    const nonNeutralTerms = [
+      "Shelling",
+      "Scuttling",
+      "Clawing",
+      "Pinching",
+      "Molting",
+      "Bubbling",
+      "Tiding",
+      "Reefing",
+      "Cracking",
+      "Sifting",
+      "Brining",
+      "Nautiling",
+      "Krilling",
+      "Barnacling",
+      "Lobstering",
+      "Tidepooling",
+      "Pearling",
+      "Snapping",
+      "Surfacing",
+    ];
+    for (const term of nonNeutralTerms) {
+      expect(DEFAULT_PROGRESS_DRAFT_LABELS).not.toContain(term);
+    }
+    // Ensure there are enough labels for a healthy pool
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS.length).toBeGreaterThanOrEqual(10);
+    // Every label must be a non-empty string
+    for (const label of DEFAULT_PROGRESS_DRAFT_LABELS) {
+      expect(typeof label).toBe("string");
+      expect(label.length).toBeGreaterThan(0);
+    }
+  });
+
   it("separates progress labels from detail lines with a blank line", () => {
     const entry = { streaming: { progress: { label: "Working" } } };
 

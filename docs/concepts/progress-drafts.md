@@ -99,25 +99,25 @@ single-word label pool:
 
 ```text
 Working
-Shelling
-Scuttling
-Clawing
-Pinching
-Molting
-Bubbling
-Tiding
-Reefing
-Cracking
-Sifting
-Brining
-Nautiling
-Krilling
-Barnacling
-Lobstering
-Tidepooling
-Pearling
-Snapping
-Surfacing
+Thinking
+Reading
+Checking
+Running
+Analyzing
+Processing
+Computing
+Compiling
+Searching
+Fetching
+Reviewing
+Indexing
+Scanning
+Formatting
+Summarizing
+Planning
+Evaluating
+Generating
+Synthesizing
 ```
 
 Use a fixed label:
