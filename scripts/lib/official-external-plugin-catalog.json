@@ -516,6 +516,23 @@
           "minHostVersion": ">=2026.4.10"
         }
       }
+    },
+    {
+      "name": "@xmemo/openclaw-memory",
+      "description": "OpenClaw memory plugin backed by XMemo cloud memory (xmemo.dev).",
+      "source": "external",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "xmemo-memory",
+          "label": "XMemo Cloud Memory"
+        },
+        "install": {
+          "npmSpec": "@xmemo/openclaw-memory",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
     }
   ]
 }

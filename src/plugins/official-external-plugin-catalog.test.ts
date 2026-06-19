@@ -257,4 +257,12 @@ describe("official external plugin catalog", () => {
       allowInvalidConfigRecovery: true,
     });
   });
+
+  it("lists XMemo Cloud Memory as an external community memory plugin", () => {
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("xmemo-memory"))).toEqual({
+      npmSpec: "@xmemo/openclaw-memory",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.6.8",
+    });
+  });
 });
