@@ -51,6 +51,7 @@ type ParentState = {
 type ChildState = {
   childThreadId: string;
   parentThreadId: string;
+  lastAssistantMessage?: string;
   transcriptPath?: string;
   transcriptPollAttempt: number;
   transcriptPollTimer?: ReturnType<typeof setTimeout>;
@@ -211,6 +212,8 @@ export class CodexNativeSubagentMonitor {
         });
       }
     }
+    this.captureChildAssistantMessage(notification);
+    await this.handleChildTurnCompletion(notification);
     await this.handleCompletionNotification(notification);
   }
 
@@ -292,7 +295,11 @@ export class CodexNativeSubagentMonitor {
         nativeCompletion.agentPath,
       );
       const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
-      if (!childState || childState.parentThreadId !== state.parentThreadId) {
+      if (
+        !childState ||
+        childState.parentThreadId !== state.parentThreadId ||
+        childState.transcriptTerminal
+      ) {
         embeddedAgentLog.warn(
           "Ignoring Codex native subagent completion for unknown child thread",
           {
@@ -316,6 +323,39 @@ export class CodexNativeSubagentMonitor {
       }
       await this.processCompletion(state, completion);
     }
+  }
+
+  private captureChildAssistantMessage(notification: CodexServerNotification): void {
+    if (notification.method !== "item/completed") {
+      return;
+    }
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const childThreadId = readString(params, "threadId")?.trim();
+    const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+    const item = isJsonObject(params?.item) ? params.item : undefined;
+    const text =
+      readString(item, "type") === "agentMessage"
+        ? normalizeOptionalString(readString(item, "text"))
+        : undefined;
+    if (childState && text) {
+      childState.lastAssistantMessage = text;
+    }
+  }
+
+  private async handleChildTurnCompletion(notification: CodexServerNotification): Promise<void> {
+    if (notification.method !== "turn/completed") {
+      return;
+    }
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const childThreadId = readString(params, "threadId")?.trim();
+    const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+    const state = childState ? this.parentStates.get(childState.parentThreadId) : undefined;
+    const turn = isJsonObject(params?.turn) ? params.turn : undefined;
+    const completion = childState && turn ? toChildTurnCompletion(childState, turn) : undefined;
+    if (!state || !childState || childState.transcriptTerminal || !completion) {
+      return;
+    }
+    await this.processCompletion(state, completion);
   }
 
   async reconcileChildTranscript(
@@ -882,6 +922,50 @@ function buildCompletionDedupeKey(
 ): string {
   const hash = createHash("sha256").update(completion.result).digest("hex").slice(0, 16);
   return `${parentThreadId}:${completion.childThreadId}:${completion.status}:${hash}`;
+}
+
+function toChildTurnCompletion(
+  childState: ChildState,
+  turn: JsonObject,
+): CodexNativeSubagentCompletion | undefined {
+  const status = readString(turn, "status");
+  if (status === "completed") {
+    return {
+      childThreadId: childState.childThreadId,
+      status: "succeeded",
+      statusLabel: "turn_completed",
+      result:
+        childState.lastAssistantMessage ??
+        "Codex native subagent completed without a final assistant message.",
+    };
+  }
+  if (status === "interrupted") {
+    return {
+      childThreadId: childState.childThreadId,
+      status: "cancelled",
+      statusLabel: "turn_interrupted",
+      result: "Codex native subagent was interrupted.",
+    };
+  }
+  if (status === "failed") {
+    return {
+      childThreadId: childState.childThreadId,
+      status: "failed",
+      statusLabel: "turn_failed",
+      result: readTurnErrorMessage(turn) ?? "Codex native subagent failed.",
+    };
+  }
+  return undefined;
+}
+
+function readTurnErrorMessage(turn: JsonObject): string | undefined {
+  const error = isJsonObject(turn.error) ? turn.error : undefined;
+  return (
+    normalizeOptionalString(readString(error, "message")) ??
+    normalizeOptionalString(
+      isJsonObject(error?.codexErrorInfo) ? readString(error.codexErrorInfo, "message") : undefined,
+    )
+  );
 }
 
 function buildParentAgentPathKey(parentThreadId: string, agentPath: string): string {
