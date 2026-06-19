@@ -275,6 +275,8 @@ export type SessionEntry = {
   usageFamilySessionIds?: string[];
   /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
   lastInteractionAt?: number;
+  /** Timestamp (ms) when an external lifecycle event forced this entry to roll over. */
+  sessionClosedAt?: number;
   /** Stable first-run start time for subagent sessions, persisted after completion. */
   startedAt?: number;
   /** Latest completed run end time for subagent sessions, persisted after completion. */

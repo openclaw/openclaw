@@ -2,19 +2,18 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   listSessionEntries,
+  patchSessionEntry,
   resolveStorePath,
-  updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Marks every session entry in the store whose key contains {@link threadId}
- * as closed by removing the store row.
+ * as closed so the next inbound message rolls over to a fresh session.
  *
- * Removing the row forces the next inbound message in that archived Discord
- * thread to start a fresh conversation without deleting on-disk transcript
- * history. Timestamp-only invalidation is not enough for idle/no-expiry
- * thread sessions because such entries can still evaluate fresh.
+ * The close marker makes idle/no-expiry thread sessions stale without deleting
+ * the entry. Keeping the entry lets the normal rollover lifecycle archive and
+ * link the old transcript when the archived thread receives another message.
  */
 export async function closeDiscordThreadSessions(params: {
   cfg: OpenClawConfig;
@@ -47,29 +46,29 @@ export async function closeDiscordThreadSessions(params: {
   const storePath = resolveStorePath(cfg.session?.store, { agentId: accountId });
 
   let resetCount = 0;
+  const closedAt = Date.now();
 
   for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
-    if (!sessionKeyContainsThreadId(sessionKey)) {
+    if (!sessionKeyContainsThreadId(sessionKey) || entry.sessionClosedAt != null) {
       continue;
     }
-    const removed = await updateSessionStore(
+    const closed = await patchSessionEntry({
       storePath,
-      (store) => {
-        const current = store[sessionKey];
-        if (!current) {
-          return false;
-        }
+      sessionKey,
+      replaceEntry: true,
+      update: (current) => {
         if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
-          return false;
+          return null;
         }
-        delete store[sessionKey];
-        return true;
+        return {
+          ...current,
+          lastInteractionAt: undefined,
+          sessionClosedAt: closedAt,
+          updatedAt: 0,
+        };
       },
-      {
-        skipSaveWhenResult: (result) => result !== true,
-      },
-    );
-    if (removed) {
+    });
+    if (closed) {
       resetCount += 1;
     }
   }

@@ -3,9 +3,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const listSessionEntries = vi.fn();
+  const patchSessionEntry = vi.fn();
   const resolveStorePath = vi.fn(() => "/tmp/openclaw-sessions.json");
-  const updateSessionStore = vi.fn();
-  return { listSessionEntries, resolveStorePath, updateSessionStore };
+  return { listSessionEntries, patchSessionEntry, resolveStorePath };
 });
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
@@ -15,8 +15,8 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     listSessionEntries: hoisted.listSessionEntries,
+    patchSessionEntry: hoisted.patchSessionEntry,
     resolveStorePath: hoisted.resolveStorePath,
-    updateSessionStore: hoisted.updateSessionStore,
   };
 });
 
@@ -26,6 +26,7 @@ type TestSessionEntry = {
   sessionId: string;
   updatedAt: number;
   lastInteractionAt?: number;
+  sessionClosedAt?: number;
 };
 
 function entry(sessionId: string, updatedAt: number, extra: Partial<TestSessionEntry> = {}) {
@@ -36,15 +37,17 @@ function setupStore(store: Record<string, TestSessionEntry>) {
   hoisted.listSessionEntries.mockImplementation(() =>
     Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry: { ...entry } })),
   );
-  hoisted.updateSessionStore.mockImplementation(
-    async (
-      _storePath: string,
-      mutator: (s: typeof store) => unknown,
-      options?: { skipSaveWhenResult?: (result: unknown) => boolean },
-    ) => {
-      const result = mutator(store);
-      options?.skipSaveWhenResult?.(result);
-      return result;
+  hoisted.patchSessionEntry.mockImplementation(
+    async (params: {
+      sessionKey: string;
+      update: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
+    }) => {
+      const current = store[params.sessionKey];
+      if (!current) return null;
+      const patch = params.update(current);
+      if (!patch) return null;
+      store[params.sessionKey] = patch as TestSessionEntry;
+      return store[params.sessionKey];
     },
   );
 }
@@ -62,12 +65,12 @@ describe("closeDiscordThreadSessions", () => {
 
   beforeEach(() => {
     hoisted.listSessionEntries.mockReset();
-    hoisted.updateSessionStore.mockReset();
+    hoisted.patchSessionEntry.mockReset();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");
   });
 
-  it("removes sessions whose key contains the threadId", async () => {
+  it("marks sessions whose key contains the threadId as closed", async () => {
     const store = {
       [MATCHED_KEY]: entry("matched-session", 1_700_000_000_000),
       [UNMATCHED_KEY]: entry("unmatched-session", 1_700_000_000_001),
@@ -81,7 +84,9 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(1);
-    expect(store[MATCHED_KEY]).toBeUndefined();
+    expect(store[MATCHED_KEY].updatedAt).toBe(0);
+    expect(store[MATCHED_KEY].lastInteractionAt).toBeUndefined();
+    expect(store[MATCHED_KEY].sessionClosedAt).toBeGreaterThan(0);
     expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
@@ -101,7 +106,7 @@ describe("closeDiscordThreadSessions", () => {
     expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
-  it("removes all matching sessions when multiple keys contain the threadId", async () => {
+  it("marks all matching sessions when multiple keys contain the threadId", async () => {
     const keyA = `agent:main:discord:channel:${THREAD_ID}`;
     const keyB = `agent:work:discord:channel:${THREAD_ID}`;
     const keyC = `agent:main:discord:channel:${OTHER_ID}`;
@@ -119,8 +124,8 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(2);
-    expect(store[keyA]).toBeUndefined();
-    expect(store[keyB]).toBeUndefined();
+    expect(store[keyA].sessionClosedAt).toBeGreaterThan(0);
+    expect(store[keyB].sessionClosedAt).toBeGreaterThan(0);
     expect(store[keyC].updatedAt).toBe(3_000);
   });
 
@@ -156,7 +161,7 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(1);
-    expect(store[uppercaseKey]).toBeUndefined();
+    expect(store[uppercaseKey].sessionClosedAt).toBeGreaterThan(0);
   });
 
   it("returns 0 immediately when threadId is empty without touching the store", async () => {
@@ -168,10 +173,10 @@ describe("closeDiscordThreadSessions", () => {
 
     expect(count).toBe(0);
     expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
-    expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+    expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
   });
 
-  it("removes idle/no-expiry thread sessions instead of relying on timestamp freshness", async () => {
+  it("marks idle/no-expiry thread sessions instead of relying on timestamp freshness", async () => {
     const store = {
       [MATCHED_KEY]: entry("matched-session", 1_700_000_000_000, {
         lastInteractionAt: 1_700_000_000_000,
@@ -187,12 +192,13 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(1);
-    expect(store[MATCHED_KEY]).toBeUndefined();
+    expect(store[MATCHED_KEY].sessionClosedAt).toBeGreaterThan(0);
+    expect(store[MATCHED_KEY].lastInteractionAt).toBeUndefined();
     expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
-  it("does not remove a matching session that changed after the list snapshot", async () => {
-    const store = {
+  it("does not mark a matching session that changed after the list snapshot", async () => {
+    const store: Record<string, TestSessionEntry> = {
       [MATCHED_KEY]: {
         sessionId: "fresh-session",
         updatedAt: 2_000,
@@ -218,6 +224,23 @@ describe("closeDiscordThreadSessions", () => {
     expect(count).toBe(0);
     expect(store[MATCHED_KEY].updatedAt).toBe(2_000);
     expect(store[MATCHED_KEY].sessionId).toBe("fresh-session");
+    expect(store[MATCHED_KEY].sessionClosedAt).toBeUndefined();
+  });
+
+  it("does not count a session that is already marked closed", async () => {
+    const store = {
+      [MATCHED_KEY]: entry("matched-session", 0, { sessionClosedAt: 1_700_000_000_000 }),
+    };
+    setupStore(store);
+
+    const count = await closeDiscordThreadSessions({
+      cfg: {},
+      accountId: "default",
+      threadId: THREAD_ID,
+    });
+
+    expect(count).toBe(0);
+    expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
   });
 
   it("resolves the store path using cfg.session.store and accountId", async () => {

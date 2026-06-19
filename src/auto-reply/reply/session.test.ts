@@ -3915,6 +3915,60 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("archives a closed idle/no-expiry thread session through the normal rollover lifecycle", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-closed-thread-rollover-");
+      const sessionKey = "agent:main:discord:channel:closed-thread";
+      const existingSessionId = "closed-thread-session";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+      const now = Date.now();
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: now,
+          sessionStartedAt: now,
+          lastInteractionAt: now,
+          sessionClosedAt: now,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "user-closed-thread",
+          To: "bot",
+          ChatType: "channel",
+          MessageThreadId: "closed-thread",
+          SessionKey: sessionKey,
+          Provider: "discord",
+          Surface: "discord",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry.sessionClosedAt).toBeUndefined();
+      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps provider-owned CLI sessions on implicit daily reset boundaries", async () => {
     vi.useFakeTimers();
     try {

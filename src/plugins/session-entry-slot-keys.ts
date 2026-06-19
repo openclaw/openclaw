@@ -33,6 +33,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "goal",
   "sessionStartedAt",
   "lastInteractionAt",
+  "sessionClosedAt",
   "startedAt",
   "endedAt",
   "runtimeMs",

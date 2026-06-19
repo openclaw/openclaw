@@ -513,6 +513,8 @@ async function initSessionStateAttemptLocked(
           policy: resetPolicy,
         })
     : undefined;
+  const entryForcesRollover =
+    typeof entry?.sessionClosedAt === "number" && Number.isFinite(entry.sessionClosedAt);
   const softResetAllowed =
     softReset.matched &&
     resetAuthorized &&
@@ -540,9 +542,10 @@ async function initSessionStateAttemptLocked(
     }));
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
-    (((reconnectResumeRequested && canReuseExistingEntry) ||
-      (entryFreshness?.fresh ?? false) ||
-      (softResetAllowed && canReuseExistingEntry)) &&
+    (!entryForcesRollover &&
+      ((reconnectResumeRequested && canReuseExistingEntry) ||
+        (entryFreshness?.fresh ?? false) ||
+        (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
   const activeReplyOperation = replyRunRegistry.get(sessionKey);
   const deferImplicitRolloverForActiveRun =
@@ -737,6 +740,7 @@ async function initSessionStateAttemptLocked(
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
+    sessionClosedAt: undefined,
     systemSent,
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
