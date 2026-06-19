@@ -12,7 +12,7 @@ import { start } from "../src/cron/service/ops.js";
 import { createCronServiceState } from "../src/cron/service/state.js";
 import { onTimer } from "../src/cron/service/timer.js";
 import { recomputeNextRunsForMaintenance } from "../src/cron/service/jobs.js";
-import { saveCronStore, loadCronStore } from "../src/cron/store.js";
+import { saveCronStore } from "../src/cron/store.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
