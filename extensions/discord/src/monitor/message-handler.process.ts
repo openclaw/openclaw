@@ -327,6 +327,7 @@ async function processDiscordMessageInner(
       });
     },
   });
+  const resolvedTiming = { ...DEFAULT_TIMING, ...cfg.messages?.statusReactions?.timing };
   const resolveTrackedReactionChannelId = async (
     args: Record<string, unknown>,
   ): Promise<string> => {
@@ -1194,8 +1195,8 @@ async function processDiscordMessageInner(
           void (async () => {
             await sleep(
               dispatchError || finalDeliveryFailed
-                ? DEFAULT_TIMING.errorHoldMs
-                : DEFAULT_TIMING.doneHoldMs,
+                ? resolvedTiming.errorHoldMs
+                : resolvedTiming.doneHoldMs,
             );
             await statusReactions.clear();
           })();

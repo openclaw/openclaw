@@ -1278,6 +1278,41 @@ describe("processDiscordMessage ack reactions", () => {
       removeAckAfterReply: true,
     });
   });
+
+  it("uses configured statusReactions.timing.doneHoldMs/errorHoldMs instead of DEFAULT_TIMING", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          removeAckAfterReply: true,
+          statusReactions: {
+            timing: { doneHoldMs: 2_000, debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getReactionEmojis()).toContain(DEFAULT_EMOJIS.done);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.runAllTimersAsync();
+
+    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      DEFAULT_EMOJIS.done,
+      expect.anything(),
+    );
+  });
 });
 
 describe("processDiscordMessage session routing", () => {
