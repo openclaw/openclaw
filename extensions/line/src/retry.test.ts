@@ -1,5 +1,5 @@
-﻿import { describe, it, expect, vi } from "vitest";
-import { isRetryableError, withRetry, DEFAULT_RETRY } from "./retry";
+import { describe, it, expect, vi } from "vitest";
+import { isRetryableError, withRetry } from "./retry.js";
 
 describe("retry", () => {
   describe("isRetryableError", () => {

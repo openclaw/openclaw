@@ -28,19 +28,38 @@ export function isRetryableError(error: unknown, _attempt: number): boolean {
   if (error && typeof error === "object") {
     // @line/bot-sdk v11 HTTPFetchError: { status, statusText, body: string }
     // Some internal callers may pass { statusCode, statusMessage, body: string }.
-    const httpErr = error as { status?: number; statusCode?: number; body?: string };
+    const httpErr = error as {
+      status?: number;
+      statusCode?: number;
+      body?: string | { message?: string };
+    };
     const status = httpErr.status ?? httpErr.statusCode;
-    const body = httpErr.body ?? "";
-    const msg = typeof body === "string" ? body : "";
+    const rawBody = httpErr.body;
+    const msg =
+      typeof rawBody === "string"
+        ? rawBody
+        : rawBody && typeof rawBody === "object"
+          ? String((rawBody as { message?: string }).message ?? "")
+          : "";
 
-    if (status && status >= 500 && status < 600) return true;
+    if (status && status >= 500 && status < 600) {
+      return true;
+    }
     if (status === 429) {
-      if (msg.includes("monthly limit")) return false;
-      if (msg.includes("rate limit")) return true;
+      if (msg.includes("monthly limit")) {
+        return false;
+      }
+      if (msg.includes("rate limit")) {
+        return true;
+      }
       return true; // unknown 429 → backoff
     }
-    if (status === 400 && msg.includes("reply token")) return false;
-    if (status && status >= 400 && status < 500) return false;
+    if (status === 400 && msg.includes("reply token")) {
+      return false;
+    }
+    if (status && status >= 400 && status < 500) {
+      return false;
+    }
   }
   return true; // network/timeout: retry
 }
@@ -58,7 +77,7 @@ export async function withRetry<T>(
     } catch (err) {
       lastError = err;
       if (attempt < config.maxRetries && retryable(err, attempt)) {
-        const delay = Math.min(config.baseDelayMs * Math.pow(2, attempt), config.maxDelayMs);
+        const delay = Math.min(config.baseDelayMs * 2 ** attempt, config.maxDelayMs);
         await sleep(delay);
         continue;
       }
