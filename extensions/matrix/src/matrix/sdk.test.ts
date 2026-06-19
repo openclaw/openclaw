@@ -1113,8 +1113,11 @@ describe("MatrixClient event bridge", () => {
 
   it("retries an exhausted missing-key decryption when a crypto key signal arrives", async () => {
     vi.useFakeTimers();
+    const cryptoStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-exhausted-retry-"));
     const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
+      idbSnapshotPath: path.join(cryptoStateDir, "crypto-idb-snapshot.json"),
+      cryptoDatabasePrefix: path.basename(cryptoStateDir),
     });
     const delivered: string[] = [];
     const cryptoListeners = new Map<string, (...args: unknown[]) => void>();
@@ -1175,9 +1178,11 @@ describe("MatrixClient event bridge", () => {
   });
 
   it("does not start duplicate retries when crypto signals fire while retry is in-flight", async () => {
-    vi.useFakeTimers();
+    const cryptoStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-duplicate-retry-"));
     const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
+      idbSnapshotPath: path.join(cryptoStateDir, "crypto-idb-snapshot.json"),
+      cryptoDatabasePrefix: path.basename(cryptoStateDir),
     });
     const delivered: string[] = [];
     const cryptoListeners = new Map<string, (...args: unknown[]) => void>();
@@ -1228,19 +1233,23 @@ describe("MatrixClient event bridge", () => {
     );
 
     await client.start();
-    matrixJsClient.emit("event", encrypted);
-    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
+    try {
+      matrixJsClient.emit("event", encrypted);
+      encrypted.emit("decrypted", encrypted, new Error("missing room key"));
 
-    const trigger = cryptoListeners.get("crypto.keyBackupDecryptionKeyCached");
-    expect(trigger).toBeTypeOf("function");
-    trigger?.();
-    trigger?.();
-    await Promise.resolve();
+      const trigger = cryptoListeners.get("crypto.keyBackupDecryptionKeyCached");
+      expect(trigger).toBeTypeOf("function");
+      trigger?.();
+      trigger?.();
+      await Promise.resolve();
 
-    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(1);
-    releaseRetryRef.current?.();
-    await Promise.resolve();
-    expect(delivered).toEqual(["m.room.message"]);
+      expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(1);
+      releaseRetryRef.current?.();
+      await Promise.resolve();
+      expect(delivered).toEqual(["m.room.message"]);
+    } finally {
+      client.stopSyncWithoutPersist();
+    }
   });
 
   it("emits room.invite when a membership invite targets the current user", async () => {
