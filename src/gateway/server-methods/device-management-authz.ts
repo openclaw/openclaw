@@ -1,7 +1,7 @@
 import type { DeviceAuthToken } from "../../infra/device-pairing.js";
 import type { GatewayClient } from "./types.js";
 
-type DeviceSessionAuthz = {
+export type DeviceSessionAuthz = {
   callerDeviceId: string | null;
   callerScopes: string[];
   isAdminCaller: boolean;

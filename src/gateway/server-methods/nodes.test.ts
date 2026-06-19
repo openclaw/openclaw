@@ -1,6 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { approveDevicePairing, requestDevicePairing } from "../../infra/device-pairing.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticSecurityEvent,
+} from "../../infra/diagnostic-events.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
 import { resolvePairingPaths } from "../../infra/pairing-files.js";
 import {
@@ -19,11 +24,25 @@ async function createState(label: string): Promise<OpenClawTestState> {
 }
 
 afterEach(async () => {
+  resetDiagnosticEventsForTest();
   vi.clearAllMocks();
   while (createdStates.length > 0) {
     await createdStates.pop()?.cleanup();
   }
 });
+
+function captureSecurityEvents(): {
+  events: DiagnosticSecurityEvent[];
+  stop: () => void;
+} {
+  const events: DiagnosticSecurityEvent[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "security.event") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
 
 function createContext() {
   return {
@@ -158,6 +177,7 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(true);
 
     const { context, opts } = createOptions({ nodeId: ` ${nodeId} ` });
+    const captured = captureSecurityEvents();
     const respond = vi.mocked(opts.respond);
     respond.mockImplementation(() => {
       expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
@@ -167,8 +187,12 @@ describe("nodeHandlers node.pair.remove", () => {
       expect(context.disconnectClientsForDevice).not.toHaveBeenCalled();
     });
 
-    await nodeHandlers["node.pair.remove"](opts);
-    await Promise.resolve();
+    try {
+      await nodeHandlers["node.pair.remove"](opts);
+      await Promise.resolve();
+    } finally {
+      captured.stop();
+    }
 
     expect(respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
     expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(false);
@@ -191,6 +215,19 @@ describe("nodeHandlers node.pair.remove", () => {
       }),
       { dropIfSlow: true },
     );
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      type: "security.event",
+      category: "auth",
+      action: "device.role.removed",
+      outcome: "success",
+      severity: "medium",
+      target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
+      policy: { id: "gateway.device-pairing", decision: "allow" },
+      control: { id: "node.pair.remove", family: "auth" },
+      attributes: { role: "node", removed_device: true },
+    });
+    expect(JSON.stringify(captured.events)).not.toContain(nodeId);
   });
 
   it("removes both backing records when a node row is merged from node and device stores", async () => {
@@ -316,8 +353,13 @@ describe("nodeHandlers node.pair.remove", () => {
       { nodeId },
       { client: createClient(["operator.pairing"], nodeId, { isDeviceTokenAuth: true }) },
     );
+    const captured = captureSecurityEvents();
 
-    await nodeHandlers["node.pair.remove"](opts);
+    try {
+      await nodeHandlers["node.pair.remove"](opts);
+    } finally {
+      captured.stop();
+    }
 
     expect(opts.respond).toHaveBeenCalledWith(
       false,
@@ -327,5 +369,18 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(true);
     expect(context.invalidateClientsForDevice).not.toHaveBeenCalled();
     expect(context.disconnectClientsForDevice).not.toHaveBeenCalled();
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "device.role.removal_denied",
+      outcome: "denied",
+      severity: "medium",
+      policy: {
+        id: "gateway.device-pairing",
+        decision: "deny",
+        reason: "role-management-requires-admin",
+      },
+      control: { id: "node.pair.remove", family: "auth" },
+      attributes: { role: "node" },
+    });
   });
 });

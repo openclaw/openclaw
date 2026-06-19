@@ -74,7 +74,9 @@ import {
   deniesCrossDeviceManagement,
   pairedDeviceHasNonOperatorRole,
   resolveDeviceManagementAuthz,
+  type DeviceManagementAuthz,
 } from "./device-management-authz.js";
+import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import {
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -370,6 +372,30 @@ function broadcastRemovedNodePairing(params: {
   );
 }
 
+function emitNodeRoleRemovalSecurityEvent(params: {
+  authz: DeviceManagementAuthz;
+  deviceId: string;
+  reason?: string;
+  removedDevice?: boolean;
+}): void {
+  const denied = params.reason !== undefined;
+  emitDeviceManagementSecurityEvent({
+    action: denied ? "device.role.removal_denied" : "device.role.removed",
+    outcome: denied ? "denied" : "success",
+    severity: "medium",
+    authz: params.authz,
+    targetDeviceId: params.deviceId,
+    policyId: "gateway.device-pairing",
+    decision: denied ? "deny" : "allow",
+    controlId: "node.pair.remove",
+    ...(params.reason ? { reason: params.reason } : {}),
+    attributes: {
+      role: "node",
+      ...(params.removedDevice !== undefined ? { removed_device: params.removedDevice } : {}),
+    },
+  });
+}
+
 async function removePairedDeviceBackedNode(params: {
   nodeId: string;
   client: GatewayClient | null;
@@ -396,6 +422,11 @@ async function removePairedDeviceBackedNode(params: {
     params.context.logGateway.warn(
       `node pairing removal denied node=${nodeId} reason=device-ownership-mismatch`,
     );
+    emitNodeRoleRemovalSecurityEvent({
+      authz,
+      deviceId: nodeId,
+      reason: "device-ownership-mismatch",
+    });
     return { status: "denied", message: "node pairing removal denied" };
   }
   // Mirror device.pair.remove: the admin requirement for mixed-role rows only
@@ -406,6 +437,11 @@ async function removePairedDeviceBackedNode(params: {
     params.context.logGateway.warn(
       `node pairing removal denied node=${nodeId} reason=role-management-requires-admin`,
     );
+    emitNodeRoleRemovalSecurityEvent({
+      authz,
+      deviceId: nodeId,
+      reason: "role-management-requires-admin",
+    });
     return { status: "denied", message: "node pairing removal denied" };
   }
 
@@ -414,6 +450,11 @@ async function removePairedDeviceBackedNode(params: {
     return { status: "unknown" };
   }
   params.context.logGateway.info(`node pairing removed device-backed node=${removed.deviceId}`);
+  emitNodeRoleRemovalSecurityEvent({
+    authz,
+    deviceId: removed.deviceId,
+    removedDevice: removed.removedDevice,
+  });
   // Match device.pair.remove: invalidate before responding so pipelined frames
   // on the affected device token are rejected. The caller queues the hard close
   // only after the success response is emitted.

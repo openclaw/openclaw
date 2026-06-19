@@ -1,5 +1,4 @@
 // Gateway RPC handlers for device pairing and device-token lifecycle operations.
-import { createHash } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -26,10 +25,7 @@ import {
   rotateDeviceToken,
   summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
-import {
-  emitTrustedSecurityEvent,
-  type DiagnosticSecurityEventInput,
-} from "../../infra/diagnostic-events.js";
+import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
 import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
@@ -39,13 +35,13 @@ import {
   resolveDeviceSessionAuthz,
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
+import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
 const DEVICE_TOKEN_REVOCATION_DENIED_MESSAGE = "device token revocation denied";
 
 type DeviceSessionAuthz = ReturnType<typeof resolveDeviceSessionAuthz>;
-type DeviceSecurityDecision = NonNullable<DiagnosticSecurityEventInput["policy"]>["decision"];
 
 const DEVICE_PAIR_APPROVAL_DENIED_MESSAGE = "device pairing approval denied";
 const DEVICE_PAIR_REJECTION_DENIED_MESSAGE = "device pairing rejection denied";
@@ -101,14 +97,6 @@ function shouldReturnRotatedDeviceToken(authz: DeviceManagementAuthz): boolean {
   return Boolean(authz.callerDeviceId && authz.callerDeviceId === authz.normalizedTargetDeviceId);
 }
 
-function hashDeviceSecurityId(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  return `sha256:${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
-}
-
 function emitDeviceSecurityEvent(params: {
   action: string;
   outcome: DiagnosticSecurityEventInput["outcome"];
@@ -116,39 +104,12 @@ function emitDeviceSecurityEvent(params: {
   authz: DeviceSessionAuthz;
   targetDeviceId?: string;
   policyId: string;
-  decision: DeviceSecurityDecision;
+  decision: NonNullable<DiagnosticSecurityEventInput["policy"]>["decision"];
   controlId: string;
   reason?: string;
   attributes?: Record<string, string | number | boolean>;
 }) {
-  emitTrustedSecurityEvent({
-    category: "auth",
-    action: params.action,
-    outcome: params.outcome,
-    severity: params.severity,
-    actor: {
-      kind: "operator",
-      ...(params.authz.callerDeviceId
-        ? { deviceIdHash: hashDeviceSecurityId(params.authz.callerDeviceId) }
-        : {}),
-      role: params.authz.isAdminCaller ? "admin" : "operator",
-    },
-    target: {
-      kind: "device",
-      ...(params.targetDeviceId ? { idHash: hashDeviceSecurityId(params.targetDeviceId) } : {}),
-    },
-    policy: {
-      id: params.policyId,
-      decision: params.decision,
-      ...(params.reason ? { reason: params.reason } : {}),
-    },
-    control: {
-      id: params.controlId,
-      family: "auth",
-    },
-    ...(params.reason ? { reason: params.reason } : {}),
-    ...(params.attributes ? { attributes: params.attributes } : {}),
-  });
+  emitDeviceManagementSecurityEvent(params);
 }
 
 function emitDevicePairingDeniedSecurityEvent(params: {
