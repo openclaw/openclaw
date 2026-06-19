@@ -191,6 +191,63 @@ describe("appendProviderCatalogRows", () => {
     expect(row.available).toBe(true);
     expect(row.tags).toEqual(["configured"]);
   });
+
+  it("filters out providers not in models.providers when mode is replace", async () => {
+    const rows: ModelRow[] = [];
+
+    await appendProviderCatalogRows({
+      rows,
+      seenKeys: new Set(),
+      catalogModels: [
+        {
+          id: "gpt-5.5",
+          name: "gpt-5.5",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          input: ["text"],
+          reasoning: false,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
+        },
+        {
+          id: "grok-4",
+          name: "grok-4",
+          provider: "xai",
+          api: "xai-responses",
+          baseUrl: "https://api.xai.com/v1",
+          input: ["text"],
+          reasoning: false,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
+        },
+      ],
+      context: {
+        cfg: {
+          models: {
+            mode: "replace",
+            providers: {
+              xai: {},
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: {
+          hasProviderAuth: () => true,
+          allowsProviderAuthAvailabilityFallback: () => false,
+        },
+        configuredByKey: new Map(),
+        discoveredKeys: new Set(),
+        filter: { local: false },
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].key).toBe("xai/grok-4");
+  });
 });
 
 describe("appendConfiguredProviderRows", () => {
