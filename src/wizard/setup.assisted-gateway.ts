@@ -21,6 +21,7 @@ import {
   readGatewayProcessArgsSync,
 } from "../infra/gateway-processes.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { spawnWithFallback } from "../process/spawn-utils.js";
@@ -232,6 +233,7 @@ async function probeVerifiedExistingGateway(params: {
   config: OpenClawConfig;
   settings: GatewayWizardSettings;
   listenerPids: number[];
+  tlsFingerprint?: string;
 }): Promise<boolean> {
   const invalidAuth =
     params.settings.authMode !== "none" && canSafelyProbeInvalidAuth(params)
@@ -265,6 +267,7 @@ async function probeVerifiedExistingGateway(params: {
         timeoutMs: 1500,
         detailLevel: "full",
         env,
+        tlsFingerprint: params.tlsFingerprint,
       });
       if (
         !expected.ok ||
@@ -291,6 +294,7 @@ async function probeVerifiedExistingGateway(params: {
         timeoutMs: 1500,
         detailLevel: "none",
         env,
+        tlsFingerprint: params.tlsFingerprint,
       });
       return (
         listenerStillOwnsPort() &&
@@ -410,6 +414,7 @@ async function waitForOwnedGatewayReachable(params: {
   port: number;
   child: ChildProcess;
   deadlineMs: number;
+  tlsFingerprint?: string;
 }): Promise<{ ok: boolean; detail?: string }> {
   if (!params.child.pid) {
     return { ok: false, detail: "The temporary OpenClaw Gateway process has no PID." };
@@ -433,6 +438,7 @@ async function waitForOwnedGatewayReachable(params: {
         timeoutMs: Math.min(1500, remainingMs),
         detailLevel: "none",
         signal: abortController.signal,
+        tlsFingerprint: params.tlsFingerprint,
       });
       // Never accept a successful response after the owned listener has changed.
       if (!temporaryGatewayOwnsListener(params)) {
@@ -467,6 +473,11 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
     basePath: params.config.gateway?.controlUi?.basePath,
     tlsEnabled: params.config.gateway?.tls?.enabled === true,
   });
+  const tlsRuntime =
+    params.config.gateway?.tls?.enabled === true
+      ? await loadGatewayTlsRuntime(params.config.gateway.tls)
+      : undefined;
+  const tlsFingerprint = tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined;
   const auth = await resolveGatewayProbeAuth(params);
   // Assisted setup invokes the Gateway directly, so trusted-proxy mode needs
   // its documented local password fallback before the agent can use it.
@@ -488,6 +499,7 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
         config: params.config,
         settings: params.settings,
         listenerPids: existingListenerPids,
+        tlsFingerprint,
       }));
     if (
       existingMatches &&
@@ -561,6 +573,7 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
           port: params.settings.port,
           child,
           deadlineMs: 15_000,
+          tlsFingerprint,
         })
       : { ok: false, detail: ownedReady.detail };
     const ready = {

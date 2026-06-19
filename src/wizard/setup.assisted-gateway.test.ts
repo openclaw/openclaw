@@ -14,6 +14,7 @@ const readGatewayProcessArgsSync = vi.hoisted(() => vi.fn());
 const defaultGatewayBindMode = vi.hoisted(() => vi.fn(() => "loopback"));
 const isLoopbackAddress = vi.hoisted(() => vi.fn((host: string) => host === "127.0.0.1"));
 const resolveSetupSecretInputString = vi.hoisted(() => vi.fn());
+const loadGatewayTlsRuntime = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -21,9 +22,9 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
-  resolveControlUiLinks: () => ({
-    httpUrl: "http://127.0.0.1:18789/",
-    wsUrl: "ws://127.0.0.1:18789",
+  resolveControlUiLinks: ({ tlsEnabled }: { tlsEnabled?: boolean }) => ({
+    httpUrl: `${tlsEnabled ? "https" : "http"}://127.0.0.1:18789/`,
+    wsUrl: `${tlsEnabled ? "wss" : "ws"}://127.0.0.1:18789`,
   }),
 }));
 
@@ -59,6 +60,8 @@ vi.mock("../infra/gateway-processes.js", () => ({
 }));
 
 vi.mock("./setup.secret-input.js", () => ({ resolveSetupSecretInputString }));
+
+vi.mock("../infra/tls/gateway.js", () => ({ loadGatewayTlsRuntime }));
 
 type MockChild = EventEmitter & {
   pid: number | undefined;
@@ -105,6 +108,10 @@ describe("agent-assisted Gateway runtime", () => {
       .mockImplementation(async ({ value }: { value?: unknown }) =>
         typeof value === "string" ? value : undefined,
       );
+    loadGatewayTlsRuntime.mockReset().mockResolvedValue({
+      enabled: false,
+      required: false,
+    });
     resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: ["/usr/bin/node", "/app/openclaw.mjs", "gateway", "--port", "18789"],
       workingDirectory: "/app",
@@ -178,6 +185,53 @@ describe("agent-assisted Gateway runtime", () => {
         detailLevel: "full",
       }),
     );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("passes the local TLS fingerprint to every existing Gateway verification probe", async () => {
+    loadGatewayTlsRuntime.mockResolvedValueOnce({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:test-local-gateway",
+    });
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "loopback",
+              auth: { mode: "token" },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_TOKEN_MISMATCH" },
+      });
+
+    const result = await ensureAgentAssistedGatewayRuntime({
+      config: { gateway: { tls: { enabled: true } } },
+      settings,
+      prompter: createWizardPrompter(),
+    });
+
+    expect(result.temporary).toBe(false);
+    expect(loadGatewayTlsRuntime).toHaveBeenCalledWith({ enabled: true });
+    expect(probeGateway).toHaveBeenCalledTimes(2);
+    for (const [probeOptions] of probeGateway.mock.calls) {
+      expect(probeOptions).toEqual(
+        expect.objectContaining({
+          url: "wss://127.0.0.1:18789",
+          tlsFingerprint: "sha256:test-local-gateway",
+        }),
+      );
+    }
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -870,6 +924,37 @@ describe("agent-assisted Gateway runtime", () => {
       graceMs: 1500,
     });
     expect(detach).toHaveBeenCalledOnce();
+  });
+
+  it("passes the local TLS fingerprint to temporary Gateway readiness probes", async () => {
+    loadGatewayTlsRuntime.mockResolvedValueOnce({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:test-local-gateway",
+    });
+    const child = createMockChild();
+    spawn.mockReturnValueOnce(child);
+    probeGateway.mockResolvedValueOnce({ ok: true });
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
+
+    const result = await ensureAgentAssistedGatewayRuntime({
+      config: { gateway: { tls: { enabled: true } } },
+      settings,
+      prompter: createWizardPrompter(),
+    });
+
+    expect(result.temporary).toBe(true);
+    expect(loadGatewayTlsRuntime).toHaveBeenCalledWith({ enabled: true });
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://127.0.0.1:18789",
+        tlsFingerprint: "sha256:test-local-gateway",
+      }),
+    );
+
+    const stop = result.stop();
+    child.emit("exit", 0, null);
+    await stop;
   });
 
   it("surfaces child spawn failures before probing Gateway readiness", async () => {
