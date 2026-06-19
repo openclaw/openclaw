@@ -100,6 +100,35 @@ async function loadSkillsStatusReport(
 ): Promise<SkillStatusReport> {
   const { config, workspaceDir, agentId } = resolveSkillsWorkspace(options);
   const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+
+  // When a Gateway URL is configured (local or remote), prefer the remote-aware
+  // skills.status RPC so that remote node capabilities (e.g. darwin + memo from
+  // a connected macOS node for apple-notes) are reflected in skill eligibility.
+  // Fall back to local-only status when the Gateway is unreachable.
+  const gatewayUrl = config.gateway?.remote?.url;
+  if (gatewayUrl) {
+    try {
+      const { callGatewayFromCli } = await import("./gateway-rpc.js");
+      const result = await callGatewayFromCli(
+        "skills.status",
+        { url: gatewayUrl, timeout: "5000" },
+        { agentId: agentId || undefined },
+        { clientName: "openclaw-cli" },
+      );
+      if (result && typeof result === "object" && (result as { ok?: boolean }).ok) {
+        const skills = (result as { skills?: unknown[] }).skills;
+        if (Array.isArray(skills)) {
+          return {
+            skills: skills as SkillStatusReport["skills"],
+            workspaceDir,
+          };
+        }
+      }
+    } catch {
+      // Gateway unreachable — fall through to local-only status.
+    }
+  }
+
   return buildWorkspaceSkillStatus(workspaceDir, { config, agentId });
 }
 
