@@ -75,6 +75,18 @@ type CaseDelta = {
   maxRssAvgDeltaPct: number | null;
 };
 
+type BenchmarkComparison = {
+  baseline: string;
+  candidate: string;
+  deltas: CaseDelta[];
+};
+
+type BenchmarkComparisonResult = {
+  baseline: SuiteResult;
+  candidate: SuiteResult;
+  comparison: BenchmarkComparison;
+};
+
 type CliOptions = {
   cases: CommandCase[];
   compareBaseline?: string;
@@ -1002,6 +1014,23 @@ function writeJsonOutput(filePath: string, value: unknown): void {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function readBenchmarkComparison(
+  baselinePath: string,
+  candidatePath: string,
+): BenchmarkComparisonResult {
+  const baseline = readBenchmarkReport(baselinePath);
+  const candidate = readBenchmarkReport(candidatePath);
+  return {
+    baseline: baseline.primary,
+    candidate: candidate.primary,
+    comparison: {
+      baseline: baselinePath,
+      candidate: candidatePath,
+      deltas: buildCaseDeltas(baseline.primary, candidate.primary),
+    },
+  };
+}
+
 async function main(): Promise<void> {
   if (hasFlag("--help")) {
     printUsage();
@@ -1013,13 +1042,10 @@ async function main(): Promise<void> {
     if (!options.compareBaseline || !options.compareCandidate) {
       throw new Error("--compare-baseline and --compare-candidate must be provided together");
     }
-    const baseline = readBenchmarkReport(options.compareBaseline);
-    const candidate = readBenchmarkReport(options.compareCandidate);
-    const comparison = {
-      baseline: options.compareBaseline,
-      candidate: options.compareCandidate,
-      deltas: buildCaseDeltas(baseline.primary, candidate.primary),
-    };
+    const { baseline, candidate, comparison } = readBenchmarkComparison(
+      options.compareBaseline,
+      options.compareCandidate,
+    );
     if (options.output) {
       writeJsonOutput(options.output, comparison);
     }
@@ -1027,7 +1053,7 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(comparison, null, 2));
       return;
     }
-    printDelta(baseline.primary, candidate.primary);
+    printDelta(baseline, candidate);
     return;
   }
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-"));
@@ -1114,6 +1140,8 @@ export const testing = {
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,
+  readBenchmarkComparison,
+  writeJsonOutput,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

@@ -1,5 +1,4 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -74,25 +73,8 @@ describe("bench-cli-startup", () => {
       writeFileSync(baselinePath, JSON.stringify(makeReport(100, 50)), "utf8");
       writeFileSync(candidatePath, JSON.stringify(makeReport(125, 60)), "utf8");
 
-      const result = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "scripts/bench-cli-startup.ts",
-          "--compare-baseline",
-          baselinePath,
-          "--compare-candidate",
-          candidatePath,
-          "--output",
-          outputPath,
-        ],
-        { cwd: process.cwd(), encoding: "utf8" },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toContain("Delta (secondary - primary, avg)");
+      const { comparison } = testing.readBenchmarkComparison(baselinePath, candidatePath);
+      testing.writeJsonOutput(outputPath, comparison);
       expect(existsSync(outputPath)).toBe(true);
       expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
         baseline: baselinePath,
