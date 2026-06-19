@@ -106,6 +106,7 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
   resolveNativeDeliveryMode: ({ cfg, accountId }) =>
     resolveTelegramExecApprovalTarget({ cfg, accountId }),
   requireMatchingTurnSourceChannel: true,
+  allowMissingTurnSourceChannelForSuppression: true,
   resolveSuppressionAccountId: ({ target, request }) =>
     normalizeOptionalString(target.accountId) ??
     normalizeOptionalString(request.request.turnSourceAccountId),

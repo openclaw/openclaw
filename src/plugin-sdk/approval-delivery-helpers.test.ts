@@ -175,6 +175,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       isNativeDeliveryEnabled,
       resolveNativeDeliveryMode: () => "both",
       requireMatchingTurnSourceChannel: true,
+      allowMissingTurnSourceChannelForSuppression: true,
       resolveSuppressionAccountId: ({ request }) =>
         request.request.turnSourceAccountId?.trim() || undefined,
     });
@@ -262,6 +263,38 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         } as never,
       }),
     ).toBe(true);
+  });
+
+  it("keeps forwarding fallback for missing-source channels unless explicitly opted in", () => {
+    const adapter = createApproverRestrictedNativeApprovalAdapter({
+      channel: "matrix",
+      channelLabel: "Matrix",
+      listAccountIds: () => [],
+      hasApprovers: () => true,
+      isExecAuthorizedSender: () => true,
+      isNativeDeliveryEnabled: () => true,
+      resolveNativeDeliveryMode: () => "both",
+      requireMatchingTurnSourceChannel: true,
+    });
+    const shouldSuppressForwardingFallback = adapter.delivery?.shouldSuppressForwardingFallback;
+    if (!shouldSuppressForwardingFallback) {
+      throw new Error("delivery suppression helper unavailable");
+    }
+
+    expect(
+      shouldSuppressForwardingFallback({
+        cfg: {} as never,
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "target-1" },
+        request: {
+          request: {
+            command: "pwd",
+            turnSourceChannel: null,
+            turnSourceAccountId: "room-1",
+          },
+        } as never,
+      }),
+    ).toBe(false);
   });
 });
 
