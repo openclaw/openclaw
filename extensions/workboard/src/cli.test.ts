@@ -153,3 +153,49 @@ describe("registerWorkboardCli", () => {
     ).rejects.toThrow("Ambiguous card id prefix");
   });
 });
+
+it("hides archived cards by default in list output", async () => {
+  const store = new WorkboardStore(createMemoryStore());
+  const active = await store.create({ title: "Active card" });
+  const archived = await store.create({ title: "Archived card" });
+  await store.archive(archived.id, true);
+  const program = createProgram(store);
+
+  const output = await captureStdout(async () => {
+    await program.parseAsync(["workboard", "list"], { from: "user" });
+  });
+
+  expect(output).toContain("Active card");
+  expect(output).not.toContain("Archived card");
+});
+
+it("shows archived cards when --include-archived is set", async () => {
+  const store = new WorkboardStore(createMemoryStore());
+  const active = await store.create({ title: "Active card" });
+  const archived = await store.create({ title: "Archived card" });
+  await store.archive(archived.id, true);
+  const program = createProgram(store);
+
+  const output = await captureStdout(async () => {
+    await program.parseAsync(["workboard", "list", "--include-archived"], { from: "user" });
+  });
+
+  expect(output).toContain("Active card");
+  expect(output).toContain("Archived card");
+});
+
+it("hides archived cards by default in JSON list output", async () => {
+  const store = new WorkboardStore(createMemoryStore());
+  const active = await store.create({ title: "Active card" });
+  const archived = await store.create({ title: "Archived card" });
+  await store.archive(archived.id, true);
+  const program = createProgram(store);
+
+  const output = await captureStdout(async () => {
+    await program.parseAsync(["workboard", "list", "--json"], { from: "user" });
+  });
+  const parsed = JSON.parse(output);
+
+  expect(parsed.cards).toHaveLength(1);
+  expect(parsed.cards[0].title).toBe("Active card");
+});
