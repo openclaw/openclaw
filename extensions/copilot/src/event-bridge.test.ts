@@ -662,6 +662,33 @@ describe("attachEventBridge", () => {
     expect(bridge.isCompacting()).toBe(false);
   });
 
+  it("ignores subagent compaction events when tracking the root session", async () => {
+    const session = createFakeSession();
+    const onCompactionStart = vi.fn();
+    const onCompactionComplete = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onCompactionStart,
+      onCompactionComplete,
+    });
+
+    session.emit("session.compaction_start", {
+      ...makeEvent("session.compaction_start", {}),
+      agentId: "subagent-1",
+    });
+    session.emit("session.compaction_complete", {
+      ...makeEvent("session.compaction_complete", { success: true }),
+      agentId: "subagent-1",
+    });
+    await bridge.awaitCompactionCompletion();
+
+    expect(bridge.hasObservedCompaction()).toBe(false);
+    expect(bridge.isCompacting()).toBe(false);
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionComplete).not.toHaveBeenCalled();
+  });
+
   it("session.error populates streamError with errorCode or errorType only when not aborted", () => {
     const activeSession = createFakeSession();
     const activeBridge = attachEventBridge(activeSession, {

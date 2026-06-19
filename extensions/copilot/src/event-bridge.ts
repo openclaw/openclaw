@@ -183,7 +183,10 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "session.compaction_start", () => {
+  registerListener(session, unsubscribeFns, "session.compaction_start", (event) => {
+    if (!isRootCompactionEvent(event)) {
+      return;
+    }
     observedCompaction = true;
     if (activeCompactionCount === 0) {
       compactionIdle = new Promise<void>((resolve) => {
@@ -195,6 +198,9 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "session.compaction_complete", (event) => {
+    if (!isRootCompactionEvent(event)) {
+      return;
+    }
     activeCompactionCount = Math.max(0, activeCompactionCount - 1);
     enqueueCompactionCallback(() =>
       options.onCompactionComplete?.({
@@ -408,6 +414,12 @@ function isAssistantMessageEvent(
   event: SessionEvent | undefined,
 ): event is Extract<SessionEvent, { type: "assistant.message" }> {
   return event?.type === "assistant.message";
+}
+
+function isRootCompactionEvent(event: { agentId?: string }): boolean {
+  // SDK session events include subagent compaction; only root compaction
+  // affects the pooled root session's cleanup and reuse lifecycle.
+  return event.agentId === undefined;
 }
 
 function joinReasoning(order: string[], reasoningById: Map<string, string>): string {
