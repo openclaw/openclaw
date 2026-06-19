@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
+  CARRYOVER_SUMMARY_MAX_CHARS,
   installSessionFamilyCarryoverContextTransform,
   resolveSessionFamilyCarryoverSummary,
   shouldInstallSessionFamilyCarryoverContextTransform,
@@ -130,6 +131,55 @@ describe("session family carryover", () => {
       tokensBefore: 22_222,
       firstKeptEntryId: "tail-msg",
     });
+  });
+
+  it("caps oversized carryover summaries before prompt injection", async () => {
+    const dir = makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const ancestorSessionId = "ancestor-oversized-summary";
+    const currentSessionId = "current-session";
+    const activeSessionFile = path.join(dir, currentSessionId + ".jsonl");
+    const oversizedSummary = `Critical prior context.\n${"x".repeat(CARRYOVER_SUMMARY_MAX_CHARS + 100)}`;
+    writeTranscript(path.join(dir, ancestorSessionId + ".jsonl.reset.2026-06-04T01-00-00.000Z"), [
+      {
+        type: "session",
+        version: 1,
+        id: ancestorSessionId,
+        timestamp: "2026-06-04T00:00:00.000Z",
+        cwd: dir,
+      },
+      {
+        type: "compaction",
+        id: "oversized-carryover",
+        parentId: null,
+        timestamp: "2026-06-04T00:30:00.000Z",
+        summary: oversizedSummary,
+        firstKeptEntryId: "oversized-msg",
+        tokensBefore: 42_000,
+      },
+    ]);
+
+    const entry = {
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      usageFamilySessionIds: [ancestorSessionId, currentSessionId],
+    } as SessionEntry;
+
+    const carryover = await resolveSessionFamilyCarryoverSummary({
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      storePath,
+      entry,
+    });
+
+    expect(carryover).toMatchObject({
+      role: "compactionSummary",
+      tokensBefore: 42_000,
+      firstKeptEntryId: "oversized-msg",
+    });
+    expect(carryover?.summary).toHaveLength(CARRYOVER_SUMMARY_MAX_CHARS);
+    expect(carryover?.summary).toContain("Critical prior context.");
+    expect(carryover?.summary).toMatch(/\[summary truncated\]$/);
   });
 
   it("ignores unowned reset archives before prompt carryover", async () => {

@@ -19,6 +19,8 @@ type CarryoverCompactionEntry = {
 };
 
 const CARRYOVER_SUMMARY_TAIL_BYTES = 512 * 1024;
+export const CARRYOVER_SUMMARY_MAX_CHARS = 16 * 1024;
+const CARRYOVER_SUMMARY_TRUNCATION_SUFFIX = "\n[summary truncated]";
 
 function isCompactionEntry(
   entry: TranscriptSessionEntry,
@@ -38,6 +40,21 @@ function hasCompactionSummary(messages: AgentMessage[]): boolean {
 function compactionTimestampMs(entry: CarryoverCompactionEntry): number {
   const parsed = Date.parse(entry.timestamp);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeCarryoverSummary(summary: string): string | undefined {
+  const trimmed = summary.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length <= CARRYOVER_SUMMARY_MAX_CHARS) {
+    return trimmed;
+  }
+  const prefixBudget = Math.max(
+    0,
+    CARRYOVER_SUMMARY_MAX_CHARS - CARRYOVER_SUMMARY_TRUNCATION_SUFFIX.length,
+  );
+  return `${trimmed.slice(0, prefixBudget).trimEnd()}${CARRYOVER_SUMMARY_TRUNCATION_SUFFIX}`;
 }
 
 async function readTranscriptTailEntries(
@@ -145,10 +162,14 @@ export async function resolveSessionFamilyCarryoverSummary(params: {
   if (!latest) {
     return undefined;
   }
+  const summary = normalizeCarryoverSummary(latest.summary);
+  if (!summary) {
+    return undefined;
+  }
 
   return {
     role: "compactionSummary",
-    summary: latest.summary.trim(),
+    summary,
     tokensBefore:
       typeof latest.tokensBefore === "number" && Number.isFinite(latest.tokensBefore)
         ? latest.tokensBefore
