@@ -398,6 +398,68 @@ describe("update-startup", () => {
     expect(getUpdateAvailable()).toBeNull();
   });
 
+  it("clears gateway update availability instead of broadcasting local update actions in containers", async () => {
+    mockPackageInstallStatus();
+    vi.mocked(resolveNpmChannelTag)
+      .mockResolvedValueOnce({
+        tag: "latest",
+        version: "2.0.0",
+      })
+      .mockResolvedValueOnce({
+        tag: "latest",
+        version: "3.0.0",
+      });
+
+    const onUpdateAvailableChange = vi.fn();
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      isContainerEnvironment: () => false,
+      onUpdateAvailableChange,
+    });
+    vi.setSystemTime(new Date("2026-01-18T11:00:00Z"));
+    const log = { info: vi.fn() };
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+      isContainerEnvironment: () => true,
+      onUpdateAvailableChange,
+    });
+
+    expect(onUpdateAvailableChange).toHaveBeenNthCalledWith(1, {
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "latest",
+    });
+    expect(onUpdateAvailableChange).toHaveBeenNthCalledWith(2, null);
+    expect(onUpdateAvailableChange).toHaveBeenCalledTimes(2);
+    expect(getUpdateAvailable()).toBeNull();
+    expect(log.info).toHaveBeenCalledWith(
+      "update available (latest): v3.0.0 (current v1.0.0). OpenClaw is running inside a container; pull a newer image version and redeploy the container.",
+    );
+  });
+
+  it("does not run package auto-update inside containers", async () => {
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      isContainerEnvironment: () => true,
+      runAutoUpdate,
+    });
+
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(getUpdateAvailable()).toBeNull();
+  });
+
   it("skips update check when disabled in config", async () => {
     const log = { info: vi.fn() };
 
