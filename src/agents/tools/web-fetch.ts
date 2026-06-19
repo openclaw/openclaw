@@ -294,11 +294,27 @@ function findNestedElementEnd(html: string, tagName: string, from: number): numb
       cursor = tagStart + 1;
       continue;
     }
-    if (tag.tagName === tagName) {
-      depth += tag.closing ? -1 : 1;
-      if (depth === 0) {
-        return tag.end + 1;
+    if (tag.closing) {
+      if (tag.tagName === tagName) {
+        depth -= 1;
+        if (depth === 0) {
+          return tag.end + 1;
+        }
       }
+      cursor = tag.end + 1;
+      continue;
+    }
+    if (tag.tagName === tagName) {
+      depth += 1;
+      cursor = tag.end + 1;
+      continue;
+    }
+    if (
+      BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName) ||
+      BODY_TAG_INERT_CONTAINERS.has(tag.tagName)
+    ) {
+      cursor = skipHtmlContainer(html, tag.tagName, tag.end + 1);
+      continue;
     }
     cursor = tag.end + 1;
   }
@@ -861,39 +877,48 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           title = readable.title;
           extractor = readable.extractor;
         } else {
-          let payload: Record<string, unknown> | null = null;
-          try {
-            payload = await maybeFetchProviderWebFetchPayload({
-              ...params,
-              urlToFetch: finalUrl,
-              cacheKey,
-              tookMs: Date.now() - start,
-            });
-          } catch {
-            payload = null;
-          }
-          if (payload) {
-            return payload;
-          }
           const basic = readableTitleOnly
             ? await extractBasicHtmlBodyContent({
                 html: body,
                 extractMode: params.extractMode,
               })
-            : await extractBasicHtmlContent({
-                html: body,
-                extractMode: params.extractMode,
-              });
+            : null;
           if (basic?.text) {
             text = basic.text;
             title = basic.title ?? readable?.title;
             extractor = "raw-html";
           } else {
-            const providerLabel =
-              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
-            throw new Error(
-              `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
-            );
+            let payload: Record<string, unknown> | null = null;
+            try {
+              payload = await maybeFetchProviderWebFetchPayload({
+                ...params,
+                urlToFetch: finalUrl,
+                cacheKey,
+                tookMs: Date.now() - start,
+              });
+            } catch {
+              payload = null;
+            }
+            if (payload) {
+              return payload;
+            }
+            const fallbackBasic = readableTitleOnly
+              ? basic
+              : await extractBasicHtmlContent({
+                  html: body,
+                  extractMode: params.extractMode,
+                });
+            if (fallbackBasic?.text) {
+              text = fallbackBasic.text;
+              title = fallbackBasic.title ?? readable?.title;
+              extractor = "raw-html";
+            } else {
+              const providerLabel =
+                (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
+              throw new Error(
+                `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
+              );
+            }
           }
         }
       } else {

@@ -971,7 +971,39 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.title).toContain("Sample Page");
   });
 
-  it("tries provider fallback before body HTML when readability returns only the page title", async () => {
+  it("ignores fake body tags in raw-text content inside inert templates", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            [
+              "<!doctype html><html><head><title>Sample Page</title>",
+              '<template><script>document.write("</template><body>Fake template script body</body>")</script></template></head>',
+              "<body><main><p>Real template raw-text body marker 82685 content.</p></main></body></html>",
+            ].join(""),
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/body-template-script" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Real template raw-text body marker 82685 content.");
+    expect(details.text).not.toContain("Fake template script body");
+    expect(details.title).toContain("Sample Page");
+  });
+
+  it("uses body HTML before provider fallback when readability returns only the page title", async () => {
     extractReadableContentMock.mockResolvedValue({
       text: "Sample Page",
       title: "Sample Page",
@@ -986,15 +1018,16 @@ describe("web_fetch extraction fallbacks", () => {
           ),
         ) as Promise<Response>,
     );
+    const providerExecute = vi.fn(async () => ({
+      extractor: "test-fetch",
+      text: "provider fallback body",
+    }));
     resolveWebFetchDefinitionMock.mockReturnValue({
       provider: { id: "test-fetch", label: "Test Fetch" },
       definition: {
         description: "test provider",
         parameters: {},
-        execute: async () => ({
-          extractor: "test-fetch",
-          text: "provider fallback body",
-        }),
+        execute: providerExecute,
       },
     });
 
@@ -1002,8 +1035,9 @@ describe("web_fetch extraction fallbacks", () => {
     const result = await executeFetch(tool, { url: "https://example.com/body" });
     const details = result?.details as { extractor?: string; text?: string };
 
-    expect(details.extractor).toBe("test-fetch");
-    expect(details.text).toContain("provider fallback body");
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Body marker 82685 content.");
+    expect(providerExecute).not.toHaveBeenCalled();
   });
 
   it("uses the provider fallback when direct fetch fails", async () => {
