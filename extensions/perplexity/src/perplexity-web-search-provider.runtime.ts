@@ -199,6 +199,17 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
   return uniqueStrings(citations);
 }
 
+const PERPLEXITY_SEARCH_CONTEXT_SIZES = new Set(["low", "medium", "high"]);
+
+function normalizePerplexitySearchContextSize(
+  value: unknown,
+): "low" | "medium" | "high" | undefined {
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  return normalized && PERPLEXITY_SEARCH_CONTEXT_SIZES.has(normalized)
+    ? (normalized as "low" | "medium" | "high")
+    : undefined;
+}
+
 async function runPerplexitySearchApi(params: {
   query: string;
   apiKey: string;
@@ -212,6 +223,7 @@ async function runPerplexitySearchApi(params: {
   searchBeforeDate?: string;
   maxTokens?: number;
   maxTokensPerPage?: number;
+  searchContextSize?: "low" | "medium" | "high";
 }): Promise<Array<Record<string, unknown>>> {
   const body: Record<string, unknown> = {
     query: params.query,
@@ -278,6 +290,7 @@ async function runPerplexitySearch(params: {
   model: string;
   timeoutSeconds: number;
   freshness?: string;
+  searchContextSize?: "low" | "medium" | "high";
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
   const body: Record<string, unknown> = {
@@ -286,6 +299,9 @@ async function runPerplexitySearch(params: {
   };
   if (params.freshness) {
     body.search_recency_filter = params.freshness;
+  }
+  if (params.searchContextSize) {
+    body.web_search_options = { search_context_size: params.searchContextSize };
   }
 
   return withTrustedWebSearchEndpoint(
@@ -357,6 +373,17 @@ export async function executePerplexitySearch(
   const maxTokensPerPage = readPositiveIntegerParam(args, "max_tokens_per_page", {
     message: "max_tokens_per_page must be a positive integer.",
   });
+  const rawSearchContextSize = readStringParam(args, "search_context_size");
+  const searchContextSize = rawSearchContextSize
+    ? normalizePerplexitySearchContextSize(rawSearchContextSize)
+    : undefined;
+  if (rawSearchContextSize && !searchContextSize) {
+    return {
+      error: "invalid_search_context_size",
+      message: "search_context_size must be low, medium, or high.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
 
   if (!structured) {
     if (country) {
@@ -396,6 +423,14 @@ export async function executePerplexitySearch(
         error: "unsupported_content_budget",
         message:
           "max_tokens and max_tokens_per_page are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them.",
+        docs: "https://docs.openclaw.ai/tools/web",
+      };
+    }
+    if (searchContextSize) {
+      return {
+        error: "unsupported_search_context_size",
+        message:
+          "search_context_size is only supported by Perplexity Sonar chat-completions mode. Configure a Perplexity model/baseUrl override to enable it.",
         docs: "https://docs.openclaw.ai/tools/web",
       };
     }
@@ -474,6 +509,7 @@ export async function executePerplexitySearch(
     domainFilter?.join(","),
     maxTokens,
     maxTokensPerPage,
+    searchContextSize,
   ]);
   const cached = readCachedSearchPayload(cacheKey);
   if (cached) {
@@ -503,6 +539,7 @@ export async function executePerplexitySearch(
               model: runtime.model,
               timeoutSeconds,
               freshness,
+              searchContextSize: searchContextSize ?? undefined,
             });
             return {
               content: wrapWebContent(result.content, "web_search"),
