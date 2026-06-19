@@ -10,7 +10,7 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { closePluginStateSqliteStore } from "../plugin-state/plugin-state-store.js";
+import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   abortTrackedChatRunById,
@@ -826,7 +826,7 @@ export function createGatewayCloseHandler(
           }),
         ]);
       });
-      await shutdownStep("plugin-state-store", () => closePluginStateSqliteStore(), warnings);
+      await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
       await measureCloseStep("config-reloader", () =>
         shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
       );
