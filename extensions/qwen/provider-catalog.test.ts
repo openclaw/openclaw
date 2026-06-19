@@ -78,6 +78,8 @@ describe("qwen token plan provider catalog", () => {
     expect(modelIds).toContain(QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID);
     expect(modelIds).toContain("qwen3.7-max");
     expect(modelIds).toContain("MiniMax-M2.5");
+    expect(modelIds).toContain("glm-5.2");
+    expect(modelIds).toContain("kimi-k2.7-code");
     // Chat-only catalog: image-generation models are intentionally excluded.
     expect(modelIds).not.toContain("qwen-image-2.0");
     expect(modelIds).not.toContain("wan2.7-image");
@@ -92,10 +94,10 @@ describe("qwen token plan provider catalog", () => {
     expect(cnProvider.api).toBe("openai-completions");
   });
 
-  it("ships all 12 reasoning-capable chat models (thinkingFormat left to detection)", () => {
+  it("ships all 14 reasoning-capable chat models (thinkingFormat left to detection)", () => {
     const provider = buildQwenTokenPlanProvider();
 
-    expect(provider.models).toHaveLength(12);
+    expect(provider.models).toHaveLength(14);
     expect(provider.models.every((model) => model.reasoning)).toBe(true);
     // No hardcoded compat: detection resolves Qwen/ModelStudio to thinkingFormat
     // "openai", matching the rest of the qwen provider.

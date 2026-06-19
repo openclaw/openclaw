@@ -127,6 +127,15 @@ export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig>
     maxTokens: 16_384,
   },
   {
+    id: "kimi-k2.7-code",
+    name: "kimi-k2.7-code",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 262_144,
+    maxTokens: 262_144,
+  },
+  {
     id: "kimi-k2.6",
     name: "kimi-k2.6",
     reasoning: true,
@@ -143,6 +152,15 @@ export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig>
     cost: QWEN_DEFAULT_COST,
     contextWindow: 262_144,
     maxTokens: 16_384,
+  },
+  {
+    id: "glm-5.2",
+    name: "glm-5.2",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 131_072,
   },
   {
     id: "glm-5.1",
