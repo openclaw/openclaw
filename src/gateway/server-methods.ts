@@ -202,6 +202,10 @@ const loadTtsHandlers = lazyHandlerModule(
   () => import("./server-methods/tts.js"),
   (module) => module.ttsHandlers,
 );
+const loadImageHandlers = lazyHandlerModule(
+  () => import("./server-methods/image.js"),
+  (module) => module.imageHandlers,
+);
 const loadUpdateHandlers = lazyHandlerModule(
   () => import("./server-methods/update.js"),
   (module) => module.updateHandlers,
@@ -448,6 +452,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "tts.providers",
     ],
     loadHandlers: loadTtsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["image.providers"],
+    loadHandlers: loadImageHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

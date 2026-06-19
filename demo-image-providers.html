@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: monospace; background: #1a1a1a; color: #eee; padding: 20px; }
+    pre { background: #2d2d2d; padding: 15px; border-radius: 8px; overflow-x: auto; }
+    .header { color: #4ec9b0; }
+    .string { color: #ce9178; }
+    .number { color: #b5cea8; }
+    .boolean { color: #569cd6; }
+    .key { color: #9cdcfe; }
+  </style>
+</head>
+<body>
+  <h2 class="header">$ pnpm openclaw infer image providers --json</h2>
+  <pre>[
+  {
+    <span class="key">"available"</span>: <span class="boolean">true</span>,
+    <span class="key">"configured"</span>: <span class="boolean">false</span>,
+    <span class="key">"selected"</span>: <span class="boolean">false</span>,
+    <span class="key">"id"</span>: <span class="string">"comfy"</span>,
+    <span class="key">"label"</span>: <span class="string">"ComfyUI"</span>,
+    <span class="key">"defaultModel"</span>: <span class="string">"workflow"</span>,
+    <span class="key">"models"</span>: [<span class="string">"workflow"</span>],
+    <span class="key">"capabilities"</span>: {
+      <span class="key">"generate"</span>: { <span class="string">"maxCount"</span>: 1, ... },
+      <span class="key">"edit"</span>: { <span class="string">"enabled"</span>: true, ... },
+      <span class="key">"geometry"</span>: { <span class="string">"sizes"</span>: [...] }
+    }
+  },
+  {
+    <span class="key">"available"</span>: <span class="boolean">true</span>,
+    <span class="key">"configured"</span>: <span class="boolean">false</span>,
+    <span class="key">"selected"</span>: <span class="boolean">false</span>,
+    <span class="key">"id"</span>: <span class="string">"fal"</span>,
+    <span class="key">"label"</span>: <span class="string">"fal"</span>,
+    <span class="key">"defaultModel"</span>: <span class="string">"fal-ai/flux/dev"</span>,
+    <span class="key">"models"</span>: [<span class="string">"fal-ai/flux/dev"</span>, <span class="string">"fal-ai/flux/dev/image-to-image"</span>, ...],
+    <span class="key">"capabilities"</span>: { ... }
+  }
+]</pre>
+  <p>This CLI output shows the data shape that the new <span class="key">image.providers</span> Gateway RPC exposes.</p>
+</body>
+</html>

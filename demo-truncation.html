@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Session Key Truncation Demo</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 24px; background: #f5f5f5; }
+  h2 { margin: 0 0 16px 0; font-size: 18px; }
+  table { border-collapse: collapse; width: 100%; max-width: 700px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.1); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #eee; font-size: 14px; }
+  th { background: #fafafa; font-weight: 600; color: #555; }
+  .mono { font-family: "SF Mono", monospace; font-size: 12px; }
+  .truncated { color: #0969da; }
+  .muted { color: #888; font-size: 12px; }
+  .note { max-width: 700px; margin-top: 12px; font-size: 13px; color: #555; background: #fff8e1; padding: 10px 14px; border-radius: 6px; border: 1px solid #ffe082; }
+  .demo-row { background: #f0f8ff; }
+</style>
+</head>
+<body>
+
+<h2>Session Key Display — PR #94813</h2>
+
+<table>
+  <tr><th>Cell Display</th><th>Hover Tooltip</th><th>Note</th></tr>
+  
+  <tr>
+    <td class="mono">Main Session</td>
+    <td class="mono muted">agent:main:main</td>
+    <td>Short key, unchanged</td>
+  </tr>
+  
+  <tr>
+    <td class="mono">Telegram · user_123</td>
+    <td class="mono muted">agent:main:telegram:direct:user_123</td>
+    <td>Short ID (<20 chars), unchanged</td>
+  </tr>
+  
+  <tr class="demo-row">
+    <td class="mono truncated" title="agent:main:feishu:direct:ou_67075ec667cac0a7feae2c5094fd27b2">
+      Feishu · ou_6707...27b2
+    </td>
+    <td class="mono muted">agent:main:feishu:direct:ou_67075ec667cac0a7feae2c5094fd27b2</td>
+    <td><strong>← PR 效果</strong>：长 ID 截断，hover 显示完整</td>
+  </tr>
+</table>
+
+<div class="note">
+  <strong>演示说明：</strong><br>
+  第三行是 PR 改动效果。单元格显示 <code>Feishu · ou_6707...27b2</code>（截断），
+  full raw key 在 title 属性中（鼠标悬停可见）。<br>
+  代码来源：<code>session-display.ts</code> 中的 <code>shortenDirectIdentifier()</code> 函数。
+</div>
+
+<script>
+  // 与 session-display.ts 一致的截断逻辑
+  function shortenDirectIdentifier(id) {
+    return id.length <= 20 ? id : id.slice(0, 6) + '...' + id.slice(-4);
+  }
+
+  const longId = "ou_67075ec667cac0a7feae2c5094fd27b2";
+  const shortId = "user_123";
+  
+  console.log("=== PR #94813 截断演示 ===");
+  console.log("长 ID (" + longId.length + " 字符):");
+  console.log("  原始:", longId);
+  console.log("  截断:", shortenDirectIdentifier(longId));
+  console.log("");
+  console.log("短 ID (" + shortId.length + " 字符):");
+  console.log("  原始:", shortId);
+  console.log("  截断:", shortenDirectIdentifier(shortId) + " (不变)");
+</script>
+</body>
+</html>
