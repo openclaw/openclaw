@@ -118,12 +118,11 @@ Skills own workflows; root owns hard policy and routing.
 - Tests in a normal source checkout: `pnpm test <path-or-filter> [vitest args...]`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`; never raw `vitest`.
 - If raw Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch mode and will not exit on its own.
 - Tests in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm test*`; use `node scripts/run-vitest.mjs <path-or-filter>` for tiny explicit-file proof, or Crabbox/Testbox for anything broader.
-- Checks in a normal source checkout: `pnpm check:changed` delegates to Crabbox/Testbox; lanes: `pnpm changed:lanes --json`; staged: `pnpm check:changed --staged`; full: `pnpm check`.
-- Lint/changed-file proof: do not run `pnpm lint` locally unless full lint is required. Use `pnpm check:changed --dry-run`, `pnpm check:changed --staged`, or `pnpm check:changed -- <files...>`; small core/extension/script diffs use targeted oxlint inside that planner.
+- Checks/lint in a normal source checkout: `pnpm check:changed` delegates to Crabbox/Testbox; lanes: `pnpm changed:lanes --json`; staged/path-scoped: `pnpm check:changed --staged` or `pnpm check:changed -- <files...>`; full `pnpm check`/`pnpm lint` only when required.
 - Checks in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm check*`; use `node scripts/crabbox-wrapper.mjs run ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside Testbox, not locally.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
-- Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `pnpm lint:*`, `scripts/run-oxlint.mjs`).
+- Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `scripts/run-oxlint.mjs`; full `pnpm lint:*` only when scope requires).
 - Build before push when build output, packaging, lazy/module boundaries, dynamic imports, or published surfaces can change.
 
 ## Validation
