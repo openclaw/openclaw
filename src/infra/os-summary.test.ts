@@ -42,16 +42,16 @@ describe("resolveOsSummary", () => {
       },
     },
     {
-      name: "falls back to os.release when sw_vers output is blank",
+      name: "returns unknown when sw_vers output is blank (Issue #95145 fix)",
       platform: "darwin" as const,
-      release: "24.1.0",
+      release: "24.1.0", // Darwin version (not macOS version)
       arch: "x64",
       swVersStdout: "   ",
       expected: {
         platform: "darwin",
         arch: "x64",
         release: "24.1.0",
-        label: "macos 24.1.0 (x64)",
+        label: "macos unknown (x64)", // Should not fall back to Darwin version
       },
     },
     {
