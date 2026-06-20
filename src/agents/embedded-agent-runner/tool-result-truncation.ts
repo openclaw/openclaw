@@ -116,6 +116,41 @@ const MIDDLE_OMISSION_MARKER =
   "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
 
 /**
+ * Check whether a text content block already contains a truncation marker from a previous pass.
+ *
+ * When the same tool result message is processed across multiple turns (e.g. by aggregate
+ * reduction), we must avoid re-truncating content that has already been projected into
+ * model-facing form. The truncation pipeline inserts distinctive markers (suffixes like
+ * `[... N chars truncated; narrow args]` and the middle-omission marker) that we detect here.
+ *
+ * Once a message is marked as truncated, downstream aggregate reduction will skip it,
+ * preserving prompt-cache prefix stability across turns.
+ */
+function textHasTruncationMarker(text: string): boolean {
+  // DEFAULT_SUFFIX:    "[... N more characters truncated; rerun with narrower args if needed]"
+  // COMPACT_RECOVERY_SUFFIX: "[... N chars truncated; narrow args]"
+  // MIDDLE_OMISSION_MARKER:   "⚠️ [... middle content omitted — showing head and tail ...]"
+  return (
+    /\[\.\.\. \d+ .*(chars|characters) truncated;/.test(text) ||
+    text.includes(MIDDLE_OMISSION_MARKER)
+  );
+}
+
+function messageHasTruncationMarker(message: AgentMessage): boolean {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block: unknown) => {
+    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+      return false;
+    }
+    const text = (block as TextContent).text;
+    return typeof text === "string" && textHasTruncationMarker(text);
+  });
+}
+
+/**
  * Detect whether text likely contains error/diagnostic content near the end,
  * which should be preserved during truncation.
  */
@@ -411,6 +446,14 @@ function buildAggregateToolResultReplacements(params: {
   branch: ToolResultBranchEntry[];
   aggregateBudgetChars: number;
   minKeepChars?: number;
+  /**
+   * Original (pre-oversized-truncation) branch entries, keyed by id.
+   * Used to determine whether a tool result already had a truncation marker
+   * before this pass — if so, it is a *historical* projection that must not
+   * be re-truncated (FIX #95219).  Messages whose marker was added by the
+   * current oversized step are still eligible for aggregate reduction.
+   */
+  originalBranchById?: ReadonlyMap<string, ToolResultBranchEntry>;
 }): ToolResultReplacement[] {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const candidates = params.branch
@@ -432,7 +475,25 @@ function buildAggregateToolResultReplacements(params: {
       message: item.entry.message,
       textLength: getToolResultTextLength(item.entry.message),
     }))
-    .filter((item) => item.textLength > 0);
+    .filter((item) => item.textLength > 0)
+    // FIX #95219: Skip tool results that already had a truncation marker
+    // *before* the current oversized truncation pass.  Once a historical tool
+    // result has been projected into model-facing form across turns, re-truncating
+    // it changes its byte representation and breaks prompt cache prefix stability.
+    // Messages whose marker was added by the current oversized step (i.e. the
+    // original message had no marker) are still eligible for aggregate reduction.
+    .filter((item) => {
+      if (!params.originalBranchById) {
+        return true; // No original-branch info → always eligible (legacy behavior)
+      }
+      const originalEntry = params.originalBranchById.get(item.entryId);
+      if (!originalEntry?.message) {
+        return true; // No original message found → cannot determine → eligible
+      }
+      // Only skip if the original message ALREADY had a truncation marker
+      // (meaning this is a historical projection, not a freshly-truncated one).
+      return !messageHasTruncationMarker(originalEntry.message);
+    });
 
   if (candidates.length < 2) {
     return [];
@@ -589,10 +650,15 @@ function buildToolResultReplacementPlan(params: {
     params.branch,
     oversizedReplacements,
   );
+  // Build map of original (pre-oversized) entries so aggregate reduction can
+  // distinguish messages that already had a truncation marker from this turn
+  // (fresh oversized truncation) vs a previous turn (historical projection).
+  const originalBranchById = new Map(params.branch.map((e) => [e.id, e]));
   const aggregateReplacements = buildAggregateToolResultReplacements({
     branch: oversizedTrimmedBranch,
     aggregateBudgetChars: params.aggregateBudgetChars,
     minKeepChars,
+    originalBranchById,
   });
   const aggregateReducibleChars = calculateReplacementReduction(
     oversizedTrimmedBranch,

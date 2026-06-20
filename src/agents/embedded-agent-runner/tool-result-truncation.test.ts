@@ -439,6 +439,89 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 });
 
+// FIX #95219: Cross-turn prompt cache stability
+it("does not re-truncate tool results that already contain a truncation marker", () => {
+  // Once a tool result has been projected into model-facing form (e.g. after
+  // being truncated and persisted to the session file), aggregate reduction
+  // must not re-compress it.  Re-truncation changes the byte representation of
+  // historical tool messages across turns, breaking prompt cache prefix stability.
+  const truncationSuffix =
+    "[... 50000 more characters truncated; rerun with narrower args if needed]";
+  const alreadyTruncated = makeToolResult("brief head " + truncationSuffix, "call_1");
+  const medium = "alpha beta gamma delta epsilon ".repeat(800);
+  const messages: AgentMessage[] = [
+    makeUserMessage("hello"),
+    makeAssistantMessage("calling tools"),
+    alreadyTruncated,
+    makeToolResult(medium, "call_2"),
+    makeToolResult(medium, "call_3"),
+  ];
+
+  const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
+    messages,
+    128_000,
+    12_000,
+    12_000,
+  );
+
+  // The already-truncated message must remain byte-identical.
+  const text0 = getFirstToolResultText(result[2]);
+  expect(text0).toBe("brief head " + truncationSuffix);
+
+  // Fresh (non-truncated) tool results should still be truncated.
+  const text1 = getFirstToolResultText(result[3]);
+  const text2 = getFirstToolResultText(result[4]);
+  expect(text1.length).toBeLessThan(medium.length);
+  expect(text2.length).toBeLessThan(medium.length);
+
+  // The aggregate budget may be slightly exceeded because the already-truncated
+  // message is kept stable (not re-truncated). This is intentional — we prefer
+  // prompt-cache prefix stability over strict budget compliance.
+  const totalChars = result.reduce(
+    (sum, message) => sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+    0,
+  );
+  // Budget is 12_000; the truncated messages fit within it, and the
+  // already-stable message (~79 chars) adds a small overhead.
+  expect(totalChars).toBeGreaterThan(12_000);
+  expect(totalChars).toBeLessThan(12_500);
+});
+
+it("handles middle-omission markers in already-truncated tool results", () => {
+  // The middle-omission marker (⚠️ [... middle content omitted …]) is another
+  // truncation indicator that must prevent re-truncation.  Use the exact
+  // marker format defined in the source for realistic coverage.
+  const middleOmission = "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
+  const headTailTruncated = makeToolResult(
+    "some head content" + middleOmission + "some tail content with Error: something failed",
+    "call_1",
+  );
+  const medium = "alpha beta gamma delta epsilon ".repeat(600);
+  const messages: AgentMessage[] = [
+    makeUserMessage("hello"),
+    makeAssistantMessage("calling tools"),
+    headTailTruncated,
+    makeToolResult(medium, "call_2"),
+  ];
+
+  const { messages: result } = truncateOversizedToolResultsInMessages(
+    messages,
+    128_000,
+    10_000,
+    10_000,
+  );
+
+  // The head+tail truncated message must remain byte-identical.
+  const text0 = getFirstToolResultText(result[2]);
+  expect(text0).toBe(
+    "some head content" + middleOmission + "some tail content with Error: something failed",
+  );
+
+  // The fresh tool result should still be truncated.
+  const text1 = getFirstToolResultText(result[3]);
+  expect(text1.length).toBeLessThan(medium.length);
+});
+
 describe("truncateOversizedToolResultsInSession", () => {
   it("readably truncates aggregate medium tool results in a session file", async () => {
     // Persisted truncation rewrites JSONL directly and emits the transcript
