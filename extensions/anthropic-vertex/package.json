@@ -8,7 +8,9 @@
   },
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/vertex-sdk": "0.16.1"
+    "@anthropic-ai/vertex-sdk": "0.16.1",
+    "gaxios": "7.1.4",
+    "google-auth-library": "10.6.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
