@@ -19,6 +19,28 @@ export type RouteMatchStatus = "pending" | "success" | "error" | "notFound" | "r
 
 export type RouteMatchFetching = false | "loader" | "component";
 
+export type RouteNotFound = {
+  type: "notFound";
+  data?: unknown;
+};
+
+export type RouteRedirect = {
+  type: "redirect";
+  location: RouteLocation;
+  replace?: boolean;
+};
+
+export function notFound(data?: unknown): RouteNotFound {
+  return { type: "notFound", data };
+}
+
+export function redirect(
+  location: RouteLocation,
+  options: { replace?: boolean } = {},
+): RouteRedirect {
+  return { type: "redirect", location, ...options };
+}
+
 export type RouteHookOptions = {
   signal: AbortSignal;
   shouldRun: () => boolean;
@@ -80,7 +102,7 @@ export type RouteMatch<TRouteId extends string = string, TModule = unknown, TDat
 export type RouterState<TRouteId extends string = string, TModule = unknown, TData = unknown> = {
   location: RouteLocation;
   resolvedLocation: RouteLocation | null;
-  status: "idle" | "loading" | "success" | "error";
+  status: "idle" | "loading" | "success" | "error" | "notFound" | "redirected";
   matches: readonly RouteMatch<TRouteId, TModule, TData>[];
   pendingMatches: readonly RouteMatch<TRouteId, TModule, TData>[];
   cachedMatches: readonly RouteMatch<TRouteId, TModule, TData>[];

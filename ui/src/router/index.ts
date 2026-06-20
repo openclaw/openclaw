@@ -2,6 +2,8 @@ export { createRouter } from "./router.ts";
 export { normalizeRouteBasePath, normalizeRoutePath } from "./matches.ts";
 export {
   definePage,
+  notFound,
+  redirect,
   type MaybePromise,
   type PageDefinition,
   type RouteHookOptions,
@@ -11,6 +13,8 @@ export {
   type RouteMatch,
   type RouteMatchFetching,
   type RouteMatchStatus,
+  type RouteNotFound,
+  type RouteRedirect,
   type Router,
   type RouterNavigationOptions,
   type RouterOptions,

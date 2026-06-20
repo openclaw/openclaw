@@ -14,6 +14,8 @@ import type {
   RouteLocation,
   RouteLoadCause,
   RouteMatch,
+  RouteNotFound,
+  RouteRedirect,
   Router,
   RouterHistory,
   RouterNavigationOptions,
@@ -35,6 +37,18 @@ function isCurrentRun(current: NavigationRun | null, run: NavigationRun): boolea
 
 function cancelRun(run: NavigationRun | null): void {
   run?.controller.abort();
+}
+
+function isRouteNotFound(error: unknown): error is RouteNotFound {
+  return (
+    typeof error === "object" && error !== null && (error as RouteNotFound).type === "notFound"
+  );
+}
+
+function isRouteRedirect(error: unknown): error is RouteRedirect {
+  return (
+    typeof error === "object" && error !== null && (error as RouteRedirect).type === "redirect"
+  );
 }
 
 export function createRouter<
@@ -170,6 +184,19 @@ export function createRouter<
         );
       } catch (error) {
         if (!hookOptions.shouldRun()) {
+          return;
+        }
+        if (isRouteNotFound(error) || isRouteRedirect(error)) {
+          const status = isRouteNotFound(error) ? "notFound" : "redirected";
+          matches.updateMatch(match.id, (current) => ({
+            ...current,
+            status,
+            isFetching: false,
+            error,
+            updatedAt: Date.now(),
+          }));
+          matches.setStatus(status);
+          currentRun = null;
           return;
         }
         matches.setStatus("error");
