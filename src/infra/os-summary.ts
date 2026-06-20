@@ -12,10 +12,39 @@ type OsSummary = {
 
 const cachedOsSummaryByKey = new Map<string, OsSummary>();
 
+/**
+ * Cache for the slow Darwin `sw_vers -productVersion` lookup, keyed by
+ * `os.release()` (the kernel release a given binary is observing). Once
+ * resolved for a given kernel release, the macOS marketing product version
+ * is stable for the lifetime of the process — there is no scenario where
+ * macOS changes its product version without the kernel release changing
+ * too — so re-spawning `sw_vers` per call only burns latency on every
+ * runtime prompt build (#95145 review feedback on PR #95189).
+ */
+const cachedMacosProductVersionByRelease = new Map<string, string>();
+
 function macosProductVersion(): string {
+  const release = os.release();
+  const cached = cachedMacosProductVersionByRelease.get(release);
+  if (cached !== undefined) {
+    return cached;
+  }
   const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
   const out = normalizeOptionalString(res.stdout) ?? "";
-  return out || os.release();
+  const resolved = out || release;
+  cachedMacosProductVersionByRelease.set(release, resolved);
+  return resolved;
+}
+
+/**
+ * Test-only: clear both module-level caches so each test case can mock a
+ * different `os.release()` without leaking the previous case's resolved
+ * Darwin marketing version. Not part of the public API — prefer keying tests
+ * by unique kernel releases when possible.
+ */
+export function __resetOsSummaryCachesForTests(): void {
+  cachedOsSummaryByKey.clear();
+  cachedMacosProductVersionByRelease.clear();
 }
 
 /** Resolves a compact OS label for diagnostics, logs, and environment summaries. */

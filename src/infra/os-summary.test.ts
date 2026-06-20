@@ -1,6 +1,6 @@
 // Tests operating system summary collection and normalization.
 import os from "node:os";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
@@ -11,7 +11,11 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-import { resolveOsSummary, resolveRuntimePromptOs } from "./os-summary.js";
+import {
+  __resetOsSummaryCachesForTests,
+  resolveOsSummary,
+  resolveRuntimePromptOs,
+} from "./os-summary.js";
 
 type OsSummaryCase = {
   name: string;
@@ -23,6 +27,9 @@ type OsSummaryCase = {
 };
 
 describe("resolveOsSummary", () => {
+  beforeEach(() => {
+    __resetOsSummaryCachesForTests();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -106,6 +113,9 @@ type RuntimePromptOsCase = {
 };
 
 describe("resolveRuntimePromptOs", () => {
+  beforeEach(() => {
+    __resetOsSummaryCachesForTests();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -164,5 +174,74 @@ describe("resolveRuntimePromptOs", () => {
       });
     }
     expect(resolveRuntimePromptOs()).toBe(expected);
+  });
+});
+
+describe("resolveRuntimePromptOs caching", () => {
+  beforeEach(() => {
+    __resetOsSummaryCachesForTests();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reuses cached macOS product version across repeated calls (PR #95189 reviewer P1)", () => {
+    // Use a kernel release no other test case in this file uses, so the
+    // module-level cache miss is exclusively this test's responsibility.
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.7.0");
+    spawnSyncMock.mockReturnValue({
+      stdout: "26.7.0\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+
+    const callsBefore = spawnSyncMock.mock.calls.length;
+    const first = resolveRuntimePromptOs();
+    const callsAfterFirst = spawnSyncMock.mock.calls.length;
+    const second = resolveRuntimePromptOs();
+    const third = resolveRuntimePromptOs();
+    const callsAfterThird = spawnSyncMock.mock.calls.length;
+
+    expect(first).toBe("macOS 26.7.0");
+    expect(second).toBe("macOS 26.7.0");
+    expect(third).toBe("macOS 26.7.0");
+    // First call must spawn sw_vers exactly once; subsequent calls must reuse
+    // the cached product version and not re-spawn the subprocess.
+    expect(callsAfterFirst - callsBefore).toBe(1);
+    expect(callsAfterThird - callsAfterFirst).toBe(0);
+  });
+
+  it("runtime-prompt and os-summary share the cached Darwin product version", () => {
+    // Same kernel release across both call paths: the second path must not
+    // spawn sw_vers again, because the cache is keyed by os.release().
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.8.0");
+    vi.spyOn(os, "arch").mockReturnValue("arm64");
+    spawnSyncMock.mockReturnValue({
+      stdout: "26.8.0\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+
+    const callsBefore = spawnSyncMock.mock.calls.length;
+    const summaryLabel = resolveOsSummary().label;
+    const callsAfterSummary = spawnSyncMock.mock.calls.length;
+    const runtimeLabel = resolveRuntimePromptOs();
+    const callsAfterRuntime = spawnSyncMock.mock.calls.length;
+
+    expect(summaryLabel).toBe("macos 26.8.0 (arm64)");
+    expect(runtimeLabel).toBe("macOS 26.8.0");
+    expect(callsAfterSummary - callsBefore).toBe(1);
+    // resolveRuntimePromptOs called after resolveOsSummary for the same
+    // kernel release must not re-spawn sw_vers — the two helpers share the
+    // module-level cachedMacosProductVersionByRelease map.
+    expect(callsAfterRuntime - callsAfterSummary).toBe(0);
   });
 });
