@@ -863,6 +863,19 @@ export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: st
   if (facadeRuntimeFiles.limitExceeded) {
     return [formatInstalledDistFileScanLimitError("root dist", facadeRuntimeFiles.limit)];
   }
+  if (facadeRuntimeFiles.files.length === 0) {
+    return [
+      "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
+    ];
+  }
+  if (facadeRuntimeFiles.files.length > 1) {
+    const relativePaths = facadeRuntimeFiles.files
+      .map((filePath) => relative(packageRoot, filePath).replaceAll("\\", "/"))
+      .toSorted((left, right) => left.localeCompare(right));
+    return [
+      `installed package has multiple facade activation runtimes; expected exactly one: ${relativePaths.join(", ")}.`,
+    ];
+  }
 
   for (const filePath of facadeRuntimeFiles.files) {
     const fileStat = lstatSync(filePath);
