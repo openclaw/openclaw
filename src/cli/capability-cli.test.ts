@@ -1685,6 +1685,35 @@ describe("capability cli", () => {
     expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
   });
 
+  it("forwards --count through to the image edit runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png", fileName: "edit.png" }],
+    });
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-edit-count-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from("png-input"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        inputPath,
+        "--prompt",
+        "make three variants",
+        "--count",
+        "3",
+        "--json",
+      ],
+    });
+
+    expect(firstImageGenerationCall()?.count).toBe(3);
+  });
+
   it("rejects unsupported image output format and background hints", async () => {
     await expect(
       runRegisteredCli({
@@ -1854,6 +1883,7 @@ describe("capability cli", () => {
       "--file",
       "--prompt",
       "--model",
+      "--count",
       "--size",
       "--aspect-ratio",
       "--resolution",
