@@ -99,14 +99,10 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
         wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
         wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
       ]) ?? systemPrompt,
-    ...(params.prompt
-      ? {
-          promptInputRange: {
-            start: promptInputStart,
-            end: promptInputStart + params.prompt.length,
-          },
-        }
-      : {}),
+    promptInputRange: {
+      start: promptInputStart,
+      end: promptInputStart + params.prompt.length,
+    },
   };
 }
 

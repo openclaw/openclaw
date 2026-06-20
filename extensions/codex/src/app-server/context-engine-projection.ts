@@ -142,6 +142,9 @@ export function fitCodexProjectedContextForTurnStart(params: {
       return params.promptText;
     }
     const preservedText = params.promptText.slice(preservedRange.start, preservedRange.end);
+    if (!preservedText) {
+      return truncateOlderContext(params.promptText, maxChars);
+    }
     if (preservedText.length >= maxChars) {
       return truncateOlderContext(preservedText, maxChars);
     }

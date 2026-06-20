@@ -295,6 +295,18 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(fitted).not.toContain("hook context");
   });
 
+  it("bounds hook output for an empty original input", () => {
+    const maxChars = 420;
+    const fitted = fitCodexProjectedContextForTurnStart({
+      promptText: `hook context ${"h".repeat(800)} hook tail`,
+      preservedRange: { start: 0, end: 0 },
+      maxChars,
+    });
+
+    expect(fitted.length).toBeLessThanOrEqual(maxChars);
+    expect(fitted).toContain("hook tail");
+  });
+
   it("bounds output for a large request under the default Codex turn limit", () => {
     const maxChars = CODEX_TURN_START_TEXT_INPUT_MAX_CHARS;
     // A large assembled header prefix already over the cap forces the
