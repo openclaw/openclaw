@@ -192,6 +192,50 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("reports empty tool policy intersections through doctor lint JSON", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        tools: {
+          profile: "coding",
+          allow: ["group:messaging"],
+        },
+      } as unknown as OpenClawConfig,
+      path: "/tmp/openclaw.json",
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/tool-policy-empty-allowlist"],
+      });
+
+      expect(exitCode).toBe(1);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload).toMatchObject({
+        ok: false,
+        checksRun: 1,
+        findings: [
+          {
+            checkId: "core/doctor/tool-policy-empty-allowlist",
+            severity: "warning",
+            path: "tools.allow",
+          },
+        ],
+      });
+      expect(payload.findings[0].message).toContain(
+        'tools.allow selects known core tool(s) "message"',
+      );
+      expect(payload.findings[0].message).toContain('tools.profile "coding"');
+      expect(payload.findings[0].message).toContain("No callable tools remain");
+      expect(payload.findings[0].fixHint).toContain("does not auto-fix");
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("rejects invalid severity thresholds", async () => {
     await expect(runDoctorLintCli(runtime, { severityMin: "warnng" })).rejects.toThrow(
       "Invalid --severity-min value",

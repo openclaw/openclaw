@@ -189,6 +189,12 @@ export const doctorHealthConversionRules = [
     rule: "Detect explicit live tool-result cap overrides that are stale or ineffective; preserve deep-mode effective cap output as finding metadata.",
   },
   {
+    contributionId: "doctor:tool-policy-empty-allowlist",
+    conversion: "detect-only",
+    target: ["core/doctor/tool-policy-empty-allowlist"],
+    rule: "Warn when configured core tool allowlists become empty after profile and policy filters; do not repair automatically because each valid fix changes tool access.",
+  },
+  {
     contributionId: "doctor:provider-catalog-projection",
     conversion: "detect-only",
     target: ["core/doctor/provider-catalog-projection"],

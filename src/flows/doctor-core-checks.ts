@@ -23,6 +23,10 @@ import {
   uiProtocolFreshnessIssueToRepairEffects,
 } from "../commands/doctor-ui.js";
 import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
+import {
+  collectEmptyCoreToolAllowlistIssues,
+  formatEmptyCoreToolAllowlistWarning,
+} from "../commands/doctor/shared/preview-warnings.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
@@ -571,6 +575,25 @@ function createSecurityCheck(deps: CoreHealthCheckDeps): HealthCheck {
   };
 }
 
+const toolPolicyEmptyAllowlistCheck: HealthCheck = {
+  id: "core/doctor/tool-policy-empty-allowlist",
+  kind: "core",
+  description: "Tool allowlists leave at least one known core tool available after profiles.",
+  source: "doctor",
+  async detect(ctx) {
+    return collectEmptyCoreToolAllowlistIssues(ctx.cfg).map(
+      (issue): HealthFinding => ({
+        checkId: "core/doctor/tool-policy-empty-allowlist",
+        severity: "warning",
+        message: normalizeDoctorNoteLine(formatEmptyCoreToolAllowlistWarning(issue)),
+        path: `${issue.pathLabel}.allow`,
+        fixHint:
+          "Review the tool policy and choose the intended access shape; doctor does not auto-fix this because switching profile, alsoAllow, or allow changes tool access.",
+      }),
+    );
+  },
+};
+
 const openAIOAuthTlsCheck: HealthCheck = {
   id: "core/doctor/oauth-tls",
   kind: "core",
@@ -955,6 +978,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     uiProtocolFreshnessCheck,
     gatewayPlatformNotesCheck,
     createSecurityCheck(deps),
+    toolPolicyEmptyAllowlistCheck,
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,

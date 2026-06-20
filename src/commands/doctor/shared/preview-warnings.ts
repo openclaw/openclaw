@@ -6,11 +6,16 @@ import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
+import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import {
   isToolAllowedByPolicies,
   isToolAllowedByPolicyName,
 } from "../../../agents/tool-policy-match.js";
-import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+import {
+  expandToolGroups,
+  mergeAlsoAllowPolicy,
+  resolveToolProfilePolicy,
+} from "../../../agents/tool-policy.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
@@ -96,6 +101,13 @@ type ToolPolicyConfig = {
   alsoAllow?: string[];
   deny?: string[];
   profile?: string;
+  byProvider?: Record<string, ToolPolicyConfig>;
+};
+
+export type EmptyCoreToolAllowlistIssue = {
+  pathLabel: string;
+  coreTools: string[];
+  profileLabels: string[];
 };
 
 function normalizeProviderPolicyKey(value: string): string {
@@ -118,10 +130,18 @@ function resolveProviderToolPolicy(params: {
   modelProvider: string;
   modelId: string;
 }): ToolPolicyConfig | undefined {
+  return resolveProviderToolPolicyEntry(params)?.policy;
+}
+
+function resolveProviderToolPolicyEntry(params: {
+  byProvider?: Record<string, ToolPolicyConfig>;
+  modelProvider: string;
+  modelId: string;
+}): { key: string; policy: ToolPolicyConfig } | undefined {
   if (!params.byProvider) {
     return undefined;
   }
-  const lookup = new Map<string, { canonical: boolean; value: ToolPolicyConfig }>();
+  const lookup = new Map<string, { canonical: boolean; key: string; policy: ToolPolicyConfig }>();
   for (const [key, value] of Object.entries(params.byProvider)) {
     const normalized = normalizeProviderPolicyKey(key);
     if (!normalized) {
@@ -130,14 +150,14 @@ function resolveProviderToolPolicy(params: {
     const canonical = isCanonicalProviderPolicyKey(key);
     const existing = lookup.get(normalized);
     if (!existing || (canonical && !existing.canonical)) {
-      lookup.set(normalized, { canonical, value });
+      lookup.set(normalized, { canonical, key, policy: value });
     }
   }
 
   const provider = normalizeProviderPolicyKey(params.modelProvider);
   const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
   const fullModelId = modelId ? `${provider}/${modelId}` : undefined;
-  return (fullModelId ? lookup.get(fullModelId)?.value : undefined) ?? lookup.get(provider)?.value;
+  return (fullModelId ? lookup.get(fullModelId) : undefined) ?? lookup.get(provider);
 }
 
 function resolveMessageToolAvailability(params: {
@@ -332,6 +352,337 @@ function formatChannelList(channels: string[]): string {
     .slice(0, 2)
     .map((channel) => `"${channel}"`)
     .join(", ")}, and ${channels.length - 2} more`;
+}
+
+const DOCTOR_CONFIRMED_RUNTIME_CORE_TOOL_IDS = new Set([
+  "agents_list",
+  "apply_patch",
+  "create_goal",
+  "edit",
+  "exec",
+  "get_goal",
+  "message",
+  "process",
+  "read",
+  "session_status",
+  "sessions_history",
+  "sessions_list",
+  "sessions_yield",
+  "subagents",
+  "tts",
+  "update_goal",
+  "write",
+]);
+
+function isDoctorConfirmedRuntimeCoreToolId(tool: string): boolean {
+  // The catalog also names plugin/runtime-conditional tools such as browser,
+  // code_execution, x_search, and memory_*; they cannot prove a linted config
+  // has a callable tool without constructing the real runtime.
+  return DOCTOR_CONFIRMED_RUNTIME_CORE_TOOL_IDS.has(tool);
+}
+
+function listExplicitKnownCoreAllowTools(allow?: string[]): string[] | undefined {
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return undefined;
+  }
+  const expanded = expandToolGroups(allow);
+  if (expanded.includes("*")) {
+    return undefined;
+  }
+  const coreTools = new Set<string>();
+  for (const entry of expanded) {
+    if (isKnownCoreToolId(entry)) {
+      coreTools.add(entry);
+      continue;
+    }
+    // Plugin tools share the same model-facing namespace, so static doctor
+    // must not claim this allowlist is empty.
+    return undefined;
+  }
+  return [...coreTools];
+}
+
+function mayAllowNonCoreTools(list?: string[]): boolean {
+  if (!Array.isArray(list) || list.length === 0) {
+    return false;
+  }
+  const expanded = expandToolGroups(list);
+  return expanded.some((entry) => entry === "*" || !isKnownCoreToolId(entry));
+}
+
+function profilePolicyFor(
+  profile: string | undefined,
+  alsoAllow: string[] | undefined,
+): ReturnType<typeof mergeAlsoAllowPolicy> {
+  return mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+}
+
+function collectEmptyCoreToolAllowlistScopeIssues(params: {
+  pathLabel: string;
+  allow?: string[];
+  profileLabels?: string[];
+  policies: Array<ReturnType<typeof pickSandboxToolPolicy> | undefined>;
+}): EmptyCoreToolAllowlistIssue[] {
+  const explicitCoreAllowTools = listExplicitKnownCoreAllowTools(params.allow);
+  if (!explicitCoreAllowTools) {
+    return [];
+  }
+  const survivingTools = explicitCoreAllowTools.filter((tool) =>
+    isToolAllowedByPolicies(tool, params.policies),
+  );
+  if (survivingTools.length > 0) {
+    return [];
+  }
+  const survivingKnownCoreTools = [...DOCTOR_CONFIRMED_RUNTIME_CORE_TOOL_IDS].filter((tool) =>
+    isToolAllowedByPolicies(tool, params.policies),
+  );
+  if (survivingKnownCoreTools.length > 0) {
+    return [];
+  }
+  return [
+    {
+      pathLabel: params.pathLabel,
+      coreTools: explicitCoreAllowTools,
+      profileLabels: params.profileLabels ?? [],
+    },
+  ];
+}
+
+export function formatEmptyCoreToolAllowlistWarning(issue: EmptyCoreToolAllowlistIssue): string {
+  const profileText =
+    issue.profileLabels.length > 0 ? ` with ${issue.profileLabels.join(" and ")}` : "";
+  return `- ${issue.pathLabel}.allow selects known core tool(s) ${issue.coreTools
+    .map((tool) => `"${tool}"`)
+    .join(
+      ", ",
+    )}, but the active tool policy${profileText} filters all of them out. Agent turns can fail before the model request with "No callable tools remain". Choose the intended access shape explicitly, such as switching the profile, adding required tools to alsoAllow, or removing the conflicting allowlist; doctor does not auto-fix this because each option changes tool access.`;
+}
+
+function resolveActiveProviderPolicy(params: {
+  tools: ToolPolicyConfig | undefined;
+  modelProvider: string;
+  modelId: string;
+}): { pathLabel: string; policy: ToolPolicyConfig } | undefined {
+  const entry = resolveProviderToolPolicyEntry({
+    byProvider: params.tools?.byProvider,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  if (!entry) {
+    return undefined;
+  }
+  return { pathLabel: `byProvider.${entry.key}`, policy: entry.policy };
+}
+
+function addIssue(
+  issues: EmptyCoreToolAllowlistIssue[],
+  seen: Set<string>,
+  params: Parameters<typeof collectEmptyCoreToolAllowlistScopeIssues>[0],
+): void {
+  for (const issue of collectEmptyCoreToolAllowlistScopeIssues(params)) {
+    const key = `${issue.pathLabel}\0${issue.coreTools.join(",")}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    issues.push(issue);
+  }
+}
+
+function appendEffectivePolicyAllowlistIssue(params: {
+  issues: EmptyCoreToolAllowlistIssue[];
+  seen: Set<string>;
+  pathLabel: string;
+  allow?: string[];
+  toolProfile?: string;
+  toolProfileLabel?: string;
+  toolAlsoAllow?: string[];
+  basePolicies: Array<ReturnType<typeof pickSandboxToolPolicy> | undefined>;
+  globalProvider?: { pathLabel: string; policy: ToolPolicyConfig };
+  agentProvider?: { pathLabel: string; policy: ToolPolicyConfig };
+  agentProviderOwnerPath?: string;
+}): void {
+  const providerProfile =
+    params.agentProvider?.policy.profile ?? params.globalProvider?.policy.profile;
+  const providerAlsoAllow =
+    params.agentProvider?.policy.alsoAllow ?? params.globalProvider?.policy.alsoAllow;
+  if (mayAllowNonCoreTools(params.toolAlsoAllow) || mayAllowNonCoreTools(providerAlsoAllow)) {
+    return;
+  }
+  const providerProfileLabel = params.agentProvider?.policy.profile
+    ? `${params.agentProviderOwnerPath}.${params.agentProvider.pathLabel}.profile "${params.agentProvider.policy.profile}"`
+    : params.globalProvider?.policy.profile
+      ? `tools.${params.globalProvider.pathLabel}.profile "${params.globalProvider.policy.profile}"`
+      : undefined;
+  addIssue(params.issues, params.seen, {
+    pathLabel: params.pathLabel,
+    allow: params.allow,
+    profileLabels: [
+      ...(params.toolProfileLabel ? [params.toolProfileLabel] : []),
+      ...(providerProfileLabel ? [providerProfileLabel] : []),
+    ],
+    policies: [
+      profilePolicyFor(params.toolProfile, params.toolAlsoAllow),
+      profilePolicyFor(providerProfile, providerAlsoAllow),
+      ...params.basePolicies,
+      pickSandboxToolPolicy(params.globalProvider?.policy),
+      pickSandboxToolPolicy(params.agentProvider?.policy),
+    ],
+  });
+}
+
+function formatAgentProfileLabel(params: {
+  agentIndex: number;
+  agentProfile?: string;
+  globalProfile?: string;
+}): string | undefined {
+  if (params.agentProfile) {
+    return `agents.list[${params.agentIndex}].tools.profile "${params.agentProfile}"`;
+  }
+  if (params.globalProfile) {
+    return `tools.profile "${params.globalProfile}"`;
+  }
+  return undefined;
+}
+
+/** Detect explicit core allowlists that become empty after profile/policy filters. */
+export function collectEmptyCoreToolAllowlistIssues(
+  cfg: OpenClawConfig,
+): EmptyCoreToolAllowlistIssue[] {
+  const issues: EmptyCoreToolAllowlistIssue[] = [];
+  const seen = new Set<string>();
+  const agentRecords = listAgentRecords(cfg);
+  const defaultModelRef = resolvePrimaryModelRef(cfg);
+  const globalProfile = cfg.tools?.profile;
+  const globalPolicy = pickSandboxToolPolicy(cfg.tools);
+  appendEffectivePolicyAllowlistIssue({
+    issues,
+    seen,
+    pathLabel: "tools",
+    allow: cfg.tools?.allow,
+    toolProfile: globalProfile,
+    toolProfileLabel: globalProfile ? `tools.profile "${globalProfile}"` : undefined,
+    toolAlsoAllow: cfg.tools?.alsoAllow,
+    basePolicies: [globalPolicy],
+  });
+  if (agentRecords.length === 0) {
+    const defaultGlobalProviderPolicy = resolveActiveProviderPolicy({
+      tools: cfg.tools,
+      modelProvider: defaultModelRef.provider,
+      modelId: defaultModelRef.model,
+    });
+    appendEffectivePolicyAllowlistIssue({
+      issues,
+      seen,
+      pathLabel: "tools",
+      allow: cfg.tools?.allow,
+      toolProfile: globalProfile,
+      toolProfileLabel: globalProfile ? `tools.profile "${globalProfile}"` : undefined,
+      toolAlsoAllow: cfg.tools?.alsoAllow,
+      basePolicies: [globalPolicy],
+      globalProvider: defaultGlobalProviderPolicy,
+    });
+    appendEffectivePolicyAllowlistIssue({
+      issues,
+      seen,
+      pathLabel: defaultGlobalProviderPolicy
+        ? `tools.${defaultGlobalProviderPolicy.pathLabel}`
+        : "tools.byProvider",
+      allow: defaultGlobalProviderPolicy?.policy.allow,
+      toolProfile: globalProfile,
+      toolProfileLabel: globalProfile ? `tools.profile "${globalProfile}"` : undefined,
+      toolAlsoAllow: cfg.tools?.alsoAllow,
+      basePolicies: [globalPolicy],
+      globalProvider: defaultGlobalProviderPolicy,
+    });
+  }
+  for (const [index, agent] of agentRecords.entries()) {
+    const agentTools = hasRecord(agent.tools) ? (agent.tools as AgentToolsConfig) : undefined;
+    const agentConfig =
+      typeof agent.id === "string" ? resolveAgentConfig(cfg, agent.id) : undefined;
+    const agentModelRef = resolvePrimaryModelRef(cfg, agentConfig?.model);
+    const agentProfile = agentTools?.profile ?? globalProfile;
+    const agentProfileLabel = formatAgentProfileLabel({
+      agentIndex: index,
+      agentProfile: agentTools?.profile,
+      globalProfile,
+    });
+    const agentAlsoAllow = agentTools?.alsoAllow ?? cfg.tools?.alsoAllow;
+    const agentPolicy = pickSandboxToolPolicy(agentTools);
+    const basePolicies = [globalPolicy, agentPolicy];
+    const agentGlobalProviderPolicy = resolveActiveProviderPolicy({
+      tools: cfg.tools,
+      modelProvider: agentModelRef.provider,
+      modelId: agentModelRef.model,
+    });
+    const agentProviderPolicy = resolveActiveProviderPolicy({
+      tools: agentTools,
+      modelProvider: agentModelRef.provider,
+      modelId: agentModelRef.model,
+    });
+    appendEffectivePolicyAllowlistIssue({
+      issues,
+      seen,
+      pathLabel: "tools",
+      allow: cfg.tools?.allow,
+      toolProfile: agentProfile,
+      toolProfileLabel: agentProfileLabel,
+      toolAlsoAllow: agentAlsoAllow,
+      basePolicies,
+      globalProvider: agentGlobalProviderPolicy,
+      agentProvider: agentProviderPolicy,
+      agentProviderOwnerPath: `agents.list[${index}].tools`,
+    });
+    appendEffectivePolicyAllowlistIssue({
+      issues,
+      seen,
+      pathLabel: `agents.list[${index}].tools`,
+      allow: agentTools?.allow,
+      toolProfile: agentProfile,
+      toolProfileLabel: agentProfileLabel,
+      toolAlsoAllow: agentAlsoAllow,
+      basePolicies,
+      globalProvider: agentGlobalProviderPolicy,
+      agentProvider: agentProviderPolicy,
+      agentProviderOwnerPath: `agents.list[${index}].tools`,
+    });
+    appendEffectivePolicyAllowlistIssue({
+      issues,
+      seen,
+      pathLabel: agentGlobalProviderPolicy
+        ? `tools.${agentGlobalProviderPolicy.pathLabel}`
+        : "tools.byProvider",
+      allow: agentGlobalProviderPolicy?.policy.allow,
+      toolProfile: agentProfile,
+      toolProfileLabel: agentProfileLabel,
+      toolAlsoAllow: agentAlsoAllow,
+      basePolicies,
+      globalProvider: agentGlobalProviderPolicy,
+      agentProvider: agentProviderPolicy,
+      agentProviderOwnerPath: `agents.list[${index}].tools`,
+    });
+    appendEffectivePolicyAllowlistIssue({
+      issues,
+      seen,
+      pathLabel: agentProviderPolicy
+        ? `agents.list[${index}].tools.${agentProviderPolicy.pathLabel}`
+        : `agents.list[${index}].tools.byProvider`,
+      allow: agentProviderPolicy?.policy.allow,
+      toolProfile: agentProfile,
+      toolProfileLabel: agentProfileLabel,
+      toolAlsoAllow: agentAlsoAllow,
+      basePolicies,
+      globalProvider: agentGlobalProviderPolicy,
+      agentProvider: agentProviderPolicy,
+      agentProviderOwnerPath: `agents.list[${index}].tools`,
+    });
+  }
+  return issues;
+}
+
+/** Warn when explicit core allowlists become empty after profile/policy filters. */
+export function collectEmptyCoreToolAllowlistWarnings(cfg: OpenClawConfig): string[] {
+  return collectEmptyCoreToolAllowlistIssues(cfg).map(formatEmptyCoreToolAllowlistWarning);
 }
 
 /** Warn when routed channel agents lack the message tool required for channel actions. */
@@ -791,6 +1142,7 @@ export async function collectDoctorPreviewNotes(params: {
   const hasPluginConfig = hasPlugins(params.cfg);
 
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
+  warnings.push(...collectEmptyCoreToolAllowlistWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
   warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
   const { collectBlockedLegacyOpenAICodexProviderWarnings } =

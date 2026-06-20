@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  collectEmptyCoreToolAllowlistWarnings,
   collectDoctorPreviewNotes,
   collectChannelBoundMessageToolPolicyWarnings,
   collectDoctorPreviewWarnings,
@@ -823,6 +824,413 @@ describe("doctor preview warnings", () => {
     expect(warning).toContain("tools.exec is configured");
     expect(warning).toContain('tools.alsoAllow: ["exec", "process"]');
     expect(warning).not.toContain("doctor --fix");
+  });
+
+  it("warns when tools.profile and tools.allow leave no known core tools", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        tools: {
+          profile: "coding",
+          allow: ["group:messaging"],
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.allow selects known core tool(s) "message"',
+    );
+    expect(warning).toContain('tools.profile "coding"');
+    expect(warning).toContain("No callable tools remain");
+    expect(warning).not.toContain("doctor --fix");
+  });
+
+  it("does not warn for glob allowlists that may also match plugin tools", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          profile: "coding",
+          allow: ["mess*"],
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("warns when an agent allowlist is emptied by inherited policy", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        profile: "coding",
+      },
+      agents: {
+        list: [
+          {
+            id: "chat",
+            tools: {
+              allow: ["group:messaging"],
+            },
+          },
+        ],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'agents.list[0].tools.allow selects known core tool(s) "message"',
+    );
+    expect(warning).toContain('tools.profile "coding"');
+  });
+
+  it("does not warn when alsoAllow preserves an explicitly allowed core tool", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          profile: "coding",
+          allow: ["group:messaging"],
+          alsoAllow: ["message"],
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("does not warn when alsoAllow keeps another core tool callable", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          profile: "coding",
+          allow: ["group:messaging"],
+          alsoAllow: ["read"],
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("does not warn when allow selects a default-enabled built-in web tool", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          profile: "coding",
+          allow: ["web_fetch"],
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("does not warn when allow selects an explicitly enabled update_plan tool", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          profile: "coding",
+          allow: ["update_plan"],
+          experimental: {
+            planTool: true,
+          },
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("warns when alsoAllow only preserves a runtime-conditional core tool", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        profile: "coding",
+        allow: ["group:messaging"],
+        alsoAllow: ["browser"],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.allow selects known core tool(s) "message"',
+    );
+    expect(warning).toContain('tools.profile "coding"');
+  });
+
+  it("does not warn when allow selects a runtime-conditional core tool", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          profile: "coding",
+          allow: ["image"],
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("does not warn when allow selects an embedded-conditional control tool", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          profile: "full",
+          allow: ["gateway"],
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("warns when profile filters an explicitly allowed session tool", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        profile: "minimal",
+        allow: ["sessions_send"],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.allow selects known core tool(s) "sessions_send"',
+    );
+    expect(warning).toContain('tools.profile "minimal"');
+  });
+
+  it("warns when alsoAllow only preserves an optional core tool", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        profile: "minimal",
+        allow: ["message"],
+        alsoAllow: ["update_plan"],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.allow selects known core tool(s) "message"',
+    );
+    expect(warning).toContain('tools.profile "minimal"');
+  });
+
+  it("does not warn when alsoAllow may keep plugin tools callable", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          profile: "coding",
+          allow: ["group:messaging"],
+          alsoAllow: ["plugin_doctor"],
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("does not warn when a mixed plugin allowlist could still leave plugin tools callable", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          profile: "coding",
+          allow: ["group:messaging", "plugin_doctor"],
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("warns when provider profile filters a global core allowlist to empty", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        allow: ["message"],
+        byProvider: {
+          openai: {
+            profile: "coding",
+          },
+        },
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.allow selects known core tool(s) "message"',
+    );
+    expect(warning).toContain('tools.byProvider.openai.profile "coding"');
+  });
+
+  it("deduplicates the same allowlist emptied by profile and provider filters", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        profile: "coding",
+        allow: ["group:messaging"],
+        byProvider: {
+          openai: {
+            profile: "coding",
+          },
+        },
+      },
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('tools.allow selects known core tool(s) "message"');
+  });
+
+  it("does not warn for provider policies unused by the active model", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          allow: ["message"],
+          byProvider: {
+            openai: {
+              profile: "coding",
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4.6",
+            },
+          },
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("does not use the fallback default provider when explicit agents use another provider", () => {
+    expect(
+      collectEmptyCoreToolAllowlistWarnings({
+        tools: {
+          allow: ["message"],
+          byProvider: {
+            openai: {
+              profile: "coding",
+            },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "chat",
+              model: {
+                primary: "anthropic/claude-sonnet-4.6",
+              },
+            },
+          ],
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("warns when an agent without tools inherits an empty provider-filtered allowlist", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        allow: ["message"],
+        byProvider: {
+          openai: {
+            profile: "coding",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "chat",
+            model: {
+              primary: "openai/gpt-5.5",
+            },
+          },
+        ],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.allow selects known core tool(s) "message"',
+    );
+    expect(warning).toContain('tools.byProvider.openai.profile "coding"');
+  });
+
+  it("warns when a global provider policy filters an agent allowlist to empty", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        byProvider: {
+          openai: {
+            profile: "coding",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "chat",
+            model: {
+              primary: "openai/gpt-5.5",
+            },
+            tools: {
+              allow: ["message"],
+            },
+          },
+        ],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'agents.list[0].tools.allow selects known core tool(s) "message"',
+    );
+    expect(warning).toContain('tools.byProvider.openai.profile "coding"');
+  });
+
+  it("warns when an agent provider policy filters an inherited global allowlist to empty", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        allow: ["message"],
+      },
+      agents: {
+        list: [
+          {
+            id: "chat",
+            model: {
+              primary: "openai/gpt-5.5",
+            },
+            tools: {
+              byProvider: {
+                openai: {
+                  profile: "coding",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.allow selects known core tool(s) "message"',
+    );
+    expect(warning).toContain('agents.list[0].tools.byProvider.openai.profile "coding"');
+  });
+
+  it("warns when merged provider policies empty a global allowlist", () => {
+    const warnings = collectEmptyCoreToolAllowlistWarnings({
+      tools: {
+        allow: ["read", "message"],
+        byProvider: {
+          openai: {
+            profile: "coding",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "chat",
+            model: {
+              primary: "openai/gpt-5.5",
+            },
+            tools: {
+              byProvider: {
+                openai: {
+                  allow: ["message"],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expectWarningsContaining(warnings, [
+      'tools.allow selects known core tool(s) "read", "message"',
+      'agents.list[0].tools.byProvider.openai.allow selects known core tool(s) "message"',
+    ]);
+    const warning = warnings.join("\n");
+    expect(warning).toContain('tools.byProvider.openai.profile "coding"');
   });
 
   it("does not suggest alsoAllow when configured section warnings already have allow", () => {

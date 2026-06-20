@@ -330,6 +330,34 @@ describe("registerCoreHealthChecks", () => {
     );
   });
 
+  it("reports empty core tool allowlist policy through doctor lint", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/tool-policy-empty-allowlist",
+    );
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {
+        tools: {
+          profile: "coding",
+          allow: ["group:messaging"],
+        },
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/tool-policy-empty-allowlist",
+        severity: "warning",
+        path: "tools.allow",
+        message: expect.stringContaining('tools.allow selects known core tool(s) "message"'),
+        fixHint: expect.stringContaining("does not auto-fix"),
+      }),
+    ]);
+  });
+
   it("reports disabled Codex plugin routes as core health findings", async () => {
     const check = getCheck(
       createCoreHealthChecks(createDeps()),

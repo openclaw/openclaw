@@ -65,6 +65,13 @@ openclaw logs --follow
 - **Tool surface:** inspect final model-visible tool names, not only the tool
   registry or config. Code mode means exactly `exec` and `wait` only after it
   actually activates.
+- **Doctor tool-policy diagnostics:** treat the core tool catalog as a config
+  vocabulary, not proof that a tool is callable in every run. For
+  `No callable tools remain`, prove the active policy intersection (`profile`,
+  `allow`, `alsoAllow`, provider/agent policy) separately from runtime-conditional
+  registration such as browser, media, web, update_plan, embedded, or sandbox
+  gates. Doctor lint should warn on confirmed empty policy intersections and stay
+  conservative around plugin/glob/dynamic tool availability.
 - **Provider payload:** log fields, model id, service tier, reasoning, input
   size, metadata keys, prompt-cache key presence, and tool names before SDK
   call.
