@@ -468,8 +468,6 @@ export type ChannelThreadingContext = {
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
-  /** Human-readable channel name, when the transport provides one. */
-  currentChannelName?: string;
   /** Routable messaging target when it differs from the platform-native channel id. */
   currentMessagingTarget?: string;
   currentGraphChannelId?: string;

@@ -249,6 +249,16 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.currentMessagingTarget).toBe("channel:C1234ABC");
   });
 
+  it("does not expose the core Channel provider as a Slack room name", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { ChatType: "channel", Channel: "slack", To: "channel:C1234ABC" },
+    });
+    expect(result).not.toHaveProperty("currentChannelName");
+    expect(result.currentChannelId).toBe("C1234ABC");
+  });
+
   it("preserves native and routable DM targets", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
