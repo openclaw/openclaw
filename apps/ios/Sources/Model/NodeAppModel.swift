@@ -23,6 +23,10 @@ private struct WatchChatPreview {
     var statusText: String?
 }
 
+private struct ExecApprovalGatewayEventPayload: Decodable {
+    var id: String
+}
+
 /// Ensures notification requests return promptly even if the system prompt blocks.
 private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -895,24 +899,47 @@ final class NodeAppModel {
             for await evt in stream {
                 if Task.isCancelled { return }
                 guard let payload = evt.payload else { continue }
-                switch evt.event {
-                case "voicewake.changed":
-                    struct Payload: Decodable { var triggers: [String] }
-                    guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { continue }
-                    let triggers = VoiceWakePreferences.sanitizeTriggerWords(decoded.triggers)
-                    VoiceWakePreferences.saveTriggerWords(triggers)
-                case "talk.mode":
-                    struct Payload: Decodable {
-                        var enabled: Bool
-                        var phase: String?
-                    }
-                    guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { continue }
-                    self.applyTalkModeSync(enabled: decoded.enabled, phase: decoded.phase)
-                default:
-                    continue
-                }
+                await self.handleOperatorGatewayServerEvent(evt)
             }
         }
+    }
+
+    private func handleOperatorGatewayServerEvent(_ evt: EventFrame) async {
+        guard let payload = evt.payload else { return }
+        switch evt.event {
+        case "voicewake.changed":
+            struct Payload: Decodable { var triggers: [String] }
+            guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { return }
+            let triggers = VoiceWakePreferences.sanitizeTriggerWords(decoded.triggers)
+            VoiceWakePreferences.saveTriggerWords(triggers)
+        case "talk.mode":
+            struct Payload: Decodable {
+                var enabled: Bool
+                var phase: String?
+            }
+            guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { return }
+            self.applyTalkModeSync(enabled: decoded.enabled, phase: decoded.phase)
+        case ExecApprovalNotificationBridge.requestedKind:
+            guard let approvalId = Self.execApprovalEventID(from: payload) else { return }
+            await self.presentExecApprovalNotificationPrompt(
+                ExecApprovalNotificationPrompt(approvalId: approvalId))
+        case ExecApprovalNotificationBridge.resolvedKind:
+            guard let approvalId = Self.execApprovalEventID(from: payload) else { return }
+            await self.handleExecApprovalResolvedRemotePush(approvalId: approvalId)
+        default:
+            return
+        }
+    }
+
+    private nonisolated static func execApprovalEventID(from payload: AnyCodable) -> String? {
+        guard let decoded = try? GatewayPayloadDecoding.decode(
+            payload,
+            as: ExecApprovalGatewayEventPayload.self)
+        else {
+            return nil
+        }
+        let approvalId = decoded.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        return approvalId.isEmpty ? nil : approvalId
     }
 
     private func applyTalkModeSync(enabled: Bool, phase: String?) {
@@ -5137,6 +5164,14 @@ extension NodeAppModel {
         self.shouldUseBackgroundAwareExecApprovalReconnect(
             sourceReason: sourceReason,
             isBackgrounded: isBackgrounded)
+    }
+
+    nonisolated static func _test_execApprovalEventID(from payload: AnyCodable) -> String? {
+        self.execApprovalEventID(from: payload)
+    }
+
+    func _test_handleOperatorGatewayServerEvent(_ event: EventFrame) async {
+        await self.handleOperatorGatewayServerEvent(event)
     }
 
     nonisolated static func _test_watchExecApprovalIDsNeedingFetch(
