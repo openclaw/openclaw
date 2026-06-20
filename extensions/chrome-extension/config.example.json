@@ -1,6 +1,6 @@
 {
   "gatewayUrl": "wss://YOUR-GATEWAY.ts.net",
   "gatewayToken": "PASTE_YOUR_GATEWAY_AUTH_TOKEN",
-  "relayPort": 18790,
+  "relayPort": 18792,
   "autoAttach": true
 }
