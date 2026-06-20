@@ -1551,6 +1551,51 @@ describe("createCopilotAgentHarness", () => {
       await flushAsyncWork();
     });
 
+    it("clears the reset block when storing a replacement session fails", async () => {
+      const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
+      const sessionStore = makeSessionStoreMock();
+      sessionStore.store.register.mockImplementation(() => {
+        throw new Error("sqlite register failed");
+      });
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        const sdkSessionId =
+          mocks.runCopilotAttempt.mock.calls.length === 1
+            ? "sdk-sess-background"
+            : "sdk-sess-replacement";
+        deps.onSessionEstablished?.({
+          sdkSessionId,
+          pooledClient: { key: {} as any, client: {} as any },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        if (sdkSessionId === "sdk-sess-background") {
+          deps.onDeferredCompaction?.({
+            abort: () => undefined,
+            cleanup: cleanup.promise,
+            sdkSessionId,
+          });
+        }
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+      const params = makeCompactParams({ sessionId: "oc-sess-store-failure" });
+
+      await harness.runAttempt(params);
+      await harness.runAttempt(params);
+      await harness.runAttempt(params);
+
+      expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]).not.toMatchObject({
+        initialReplayState: expect.objectContaining({ sdkSessionId: "sdk-sess-background" }),
+      });
+      expect(mocks.runCopilotAttempt.mock.calls[2]?.[0]).toMatchObject({
+        initialReplayState: expect.objectContaining({ sdkSessionId: "sdk-sess-replacement" }),
+      });
+      cleanup.resolve("completed");
+      await flushAsyncWork();
+    });
+
     it("calls the SDK history compaction RPC without requiring a workspace sidecar", async () => {
       const beforeCompaction = vi.fn();
       const afterCompaction = vi.fn();

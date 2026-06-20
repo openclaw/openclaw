@@ -621,7 +621,7 @@ export function createCopilotAgentHarness(
                   sessionConfig,
                   ...sessionAuthFields(poolAcquire.auth),
                 });
-                const persisted = registerStoredBinding(options?.sessionStore, openclawSessionId, {
+                registerStoredBinding(options?.sessionStore, openclawSessionId, {
                   schemaVersion: 2,
                   sdkSessionId,
                   compatKey: currentCompatKey,
@@ -629,9 +629,7 @@ export function createCopilotAgentHarness(
                   ...sessionAuthFields(poolAcquire.auth),
                   updatedAt: Date.now(),
                 });
-                if (persisted) {
-                  resetBlockedStoredSessions.delete(openclawSessionId);
-                }
+                resetBlockedStoredSessions.delete(openclawSessionId);
               }
             : undefined,
           onDeferredCompaction: openclawSessionId

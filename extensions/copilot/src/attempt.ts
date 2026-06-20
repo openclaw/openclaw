@@ -837,6 +837,8 @@ export async function runCopilotAttempt(
       }
       params.abortSignal?.removeEventListener("abort", onAbort);
     } else {
+      // `sendAndWait` resolves on `session.idle`, which the SDK defines as
+      // no background agents in flight. Only an observed compaction needs retention.
       await bridge?.awaitCompactionChain();
       bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);
