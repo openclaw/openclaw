@@ -626,3 +626,67 @@ test("sessions.create can start the first agent turn from an initial task", asyn
 
   ws.close();
 });
+
+test("sessions.create without key reuses existing active dashboard session", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const existingKey = "agent:ops:dashboard:existing-session";
+  await writeSessionStore({
+    agentId: "ops",
+    entries: {
+      [existingKey]: sessionStoreEntry("sess-existing", {
+        updatedAt: 1000,
+        label: "Existing Dashboard",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    sessionId?: string;
+    entry?: { label?: string };
+  }>("sessions.create", {
+    agentId: "ops",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.key).toBe(existingKey);
+  expect(created.payload?.sessionId).toBe("sess-existing");
+  expect(created.payload?.entry?.label).toBe("Existing Dashboard");
+});
+
+test("sessions.create without key creates new dashboard session when none exists", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq<{
+    key?: string;
+  }>("sessions.create", {
+    agentId: "ops",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+});
+
+test("sessions.create without key creates new dashboard session when existing ones have endedAt", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    agentId: "ops",
+    entries: {
+      "agent:ops:dashboard:ended": sessionStoreEntry("sess-ended", {
+        updatedAt: 1000,
+        endedAt: 500,
+        label: "Ended Dashboard",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+  }>("sessions.create", {
+    agentId: "ops",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+  expect(created.payload?.key).not.toBe("agent:ops:dashboard:ended");
+});

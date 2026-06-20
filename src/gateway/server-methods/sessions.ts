@@ -348,6 +348,23 @@ function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
+function findActiveDashboardSessionKey(
+  store: Record<string, SessionEntry>,
+  agentId: string,
+): string | undefined {
+  const prefix = `agent:${agentId}:dashboard:`;
+  let latest: { key: string; updatedAt: number } | undefined;
+  for (const key of Object.keys(store)) {
+    if (!key.startsWith(prefix)) continue;
+    const entry = store[key];
+    if (!entry || entry.endedAt) continue;
+    const updatedAt = entry.updatedAt ?? 0;
+    if (!latest || updatedAt > latest.updatedAt) {
+      latest = { key, updatedAt };
+    }
+  }
+  return latest?.key;
+}
 function isAgentMainSessionKey(cfg: OpenClawConfig, sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -1393,6 +1410,23 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         entry: parentEntry,
         reason: "new",
       });
+    }
+    if (!requestedKey) {
+      const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId });
+      const existingKey = findActiveDashboardSessionKey(store, agentId);
+      if (existingKey) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: existingKey,
+            sessionId: store[existingKey]?.sessionId,
+            entry: store[existingKey],
+          },
+          undefined,
+        );
+        return;
+      }
     }
     const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
     const key = requestedKey
