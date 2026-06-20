@@ -1300,7 +1300,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         modelProvider: "openai",
         model: "gpt-5.5",
         responseUsage: "tokens",
-        ...(existingFallbackState ?? {}),
+        ...existingFallbackState,
       };
       const expectedStoredFallbackState = {
         selectedModel: existingFallbackState?.fallbackNoticeSelectedModel,
