@@ -114,6 +114,7 @@ export function createRouter<
     const sameRoute = previous?.routeId === routeId && locationsEqual(previous.location, location);
     const sameMatch = sameRoute && previous?.deps === deps;
     const revalidating = navigationOptions.revalidate === true && previous?.routeId === routeId;
+    const backgroundReload = sameMatch && revalidating;
     const staleTime = route.staleTime ?? options.staleTime ?? DEFAULT_STALE_TIME;
     const fresh =
       previous &&
@@ -181,7 +182,7 @@ export function createRouter<
       matches.setPending([match]);
     }
     matches.setLocation(location, previousLocation);
-    matches.setStatus("loading");
+    matches.setStatus(backgroundReload ? "success" : "loading");
 
     const navigation = (async () => {
       let result: { data: TData; module: TModule };
@@ -280,6 +281,16 @@ export function createRouter<
       }
     })();
     activeNavigation = navigation;
+    if (backgroundReload) {
+      void navigation
+        .finally(() => {
+          if (activeNavigation === navigation) {
+            activeNavigation = null;
+          }
+        })
+        .catch(() => undefined);
+      return;
+    }
     try {
       await navigation;
     } finally {
