@@ -1081,6 +1081,14 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
   return changed ? next : messages;
 }
 
+function isStreamErrorFallbackAssistantMessage(message: unknown, text: string): boolean {
+  if (text.trim() !== STREAM_ERROR_FALLBACK_TEXT) {
+    return false;
+  }
+  const entry = message as { internalStreamError?: unknown; stopReason?: unknown };
+  return entry.stopReason === "error" || entry.internalStreamError === true;
+}
+
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -1096,7 +1104,13 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);
-  if (text === undefined || !isSuppressedControlReplyText(text)) {
+  if (text === undefined) {
+    return false;
+  }
+  if (isStreamErrorFallbackAssistantMessage(message, text)) {
+    return !hasAssistantNonTextContent(message);
+  }
+  if (!isSuppressedControlReplyText(text)) {
     return false;
   }
   return !hasAssistantNonTextContent(message);
@@ -1609,6 +1623,67 @@ function projectSessionsSendInterSessionMessages(
 
 const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
 
+function hasDisplayableAssistantStructuredContent(message: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(message.content) &&
+    message.content.some((block) => {
+      if (!block || typeof block !== "object" || Array.isArray(block)) {
+        return false;
+      }
+      const type = (block as { type?: unknown }).type;
+      return (
+        !isAssistantTextContentType(type) &&
+        type !== "thinking" &&
+        type !== "reasoning" &&
+        type !== "redacted_thinking"
+      );
+    })
+  );
+}
+
+function isPureStreamErrorFallbackAssistantMessage(message: Record<string, unknown>): boolean {
+  const text = extractAssistantTextForSilentCheck(message);
+  return (
+    text !== undefined &&
+    isStreamErrorFallbackAssistantMessage(message, text) &&
+    !hasAssistantNonTextContent(message)
+  );
+}
+
+function hasVisibleAssistantDisplayContent(message: Record<string, unknown>): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER).message as Record<
+    string,
+    unknown
+  >;
+  if (shouldDropAssistantHistoryMessage(sanitized)) {
+    return false;
+  }
+  if (hasDisplayableAssistantStructuredContent(sanitized)) {
+    return true;
+  }
+  const text = extractAssistantTextForSilentCheck(sanitized);
+  return text !== undefined && text.trim().length > 0 && !isSuppressedControlReplyText(text);
+}
+
+function hasLaterVisibleAssistantDisplayContent(
+  messages: Array<Record<string, unknown>>,
+  startIndex: number,
+): boolean {
+  for (let index = startIndex + 1; index < messages.length; index++) {
+    const message = messages[index];
+    if (message.role === "user") {
+      return false;
+    }
+    if (hasVisibleAssistantDisplayContent(message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function sanitizeAssistantErrorDisplayMessage(
   message: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -1643,27 +1718,24 @@ function projectEmptyAssistantErrorMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
   let changed = false;
-  const projected = messages.map((message) => {
-    if (message.role !== "assistant" || message.stopReason !== "error") {
-      return message;
-    }
-    const hasDisplayableStructuredContent =
-      Array.isArray(message.content) &&
-      message.content.some((block) => {
-        if (!block || typeof block !== "object" || Array.isArray(block)) {
-          return false;
-        }
-        const type = (block as { type?: unknown }).type;
-        return (
-          !isAssistantTextContentType(type) &&
-          type !== "thinking" &&
-          type !== "reasoning" &&
-          type !== "redacted_thinking"
-        );
-      });
-    if (hasDisplayableStructuredContent) {
+  const projected: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (
+      isPureStreamErrorFallbackAssistantMessage(message) &&
+      hasLaterVisibleAssistantDisplayContent(messages, index)
+    ) {
       changed = true;
-      return sanitizeAssistantErrorDisplayMessage(message);
+      continue;
+    }
+    if (message.role !== "assistant" || message.stopReason !== "error") {
+      projected.push(message);
+      continue;
+    }
+    if (hasDisplayableAssistantStructuredContent(message)) {
+      changed = true;
+      projected.push(sanitizeAssistantErrorDisplayMessage(message));
+      continue;
     }
     const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
       .message as Record<string, unknown>;
@@ -1690,7 +1762,8 @@ function projectEmptyAssistantErrorMessages(
     );
     if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleReplyText) {
       changed = true;
-      return sanitizeAssistantErrorDisplayMessage(message);
+      projected.push(sanitizeAssistantErrorDisplayMessage(message));
+      continue;
     }
     changed = true;
     const next: Record<string, unknown> = {
@@ -1704,8 +1777,8 @@ function projectEmptyAssistantErrorMessages(
     delete next.errorType;
     delete next.phase;
     delete next.text;
-    return next;
-  });
+    projected.push(next);
+  }
   return changed ? projected : messages;
 }
 

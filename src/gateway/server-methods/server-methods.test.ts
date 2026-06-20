@@ -862,6 +862,59 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
+  it("drops stream-error fallback sentinels from chat history display", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        errorMessage: "provider failed before content",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
+  it("preserves ordinary assistant messages matching the stream-error sentinel text", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
     const result = sanitizeChatHistoryMessages([
       {
@@ -1168,6 +1221,42 @@ describe("projectRecentChatDisplayMessages", () => {
       expect(JSON.stringify(result)).not.toContain("secret.internal.example");
     },
   );
+
+  it("drops repaired stream-error sentinels when a later assistant reply is visible", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        errorMessage: "provider failed before content",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("The agent run failed before producing a reply.");
+  });
 
   it("projects signature-only commentary errors as a visible generic safe failure", () => {
     const result = projectRecentChatDisplayMessages([
