@@ -218,6 +218,25 @@ describe("lmstudio stream wrapper", () => {
     });
   });
 
+  it("streams with the canonical model key returned by preload", async () => {
+    ensureLmstudioModelLoadedMock.mockResolvedValueOnce("gemma-4-e4b-it-ultra-uncensored-heretic");
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const variantKey = "gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m";
+    const stream = runWrappedLmstudioStream(wrapped, { id: `lmstudio/${variantKey}` });
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expectEnsureLoadedFields({
+      modelKey: variantKey,
+      baseUrl: "http://localhost:1234/v1",
+    });
+    expectBaseStreamModelFields(baseStream, {
+      provider: "lmstudio",
+      id: "gemma-4-e4b-it-ultra-uncensored-heretic",
+    });
+  });
+
   it("prefers model contextTokens over contextWindow for preload requests", async () => {
     const baseStream = buildDoneStreamFn();
     const wrapped = createWrappedLmstudioStream(baseStream, {

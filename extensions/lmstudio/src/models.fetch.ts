@@ -13,6 +13,7 @@ import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   buildLmstudioModelName,
   mapLmstudioWireEntry,
+  resolveLmstudioCanonicalModelKey,
   resolveLmstudioServerBase,
   resolveLoadedContextWindow,
   type LmstudioModelWire,
@@ -198,7 +199,7 @@ export async function ensureLmstudioModelLoaded(params: {
   timeoutMs?: number;
   /** Injectable fetch implementation; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
-}): Promise<void> {
+}): Promise<string> {
   const modelKey = params.modelKey.trim();
   if (!modelKey) {
     throw new Error("LM Studio model key is required");
@@ -220,7 +221,11 @@ export async function ensureLmstudioModelLoaded(params: {
   if (preflight.status !== undefined && preflight.status >= 400) {
     throw new Error(`LM Studio model discovery failed (${preflight.status})`);
   }
-  const matchingModel = preflight.models.find((entry) => entry.key?.trim() === modelKey);
+  const canonicalModelKey = resolveLmstudioCanonicalModelKey({
+    modelKey,
+    models: preflight.models,
+  });
+  const matchingModel = preflight.models.find((entry) => entry.key?.trim() === canonicalModelKey);
   const loadedContextWindow = matchingModel ? resolveLoadedContextWindow(matchingModel) : null;
   const advertisedContextLimit = asPositiveSafeInteger(matchingModel?.max_context_length) ?? null;
   const requestedContextLength = asPositiveSafeInteger(params.requestedContextLength) ?? null;
@@ -232,7 +237,7 @@ export async function ensureLmstudioModelLoaded(params: {
           advertisedContextLimit,
         );
   if (loadedContextWindow !== null && loadedContextWindow >= contextLengthForLoad) {
-    return;
+    return canonicalModelKey;
   }
 
   const { response, release } = await fetchLmstudioEndpoint({
@@ -245,7 +250,7 @@ export async function ensureLmstudioModelLoaded(params: {
         json: true,
       }),
       body: JSON.stringify({
-        model: modelKey,
+        model: canonicalModelKey,
         // Ask LM Studio to load with our default target, capped to the model's own limit.
         context_length: contextLengthForLoad,
       }),
@@ -272,4 +277,5 @@ export async function ensureLmstudioModelLoaded(params: {
   } finally {
     await release();
   }
+  return canonicalModelKey;
 }

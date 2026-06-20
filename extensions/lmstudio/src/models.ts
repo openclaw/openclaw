@@ -17,6 +17,8 @@ export type LmstudioModelWire = {
   display_name?: string;
   max_context_length?: number;
   format?: "gguf" | "mlx" | null;
+  variants?: unknown;
+  selected_variant?: unknown;
   capabilities?: {
     vision?: boolean;
     trained_for_tool_use?: boolean;
@@ -217,6 +219,56 @@ export function resolveLoadedContextWindow(
     contextWindow = contextWindow === null ? normalized : Math.max(contextWindow, normalized);
   }
   return contextWindow;
+}
+
+function normalizeLmstudioVariantIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return uniqueStrings(
+    value.flatMap((variant) =>
+      typeof variant === "string" && variant.trim().length > 0 ? variant.trim() : [],
+    ),
+  );
+}
+
+/**
+ * Resolves LM Studio variant ids back to their loadable model key.
+ *
+ * LM Studio exposes quantized variants separately from the canonical `key`, but
+ * `/api/v1/models/load` expects the key. Exact key matches still win so unusual
+ * servers that expose a suffix as the real key are preserved.
+ */
+export function resolveLmstudioCanonicalModelKey(params: {
+  modelKey: string;
+  models: LmstudioModelWire[];
+}): string {
+  const modelKey = params.modelKey.trim();
+  if (!modelKey) {
+    return modelKey;
+  }
+  const normalizedModelKey = modelKey.toLowerCase();
+  for (const entry of params.models) {
+    if (entry.key?.trim() === modelKey) {
+      return modelKey;
+    }
+  }
+  for (const entry of params.models) {
+    const key = entry.key?.trim();
+    if (!key) {
+      continue;
+    }
+    const selectedVariant =
+      typeof entry.selected_variant === "string" ? entry.selected_variant.trim() : "";
+    const variants = normalizeLmstudioVariantIds(entry.variants);
+    if (
+      selectedVariant.toLowerCase() === normalizedModelKey ||
+      variants.some((variant) => variant.toLowerCase() === normalizedModelKey)
+    ) {
+      return key;
+    }
+  }
+  return modelKey;
 }
 
 /**
