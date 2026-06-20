@@ -24,6 +24,7 @@ export const ImageProviderCapabilityGeometrySchema = Type.Union([
 
 export const ImageProviderCapabilityOutputSchema = Type.Union([
   Type.Boolean(),
+  Type.Array(Type.String()), // Empty array [] is valid
   Type.Object({
     formats: Type.Optional(Type.Array(Type.String())),
     qualities: Type.Optional(Type.Array(Type.String())),
