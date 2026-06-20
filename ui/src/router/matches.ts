@@ -8,6 +8,7 @@ import type {
 } from "./types.ts";
 
 export type MatchStore<TRouteId extends string, TModule, TData> = {
+  batch: (operation: () => void) => void;
   getState: () => RouterState<TRouteId, TModule, TData>;
   getMatch: (matchId: string) => RouteMatch<TRouteId, TModule, TData> | undefined;
   getCachedMatch: (matchId: string) => RouteMatch<TRouteId, TModule, TData> | undefined;
@@ -192,6 +193,7 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
     active.get(matchId) ?? pending.get(matchId) ?? cached.get(matchId);
 
   return {
+    batch,
     getState: readState,
     getMatch,
     getCachedMatch: (matchId) => cached.get(matchId),

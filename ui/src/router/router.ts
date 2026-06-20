@@ -232,17 +232,19 @@ export function createRouter<
         lastAccessedAt: Date.now(),
       };
       const currentActive = matches.getActiveMatch();
-      if (!sameMatch && currentActive) {
-        matches.setCached([...matches.getState().cachedMatches, currentActive]);
-        const currentRoute = compiled.byId.get(currentActive.routeId);
-        if (currentRoute) {
-          loading.scheduleGc(currentActive, currentRoute);
+      matches.batch(() => {
+        if (!sameMatch && currentActive) {
+          matches.setCached([...matches.getState().cachedMatches, currentActive]);
+          const currentRoute = compiled.byId.get(currentActive.routeId);
+          if (currentRoute) {
+            loading.scheduleGc(currentActive, currentRoute);
+          }
         }
-      }
-      matches.setActive([resolvedMatch]);
-      matches.setPending([]);
-      matches.setLocation(location, location);
-      matches.setStatus("success");
+        matches.setActive([resolvedMatch]);
+        matches.setPending([]);
+        matches.setLocation(location, location);
+        matches.setStatus("success");
+      });
 
       const lifecycleErrors: unknown[] = [];
       if (!sameRoute) {
