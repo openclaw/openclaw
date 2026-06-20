@@ -18,6 +18,7 @@ import {
 const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 const INPUT_PROVENANCE_KIND_VALUES = ["external_user", "inter_session", "internal_system"] as const;
 const SESSION_LABEL_MAX_LENGTH = 512;
+const SESSION_TITLE_MAX_LENGTH = SESSION_LABEL_MAX_LENGTH;
 
 /** Non-empty string primitive for protocol fields that reject blank values. */
 export const NonEmptyString = Type.String({ minLength: 1 });
@@ -28,11 +29,13 @@ export const ChatSendSessionKeyString = Type.String({
   minLength: 1,
   maxLength: CHAT_SEND_SESSION_KEY_MAX_LENGTH,
 });
-/** Human-readable session label primitive with bounded display length. */
-export const SessionLabelString = Type.String({
+/** Canonical human-readable session title primitive with bounded display length. */
+export const SessionTitleString = Type.String({
   minLength: 1,
-  maxLength: SESSION_LABEL_MAX_LENGTH,
+  maxLength: SESSION_TITLE_MAX_LENGTH,
 });
+/** Human-readable legacy session label primitive with bounded display length. */
+export const SessionLabelString = SessionTitleString;
 /** Provenance marker for content copied from another user/session/system source. */
 export const InputProvenanceSchema = Type.Object(
   {
