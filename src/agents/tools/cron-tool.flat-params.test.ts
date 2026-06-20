@@ -182,3 +182,50 @@ describe("cron tool flat-params", () => {
     });
   });
 });
+
+// Trailing-space key trimming regression tests for #95407.
+import { canonicalizeCronToolObject } from "./cron-tool-canonicalize.js";
+
+describe("cron tool trailing-space key trimming", () => {
+  it("trims trailing spaces from recognized cron job keys", () => {
+    const result = canonicalizeCronToolObject({
+      action: "add",
+      job: {
+        name: "Test",
+        "schedule ": { kind: "cron", expr: "30 10 * * *" },
+        "sessionTarget ": "isolated",
+        "payload ": { kind: "agentTurn", message: "hello" },
+        "enabled ": true,
+      },
+    });
+    expect(result).toHaveProperty("schedule");
+    expect(result).toHaveProperty("sessionTarget");
+    expect(result).toHaveProperty("payload");
+    expect(result).toHaveProperty("enabled");
+    expect(Object.keys(result)).not.toContain("schedule ");
+    expect(result.schedule).toEqual({ kind: "cron", expr: "30 10 * * *" });
+  });
+
+  it("rejects __proto__ key even after trimming", () => {
+    const result = canonicalizeCronToolObject({
+      job: {
+        name: "Test",
+        "__proto__ ": { polluted: true },
+        schedule: { kind: "cron", expr: "0 * * * *" },
+      },
+    });
+    expect(result).toHaveProperty("schedule");
+    expect(Object.keys(result)).not.toContain("__proto__");
+    expect(Object.getPrototypeOf(result)).toBeNull();
+  });
+
+  it("does not strip trailing spaces from values, only keys", () => {
+    const result = canonicalizeCronToolObject({
+      job: {
+        "name ": "Test Name ",
+        schedule: { kind: "cron", expr: "30 10 * * *" },
+      },
+    });
+    expect(result.name).toBe("Test Name ");
+  });
+});

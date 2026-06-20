@@ -248,11 +248,19 @@ function normalizeCronToolKeys(value: Record<string, unknown>): Record<string, u
   // property names (e.g. "schedule " instead of "schedule"). Normalize keys by
   // trimming whitespace so downstream matching against CRON_RECOVERABLE_OBJECT_KEYS
   // and schema validation sees the expected names.
-  const next: Record<string, unknown> = {};
+  const next = Object.create(null) as Record<string, unknown>;
   for (const [key, val] of Object.entries(value)) {
     const trimmed = key.trim();
     if (trimmed.length === 0) continue;
-    next[trimmed] = val;
+    // Only accept keys that are recognized cron fields or look like
+    // standard identifiers (alphanumeric + underscore/dash) to keep the
+    // accumulator narrow and prototype-safe.
+    if (
+      trimmed !== "__proto__" &&
+      (CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed) || /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(trimmed))
+    ) {
+      next[trimmed] = val;
+    }
   }
   return next;
 }
