@@ -35,7 +35,7 @@ export function routeLoadContext(host: SettingsHost): RouteLoadContext {
 }
 
 type AppRouteModule = {
-  render: (context: RouteRenderContext) => unknown;
+  render: (context: RouteRenderContext, data: unknown) => unknown;
   shell?: "chat" | "page";
   header?: boolean;
   contentClass?: string;

@@ -4,11 +4,15 @@ type RenderableModule<TContext, TData> = {
   render: (context: TContext, data: TData | undefined) => unknown;
 };
 
-export type RouterOutletOptions<TRouteId extends string> = {
+export type RouterOutletOptions<TRouteId extends string, TData = unknown> = {
   fallbackRouteId?: TRouteId;
-  pending?: (state: RouteState<TRouteId>) => unknown;
-  error?: (error: unknown, state: RouteState<TRouteId>, render?: () => unknown) => unknown;
-  onRender?: (routeId: TRouteId, state: RouteState<TRouteId>, render: () => unknown) => unknown;
+  pending?: (state: RouteState<TRouteId, TData>) => unknown;
+  error?: (error: unknown, state: RouteState<TRouteId, TData>, render?: () => unknown) => unknown;
+  onRender?: (
+    routeId: TRouteId,
+    state: RouteState<TRouteId, TData>,
+    render: () => unknown,
+  ) => unknown;
 };
 
 function isRenderableModule<TContext, TData>(
@@ -22,10 +26,16 @@ function isRenderableModule<TContext, TData>(
   );
 }
 
-export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TContext>(
-  router: Router<TRouteId, TLoadContext, TModule, unknown>,
+export function renderRouterOutlet<
+  TRouteId extends string,
+  TLoadContext,
+  TModule,
+  TContext,
+  TData = unknown,
+>(
+  router: Router<TRouteId, TLoadContext, TModule, TData>,
   context: TContext,
-  options: RouterOutletOptions<TRouteId> = {},
+  options: RouterOutletOptions<TRouteId, TData> = {},
 ): unknown {
   const state = router.getState();
   const routeId =
@@ -43,7 +53,7 @@ export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModul
   if (route?.component && !module) {
     return options.pending?.(state) ?? null;
   }
-  if (!isRenderableModule<TContext, unknown>(module)) {
+  if (!isRenderableModule<TContext, TData>(module)) {
     return state.status === "error" ? (options.error?.(state.error, state) ?? null) : null;
   }
   const renderPage = () => module.render(context, state.resolvedData);
