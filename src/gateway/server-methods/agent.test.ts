@@ -3779,6 +3779,88 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("infers the key agent id for fresh explicit cron session runs", async () => {
+    const sessionKey = "agent:main:cron-fresh";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "cron turn",
+        sessionKey,
+        bootstrapContextRunKind: "cron",
+        idempotencyKey: "fresh-explicit-agent-session-cron",
+      },
+      { reqId: "fresh-explicit-agent-session-cron" },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      agentId?: string;
+      sessionKey?: string;
+    }>();
+    expect(call.agentId).toBe("main");
+    expect(call.sessionKey).toBe(sessionKey);
+  });
+
+  it("rejects fresh explicit agent sessions when agent id disagrees with the session key", async () => {
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    };
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "first turn",
+        agentId: "work",
+        sessionKey: "agent:main:probe-fresh",
+        idempotencyKey: "fresh-agent-session-mismatch",
+      },
+      { reqId: "fresh-agent-session-mismatch", flushDispatch: false },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    const error = expectRespondError(respond, {});
+    expectStringFieldContains(
+      error,
+      "message",
+      'agent "work" does not match session key agent "main"',
+    );
+  });
+
+  it("rejects an unconfigured agent in a non-global fresh session key", async () => {
+    mocks.listAgentIds.mockReturnValue(["main"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "first turn",
+        sessionKey: "agent:ghost:probe-fresh",
+        idempotencyKey: "fresh-agent-session-unknown-nonglobal",
+      },
+      { reqId: "fresh-agent-session-unknown-nonglobal", flushDispatch: false },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    const error = expectRespondError(respond, {});
+    expectStringFieldContains(error, "message", 'unknown agent id "ghost"');
+  });
+
   it("does not let --agent force the agent main session when --session-id is provided", async () => {
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
     mockMainSessionEntry({ sessionId: "resume-whatsapp-session" });
