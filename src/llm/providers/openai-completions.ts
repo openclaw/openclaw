@@ -197,7 +197,12 @@ export const streamOpenAICompletions: StreamFunction<
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
       const blocks = output.content as StreamingBlock[];
       const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
+      const finishedBlocks = new Set<StreamingBlock>();
       const finishBlock = (block: StreamingBlock) => {
+        if (finishedBlocks.has(block)) {
+          return;
+        }
+        finishedBlocks.add(block);
         const contentIndex = getContentIndex(block);
         if (contentIndex === -1) {
           return;
@@ -259,6 +264,14 @@ export const streamOpenAICompletions: StreamFunction<
         return thinkingBlock;
       };
       const appendTextDelta = (delta: string) => {
+        // Close any open thinking block before emitting text to ensure
+        // thinking_end fires before text_start for providers (e.g. DeepSeek)
+        // that do not emit a discrete thinking_end at the reasoning→content
+        // transition.
+        if (thinkingBlock) {
+          finishBlock(thinkingBlock);
+          thinkingBlock = null;
+        }
         const block = ensureTextBlock();
         block.text += delta;
         stream.push({
