@@ -557,13 +557,11 @@ export function createSessionsSendTool(opts?: {
       const sameSessionA2A = requesterSessionKey === resolvedKey;
       // An isolated cron run is the only requester for which the A2A ping-pong
       // is harmful: feeding the target's reply back as a new turn corrupts the
-      // isolated run (#92257). Detect it with the canonical cron-run classifier
-      // and the cron channel marker (see src/cron/isolated-agent/run.ts), not a
-      // raw `:cron:` substring: a normal requester whose key merely contains
-      // that segment (e.g. agent:main:slack:cron:job:run:uuid) must keep its
-      // intended cross-session ping-pong.
-      const isIsolatedCronRequester =
-        isCronRunSessionKey(requesterSessionKey) || requesterChannel === "cron";
+      // isolated run (#92257). Detect it with the canonical cron-run classifier,
+      // not a raw `:cron:` substring: a normal requester whose key merely
+      // contains that segment (e.g. agent:main:slack:cron:job:run:uuid) must
+      // keep its intended cross-session ping-pong.
+      const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
 
       // Capture the pre-run assistant snapshot before starting the nested run.
       // Fast in-process test doubles and short-circuit agent paths can finish

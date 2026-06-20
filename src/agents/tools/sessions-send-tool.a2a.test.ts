@@ -340,7 +340,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   });
 
   it("with maxPingPongTurns 0 and requester != target, never steps the requester session but still announces in the target (#92257)", async () => {
-    const requesterSessionKey = "agent:main:cron:run:abc";
+    const requesterSessionKey = "agent:main:cron:job:run:abc";
     const targetSessionKey = "agent:other:discord:group:ops";
 
     await runSessionsSendA2AFlow({
@@ -350,7 +350,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       announceTimeoutMs: 10_000,
       maxPingPongTurns: 0,
       requesterSessionKey,
-      requesterChannel: "cron",
+      requesterChannel: "telegram",
       roundOneReply: "Worker completed successfully",
     });
 
@@ -381,8 +381,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       message: "Test message",
       announceTimeoutMs: 10_000,
       maxPingPongTurns: 0,
-      requesterSessionKey: "agent:main:cron:run:abc",
-      requesterChannel: "cron",
+      requesterSessionKey: "agent:main:cron:job:run:abc",
+      requesterChannel: "telegram",
       baseline: {
         text: "pre-existing cron output",
         fingerprint: "pre-existing-cron-output",

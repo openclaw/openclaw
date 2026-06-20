@@ -1112,7 +1112,9 @@ describe("sessions_send gating", () => {
   it("forces maxPingPongTurns to 0 for fire-and-forget sends from an isolated cron requester (#92257)", async () => {
     const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
     vi.mocked(runSessionsSendA2AFlow).mockClear();
-    const requesterSessionKey = "agent:main:cron:run:abc";
+    // Canonical isolated-cron run key (agent:<id>:cron:<job>:run:<run>); the
+    // gate fires on isCronRunSessionKey alone, with a normal delivery channel.
+    const requesterSessionKey = "agent:main:cron:job:run:abc";
     const targetSessionKey = "agent:other:discord:group:ops";
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
@@ -1123,7 +1125,7 @@ describe("sessions_send gating", () => {
     });
     const tool = createSessionsSendTool({
       agentSessionKey: requesterSessionKey,
-      agentChannel: "cron",
+      agentChannel: "telegram",
     });
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
