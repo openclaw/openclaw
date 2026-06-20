@@ -77,17 +77,26 @@ async function withStateDirForStorePath<T>(
   runWithStateDir: () => Promise<T>,
 ): Promise<T> {
   const stateRoot = path.dirname(path.dirname(storePath));
-  resetTaskRouteLeasesForTests();
-  try {
-    return await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, runWithStateDir);
-  } finally {
+  // Issue #92460 (ClawSweeper 4th round P2): resetTaskRouteLeasesForTests
+  // and closeOpenClawStateDatabaseForTest must run INSIDE the
+  // withEnvAsync scope so they operate on the temp OPENCLAW_STATE_DIR
+  // fixture, not the developer's default shared state DB. Previously
+  // the outer reset ran before withEnvAsync installed the temp env, and
+  // the finally reset ran after withEnvAsync restored the previous
+  // env, so both could touch the default DB.
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
     resetTaskRouteLeasesForTests();
     try {
-      closeOpenClawStateDatabaseForTest();
-    } catch {
-      // noop
+      return await runWithStateDir();
+    } finally {
+      resetTaskRouteLeasesForTests();
+      try {
+        closeOpenClawStateDatabaseForTest();
+      } catch {
+        // noop
+      }
     }
-  }
+  });
 }
 
 describe("manual cron route-lease lifecycle — issue #92460 P1 manual path", () => {
