@@ -809,7 +809,6 @@ export async function runPreparedReply(
     : !isNewSession && threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
-  const drainedSystemEventBlocks: string[] = [];
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
@@ -817,6 +816,7 @@ export async function runPreparedReply(
     transcriptCommandBody: string;
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
+    const drainedSystemEventBlocks: string[] = [];
     if (!useFastReplyRuntime) {
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
