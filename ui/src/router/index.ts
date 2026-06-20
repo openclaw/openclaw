@@ -15,5 +15,6 @@ export {
   type RouterNavigationOptions,
   type RouterOptions,
   type RouterState,
+  type RouterStateSelector,
   type RouterHistory,
 } from "./types.ts";

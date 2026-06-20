@@ -4,6 +4,7 @@ import type {
   RouteMatch,
   RouterOptions,
   RouterState,
+  RouterStateSelector,
 } from "./types.ts";
 
 export type MatchStore<TRouteId extends string, TModule, TData> = {
@@ -24,6 +25,11 @@ export type MatchStore<TRouteId extends string, TModule, TData> = {
   invalidate: (routeId?: TRouteId) => void;
   clear: () => void;
   subscribe: (listener: (state: RouterState<TRouteId, TModule, TData>) => void) => () => boolean;
+  subscribeSelector: <TSelected>(
+    selector: RouterStateSelector<RouterState<TRouteId, TModule, TData>, TSelected>,
+    listener: (next: TSelected) => void,
+    equal?: (previous: TSelected, next: TSelected) => boolean,
+  ) => () => boolean;
   subscribeMatch: (
     matchId: string,
     listener: (match: RouteMatch<TRouteId, TModule, TData> | undefined) => void,
@@ -261,6 +267,19 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    subscribeSelector(selector, listener, equal = Object.is) {
+      let previous = selector(readState());
+      const selectedListener = (state: RouterState<TRouteId, TModule, TData>) => {
+        const next = selector(state);
+        if (equal(previous, next)) {
+          return;
+        }
+        previous = next;
+        listener(next);
+      };
+      listeners.add(selectedListener);
+      return () => listeners.delete(selectedListener);
     },
     subscribeMatch(matchId, listener) {
       const current = matchListeners.get(matchId) ?? new Set();

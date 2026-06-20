@@ -313,6 +313,7 @@ export function createRouter<
     },
     getState: matches.getState,
     subscribe: matches.subscribe,
+    subscribeSelector: matches.subscribeSelector,
     subscribeMatch: matches.subscribeMatch,
     pathForRoute: compiled.pathForRoute,
     routeIdFromPath: compiled.routeIdFromPath,

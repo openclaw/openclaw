@@ -86,6 +86,8 @@ export type RouterState<TRouteId extends string = string, TModule = unknown, TDa
   cachedMatches: readonly RouteMatch<TRouteId, TModule, TData>[];
 };
 
+export type RouterStateSelector<TState, TSelected> = (state: TState) => TSelected;
+
 export type RouterOptions<TRouteId extends string, TLoadContext, TModule, TData> = {
   routes: readonly PageDefinition<TRouteId, TLoadContext, TModule, TData>[];
   defaultRouteId?: TRouteId;
@@ -103,6 +105,11 @@ export type Router<TRouteId extends string, TLoadContext, TModule, TData> = {
   invalidate: (routeId?: TRouteId) => void;
   getState: () => RouterState<TRouteId, TModule, TData>;
   subscribe: (listener: (next: RouterState<TRouteId, TModule, TData>) => void) => () => boolean;
+  subscribeSelector: <TSelected>(
+    selector: RouterStateSelector<RouterState<TRouteId, TModule, TData>, TSelected>,
+    listener: (next: TSelected) => void,
+    equal?: (previous: TSelected, next: TSelected) => boolean,
+  ) => () => boolean;
   subscribeMatch: (
     matchId: string,
     listener: (next: RouteMatch<TRouteId, TModule, TData> | undefined) => void,
