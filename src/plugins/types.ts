@@ -192,8 +192,12 @@ export type {
 export type {
   CliBackendAuthEpochMode,
   CliBackendExecutionMode,
+  CliBackendJsonlUsage,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
+  CliBackendParseJsonlEvent,
+  CliBackendParseJsonlEventContext,
+  CliBackendParsedJsonlEvent,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
