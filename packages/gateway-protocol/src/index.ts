@@ -479,6 +479,7 @@ import {
   type WizardStep,
   WizardStepSchema,
 } from "./schema.js";
+import { ImageProvidersResultSchema } from "./schema/image-generation.js";
 
 /** Normalized validation error shape exposed by every protocol validator. */
 export type ValidationError = {
@@ -542,6 +543,7 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
 
 // Public per-method validators. Names intentionally mirror the exported schema
 // constants so call sites can pair validation with the wire contract directly.
+export const validateImageProvidersResult = lazyCompile(ImageProvidersResultSchema);
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
 export const validateRequestFrame = lazyCompile<RequestFrame>(RequestFrameSchema);
