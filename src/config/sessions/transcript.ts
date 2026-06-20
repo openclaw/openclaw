@@ -254,7 +254,7 @@ export async function readRecentUserAssistantTextFromSessionTranscript(
       continue;
     }
   }
-  return recent.reverse();
+  return recent.toReversed();
 }
 
 export async function readRecentUserAssistantTextForSession(
