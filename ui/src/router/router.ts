@@ -217,6 +217,7 @@ export function createRouter<
         dataCache.delete(entry.key);
       }
     }, lifetime);
+    (entry.gcTimer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
   };
 
   const loadModule = (route: PageDefinition<TRouteId, TLoadContext, TModule, TData>) => {
@@ -449,10 +450,12 @@ export function createRouter<
       } catch (error) {
         lifecycleErrors.push(error);
       }
-      try {
-        await runHook(routeId, "onEnter", context, result.data, hookOptions);
-      } catch (error) {
-        lifecycleErrors.push(error);
+      if (!sameRoute) {
+        try {
+          await runHook(routeId, "onEnter", context, result.data, hookOptions);
+        } catch (error) {
+          lifecycleErrors.push(error);
+        }
       }
       if (lifecycleErrors.length > 0) {
         throw lifecycleErrors[0];
