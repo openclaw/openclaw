@@ -229,6 +229,10 @@
       "destination": "/providers/openrouter"
     },
     {
+      "source": "/acedatacloud",
+      "destination": "/providers/acedatacloud"
+    },
+    {
       "source": "/opencode",
       "destination": "/providers/opencode"
     },
@@ -1411,6 +1415,7 @@
               {
                 "group": "Providers",
                 "pages": [
+                  "providers/acedatacloud",
                   "providers/alibaba",
                   "providers/bedrock",
                   "providers/bedrock-mantle",
