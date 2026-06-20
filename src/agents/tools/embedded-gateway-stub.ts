@@ -371,7 +371,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
               return dropPreSessionStartAnnouncePairs(
                 messages,
                 target.applySessionStartedAtFilter && typeof entry?.sessionStartedAt === "number"
-                  ? (entry.sessionStartedAt as number)
+                  ? entry.sessionStartedAt
                   : undefined,
               );
             }),
