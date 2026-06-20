@@ -186,18 +186,41 @@ gh api "repos/$SOURCE_REPO/pulls/<n>/comments"
 gh api "repos/$SOURCE_REPO/issues/<n>/comments"
 ```
 
-Only process `fix/issue-*` PRs created by this workflow unless the user explicitly named PR numbers. Group actionable comments by PR. Ignore praise, status, duplicates, and already-addressed comments. Spawn one worker per selected/scoped PR, same background rules.
+Only process `fix/issue-*` PRs created by this workflow unless the user explicitly named PR numbers. Ignore praise, status, duplicates, resolved threads, and already-addressed comments.
+
+Before spawning review work, normalize the review queue per PR:
+
+1. Collect all actionable inline review comments and issue-level reviewer comments.
+2. Group related comments by root problem, not by comment id or file. A group may include comments across several files when one underlying fix addresses them together.
+3. For each group, record the root problem, related comment ids/URLs, files/lines, acceptance criteria, and any comments intentionally skipped as non-actionable.
+4. Order groups deterministically: PR number, then earliest comment creation time, then first comment id.
+5. Process one group at a time. Start the next group only after the previous group has reported proof, been committed/pushed if changed, and all related comments have replies or an explicit skip reason.
+
+Spawn one review worker for the current group of the selected/scoped PR, same background rules. Do not fan out several groups from the same PR at once; sequential grouping prevents overlapping branch mutations and duplicated replies.
+
+Make checkout/commit/push deterministic where possible:
+
+```bash
+gh pr view <n> --repo "$SOURCE_REPO" --json headRefName,headRepositoryOwner,headRepository,baseRefName
+BRANCH=$(gh pr view <n> --repo "$SOURCE_REPO" --json headRefName --jq .headRefName)
+git fetch origin "$BRANCH"
+git checkout -B "$BRANCH" "origin/$BRANCH"
+git status --short
+```
+
+Use the PR head remote when it is not `origin`; fetch and check out the exact PR head ref before editing. Refuse to continue on a dirty worktree unless the dirt is created by this review worker. Commit once per root-problem group when practical, with a conventional message scoped to the affected area. Push the checked-out branch to its PR head remote without force unless the user explicitly requested force-push.
 
 Review worker instructions:
 
 ```text
-Checkout PR branch.
-Read all actionable review comments.
-Patch minimal changes.
-Run relevant tests.
+Checkout the exact PR head branch from its remote.
+Read only the grouped work item plus enough surrounding code to fix it.
+Patch the minimal root-cause fix for this group.
+Run relevant focused tests or a focused inspection gate.
 Commit and push normally; do not force-push unless explicitly told.
-Reply to addressed comments with fix + commit/file reference.
-Report comments addressed/skipped and proof.
+Reply to every related comment in the group after the fix lands, referencing the commit and file/test proof.
+For comments in the group that are not fixed, reply or report the precise skip reason.
+Report root problem, related comment ids/URLs, files changed, commit, push target, replies left, skipped comments, and proof.
 ```
 
 ## Watch mode
