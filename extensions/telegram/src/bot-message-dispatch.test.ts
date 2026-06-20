@@ -552,6 +552,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   }
 
+  function createReasoningOnContext(): TelegramMessageContext {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "on" },
+    });
+    return createContext({
+      ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+    });
+  }
+
   function createReasoningDefaultContext(): TelegramMessageContext {
     loadSessionStore.mockReturnValue({
       s1: {},
@@ -3607,6 +3616,44 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.update).not.toHaveBeenCalledWith("Thinking...\n\n_Thinking_");
     finishRun?.();
     await run;
+  });
+
+  it("delivers reasoning as durable block when reasoning is on", async () => {
+    // In "on" mode, no draft stream is created for reasoning.
+    setupDraftStreams({ answerMessageId: 2001 });
+    let capturedOnReasoningStream:
+      | ((payload: { text?: string }) => Promise<void> | void)
+      | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      capturedOnReasoningStream = replyOptions?.onReasoningStream as
+        | ((payload: { text?: string }) => Promise<void> | void)
+        | undefined;
+      await replyOptions?.onReasoningStream?.({
+        text: "<think>ambient reasoning</think>",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningOnContext(),
+    });
+
+    // onReasoningStream must be defined for block-delivered reasoning.
+    expect(capturedOnReasoningStream).toBeDefined();
+    // Durable delivery must have been triggered for the reasoning block,
+    // with the formatted text extracted from the thinking tags.
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "Thinking\n\n_ambient reasoning_",
+        }),
+      }),
+    );
+    // Draft streaming must NOT be used for reasoning in "on" mode.
+    const reasoningStreams = createTelegramDraftStream.mock.calls.filter(
+      ([opts]) => (opts as { label?: string })?.label === "reasoning",
+    );
+    expect(reasoningStreams).toHaveLength(0);
   });
 
   it("suppresses reasoning-only finals without raw text fallback", async () => {

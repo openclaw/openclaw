@@ -2423,7 +2423,21 @@ export const dispatchTelegramMessage = async ({
                           enqueueDraftLaneEvent(async () => {
                             await pushStreamReasoningProgress(payload);
                           })
-                      : undefined,
+                      : forceBlockStreamingForReasoning
+                        ? (payload) =>
+                            enqueueDraftLaneEvent(async () => {
+                              const split = splitTelegramReasoningText(payload.text, true);
+                              const text = split.reasoningText?.trim();
+                              if (!text) {
+                                return;
+                              }
+                              reasoningStepState.noteReasoningHint();
+                              reasoningStepState.noteReasoningDelivered();
+                              await sendPayload(applyTextToPayload(payload, text), {
+                                durable: true,
+                              });
+                            })
+                        : undefined,
                   onAssistantMessageStart: answerLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
@@ -2449,7 +2463,12 @@ export const dispatchTelegramMessage = async ({
                           splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
                           resetProgressDraftState();
                         })
-                    : undefined,
+                    : forceBlockStreamingForReasoning
+                      ? () =>
+                          enqueueDraftLaneEvent(async () => {
+                            resetProgressDraftState();
+                          })
+                      : undefined,
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
                   forceToolResultProgress: streamMode === "progress" && streamToolProgressEnabled,
