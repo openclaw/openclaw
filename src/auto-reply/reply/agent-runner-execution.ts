@@ -2393,6 +2393,7 @@ export async function runAgentTurnWithFallback(params: {
                     agentAccountId: params.followupRun.run.agentAccountId,
                     senderId: params.followupRun.run.senderId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
+                    approvalReviewerDeviceId: params.followupRun.run.approvalReviewerDeviceId,
                     toolsAllow: params.opts?.toolsAllow,
                     disableTools: params.opts?.disableTools,
                     abortSignal: runAbortSignal,

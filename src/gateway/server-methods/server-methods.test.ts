@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
@@ -2366,6 +2367,24 @@ describe("exec approval handlers", () => {
     timeoutMs: 2000,
   } as const;
 
+  function createExecApprovalClient(params: {
+    connId: string;
+    clientId: string;
+    deviceId?: string;
+    scopes?: string[];
+    approvalRuntime?: boolean;
+  }): ExecApprovalRequestArgs["client"] {
+    return {
+      connId: params.connId,
+      connect: {
+        client: { id: params.clientId },
+        device: params.deviceId ? { id: params.deviceId } : undefined,
+        scopes: params.scopes,
+      },
+      ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+    } as unknown as ExecApprovalRequestArgs["client"];
+  }
+
   function toExecApprovalRequestContext(context: {
     broadcast: (event: string, payload: unknown) => void;
     hasExecApprovalClients?: () => boolean;
@@ -2869,6 +2888,138 @@ describe("exec approval handlers", () => {
       client: otherClient,
     });
     expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("ignores approval reviewer devices from non-runtime approval request clients", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-client",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+    });
+    const reviewerClient = createExecApprovalClient({
+      connId: "conn-ios-reviewer",
+      clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+      deviceId: "device-ios-reviewer",
+      scopes: ["operator.approvals"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-untrusted",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    expect(
+      manager.getSnapshot("approval-reviewer-untrusted")?.approvalReviewerDeviceIds,
+    ).toBeUndefined();
+
+    const listRespond = vi.fn();
+    await listExecApprovals({
+      handlers,
+      respond: listRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(listRespond)).toBe(true);
+    expect(mockCallArg(listRespond, 0, 1)).toEqual([]);
+
+    const getRespond = vi.fn();
+    await getExecApproval({
+      handlers,
+      id: "approval-reviewer-untrusted",
+      respond: getRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(getRespond)).toBe(false);
+    expectRecordFields(mockCallArg(getRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+
+    expect(manager.resolve("approval-reviewer-untrusted", "deny")).toBe(true);
+    await requestPromise;
+  });
+
+  it("allows the internal approval runtime to bind the initiating mobile approval reviewer device", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const reviewerClient = createExecApprovalClient({
+      connId: "conn-ios-reviewer",
+      clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+      deviceId: "device-ios-reviewer",
+      scopes: ["operator.approvals"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    expect(manager.getSnapshot("approval-reviewer-runtime")?.approvalReviewerDeviceIds).toEqual([
+      "device-ios-reviewer",
+    ]);
+
+    const listRespond = vi.fn();
+    await listExecApprovals({
+      handlers,
+      respond: listRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(listRespond)).toBe(true);
+    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+    expect(approvals.map((entry) => entry.id)).toEqual(["approval-reviewer-runtime"]);
+
+    const getRespond = vi.fn();
+    await getExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime",
+      respond: getRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(getRespond)).toBe(true);
+    expectRecordFields(mockCallArg(getRespond, 0, 1), {
+      id: "approval-reviewer-runtime",
+      commandText: "echo ok",
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime",
+      respond: resolveRespond,
+      context,
+      client: reviewerClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-reviewer-runtime")?.decision).toBe("allow-once");
   });
 
   it("returns not found for stale exec.approval.get ids", async () => {

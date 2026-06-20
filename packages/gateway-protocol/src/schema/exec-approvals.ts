@@ -182,6 +182,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     turnSourceTo: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     turnSourceAccountId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
+    approvalReviewerDeviceIds: Type.Optional(Type.Array(NonEmptyString)),
     requireDeliveryRoute: Type.Optional(Type.Boolean()),
     suppressDelivery: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
