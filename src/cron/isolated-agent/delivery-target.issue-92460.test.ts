@@ -29,14 +29,10 @@ import {
 } from "../../infra/outbound/targets.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
-  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import {
-  acquireTaskRouteLease,
-  getActiveTaskRouteLease,
-  resetTaskRouteLeasesForTests,
-} from "../../tasks/task-route-lease.js";
+import { acquireTaskRouteLease, getActiveTaskRouteLease } from "../../tasks/task-route-lease.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 const { extractDeliveryInfoMock } = vi.hoisted(() => ({
@@ -140,7 +136,13 @@ function setSessionStore(store: SessionStore) {
 
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
-  resetTaskRouteLeasesForTests();
+  // Open a fresh temp state DB before any lease helper runs. A new DB
+  // file is empty, so the previous `resetTaskRouteLeasesForTests()`
+  // dance is unnecessary; running it before this open would have hit
+  // the default shared state DB and could have wiped real route leases.
+  openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+  });
   extractDeliveryInfoMock.mockReset();
   extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   vi.mocked(resolveOutboundTarget).mockReset();
@@ -166,7 +168,7 @@ beforeEach(() => {
 afterEach(() => {
   resetPluginRuntimeStateForTest();
   try {
-    closeOpenClawStateDatabase();
+    closeOpenClawStateDatabaseForTest();
   } catch {
     // noop
   }

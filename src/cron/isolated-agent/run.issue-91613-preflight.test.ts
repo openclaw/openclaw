@@ -8,8 +8,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { CronJob } from "../types.js";
 
 const resolveDeliveryTargetMock = vi.hoisted(() => vi.fn());
+const updateResolvedTaskRouteLeaseMock = vi.hoisted(() => vi.fn(() => false));
 vi.mock("./run-delivery.runtime.js", () => ({
   resolveDeliveryTarget: resolveDeliveryTargetMock,
+  updateResolvedTaskRouteLease: updateResolvedTaskRouteLeaseMock,
 }));
 
 import { resolveCronDeliveryContext } from "./run.js";
