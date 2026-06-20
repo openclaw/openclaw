@@ -86,6 +86,8 @@ describe("ApiClient", () => {
         hostnameAllowlist: ["qqbot.test"],
         allowRfc2544BenchmarkRange: true,
       },
+      timeoutMs: 30_000,
+      capture: false,
     });
   });
 });
