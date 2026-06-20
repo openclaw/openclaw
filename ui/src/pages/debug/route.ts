@@ -45,7 +45,7 @@ export const page = definePage({
       `,
       header: true,
     })),
-  load: async ({ host, app }: DebugLoadContext) => {
+  loader: async ({ host, app }: DebugLoadContext) => {
     await loadDebug(app);
     host.eventLog = host.eventLogBuffer;
   },

@@ -11,7 +11,7 @@ function configPage(id: ConfigPageId, path: string) {
   return definePage({
     id,
     path,
-    load: ({ host, app }: ConfigLoadContext) => loadSettingsPage(host, app),
+    loader: ({ host, app }: ConfigLoadContext) => loadSettingsPage(host, app),
     component: () =>
       import("./page.ts").then((module) => ({
         header: true,

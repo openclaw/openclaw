@@ -15,6 +15,6 @@ export const page = definePage({
       header: true,
       render: ({ state }: SkillWorkshopRenderContext) => module.renderSkillWorkshopPage(state),
     })),
-  load: ({ app }: SkillWorkshopLoadContext) =>
+  loader: ({ app }: SkillWorkshopLoadContext) =>
     loadSkillWorkshopProposals(app, { force: true }).then(() => undefined),
 });

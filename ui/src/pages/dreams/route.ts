@@ -277,7 +277,7 @@ export const page = definePage({
   id: "dreams",
   path: "/dreaming",
   aliases: ["/dreams"],
-  load: ({ host, app }: DreamsLoadContext) => loadDreamsPage(host, app),
+  loader: ({ host, app }: DreamsLoadContext) => loadDreamsPage(host, app),
   component: () => ({
     shell: "page" as const,
     header: true,

@@ -109,7 +109,7 @@ export const page = definePage({
         })}
       `,
     })),
-  load: async ({ app }: SkillsLoadContext) => {
+  loader: async ({ app }: SkillsLoadContext) => {
     await loadAgents(app);
     reconcileSkillsAgentId(app, app.agentsList);
     await loadSkills(app);

@@ -286,7 +286,7 @@ function renderCronPage(state: AppViewState, module: CronModule) {
 export const page = definePage({
   id: "cron",
   path: "/cron",
-  load: ({ host }: CronLoadContext, options) => loadCronPage(host, options),
+  loader: ({ host }: CronLoadContext, options) => loadCronPage(host, options),
   component: () =>
     import("../../ui/views/cron.ts").then((module) => ({
       shell: "page" as const,

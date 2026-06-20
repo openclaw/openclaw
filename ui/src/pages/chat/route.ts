@@ -110,10 +110,10 @@ function renderGuardedChatControls(state: AppViewState) {
 export const page = definePage({
   id: "chat",
   path: "/chat",
-  load: async ({ host, app }: ChatLoadContext) => {
+  loader: async ({ host, app }: ChatLoadContext) => {
     await loadChatPage(host, app);
   },
-  onEnter: ({ host }: ChatLoadContext, options) => {
+  onEnter: ({ host }: ChatLoadContext, _data, options) => {
     if (!options.revalidating) {
       host.chatHasAutoScrolled = false;
     }
