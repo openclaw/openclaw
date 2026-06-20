@@ -207,6 +207,20 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("openclaw plugins install @openclaw/llama-cpp-provider");
   });
 
+  it("does not warn when local provider probe was skipped", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("warns when local provider with default model but gateway probe reports not ready", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",

@@ -472,6 +472,13 @@ export async function noteMemorySearchHealth(
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
+    // When the probe was intentionally skipped (probe: false path per
+    // probeGatewayMemoryStatus), the gateway made no readiness
+    // determination — do not warn. A skipped probe does not mean local
+    // embeddings are unavailable.
+    if (opts?.gatewayMemoryProbe?.skipped) {
+      return;
+    }
     const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
     const detail = opts?.gatewayMemoryProbe?.error?.trim();
     note(
