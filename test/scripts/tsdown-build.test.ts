@@ -276,7 +276,7 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("rejects malformed OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB values", () => {
-    for (const value of ["0", "-1", "1.5", "1e3", "4096mb"]) {
+    for (const value of ["0", "-1", "1.5", "1e3", "4096mb", "9007199254740992"]) {
       expect(() =>
         resolveTsdownBuildInvocation({
           nodeExecPath: "/usr/bin/node",
