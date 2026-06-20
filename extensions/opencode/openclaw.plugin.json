@@ -137,12 +137,6 @@
             ],
             "contextWindow": 200000,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -161,12 +155,6 @@
             ],
             "contextWindow": 200000,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -209,12 +197,6 @@
             ],
             "contextWindow": 200000,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -233,12 +215,6 @@
             ],
             "contextWindow": 200000,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -257,12 +233,6 @@
             ],
             "contextWindow": 200000,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -281,12 +251,6 @@
             ],
             "contextWindow": 1048576,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -305,12 +269,6 @@
             ],
             "contextWindow": 1048576,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -329,12 +287,6 @@
             ],
             "contextWindow": 1048576,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -377,12 +329,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -401,12 +347,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -425,12 +365,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -449,12 +383,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -473,12 +401,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -497,12 +419,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -521,12 +437,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -545,12 +455,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -569,12 +473,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -593,12 +491,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -617,12 +509,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -641,12 +527,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -665,12 +545,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -689,12 +563,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -713,12 +581,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -737,12 +599,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -761,12 +617,6 @@
             ],
             "contextWindow": 128000,
             "maxTokens": 8192,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -784,12 +634,6 @@
             ],
             "contextWindow": 1000000,
             "maxTokens": 384000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -807,12 +651,6 @@
             ],
             "contextWindow": 1000000,
             "maxTokens": 384000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -830,12 +668,6 @@
             ],
             "contextWindow": 204800,
             "maxTokens": 131072,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -853,12 +685,6 @@
             ],
             "contextWindow": 204800,
             "maxTokens": 131072,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -876,12 +702,6 @@
             ],
             "contextWindow": 204800,
             "maxTokens": 131072,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -899,12 +719,6 @@
             ],
             "contextWindow": 204800,
             "maxTokens": 131072,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -923,12 +737,6 @@
             ],
             "contextWindow": 262144,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -947,12 +755,6 @@
             ],
             "contextWindow": 262144,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -970,12 +772,6 @@
             ],
             "contextWindow": 262144,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -993,12 +789,6 @@
             ],
             "contextWindow": 262144,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -1017,12 +807,6 @@
             ],
             "contextWindow": 128000,
             "maxTokens": 8192,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -1040,12 +824,6 @@
             ],
             "contextWindow": 1000000,
             "maxTokens": 384000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -1064,12 +842,6 @@
             ],
             "contextWindow": 262144,
             "maxTokens": 8192,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -1087,12 +859,6 @@
             ],
             "contextWindow": 262144,
             "maxTokens": 65536,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -1110,12 +876,6 @@
             ],
             "contextWindow": 204800,
             "maxTokens": 131072,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -1134,12 +894,6 @@
             ],
             "contextWindow": 128000,
             "maxTokens": 8192,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -1158,12 +912,6 @@
             ],
             "contextWindow": 128000,
             "maxTokens": 8192,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,

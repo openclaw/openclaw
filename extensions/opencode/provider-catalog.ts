@@ -20,8 +20,6 @@ const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
 
-const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
-
 const MODEL_COSTS: Record<
   string,
   { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -187,6 +185,7 @@ function resolveOpencodeZenTransport(modelId: string): OpencodeZenTransport {
 function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
   const normalizedModelId = modelId.trim().toLowerCase();
   const transport = resolveOpencodeZenTransport(normalizedModelId);
+  const cost = MODEL_COSTS[normalizedModelId];
   return normalizeModelCompat({
     id: normalizedModelId,
     name: formatModelName(normalizedModelId),
@@ -195,7 +194,7 @@ function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
     baseUrl: transport.baseUrl,
     reasoning: true,
     input: supportsImageInput(normalizedModelId) ? ["text", "image"] : ["text"],
-    cost: MODEL_COSTS[normalizedModelId] ?? DEFAULT_COST,
+    ...(cost ? { cost } : {}),
     contextWindow: resolveContextWindow(normalizedModelId),
     maxTokens: resolveMaxTokens(normalizedModelId),
     compat: {

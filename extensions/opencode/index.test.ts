@@ -223,6 +223,56 @@ describe("opencode provider plugin", () => {
     expect(manifestQwen.baseUrl).toBe("https://opencode.ai/zen");
   });
 
+  it("omits unverified OpenCode Zen costs instead of publishing default zeroes", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const unverifiedCostModel = requireRecord(
+      provider.resolveDynamicModel?.({ modelId: "claude-opus-4-1" } as never),
+      "unverified cost model",
+    );
+    expect(unverifiedCostModel.cost).toBeUndefined();
+
+    const verifiedCostModel = requireRecord(
+      provider.resolveDynamicModel?.({ modelId: "claude-opus-4-8" } as never),
+      "verified cost model",
+    );
+    expect(verifiedCostModel.cost).toEqual({
+      input: 5,
+      output: 25,
+      cacheRead: 0.5,
+      cacheWrite: 6.25,
+    });
+
+    const manifestProvider = requireRecord(
+      manifest.modelCatalog.providers.opencode,
+      "manifest provider",
+    );
+    const manifestModels = manifestProvider.models;
+    if (!Array.isArray(manifestModels)) {
+      throw new Error("expected manifest opencode models");
+    }
+    const manifestUnverifiedCostModel = requireRecord(
+      manifestModels.find(
+        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-1",
+      ),
+      "manifest unverified cost model",
+    );
+    expect(manifestUnverifiedCostModel.cost).toBeUndefined();
+
+    const manifestVerifiedCostModel = requireRecord(
+      manifestModels.find(
+        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-8",
+      ),
+      "manifest verified cost model",
+    );
+    expect(manifestVerifiedCostModel.cost).toEqual({
+      input: 5,
+      output: 25,
+      cacheRead: 0.5,
+      cacheWrite: 6.25,
+    });
+  });
+
   it("loads OpenCode Zen model discovery through the provider runtime", () => {
     expect(manifest.modelCatalog.discovery.opencode).toBe("runtime");
   });
