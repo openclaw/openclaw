@@ -7,7 +7,7 @@ import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 // Create proposals are for new skills; existing workspace skill paths must be
 // updated through action=update so the live target hash/rollback guard applies.
 const WORKSPACE_SKILL_PATH_REFERENCE_PATTERN =
-  /(?:^|[\s"'`([{|<>])((?:(?:\.\/|[ab]\/)?skills)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
+  /(?:^|[\s"'`([{|<>])((?:(?:\.\/|[ab]\/)?(?:skills|\.agents\/skills))\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
 const ABSOLUTE_WORKSPACE_SKILL_PATH_REFERENCE_PATTERN =
   /(?:^|[\s"'`([{|<>])((?:~(?=\/)|\/)[^\s"'`)\]}|<>]*\/skills\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
 
@@ -33,14 +33,24 @@ function collectExistingWorkspaceSkillRefs(params: {
   content: string;
 }): string[] {
   const workspaceDir = path.resolve(params.workspaceDir);
-  const skillDirs = loadWorkspaceSkillEntries(workspaceDir, {
+  const references = collectWorkspaceSkillPathReferences(params.content, workspaceDir);
+  if (references.length === 0) {
+    return [];
+  }
+  const workspaceSkillEntries = loadWorkspaceSkillEntries(workspaceDir, {
     config: params.config,
     workspaceOnly: true,
-  })
+  });
+  const projectAgentSkillEntries = referencesIncludeProjectAgentSkills(references, workspaceDir)
+    ? loadWorkspaceSkillEntries(workspaceDir, { config: params.config }).filter(
+        (entry) => entry.skill.source === "agents-skills-project",
+      )
+    : [];
+  const skillDirs = [...workspaceSkillEntries, ...projectAgentSkillEntries]
     .map((entry) => path.resolve(entry.skill.baseDir))
     .toSorted((a, b) => b.length - a.length);
   const refs = new Set<string>();
-  for (const reference of collectWorkspaceSkillPathReferences(params.content, workspaceDir)) {
+  for (const reference of references) {
     const skillDir = skillDirs.find(
       (candidate) => reference === candidate || isPathInside(candidate, reference),
     );
@@ -53,13 +63,14 @@ function collectExistingWorkspaceSkillRefs(params: {
 
 function collectWorkspaceSkillPathReferences(content: string, workspaceDir: string): string[] {
   const references = new Set<string>();
-  for (const match of content.matchAll(WORKSPACE_SKILL_PATH_REFERENCE_PATTERN)) {
+  const normalizedContent = content.replace(/\\/g, "/");
+  for (const match of normalizedContent.matchAll(WORKSPACE_SKILL_PATH_REFERENCE_PATTERN)) {
     const reference = resolveWorkspacePathReference(workspaceDir, match[1] ?? "");
     if (reference) {
       references.add(reference);
     }
   }
-  for (const match of content.matchAll(ABSOLUTE_WORKSPACE_SKILL_PATH_REFERENCE_PATTERN)) {
+  for (const match of normalizedContent.matchAll(ABSOLUTE_WORKSPACE_SKILL_PATH_REFERENCE_PATTERN)) {
     const reference = resolveWorkspacePathReference(workspaceDir, match[1] ?? "");
     if (reference) {
       references.add(reference);
@@ -77,13 +88,32 @@ function resolveWorkspacePathReference(workspaceDir: string, rawReference: strin
     return resolved === workspaceDir || isPathInside(workspaceDir, resolved) ? resolved : null;
   }
   const parts = reference.split("/");
-  if (parts[0] !== "skills" || parts.length < 3) {
+  const isProjectAgentSkill = parts[0] === ".agents" && parts[1] === "skills";
+  if (isProjectAgentSkill ? parts.length < 4 : parts[0] !== "skills" || parts.length < 3) {
     return null;
   }
-  if (parts.some((part) => !part || part === "." || part === ".." || part.startsWith("."))) {
+  if (
+    parts.some((part, index) => {
+      if (isProjectAgentSkill && index === 0 && part === ".agents") {
+        return false;
+      }
+      return !part || part === "." || part === ".." || part.startsWith(".");
+    })
+  ) {
     return null;
   }
   return path.resolve(workspaceDir, ...parts);
+}
+
+function referencesIncludeProjectAgentSkills(
+  references: readonly string[],
+  workspaceDir: string,
+): boolean {
+  const projectAgentSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
+  return references.some(
+    (reference) =>
+      reference === projectAgentSkillsDir || isPathInside(projectAgentSkillsDir, reference),
+  );
 }
 
 function formatWorkspaceSkillRef(workspaceDir: string, skillDir: string): string {

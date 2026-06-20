@@ -63,6 +63,7 @@ describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
         "+++ b/skills/foo/SKILL.md\n",
       "skills/foo/",
     ],
+    ["Windows-style relative path", "Change `skills\\foo\\SKILL.md`.", "skills/foo/"],
   ])("rejects existing workspace skill refs in %s", async (_label, content, expectedRef) => {
     const workspaceDir = await makeWorkspaceWithSkills(workspaceSkills);
 
@@ -105,6 +106,40 @@ describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
         process.env.HOME = previousHome;
       }
     }
+  });
+
+  it("rejects existing project agent skill refs", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-create-target-agents-");
+    await writeSkill({
+      dir: path.join(workspaceDir, ".agents", "skills", "project-reviewer"),
+      name: "project-reviewer",
+      description: "Existing project reviewer skill",
+      body: "# Project Reviewer\n\nExisting workflow.\n",
+    });
+
+    expect(() =>
+      assertCreateProposalDoesNotPatchExistingSkills({
+        workspaceDir,
+        content: "Patch `.agents/skills/project-reviewer/SKILL.md`.",
+      }),
+    ).toThrow(
+      "action=create cannot propose changes to existing workspace skills: .agents/skills/project-reviewer/",
+    );
+  });
+
+  it("rejects prompted absolute paths with native Windows separators", async () => {
+    const workspaceDir = await makeWorkspaceWithSkills(workspaceSkills);
+    const absoluteSkillFile = path
+      .join(workspaceDir, "skills", "foo", "SKILL.md")
+      .split(path.sep)
+      .join("\\");
+
+    expect(() =>
+      assertCreateProposalDoesNotPatchExistingSkills({
+        workspaceDir,
+        content: `<location>${absoluteSkillFile}</location>`,
+      }),
+    ).toThrow("action=create cannot propose changes to existing workspace skills: skills/foo/");
   });
 
   it.each([
