@@ -18,6 +18,23 @@ function macosVersion(): string {
   return out || os.release();
 }
 
+/**
+ * Resolves the OS label for runtime-prompt context (e.g., "macOS 26.5.1" on Darwin,
+ * "Linux 6.8.0" on other platforms).
+ *
+ * On Darwin this uses `sw_vers -productVersion` instead of `os.release()` which
+ * returns the Darwin kernel version (e.g., 25.5.0) that no longer maps to the
+ * macOS marketing version starting with macOS 26 (Tahoe).
+ *
+ * Fixes #95145
+ */
+export function resolveRuntimeOsLabel(): string {
+  if (os.platform() === "darwin") {
+    return `macOS ${macosVersion()}`;
+  }
+  return `${os.type()} ${os.release()}`;
+}
+
 /** Resolves a compact OS label for diagnostics, logs, and environment summaries. */
 export function resolveOsSummary(): OsSummary {
   const platform = os.platform();
