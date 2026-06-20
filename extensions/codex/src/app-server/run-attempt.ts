@@ -1033,13 +1033,18 @@ export async function runCodexAppServerAttempt(
     promptInputRange: { start: number; end: number } | undefined,
     turnPromptText: string,
   ): CodexProjectedContextRange | undefined => {
+    const promptTextInputOffset = promptInputRange
+      ? promptInputRange.end - promptText.length
+      : undefined;
     if (
       !promptContextRange ||
       !promptInputRange ||
+      promptTextInputOffset === undefined ||
       promptInputRange.start < 0 ||
       promptInputRange.end < promptInputRange.start ||
       promptInputRange.end > prompt.length ||
-      prompt.slice(promptInputRange.start, promptInputRange.end) !== promptText ||
+      promptTextInputOffset < promptInputRange.start ||
+      prompt.slice(promptTextInputOffset, promptInputRange.end) !== promptText ||
       !turnPromptText.endsWith(prompt)
     ) {
       return undefined;
@@ -1049,7 +1054,7 @@ export async function runCodexAppServerAttempt(
     // earlier input span. The exact input range still covers prepend-only hooks.
     const promptTextOffset = prompt.endsWith(promptText)
       ? prompt.length - promptText.length
-      : promptInputRange.end - promptText.length;
+      : promptTextInputOffset;
     if (promptTextOffset < 0) {
       return undefined;
     }

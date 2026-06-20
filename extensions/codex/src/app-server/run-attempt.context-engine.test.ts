@@ -525,6 +525,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 300_000;
     params.prompt = "current prompt survives";
+    params.currentInboundContext = { text: "current inbound context survives" };
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -532,6 +533,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const inputText = getRequestInputText(harness);
     expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
     expect(inputText).toContain("recent anchor");
+    expect(inputText).toContain("current inbound context survives");
     expect(inputText).toContain("current prompt survives");
 
     await harness.completeTurn();
