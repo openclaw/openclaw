@@ -66,6 +66,7 @@ import {
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
   renderCodexSkillsCollaborationInstructions,
+  resolveCodexDeliveryHintPreservedInputRange,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import {
@@ -1115,11 +1116,17 @@ export async function runCodexAppServerAttempt(
       promptBuild.promptInputRange,
       turnPromptText,
     );
-    const preservedRange = resolveShiftedPromptInputRange(
-      promptBuild.prompt,
-      promptBuild.promptInputRange,
-      turnPromptText,
-    );
+    const preservedRange =
+      resolveShiftedPromptInputRange(
+        promptBuild.prompt,
+        promptBuild.promptInputRange,
+        turnPromptText,
+      ) ??
+      resolveCodexDeliveryHintPreservedInputRange({
+        prompt: promptBuild.prompt,
+        promptInputRange: promptBuild.promptInputRange,
+        decoratedPrompt: turnPromptText,
+      });
     return fitCodexProjectedContextForTurnStart({
       promptText: turnPromptText,
       contextRange: projectedRanges?.contextRange,
