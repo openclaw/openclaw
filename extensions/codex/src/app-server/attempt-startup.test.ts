@@ -95,6 +95,7 @@ function startThreadWithHarness(
 ) {
   const harness = overrides?.harness ?? createClientHarness();
   const paths = overrides?.paths ?? createAttemptPaths();
+  const attemptParams = createAttemptParams(paths);
   if (!overrides?.skipStartSpy) {
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
   }
@@ -109,9 +110,10 @@ function startThreadWithHarness(
     startupAuthProfileId: undefined,
     startupAuthAccountCacheKey: undefined,
     startupEnvApiKeyCacheKey: undefined,
+    authProfileStore: attemptParams.authProfileStore,
     agentDir: paths.agentDir,
     config: undefined,
-    buildAttemptParams: () => createAttemptParams(paths),
+    buildAttemptParams: () => attemptParams,
     sessionAgentId: "agent-1",
     effectiveWorkspace: paths.workspaceDir,
     effectiveCwd: paths.cwd,
@@ -131,7 +133,7 @@ function startThreadWithHarness(
     spawnedBy: undefined,
   });
 
-  return { harness, run };
+  return { harness, run, attemptParams };
 }
 
 async function answerInitialize(harness: ClientHarness): Promise<void> {
@@ -195,6 +197,34 @@ describe("startCodexAttemptThread", () => {
 
     await expect(run).rejects.toThrow("Invalid bearer token");
     expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
+  it("forwards scoped auth stores through the startup client factory", async () => {
+    let observedFactoryOptions:
+      | Parameters<Parameters<typeof startCodexAttemptThread>[0]["attemptClientFactory"]>[4]
+      | undefined;
+    const { harness, run, attemptParams } = startThreadWithHarness(
+      5_000,
+      new AbortController().signal,
+      {
+        attemptClientFactory:
+          (factoryHarness) => async (_startOptions, _authProfileId, _agentDir, _config, options) => {
+            observedFactoryOptions = options;
+            return factoryHarness.client;
+          },
+      },
+    );
+
+    await vi.waitFor(() => expect(observedFactoryOptions).toBeDefined());
+    expect(observedFactoryOptions?.authProfileStore).toBe(attemptParams.authProfileStore);
+
+    await answerInitialize(harness);
+    const threadStart = await waitForThreadStart(harness);
+    harness.send({
+      id: threadStart.id,
+      error: { code: -32000, message: "401 authentication_error: Invalid bearer token" },
+    });
+    await expect(run).rejects.toThrow();
   });
 
   it("retires a failed startup client after another active lease releases", async () => {

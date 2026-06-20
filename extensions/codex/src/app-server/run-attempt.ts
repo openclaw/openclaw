@@ -1344,6 +1344,7 @@ export async function runCodexAppServerAttempt(
       startupAuthProfileId,
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
+      authProfileStore: params.authProfileStore,
       agentDir,
       config: params.config,
       buildAttemptParams: buildActiveRunAttemptParams,
