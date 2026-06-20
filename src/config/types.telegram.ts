@@ -109,6 +109,8 @@ export type TelegramAccountConfig = {
   execApprovals?: TelegramExecApprovalConfig;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
+  /** When false, disables isolated polling ingress and falls back to legacy main-thread polling. Default: true. */
+  isolatedIngress?: boolean;
   /** Override native command registration for Telegram (bool or "auto"). */
   commands?: ProviderCommandsConfig;
   /** Custom commands to register in Telegram's command menu (merged with native). */

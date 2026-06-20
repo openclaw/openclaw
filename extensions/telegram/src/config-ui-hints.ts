@@ -6,6 +6,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram",
     help: "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",
   },
+  isolatedIngress: {
+    label: "Telegram Isolated Ingress",
+    help: "When false, disables isolated polling ingress for this account and falls back to legacy main-thread polling. Default: true.",
+  },
   customCommands: {
     label: "Telegram Custom Commands",
     help: "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
