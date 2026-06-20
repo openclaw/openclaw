@@ -4,6 +4,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { resolveBoundAgentIdForSession } from "../session-agent-binding.js";
 
 type ResolveContextEngineCapabilitiesParams = {
@@ -14,6 +15,30 @@ type ResolveContextEngineCapabilitiesParams = {
   contextEnginePluginId?: string;
   purpose: string;
 };
+
+/**
+ * Resolve the LLM model-override policy for a context-engine's owning plugin.
+ * When the context-engine is owned by a plugin that configures
+ * `plugins.entries.<id>.llm.allowModelOverride: true`, the authority should
+ * reflect that so `assertAllowedModelOverride` can honor the override without
+ * relying on a potentially-stale plugin-policy lookup via `getConfig`.
+ */
+function resolveContextEngineModelOverridePolicy(
+  cfg: OpenClawConfig | undefined,
+  contextEnginePluginId: string | undefined,
+): { allowModelOverride: boolean; allowedModels?: readonly string[] } {
+  if (!cfg || !contextEnginePluginId) {
+    return { allowModelOverride: false };
+  }
+  const entry = normalizePluginsConfig(cfg.plugins).entries[contextEnginePluginId]?.llm;
+  if (entry?.allowModelOverride === true) {
+    return {
+      allowModelOverride: true,
+      allowedModels: entry.allowedModels,
+    };
+  }
+  return { allowModelOverride: false };
+}
 
 /**
  * Build host-owned capabilities that are bound to one context-engine runtime call.
@@ -28,6 +53,10 @@ export function resolveContextEngineCapabilities(
     agentId: params.agentId,
   });
   const contextEnginePluginId = normalizeOptionalString(params.contextEnginePluginId);
+  const modelOverridePolicy = resolveContextEngineModelOverridePolicy(
+    params.config,
+    contextEnginePluginId,
+  );
   return {
     llm: {
       complete: async (request) => {
@@ -42,7 +71,10 @@ export function resolveContextEngineCapabilities(
             ...(params.authProfileId ? { preferredProfile: params.authProfileId } : {}),
             ...(contextEnginePluginId ? { pluginIdForPolicy: contextEnginePluginId } : {}),
             allowAgentIdOverride: false,
-            allowModelOverride: false,
+            allowModelOverride: modelOverridePolicy.allowModelOverride,
+            ...(modelOverridePolicy.allowedModels
+              ? { allowedModels: modelOverridePolicy.allowedModels }
+              : {}),
             allowComplete: true,
           },
         }).complete(request);

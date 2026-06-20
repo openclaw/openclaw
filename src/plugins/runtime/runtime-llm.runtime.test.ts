@@ -326,7 +326,7 @@ describe("runtime.llm.complete", () => {
         messages: [{ role: "user", content: "summarize" }],
       }),
     ).rejects.toThrow(
-      'model override "openai/gpt-5.5" is not allowlisted for plugin "lossless-claw"',
+      'model override "openai/gpt-5.5" is not allowlisted',
     );
     expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
