@@ -1826,6 +1826,26 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(updates.join("\n")).not.toContain("Reasoning");
   });
 
+  it("ignores reasoning deltas that are a substring of the current buffer", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "reasoning", text: "Reading files" },
+      { kind: "reasoning", text: "Read" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(["Shelling", "• Reading files"].join("\n"));
+    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
+    expect(updates.join("\n")).not.toContain("Reading filesRead");
+  });
+
   it("replaces Slack reasoning snapshots instead of appending duplicates", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);

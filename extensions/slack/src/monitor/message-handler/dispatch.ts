@@ -377,6 +377,11 @@ function mergeSlackReasoningProgressText(
   if (!normalizedIncoming || normalizedIncoming === normalizedCurrent) {
     return current;
   }
+  if (normalizedCurrent && normalizedCurrent.startsWith(normalizedIncoming)) {
+    // Incoming is a sub-string of current (partial resend / reconnected retry).
+    // Keep the longer buffer; the missing suffix arrives in the next delta.
+    return current;
+  }
   if (
     options?.snapshot === true ||
     isSlackReasoningSnapshotText(incoming) ||
