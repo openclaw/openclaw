@@ -71,9 +71,46 @@ describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
     );
   });
 
+  it("rejects prompted absolute and home-relative existing workspace skill refs", async () => {
+    const homeDir = await tempDirs.make("openclaw-skill-workshop-create-target-home-");
+    const workspaceDir = path.join(homeDir, "workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "foo"),
+      name: "foo",
+      description: "Existing Foo skill",
+      body: "# Foo\n\nExisting workflow.\n",
+    });
+    const absoluteSkillFile = path.join(workspaceDir, "skills", "foo", "SKILL.md");
+
+    expect(() =>
+      assertCreateProposalDoesNotPatchExistingSkills({
+        workspaceDir,
+        content: `<location>${absoluteSkillFile}</location>`,
+      }),
+    ).toThrow("action=create cannot propose changes to existing workspace skills: skills/foo/");
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    try {
+      expect(() =>
+        assertCreateProposalDoesNotPatchExistingSkills({
+          workspaceDir,
+          content: "Change `~/workspace/skills/foo/SKILL.md`.",
+        }),
+      ).toThrow("action=create cannot propose changes to existing workspace skills: skills/foo/");
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
+  });
+
   it.each([
     ["new skill path", "Add `skills/new-skill/SKILL.md`."],
     ["bare directory without child path", "This mentions skills/foo as prose."],
+    ["non-workspace absolute path", "Change `/tmp/other/skills/foo/SKILL.md`."],
     ["non-workspace URL path", "See https://example.test/skills/foo/SKILL.md"],
     ["plain word prefix", "prefixskills/foo/SKILL.md"],
   ])("allows %s", async (_label, content) => {

@@ -1,12 +1,15 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveOsHomeRelativePath } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-safety.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 
 // Create proposals are for new skills; existing workspace skill paths must be
 // updated through action=update so the live target hash/rollback guard applies.
 const WORKSPACE_SKILL_PATH_REFERENCE_PATTERN =
-  /(?:^|[\s"'`([{|<])((?:(?:\.\/|[ab]\/)?skills)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
+  /(?:^|[\s"'`([{|<>])((?:(?:\.\/|[ab]\/)?skills)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
+const ABSOLUTE_WORKSPACE_SKILL_PATH_REFERENCE_PATTERN =
+  /(?:^|[\s"'`([{|<>])((?:~(?=\/)|\/)[^\s"'`)\]}|<>]*\/skills\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
 
 export function assertCreateProposalDoesNotPatchExistingSkills(params: {
   workspaceDir: string;
@@ -56,11 +59,23 @@ function collectWorkspaceSkillPathReferences(content: string, workspaceDir: stri
       references.add(reference);
     }
   }
+  for (const match of content.matchAll(ABSOLUTE_WORKSPACE_SKILL_PATH_REFERENCE_PATTERN)) {
+    const reference = resolveWorkspacePathReference(workspaceDir, match[1] ?? "");
+    if (reference) {
+      references.add(reference);
+    }
+  }
   return [...references].sort((a, b) => a.localeCompare(b));
 }
 
 function resolveWorkspacePathReference(workspaceDir: string, rawReference: string): string | null {
   const reference = rawReference.replace(/^(?:\.\/|[ab]\/)/, "");
+  if (reference.startsWith("~/") || path.isAbsolute(reference)) {
+    const resolved = reference.startsWith("~/")
+      ? resolveOsHomeRelativePath(reference)
+      : path.resolve(reference);
+    return resolved === workspaceDir || isPathInside(workspaceDir, resolved) ? resolved : null;
+  }
   const parts = reference.split("/");
   if (parts[0] !== "skills" || parts.length < 3) {
     return null;
