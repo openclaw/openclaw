@@ -36,4 +36,20 @@ describe("HyperlinkMarkdown", () => {
     expect(rendered.every((line) => visibleWidth(line) <= 12)).toBe(true);
     expect(rendered.join("\n")).toContain("this-is-a");
   });
+
+  it("keeps fenced code borders nested inside markdown containers", () => {
+    const markdown = new HyperlinkMarkdown(
+      ["- item", "  ```ts", "  const value = 1;", "  ```", "- next"].join("\n"),
+      0,
+      0,
+      markdownTheme,
+    );
+
+    const rendered = plainLines(markdown.render(12));
+
+    expect(rendered.every((line) => visibleWidth(line) <= 12)).toBe(true);
+    expect(rendered).toContain("  ```ts");
+    expect(rendered).toContain("  ```");
+    expect(rendered).not.toContain("```ts");
+  });
 });

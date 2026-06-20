@@ -5,18 +5,20 @@ import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
 
 type MarkdownSegment =
   | { kind: "markdown"; text: string }
-  | { kind: "code"; fence: string; info: string; lines: string[]; closed: boolean };
+  | { kind: "code"; prefix: string; fence: string; info: string; lines: string[]; closed: boolean };
 
-const OPEN_FENCE_RE = /^(?: {0,3})(`{3,}|~{3,})(.*)$/;
+const OPEN_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const CODE_WRAP_TOKEN_RE = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]+/gu;
 const WHITESPACE_RE = /^\s+$/;
 
-function parseOpeningFence(line: string): { fence: string; info: string } | undefined {
+function parseOpeningFence(
+  line: string,
+): { prefix: string; fence: string; info: string } | undefined {
   const match = OPEN_FENCE_RE.exec(line);
   if (!match) {
     return undefined;
   }
-  return { fence: match[1], info: match[2].trim() };
+  return { prefix: match[1], fence: match[2], info: match[3].trim() };
 }
 
 function isClosingFence(line: string, openingFence: string): boolean {
@@ -209,17 +211,18 @@ export class HyperlinkMarkdown implements Component {
     const highlightedLines = highlightCode
       ? wrappedCodeLines.flatMap((line) => highlightCode(line, language))
       : wrappedCodeLines.map((line) => this.theme.codeBlock(line));
-    const borderWidth = Math.max(1, width - this.paddingX * 2);
-    const lines = wrapCodeLine(`${segment.fence}${segment.info}`, borderWidth).map((line) =>
-      this.theme.codeBlockBorder(line),
+    const borderPrefixWidth = visibleWidth(segment.prefix);
+    const borderWidth = Math.max(1, width - this.paddingX * 2 - borderPrefixWidth);
+    const renderBorderLine = (line: string) =>
+      this.theme.codeBlockBorder(`${segment.prefix}${line}`);
+    const lines = wrapCodeLine(`${segment.fence}${segment.info}`, borderWidth).map(
+      renderBorderLine,
     );
     for (const line of highlightedLines) {
       lines.push(`${indent}${line}`);
     }
     if (segment.closed) {
-      lines.push(
-        ...wrapCodeLine(segment.fence, borderWidth).map((line) => this.theme.codeBlockBorder(line)),
-      );
+      lines.push(...wrapCodeLine(segment.fence, borderWidth).map(renderBorderLine));
     }
     return lines.map((line) => this.applyLineChrome(line, width));
   }
