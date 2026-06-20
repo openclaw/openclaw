@@ -198,10 +198,8 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function resolveControlUiImageThumbnailMaxSide(config?: OpenClawConfig): number {
-  return (
-    config?.gateway?.controlUi?.imageThumbnailMaxSide ?? CONTROL_UI_DEFAULT_IMAGE_THUMBNAIL_MAX_SIDE
-  );
+function resolveControlUiImageThumbnailMaxSide(): number {
+  return CONTROL_UI_DEFAULT_IMAGE_THUMBNAIL_MAX_SIDE;
 }
 
 async function tryBuildAssistantMediaThumbnail(
@@ -651,7 +649,7 @@ export async function handleControlUiAssistantMediaRequest(
       const thumbnail = await tryBuildAssistantMediaThumbnail(
         opened,
         mime ?? null,
-        resolveControlUiImageThumbnailMaxSide(opts?.config),
+        resolveControlUiImageThumbnailMaxSide(),
       );
       if (thumbnail) {
         res.statusCode = 200;

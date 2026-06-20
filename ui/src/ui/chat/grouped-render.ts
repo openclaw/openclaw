@@ -150,6 +150,7 @@ type ImageRenderOptions = {
   localMediaPreviewRoots?: readonly string[];
   basePath?: string;
   authToken?: string | null;
+  authTokens?: readonly string[];
   onRequestUpdate?: () => void;
 };
 
@@ -437,6 +438,7 @@ type RenderMessageGroupOptions = {
   basePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
+  assistantAttachmentAuthTokens?: readonly string[];
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
@@ -469,6 +471,7 @@ function buildGroupedMessageRenderOptions(
     basePath: opts.basePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+    assistantAttachmentAuthTokens: opts.assistantAttachmentAuthTokens,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
   };
@@ -1169,13 +1172,28 @@ function buildManagedOutgoingImagePreviewFetchUrl(source: string, basePath?: str
   }
 }
 
+function resolveManagedOutgoingImageAuthTokens(opts?: ImageRenderOptions): string[] {
+  const tokens: string[] = [];
+  for (const raw of [...(opts?.authTokens ?? []), opts?.authToken]) {
+    const token = raw?.trim();
+    if (token && !tokens.includes(token)) {
+      tokens.push(token);
+    }
+  }
+  return tokens;
+}
+
+function shouldRetryManagedOutgoingImageAuth(status: number): boolean {
+  return status === 401 || status === 403;
+}
+
 async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
-  const authToken = opts?.authToken?.trim() ?? "";
+  const authTokens = resolveManagedOutgoingImageAuthTokens(opts);
   const fetchUrl = buildManagedOutgoingImagePreviewFetchUrl(source, opts?.basePath);
-  const cacheKey = `${fetchUrl}::${authToken}`;
+  const cacheKey = `${fetchUrl}::${authTokens.join("\u0000")}`;
   const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -1188,31 +1206,35 @@ async function resolveManagedOutgoingImageBlobUrl(
   if (!pending) {
     pending = (async () => {
       const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
-      const headers = new Headers({ Accept: "image/*" });
-      if (authToken) {
-        headers.set("Authorization", `Bearer ${authToken}`);
+      const attempts = authTokens.length > 0 ? authTokens : [null];
+      for (const authToken of attempts) {
+        const headers = buildManagedOutgoingImageHeaders(source, authToken, {
+          requesterSessionKey,
+        });
+        const res = await fetch(fetchUrl, {
+          method: "GET",
+          headers,
+          credentials: "same-origin",
+        });
+        if (!res.ok) {
+          if (authToken && shouldRetryManagedOutgoingImageAuth(res.status)) {
+            continue;
+          }
+          managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+          return null;
+        }
+        const blob = await res.blob();
+        if (!blob.type.startsWith("image/")) {
+          managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+          return null;
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
+        managedImageBlobUrlMissCache.delete(cacheKey);
+        return blobUrl;
       }
-      if (requesterSessionKey) {
-        headers.set("x-openclaw-requester-session-key", requesterSessionKey);
-      }
-      const res = await fetch(fetchUrl, {
-        method: "GET",
-        headers,
-        credentials: "same-origin",
-      });
-      if (!res.ok) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-        return null;
-      }
-      const blob = await res.blob();
-      if (!blob.type.startsWith("image/")) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-        return null;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-      managedImageBlobUrlMissCache.delete(cacheKey);
-      return blobUrl;
+      managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+      return null;
     })().finally(() => {
       managedImageBlobUrlCache.delete(cacheKey);
     });
@@ -1221,13 +1243,18 @@ async function resolveManagedOutgoingImageBlobUrl(
   return pending;
 }
 
-function buildManagedOutgoingImageHeaders(source: string, authToken?: string | null): Headers {
+function buildManagedOutgoingImageHeaders(
+  source: string,
+  authToken?: string | null,
+  opts?: { requesterSessionKey?: string | null },
+): Headers {
   const headers = new Headers({ Accept: "image/*" });
   const normalizedAuthToken = authToken?.trim();
   if (normalizedAuthToken) {
     headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
   }
-  const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
+  const requesterSessionKey =
+    opts?.requesterSessionKey ?? resolveManagedOutgoingImageRequesterSessionKey(source);
   if (requesterSessionKey) {
     headers.set("x-openclaw-requester-session-key", requesterSessionKey);
   }
@@ -1239,21 +1266,29 @@ async function fetchImageBlobForAction(source: string, opts?: ImageActionOptions
   const fetchUrl = isManagedImage
     ? buildManagedOutgoingImageFetchUrl(source, opts?.basePath)
     : source;
-  const res = await fetch(fetchUrl, {
-    method: "GET",
-    headers: isManagedImage
-      ? buildManagedOutgoingImageHeaders(source, opts?.authToken)
-      : new Headers({ Accept: "image/*" }),
-    credentials: "same-origin",
-  });
-  if (!res.ok) {
-    throw new Error(`Image request failed with HTTP ${res.status}`);
+  const authTokens = isManagedImage ? resolveManagedOutgoingImageAuthTokens(opts) : [];
+  const attempts = isManagedImage && authTokens.length > 0 ? authTokens : [null];
+  for (const authToken of attempts) {
+    const res = await fetch(fetchUrl, {
+      method: "GET",
+      headers: isManagedImage
+        ? buildManagedOutgoingImageHeaders(source, authToken)
+        : new Headers({ Accept: "image/*" }),
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      if (isManagedImage && authToken && shouldRetryManagedOutgoingImageAuth(res.status)) {
+        continue;
+      }
+      throw new Error(`Image request failed with HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    if (!blob.type.startsWith("image/")) {
+      throw new Error(`Expected image response, got ${blob.type || "unknown content type"}`);
+    }
+    return blob;
   }
-  const blob = await res.blob();
-  if (!blob.type.startsWith("image/")) {
-    throw new Error(`Expected image response, got ${blob.type || "unknown content type"}`);
-  }
-  return blob;
+  throw new Error("Image request failed with HTTP 403");
 }
 
 function imageExtensionForMimeType(mimeType: string): string {
@@ -1651,6 +1686,7 @@ function renderAssistantAttachments(
   localMediaPreviewRoots: readonly string[],
   basePath?: string,
   authToken?: string | null,
+  authTokens?: readonly string[],
   onRequestUpdate?: () => void,
 ) {
   if (attachments.length === 0) {
@@ -1686,7 +1722,13 @@ function renderAssistantAttachments(
             }),
             actionUrl: attachmentUrl,
             alt: attachment.label,
-            actionOptions: { basePath, authToken, localMediaPreviewRoots, label: attachment.label },
+            actionOptions: {
+              basePath,
+              authToken,
+              authTokens,
+              localMediaPreviewRoots,
+              label: attachment.label,
+            },
           });
         }
         if (attachment.kind === "audio") {
@@ -1895,6 +1937,7 @@ function renderGroupedMessage(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
+    assistantAttachmentAuthTokens?: readonly string[];
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -1916,6 +1959,7 @@ function renderGroupedMessage(
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     basePath: opts.basePath,
     authToken: opts.assistantAttachmentAuthToken,
+    authTokens: opts.assistantAttachmentAuthTokens,
     onRequestUpdate: opts.onRequestUpdate,
   };
   const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
@@ -2091,6 +2135,7 @@ function renderGroupedMessage(
                         opts.localMediaPreviewRoots ?? [],
                         opts.basePath,
                         opts.assistantAttachmentAuthToken,
+                        opts.assistantAttachmentAuthTokens,
                         opts.onRequestUpdate,
                       )}
                       ${reasoningMarkdown
@@ -2148,6 +2193,7 @@ function renderGroupedMessage(
               opts.localMediaPreviewRoots ?? [],
               opts.basePath,
               opts.assistantAttachmentAuthToken,
+              opts.assistantAttachmentAuthTokens,
               opts.onRequestUpdate,
             )}
             ${reasoningMarkdown

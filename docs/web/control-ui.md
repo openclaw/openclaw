@@ -307,19 +307,7 @@ The value is validated before it reaches the browser. Supported values include p
 
 ## Chat image thumbnails
 
-Generated and managed chat images render as authenticated thumbnails in the Control UI timeline. The default maximum thumbnail side length is 300 pixels. To tune the server-generated preview size without changing the original image used by Open, Download, and Copy actions, set `gateway.controlUi.imageThumbnailMaxSide`:
-
-```json5
-{
-  gateway: {
-    controlUi: {
-      imageThumbnailMaxSide: 512,
-    },
-  },
-}
-```
-
-The value must be an integer from 32 through 4096.
+Generated and managed chat images render as authenticated thumbnails in the Control UI timeline. Open, Download, and Copy actions still use the original full-size image.
 
 ## Tailnet access (recommended)
 

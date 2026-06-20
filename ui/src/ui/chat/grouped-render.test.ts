@@ -1588,7 +1588,7 @@ describe("grouped chat rendering", () => {
     vi.unstubAllGlobals();
   });
 
-  it("fetches managed chat images with auth and renders blob previews", async () => {
+  it("retries owner-capable auth for managed chat image previews and actions", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const managedChatImageUrl =
       "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full";
@@ -1602,10 +1602,19 @@ describe("grouped chat rendering", () => {
     );
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const headers = init?.headers as Headers;
-      expect(headers.get("Authorization")).toBe("Bearer session-token");
+      const authHeader = headers.get("Authorization");
+      expect(["Bearer session-token", "Bearer owner-token"]).toContain(authHeader);
       expect(headers.get("x-openclaw-requester-session-key")).toBe("agent:main:main");
+      if (authHeader === "Bearer session-token") {
+        return {
+          ok: false,
+          status: 403,
+          blob: async () => new Blob(["forbidden"], { type: "text/plain" }),
+        };
+      }
       return {
         ok: true,
+        status: 200,
         blob: async () => new Blob(["png"], { type: "image/png" }),
       };
     });
@@ -1630,6 +1639,7 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "session-token",
+        assistantAttachmentAuthTokens: ["session-token", "owner-token"],
       },
     );
 
@@ -1641,7 +1651,6 @@ describe("grouped chat rendering", () => {
       },
       { interval: 1, timeout: 100 },
     );
-    expect(fetchMock).toHaveBeenCalled();
     const fetchedUrls = fetchMock.mock.calls.map(([url]) => url);
     const thumbnailUrl =
       "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/thumbnail";
@@ -1658,6 +1667,10 @@ describe("grouped chat rendering", () => {
         credentials: "same-origin",
       }),
     );
+    const thumbnailAuthHeaders = fetchMock.mock.calls
+      .filter(([url]) => url === thumbnailUrl)
+      .map(([, init]) => (init ? (init.headers as Headers).get("Authorization") : null));
+    expect(thumbnailAuthHeaders).toEqual(["Bearer session-token", "Bearer owner-token"]);
 
     const fullObjectUrl = "blob:managed-full-image";
     const createObjectUrlSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue(fullObjectUrl);
@@ -1690,6 +1703,10 @@ describe("grouped chat rendering", () => {
         credentials: "same-origin",
       }),
     );
+    const fullAuthHeaders = fetchMock.mock.calls
+      .filter(([url]) => url === managedChatImageUrl)
+      .map(([, init]) => (init ? (init.headers as Headers).get("Authorization") : null));
+    expect(fullAuthHeaders).toEqual(["Bearer session-token", "Bearer owner-token"]);
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
     expectSameOriginGet(fetchInit);
   });

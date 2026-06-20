@@ -77,6 +77,7 @@ import {
   handleChatManualRefresh,
   isCronSessionKey,
   parseSessionKey,
+  resolveAssistantAttachmentAuthTokens,
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
   resolveSessionOptionGroups,
@@ -322,6 +323,28 @@ describe("resolveAssistantAttachmentAuthToken", () => {
         password: "   ",
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveAssistantAttachmentAuthTokens", () => {
+  it("returns ordered unique credential candidates", () => {
+    expect(
+      resolveAssistantAttachmentAuthTokens({
+        hello: { auth: { deviceToken: "device-token" } } as AppViewState["hello"],
+        settings: { token: "session-token" } as AppViewState["settings"],
+        password: "session-token",
+      }),
+    ).toEqual(["device-token", "session-token"]);
+  });
+
+  it("drops blank and header-unsafe credential candidates", () => {
+    expect(
+      resolveAssistantAttachmentAuthTokens({
+        hello: { auth: { deviceToken: "bad\nvalue" } } as AppViewState["hello"],
+        settings: { token: "   " } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toEqual(["shared-password"]);
   });
 });
 

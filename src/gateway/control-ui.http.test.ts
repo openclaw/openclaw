@@ -383,18 +383,17 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("uses configured thumbnail sizing for assistant media previews", async () => {
+  it("uses bounded thumbnail sizing for assistant media previews", async () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-thumb-",
       fn: async (tmpRoot) => {
         const filePath = path.join(tmpRoot, "wide.png");
-        await fs.writeFile(filePath, createSolidPngBuffer(120, 40, { r: 24, g: 64, b: 128 }));
+        await fs.writeFile(filePath, createSolidPngBuffer(600, 200, { r: 24, g: 64, b: 128 }));
 
         const { res, handled, end } = await runAssistantMediaRequest({
           url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&thumbnail=1&token=test-token`,
           method: "GET",
           auth: { mode: "token", token: "test-token", allowTailscale: false },
-          config: { gateway: { controlUi: { imageThumbnailMaxSide: 60 } } },
         });
 
         expect(handled).toBe(true);
@@ -402,8 +401,8 @@ describe("handleControlUiHttpRequest", () => {
         const thumbnail = end.mock.calls[0]?.[0];
         expect(Buffer.isBuffer(thumbnail)).toBe(true);
         await expect(getImageMetadata(thumbnail as Buffer)).resolves.toEqual({
-          width: 60,
-          height: 20,
+          width: 300,
+          height: 100,
         });
       },
     });
