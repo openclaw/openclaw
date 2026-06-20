@@ -2,6 +2,7 @@
 // preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { streamSessionTranscriptLinesReverse } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
@@ -51,6 +52,54 @@ function resolveInjectedAssistantContent(params: {
     return [{ type: "text", text: labelPrefix.trim() }, ...params.content];
   }
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
+}
+
+/** Extract concatenated visible text from an assistant message block array. */
+function extractMessageBlockText(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block) =>
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+        ? ((block as { text: string }).text ?? "")
+        : "",
+    )
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return text || undefined;
+}
+
+/**
+ * Find the latest assistant message whose visible text matches,
+ * skipping non-message entries (e.g. openclaw.cache-ttl) in the reverse scan.
+ * Returns null when no match is found or the transcript is empty.
+ */
+async function findLatestAssistantMessageIdByText(
+  transcriptPath: string,
+  expectedText: string,
+): Promise<{ messageId: string; message: Record<string, unknown> } | null> {
+  if (!expectedText) return null;
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!record || typeof record !== "object" || Array.isArray(record)) continue;
+    const r = record as Record<string, unknown>;
+    if (r.type !== "message") continue;
+    const message = r.message as Record<string, unknown> | undefined;
+    if (!message || message.role !== "assistant") continue;
+    const existingText = extractMessageBlockText(message.content);
+    if (existingText === expectedText) {
+      return { messageId: typeof r.id === "string" ? r.id : expectedText, message };
+    }
+  }
+  return null;
 }
 
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
@@ -116,6 +165,19 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         }
       : {}),
   };
+
+  // Deduplicate against the canonical agent reply already in the transcript.
+  // After the agent writes its reply, cache-ttl is appended as a child and
+  // becomes the leaf. Without this check the injected append parents to
+  // cache-ttl, creating a duplicate branch that WebChat renders twice.
+  // See: https://github.com/openclaw/openclaw/issues/94930
+  const expectedText = extractMessageBlockText(resolvedContent);
+  if (expectedText) {
+    const existing = await findLatestAssistantMessageIdByText(params.transcriptPath, expectedText);
+    if (existing) {
+      return { ok: true, messageId: existing.messageId, message: existing.message };
+    }
+  }
 
   try {
     const turn = await persistSessionTranscriptTurn(
