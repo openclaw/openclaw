@@ -20,6 +20,9 @@ export { EventHub, isGatewayEvent } from "./event-hub.js";
 export { normalizeGatewayEvent } from "./normalize.js";
 export { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 export type {
+  AgentsCreateParams,
+  AgentsDeleteParams,
+  AgentsUpdateParams,
   AgentRunParams,
   ApprovalMode,
   ArtifactQuery,

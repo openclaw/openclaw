@@ -324,3 +324,25 @@ export type SessionTarget = {
 };
 
 export type RunCreateParams = AgentRunParams;
+
+export type AgentsCreateParams = {
+  name: string;
+  workspace: string;
+  model?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+export type AgentsUpdateParams = {
+  agentId: string;
+  name?: string;
+  workspace?: string;
+  model?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+export type AgentsDeleteParams = {
+  agentId: string;
+  deleteFiles?: boolean;
+};

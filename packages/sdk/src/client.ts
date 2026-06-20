@@ -4,6 +4,9 @@ import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
+  AgentsCreateParams,
+  AgentsDeleteParams,
+  AgentsUpdateParams,
   AgentRunParams,
   ArtifactQuery,
   ArtifactsDownloadResult,
@@ -715,15 +718,15 @@ export class AgentsNamespace {
     return new Agent(this.client, id);
   }
 
-  async create(params: Record<string, unknown>): Promise<unknown> {
+  async create(params: AgentsCreateParams): Promise<unknown> {
     return await this.client.request("agents.create", params);
   }
 
-  async update(params: Record<string, unknown>): Promise<unknown> {
+  async update(params: AgentsUpdateParams): Promise<unknown> {
     return await this.client.request("agents.update", params);
   }
 
-  async delete(params: Record<string, unknown>): Promise<unknown> {
+  async delete(params: AgentsDeleteParams): Promise<unknown> {
     return await this.client.request("agents.delete", params);
   }
 }
