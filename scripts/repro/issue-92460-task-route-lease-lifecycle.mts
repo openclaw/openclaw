@@ -19,6 +19,11 @@
  *   3. settle → getActive returns undefined (lease is no longer active)
  *   4. extend → expiresAt is bumped
  *   5. expireStaleTaskRouteLeases GC only marks expired rows
+ *   6. mapDeliveryStatusToLeaseRetirement maps terminal statuses
+ *   7. SQLite persistence: close + reopen keeps the row
+ *   8. re-acquire after settle clears settledAt (PR #95352 P3 fix)
+ *   9. deleteTaskRouteLeasesByTaskIdInDb removes all leases for a task
+ *      atomically (PR #95352 P2 retention fix)
  *
  * Real environment: this script runs against a real on-disk SQLite
  * database under a temp directory, then cleans up. No mocks, no in-
@@ -35,6 +40,7 @@ import {
 } from "../../src/state/openclaw-state-db.ts";
 import {
   acquireTaskRouteLease,
+  deleteTaskRouteLeasesByTaskIdInDb,
   expireStaleTaskRouteLeases,
   extendTaskRouteLease,
   getActiveTaskRouteLease,
@@ -125,6 +131,67 @@ async function main(): Promise<void> {
     const afterReopen = getActiveTaskRouteLease("run-persist");
     assert(afterReopen, "lease lost after DB close + reopen");
     console.log("PASS  7. lease persists across SQLite close + reopen");
+
+    // 8. PR #95352 P3 fix: re-acquire after settle must clear settledAt.
+    // Without the fix, the conflict update left the old settled_at value
+    // in place, so getActive would return a lease whose .settledAt still
+    // reflected the prior terminal transition.
+    acquireTaskRouteLease({
+      runId: "run-reacquire-settled-at",
+      taskId: "task-reacquire-settled-at",
+      requesterOrigin: { channel: "telegram", to: "444", accountId: "default" },
+      ttlMs: 60_000,
+    });
+    settleTaskRouteLease("run-reacquire-settled-at", "settled");
+    acquireTaskRouteLease({
+      runId: "run-reacquire-settled-at",
+      taskId: "task-reacquire-settled-at",
+      requesterOrigin: { channel: "telegram", to: "444-reset", accountId: "default" },
+      ttlMs: 60_000,
+    });
+    const reacquired = getActiveTaskRouteLease("run-reacquire-settled-at");
+    assert(reacquired, "re-acquired lease not active");
+    assert.equal(reacquired.status, "active");
+    assert.equal(
+      reacquired.settledAt,
+      undefined,
+      "settledAt should be cleared on re-acquire (PR #95352 P3)",
+    );
+    console.log("PASS  8. re-acquire after settle clears settledAt");
+
+    // 9. PR #95352 P2 fix: deleteTaskRouteLeasesByTaskIdInDb removes
+    // every lease row for the given taskId atomically. The full task
+    // registry delete path is covered by task-registry.store.test.ts;
+    // this proves the lease-module helper behaves as advertised on a
+    // real DB.
+    acquireTaskRouteLease({
+      runId: "run-cascade-A",
+      taskId: "task-cascade-repro",
+      requesterOrigin: { channel: "telegram", to: "555", accountId: "default" },
+      ttlMs: 60_000,
+    });
+    acquireTaskRouteLease({
+      runId: "run-cascade-B",
+      taskId: "task-cascade-repro",
+      requesterOrigin: { channel: "telegram", to: "555", accountId: "default" },
+      ttlMs: 60_000,
+    });
+    acquireTaskRouteLease({
+      runId: "run-cascade-other",
+      taskId: "task-cascade-other",
+      requesterOrigin: { channel: "telegram", to: "666", accountId: "default" },
+      ttlMs: 60_000,
+    });
+    const { db } = openOpenClawStateDatabase();
+    const deleted = deleteTaskRouteLeasesByTaskIdInDb(db, "task-cascade-repro");
+    assert.equal(deleted, 2, `expected 2 leases deleted, got ${deleted}`);
+    assert(!getActiveTaskRouteLease("run-cascade-A"), "run-cascade-A still active");
+    assert(!getActiveTaskRouteLease("run-cascade-B"), "run-cascade-B still active");
+    assert(
+      getActiveTaskRouteLease("run-cascade-other"),
+      "unrelated task's lease was incorrectly deleted",
+    );
+    console.log("PASS  9. deleteTaskRouteLeasesByTaskIdInDb cascade");
 
     console.log("ALL PASS  task-route lease lifecycle behaves as expected");
   } catch (err) {
