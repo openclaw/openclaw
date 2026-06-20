@@ -17,6 +17,7 @@ export type CronQuickCreateProps = {
   open: boolean;
   step: CronQuickCreateStep;
   draft: CronQuickCreateDraft;
+  modelSuggestions?: string[];
   onDraftChange: (patch: Partial<CronQuickCreateDraft>) => void;
   onStepChange: (step: CronQuickCreateStep) => void;
   onCreate: () => void;
@@ -29,6 +30,7 @@ export type CronQuickCreateStep = "what" | "when" | "how";
 export type CronQuickCreateDraft = {
   prompt: string;
   name: string;
+  model?: string;
   schedulePreset: SchedulePresetId | "custom";
   deliveryPreset: DeliveryPresetId;
 };
@@ -121,6 +123,7 @@ export function createDefaultDraft(): CronQuickCreateDraft {
   return {
     prompt: "",
     name: "",
+    model: "",
     schedulePreset: "every-morning",
     deliveryPreset: "notify",
   };
@@ -198,6 +201,12 @@ export function draftToCronFormPatch(draft: CronQuickCreateDraft): Partial<CronF
       patch.deliveryMode = "none";
       patch.wakeMode = "now";
       break;
+  }
+
+  // Model
+  const model = draft.model?.trim();
+  if (model) {
+    patch.payloadModel = model;
   }
 
   return patch;
@@ -345,6 +354,21 @@ function renderHowStep(props: CronQuickCreateProps) {
           `,
         )}
       </div>
+      <label class="field cqc-model-field">
+        <span class="field-label">${t("cron.form.model")}</span>
+        <input
+          type="text"
+          .value=${props.draft.model ?? ""}
+          @input=${(e: Event) =>
+            props.onDraftChange({ model: (e.target as HTMLInputElement).value })}
+          placeholder=${t("cron.form.modelPlaceholder")}
+          list="cqc-model-suggestions"
+        />
+        <datalist id="cqc-model-suggestions">
+          ${(props.modelSuggestions ?? []).map((m) => html`<option value=${m}></option>`)}
+        </datalist>
+        <span class="field-hint muted">${t("cron.form.modelHelp")}</span>
+      </label>
     </div>
     <div class="cqc-actions">
       <div class="cqc-actions__secondary">

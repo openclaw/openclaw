@@ -38,4 +38,18 @@ describe("cron quick create", () => {
     expect(patch.deliveryMode).toBe("announce");
     expect(patch.wakeMode).toBe("now");
   });
+
+  it("maps model override into payloadModel", () => {
+    const patch = draftToCronFormPatch(createDraft({ model: "gpt-5" }));
+
+    expect(patch.payloadModel).toBe("gpt-5");
+  });
+
+  it("omits payloadModel when model is empty or undefined", () => {
+    const emptyModel = draftToCronFormPatch(createDraft({ model: "" }));
+    const noModel = draftToCronFormPatch(createDraft({ model: undefined }));
+
+    expect(emptyModel.payloadModel).toBeUndefined();
+    expect(noModel.payloadModel).toBeUndefined();
+  });
 });

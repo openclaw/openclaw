@@ -1253,6 +1253,7 @@ function renderCronQuickCreateForTab(
     open: state.cronQuickCreateOpen,
     step: state.cronQuickCreateStep,
     draft: state.cronQuickCreateDraft ?? createDefaultDraft(),
+    modelSuggestions: state.cronModelSuggestions,
     onDraftChange: (patch) => {
       state.cronQuickCreateDraft = {
         ...(state.cronQuickCreateDraft ?? createDefaultDraft()),
