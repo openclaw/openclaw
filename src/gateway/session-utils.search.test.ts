@@ -587,6 +587,79 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions[0].displayName).toBe("Quote Assistant");
   });
 
+  test("filters resolved-default-agent direct sessions by configured default account", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops", default: true }, { id: "quote" }] },
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+          accounts: {
+            ops: { name: "Ops Agent Account" },
+            work: { name: "Heliotrope Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const directKey = "agent:ops:feishu:direct:ou_8ad348410b";
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        ...makeStore(),
+        [directKey]: {
+          sessionId: "feishu-direct-session",
+          updatedAt: Date.now(),
+          origin: {
+            provider: "feishu",
+            label: "ou_8ad348410b",
+          },
+        } as SessionEntry,
+      },
+      opts: { search: "heliotrope" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe(directKey);
+    expect(result.sessions[0].displayName).toBe("Heliotrope Assistant");
+  });
+
+  test("filters direct sessions by normalized configured account display fallback", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+      channels: {
+        feishu: {
+          defaultAccount: "Router D",
+          accounts: {
+            "router-d": { name: "Router Display" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const directKey = "agent:main:feishu:direct:ou_8ad348410b";
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        ...makeStore(),
+        [directKey]: {
+          sessionId: "feishu-direct-session",
+          updatedAt: Date.now(),
+          origin: {
+            provider: "feishu",
+            label: "ou_8ad348410b",
+          },
+        } as SessionEntry,
+      },
+      opts: { search: "router" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe(directKey);
+    expect(result.sessions[0].displayName).toBe("Router Display");
+  });
+
   test("hides cron run alias session keys from sessions list", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {

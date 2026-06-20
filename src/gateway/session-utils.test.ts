@@ -903,6 +903,61 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("Quote Assistant");
   });
 
+  test("buildGatewaySessionRow displayName uses configured default account for resolved default agent", () => {
+    const cfg = {
+      agents: { list: [{ id: "ops", default: true }, { id: "quote" }] },
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+          accounts: {
+            ops: { name: "Ops Agent Account" },
+            work: { name: "Work Feishu" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "feishu",
+      origin: { label: "ou_8ad348410b" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:ops:feishu:direct:ou_8ad348410b": entry },
+      key: "agent:ops:feishu:direct:ou_8ad348410b",
+      entry,
+    });
+    expect(row.displayName).toBe("Work Feishu");
+  });
+
+  test("buildGatewaySessionRow displayName normalizes configured account lookup", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      channels: {
+        feishu: {
+          defaultAccount: "Router D",
+          accounts: {
+            "router-d": { name: "Router Display" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "feishu",
+      origin: { label: "ou_8ad348410b" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:feishu:direct:ou_8ad348410b": entry },
+      key: "agent:main:feishu:direct:ou_8ad348410b",
+      entry,
+    });
+    expect(row.displayName).toBe("Router Display");
+  });
+
   test("buildGatewaySessionRow displayName uses default account before agent id", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },

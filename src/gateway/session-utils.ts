@@ -74,9 +74,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
+import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
   DEFAULT_AGENT_ID,
+  normalizeAccountId,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -1254,7 +1256,11 @@ function readConfiguredChannelAccountName(params: {
   if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
     return undefined;
   }
-  const accountConfig = (accounts as Record<string, unknown>)[accountId];
+  const accountConfig = resolveNormalizedAccountEntry(
+    accounts as Record<string, unknown>,
+    accountId,
+    normalizeAccountId,
+  );
   if (!accountConfig || typeof accountConfig !== "object" || Array.isArray(accountConfig)) {
     return undefined;
   }
@@ -1297,11 +1303,15 @@ function listDirectSessionAccountDisplayNameCandidates(params: {
 }): string[] {
   const candidates: string[] = [];
   const seen = new Set<string>();
+  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
+  const parsedAgentId = params.parsed.agentId
+    ? normalizeAgentId(params.parsed.agentId)
+    : undefined;
   appendAccountIdCandidate(candidates, seen, params.entry?.origin?.accountId);
   appendAccountIdCandidate(candidates, seen, params.entry?.lastAccountId);
   appendAccountIdCandidate(candidates, seen, params.parsed.accountId);
-  if (params.parsed.agentId !== DEFAULT_AGENT_ID) {
-    appendAccountIdCandidate(candidates, seen, params.parsed.agentId);
+  if (parsedAgentId && parsedAgentId !== defaultAgentId) {
+    appendAccountIdCandidate(candidates, seen, parsedAgentId);
   }
   appendAccountIdCandidate(
     candidates,
