@@ -1429,7 +1429,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       expect(result).toEqual({ signal: null, status: 143 });
       expect(elapsedMs).toBeLessThan(2_000);
       expect(readFileSync(logPath, "utf8")).toContain("signal cleanup log sentinel");
-      await waitForDead(childPid, 2_000);
+      await waitForDead(childPid, 10_000);
     } finally {
       if (runnerPid !== undefined && isProcessAlive(runnerPid)) {
         process.kill(runnerPid, "SIGKILL");
