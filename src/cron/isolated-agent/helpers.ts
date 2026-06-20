@@ -9,7 +9,16 @@ import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
 type DeliveryPayload = Pick<
   ReplyPayload,
-  "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData" | "isError"
+  | "text"
+  | "mediaUrl"
+  | "mediaUrls"
+  | "presentation"
+  | "interactive"
+  | "channelData"
+  | "isError"
+  | "isCompactionNotice"
+  | "isFallbackNotice"
+  | "isStatusNotice"
 >;
 
 /** Normalized cron run payload state used for summaries, delivery, and failure classification. */
@@ -228,6 +237,19 @@ function isSuccessfulCronPayload(payload: DeliveryPayload | undefined): boolean 
   );
 }
 
+function pickLeadingFallbackNoticePayloads(payloads: DeliveryPayload[]): DeliveryPayload[] {
+  const notices: DeliveryPayload[] = [];
+  for (const payload of payloads) {
+    if (payload.isError === true || payload.isFallbackNotice !== true) {
+      break;
+    }
+    if (normalizeOptionalString(payload.text)) {
+      notices.push(payload);
+    }
+  }
+  return notices;
+}
+
 /** Resolves summary, output text, delivery payloads, and fatal-error state from cron run output. */
 export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
@@ -320,8 +342,11 @@ export function resolveCronPayloadOutcome(params: {
     ? normalizedFinalAssistantVisibleText
     : fallbackOutputText;
   const synthesizedText = normalizeOptionalString(outputText) ?? normalizeOptionalString(summary);
+  const finalAssistantFallbackNotices = shouldUseFinalAssistantVisibleText
+    ? pickLeadingFallbackNoticePayloads(params.payloads)
+    : [];
   const resolvedDeliveryPayloads = shouldUseFinalAssistantVisibleText
-    ? [{ text: normalizedFinalAssistantVisibleText }]
+    ? [...finalAssistantFallbackNotices, { text: normalizedFinalAssistantVisibleText }]
     : selectedDeliveryPayloads.length > 0
       ? selectedDeliveryPayloads
       : synthesizedText

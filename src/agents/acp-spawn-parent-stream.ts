@@ -4,6 +4,7 @@ import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import { formatProviderModelRef } from "../auto-reply/model-runtime.js";
 import {
   isAcpTagVisible,
   resolveAcpProjectionSettings,
@@ -67,6 +68,37 @@ function formatProxyEnvSummary(keys: string[]): string {
     return "proxy env: none";
   }
   return `proxy env: ${keys.join(", ")}`;
+}
+
+function buildLifecycleFallbackNotice(
+  data: Record<string, unknown> | undefined,
+): string | undefined {
+  const selectedProvider = normalizeOptionalString(data?.selectedProvider);
+  const selectedModel = normalizeOptionalString(data?.selectedModel);
+  const activeProvider = normalizeOptionalString(data?.activeProvider);
+  const activeModel = normalizeOptionalString(data?.activeModel);
+  const reasonSummary = normalizeOptionalString(data?.reasonSummary);
+  if (!selectedModel || !activeModel) {
+    return undefined;
+  }
+  const selected = formatProviderModelRef(selectedProvider ?? "", selectedModel);
+  const active = formatProviderModelRef(activeProvider ?? "", activeModel);
+  return `↪️ Model Fallback: ${active} (selected ${selected}; ${reasonSummary ?? "selected model unavailable"})`;
+}
+
+function buildLifecycleFallbackClearedNotice(
+  data: Record<string, unknown> | undefined,
+): string | undefined {
+  const selectedProvider = normalizeOptionalString(data?.selectedProvider);
+  const selectedModel = normalizeOptionalString(data?.selectedModel);
+  if (!selectedModel) {
+    return undefined;
+  }
+  const selected = formatProviderModelRef(selectedProvider ?? "", selectedModel);
+  const previous = normalizeOptionalString(data?.previousActiveModel);
+  return previous && previous !== selected
+    ? `↪️ Model Fallback cleared: ${selected} (was ${previous})`
+    : `↪️ Model Fallback cleared: ${selected}`;
 }
 
 function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
@@ -722,8 +754,25 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
 
-    const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
+    const lifecycleData = asObjectRecord(event.data);
+    const phase = normalizeOptionalString(lifecycleData?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
+    if (phase === "fallback") {
+      flushPending();
+      const notice = buildLifecycleFallbackNotice(lifecycleData);
+      if (notice) {
+        emit(`${relayLabel}: ${notice}`, `${contextPrefix}:fallback`);
+      }
+      return;
+    }
+    if (phase === "fallback_cleared") {
+      flushPending();
+      const notice = buildLifecycleFallbackClearedNotice(lifecycleData);
+      if (notice) {
+        emit(`${relayLabel}: ${notice}`, `${contextPrefix}:fallback-cleared`);
+      }
+      return;
+    }
     if (phase === "end") {
       flushReplaceableAssistantSnapshot();
       flushPending();
