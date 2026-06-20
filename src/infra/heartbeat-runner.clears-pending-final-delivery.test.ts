@@ -47,8 +47,8 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
   }
 
   // seedMainSessionStore exposes only part of the pendingFinalDelivery* family;
-  // patch in lastHeartbeat* and the two unexposed pending fields so each test can
-  // prove all seven recovery fields get cleared.
+  // patch in lastHeartbeat* and the three unexposed pending fields so each test can
+  // prove all eight recovery fields get cleared.
   async function patchEntry(
     storePath: string,
     sessionKey: string,
@@ -72,6 +72,7 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     expect(entry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
     expect(entry?.pendingFinalDeliveryLastError).toBeUndefined();
     expect(entry?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryIntentId).toBeUndefined();
   }
 
   it("nulls every pendingFinalDelivery* field after delivering substantive heartbeat content", async () => {
@@ -95,6 +96,7 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       await patchEntry(storePath, sessionKey, {
         pendingFinalDeliveryLastAttemptAt: 2,
         pendingFinalDeliveryContext: { foo: "bar" },
+        pendingFinalDeliveryIntentId: "intent-send-success",
       });
 
       // Substantive reply text forces the post-success store write path
@@ -157,6 +159,7 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastHeartbeatSentAt: staleAt,
         pendingFinalDeliveryLastAttemptAt: 2,
         pendingFinalDeliveryContext: { foo: "bar" },
+        pendingFinalDeliveryIntentId: "intent-duplicate-skip",
       });
 
       // Reply is the prefix-less body; normalizeHeartbeatReply re-adds "🤖 ", so

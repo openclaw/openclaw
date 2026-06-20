@@ -1304,6 +1304,7 @@ const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
   pendingFinalDeliveryAttemptCount: undefined,
   pendingFinalDeliveryLastError: undefined,
   pendingFinalDeliveryContext: undefined,
+  pendingFinalDeliveryIntentId: undefined,
 } as const;
 
 export async function runHeartbeatOnce(opts: {
