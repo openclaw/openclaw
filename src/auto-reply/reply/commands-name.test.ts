@@ -113,6 +113,32 @@ describe("name command", () => {
     ]);
   });
 
+  it("clears the current session label", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        label: "Billing rework",
+      },
+    });
+
+    const params = buildNameParams("/name --clear", storePath);
+    const result = await handleNameCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Session name cleared");
+    expect(getSessionEntry({ storePath, sessionKey })?.label).toBeUndefined();
+    expect(params.sessionEntry?.label).toBeUndefined();
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      { sessionKey, reason: "command-metadata" },
+    ]);
+  });
+
   it("suggests a name without mutating when no argument is given", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry({
