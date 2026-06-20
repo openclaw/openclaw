@@ -490,6 +490,7 @@ describe("telegram doctor", () => {
     const cfg = {
       channels: {
         telegram: {
+          groupPolicy: "allowlist",
           groups: {
             "-1001234567890": {
               requireMention: true,
@@ -556,7 +557,7 @@ describe("telegram doctor", () => {
     expect(scanTelegramRootGroupsMissingAccountGroups(cfg)).toStrictEqual([]);
   });
 
-  it("does not warn about root groups when Telegram or group policy is open", () => {
+  it("does not warn about root groups when Telegram or effective group policy is open", () => {
     const disabledCfg = {
       channels: {
         telegram: {
@@ -604,8 +605,53 @@ describe("telegram doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
+    const defaultOpenPolicyCfg = {
+      channels: {
+        defaults: {
+          groupPolicy: "open",
+        },
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+            },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+            },
+            alerts: {
+              botToken: "123:alerts",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fallbackOpenPolicyCfg = {
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+            },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+            },
+            alerts: {
+              botToken: "123:alerts",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
     expect(scanTelegramRootGroupsMissingAccountGroups(disabledCfg)).toStrictEqual([]);
     expect(scanTelegramRootGroupsMissingAccountGroups(openPolicyCfg)).toStrictEqual([]);
+    expect(scanTelegramRootGroupsMissingAccountGroups(defaultOpenPolicyCfg)).toStrictEqual([]);
+    expect(scanTelegramRootGroupsMissingAccountGroups(fallbackOpenPolicyCfg)).toStrictEqual([]);
   });
 
   it("warns for allowlisted accounts without local groups even when another account is open", () => {

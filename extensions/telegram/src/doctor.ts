@@ -24,6 +24,7 @@ import {
   legacyConfigRules as TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
+import { resolveTelegramRuntimeGroupPolicy } from "./group-access.js";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
@@ -47,11 +48,16 @@ type TelegramAllowFromListRef = {
   holder: Record<string, unknown>;
   key: "allowFrom" | "groupAllowFrom";
 };
+type TelegramRuntimeGroupPolicy = "allowlist" | "disabled" | "open";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function asTelegramRuntimeGroupPolicy(value: unknown): TelegramRuntimeGroupPolicy | undefined {
+  return value === "allowlist" || value === "disabled" || value === "open" ? value : undefined;
 }
 
 function sanitizeForLog(value: string): string {
@@ -276,7 +282,9 @@ export function scanTelegramRootGroupsMissingAccountGroups(
     return [];
   }
 
-  const baseGroupPolicy = typeof telegram.groupPolicy === "string" ? telegram.groupPolicy : "";
+  const channelDefaults = asObjectRecord(asObjectRecord(cfg.channels)?.defaults);
+  const defaultGroupPolicy = asTelegramRuntimeGroupPolicy(channelDefaults?.groupPolicy);
+  const baseGroupPolicy = asTelegramRuntimeGroupPolicy(telegram.groupPolicy);
   let enabledAccountCount = 0;
   const accountsThatNeedGroupRules: Array<[string, Record<string, unknown>]> = [];
   for (const [accountId, rawAccount] of Object.entries(accounts)) {
@@ -285,9 +293,12 @@ export function scanTelegramRootGroupsMissingAccountGroups(
       continue;
     }
     enabledAccountCount += 1;
-    const effectiveGroupPolicy =
-      typeof account.groupPolicy === "string" ? account.groupPolicy : baseGroupPolicy;
-    if (effectiveGroupPolicy === "disabled" || effectiveGroupPolicy === "open") {
+    const effectiveGroupPolicy = resolveTelegramRuntimeGroupPolicy({
+      providerConfigPresent: true,
+      groupPolicy: asTelegramRuntimeGroupPolicy(account.groupPolicy) ?? baseGroupPolicy,
+      defaultGroupPolicy,
+    }).groupPolicy;
+    if (effectiveGroupPolicy !== "allowlist") {
       continue;
     }
     accountsThatNeedGroupRules.push([accountId, account]);
