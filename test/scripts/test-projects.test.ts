@@ -1363,6 +1363,18 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-npm-release.ts",
         ["test/plugin-npm-release.test.ts", "test/plugin-clawhub-release.test.ts"],
       ],
+      [
+        "scripts/lib/plugin-npm-runtime-assets.mjs",
+        ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
+      ],
+      [
+        "scripts/lib/static-extension-assets.mjs",
+        [
+          "test/scripts/runtime-postbuild.test.ts",
+          "src/infra/run-node.test.ts",
+          "test/scripts/plugin-npm-runtime-build-args.test.ts",
+        ],
+      ],
       ["scripts/lib/test-group-report.mjs", ["test/scripts/test-group-report.test.ts"]],
       ["scripts/lib/stable-release-closeout.mjs", ["test/stable-release-closeout.test.ts"]],
       ["scripts/lib/ts-guard-utils.mjs", ["test/scripts/ts-guard-utils.test.ts"]],
