@@ -350,7 +350,14 @@ describe("CodexAppServerEventProjector", () => {
     // Newer Codex app-servers (>= 0.139) stream agentMessage deltas without a
     // "final_answer" phase. These must still surface as live partial replies
     // instead of only appearing as one chunk at turn completion.
-    const { onPartialReply, projector } = await createProjectorWithAssistantHooks();
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      onAgentEvent,
+      onPartialReply,
+    });
 
     await projector.handleNotification(agentMessageDelta("hel", "msg-final"));
     await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
@@ -358,6 +365,10 @@ describe("CodexAppServerEventProjector", () => {
     expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
       { text: "hel", delta: "hel" },
       { text: "hello", delta: "lo" },
+    ]);
+    expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
+      { stream: "assistant", data: { text: "hel", delta: "hel" } },
+      { stream: "assistant", data: { text: "hello", delta: "lo" } },
     ]);
   });
 

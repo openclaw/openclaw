@@ -522,12 +522,17 @@ export class CodexAppServerEventProjector {
     if (this.isCommentaryAssistantItem(itemId)) {
       this.emitCommentaryProgress({ itemId, text });
     } else {
+      this.emitAgentEvent({
+        stream: "assistant",
+        data: { text, delta },
+      });
       await this.params.onPartialReply?.({ text, delta });
     }
-    // Stream non-commentary assistant deltas as partial replies so live surfaces
-    // (TUI, WebChat) render incremental answer text. Older Codex app-servers tag
-    // the terminal item with phase "final_answer", but newer builds may omit that
-    // phase mid-stream, so gating on it silently disabled streaming entirely.
+    // Stream non-commentary assistant deltas as partial replies and assistant
+    // agent events so live surfaces (TUI, WebChat) render incremental answer
+    // text via gateway emitChatDelta. Older Codex app-servers tag the terminal
+    // item with phase "final_answer", but newer builds may omit that phase
+    // mid-stream, so gating on it silently disabled streaming entirely.
     // Commentary items stay progress-only, and turn completion still selects the
     // final user-visible reply, so any superseded intermediate item is replaced.
   }
