@@ -46,13 +46,13 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-06-19 06:00:11 UTC · hosts:eu us_
+_Last automated scan: 2026-06-20 06:00:10 UTC · hosts:eu us_
 
 | Pri | Host   | Agent                          | Issue                | Detail                                                                 |
 | --- | ------ | ------------------------------ | -------------------- | ---------------------------------------------------------------------- |
-| P1  | eu     | -                              | Heavy swap usage     | 1416MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
-| P1  | models | nvidia/deepseek-ai/deepseek-r1 | Model not responding | NOT_FOUND (HTTP 404, 0.1s) on a 1-token probe via nvidia API.          |
-| P1  | models | nvidia/qwen/qwen3.5-397b-a17b  | Model not responding | SERVER_ERR (HTTP 500, 0.8s) on a 1-token probe via nvidia API.         |
-| P1  | us     | -                              | Heavy swap usage     | 2397MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| P1  | eu     | -                              | Heavy swap usage     | 1458MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| P1  | models | nvidia/deepseek-ai/deepseek-r1 | Model not responding | NOT_FOUND (HTTP 404, 0.2s) on a 1-token probe via nvidia API.          |
+| P1  | models | nvidia/qwen/qwen3.5-397b-a17b  | Model not responding | TIMEOUT (HTTP 000, 45.0s) on a 1-token probe via nvidia API.           |
+| P1  | us     | -                              | Heavy swap usage     | 2381MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
 
 <!-- AUTOSCAN:END -->
