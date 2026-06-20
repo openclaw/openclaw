@@ -591,6 +591,22 @@ function resolveModelRequestPolicy(model: Model) {
   });
 }
 
+/** True when the error is an undici keep-alive socket reuse failure. */
+export function isUndiciSocketError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const record = error as Record<string, unknown>;
+  if (record.code === "UND_ERR_SOCKET") {
+    return true;
+  }
+  const cause =
+    record.cause && typeof record.cause === "object"
+      ? (record.cause as Record<string, unknown>)
+      : undefined;
+  return cause?.code === "UND_ERR_SOCKET";
+}
+
 export function resolveModelRequestTimeoutMs(
   model: Model,
   timeoutMs: number | undefined,
@@ -739,21 +755,6 @@ export function buildGuardedModelFetch(
     ].join(" ");
   };
 
-  /** True when the error is an undici keep-alive socket reuse failure. */
-  const isUndiciSocketError = (error: unknown): boolean => {
-    if (!error || typeof error !== "object") {
-      return false;
-    }
-    const record = error as Record<string, unknown>;
-    if (record.code === "UND_ERR_SOCKET") {
-      return true;
-    }
-    const cause =
-      record.cause && typeof record.cause === "object"
-        ? (record.cause as Record<string, unknown>)
-        : undefined;
-    return cause?.code === "UND_ERR_SOCKET";
-  };
   return async (input, init) => {
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
