@@ -592,6 +592,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ...locationContext,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
+      ThreadLabel: isForum && topicName ? topicName : undefined,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
   if (inboundEventKind === "room_event" && historyKey) {
