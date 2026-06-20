@@ -12,7 +12,7 @@ describe("resolveTavilyApiKey", () => {
     if (originalEnv === undefined) {
       delete process.env.TAVILY_API_KEY;
     } else {
-      process.env.TAVILY_API_KEY = ***
+      process.env.TAVILY_API_KEY = originalEnv;
     }
     vi.restoreAllMocks();
     vi.unmock("openclaw/plugin-sdk/secret-input");
@@ -40,10 +40,9 @@ describe("resolveTavilyApiKey", () => {
     // a configured env SecretRef. resolveConfiguredSecret should return
     // `available` with the env value, so the key is used.
     vi.mock("openclaw/plugin-sdk/secret-input", async () => {
-      const actual =
-        await vi.importActual<typeof import("openclaw/plugin-sdk/secret-input")>(
-          "openclaw/plugin-sdk/secret-input",
-        );
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/secret-input")>(
+        "openclaw/plugin-sdk/secret-input",
+      );
       return {
         ...actual,
         resolveSecretInputString: (params: { value: unknown; path: string; mode: string }) => {
@@ -82,10 +81,9 @@ describe("resolveTavilyApiKey", () => {
     // TAVILY_API_KEY. resolveConfiguredSecret should return `blocked`,
     // and resolveTavilyApiKey should return undefined.
     vi.mock("openclaw/plugin-sdk/secret-input", async () => {
-      const actual =
-        await vi.importActual<typeof import("openclaw/plugin-sdk/secret-input")>(
-          "openclaw/plugin-sdk/secret-input",
-        );
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/secret-input")>(
+        "openclaw/plugin-sdk/secret-input",
+      );
       return {
         ...actual,
         resolveSecretInputString: () => ({
@@ -120,10 +118,9 @@ describe("resolveTavilyApiKey", () => {
     // Env-backed SecretRefs whose id is not TAVILY_API_KEY must not
     // silently fall through to ambient TAVILY_API_KEY.
     vi.mock("openclaw/plugin-sdk/secret-input", async () => {
-      const actual =
-        await vi.importActual<typeof import("openclaw/plugin-sdk/secret-input")>(
-          "openclaw/plugin-sdk/secret-input",
-        );
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/secret-input")>(
+        "openclaw/plugin-sdk/secret-input",
+      );
       return {
         ...actual,
         resolveSecretInputString: () => ({
