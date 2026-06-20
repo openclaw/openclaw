@@ -4,7 +4,11 @@ import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
+  AgentsCreateParams,
+  AgentsDeleteParams,
+  AgentsUpdateParams,
   AgentRunParams,
+  ApprovalDecisionParams,
   ArtifactQuery,
   ArtifactsDownloadResult,
   ArtifactsGetResult,
@@ -25,6 +29,7 @@ import type {
   TasksGetResult,
   TasksListParams,
   TasksListResult,
+  ToolsEffectiveParams,
   ToolInvokeParams,
   ToolInvokeResult,
 } from "./types.js";
@@ -230,6 +235,18 @@ function hasArtifactQueryScope(params: unknown): params is ArtifactQuery {
 function requireArtifactQueryScope(api: string, params: unknown): ArtifactQuery {
   if (!hasArtifactQueryScope(params)) {
     throw new Error(`${api} requires one of sessionKey, runId, or taskId`);
+  }
+  return params;
+}
+
+function hasToolsEffectiveSessionKey(params: unknown): params is ToolsEffectiveParams {
+  const record = asRecord(params);
+  return typeof record.sessionKey === "string" && record.sessionKey.trim().length > 0;
+}
+
+function requireToolsEffectiveSessionKey(params: unknown): ToolsEffectiveParams {
+  if (!hasToolsEffectiveSessionKey(params)) {
+    throw new Error("oc.tools.effective requires sessionKey");
   }
   return params;
 }
@@ -678,7 +695,14 @@ export class Session {
   async send(input: string | Omit<SessionSendParams, "key">): Promise<Run> {
     const params: SessionSendParams =
       typeof input === "string" ? { key: this.key, message: input } : { ...input, key: this.key };
-    const raw = await this.client.request("sessions.send", params, { expectFinal: true });
+    const timeoutMs = normalizeTimeoutMs(params.timeoutMs);
+    if (timeoutMs !== undefined) {
+      params.timeoutMs = timeoutMs;
+    }
+    const raw = await this.client.request("sessions.send", params, {
+      expectFinal: true,
+      ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
+    });
     const record = asRecord(raw);
     const runId = readOptionalString(record.runId);
     if (!runId) {
@@ -715,15 +739,15 @@ export class AgentsNamespace {
     return new Agent(this.client, id);
   }
 
-  async create(params: Record<string, unknown>): Promise<unknown> {
+  async create(params: AgentsCreateParams): Promise<unknown> {
     return await this.client.request("agents.create", params);
   }
 
-  async update(params: Record<string, unknown>): Promise<unknown> {
+  async update(params: AgentsUpdateParams): Promise<unknown> {
     return await this.client.request("agents.update", params);
   }
 
-  async delete(params: Record<string, unknown>): Promise<unknown> {
+  async delete(params: AgentsDeleteParams): Promise<unknown> {
     return await this.client.request("agents.delete", params);
   }
 }
@@ -857,8 +881,8 @@ export class ToolsNamespace extends RpcNamespace {
     return await this.call("catalog", params === undefined ? {} : params);
   }
 
-  async effective(params?: unknown): Promise<unknown> {
-    return await this.call("effective", params);
+  async effective(params: ToolsEffectiveParams): Promise<unknown> {
+    return await this.call("effective", requireToolsEffectiveSessionKey(params));
   }
 
   async invoke(name: string, params?: ToolInvokeParams): Promise<ToolInvokeResult> {
@@ -906,8 +930,11 @@ export class ApprovalsNamespace {
     return await this.client.request("exec.approval.list", params === undefined ? {} : params);
   }
 
-  async respond(approvalId: string, decision: Record<string, unknown>): Promise<unknown> {
-    return await this.client.request("exec.approval.resolve", { ...decision, id: approvalId });
+  async respond(approvalId: string, params: ApprovalDecisionParams): Promise<unknown> {
+    return await this.client.request("exec.approval.resolve", {
+      id: approvalId,
+      decision: params.decision,
+    });
   }
 }
 

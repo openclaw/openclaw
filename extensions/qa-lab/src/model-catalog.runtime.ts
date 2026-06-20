@@ -207,6 +207,7 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
     await new Promise<void>((resolve, reject) => {
       let aborted = params.signal?.aborted === true;
       let forceKillTimer: NodeJS.Timeout | undefined;
+      let forceKillAt: number | undefined;
       const child = spawn(nodeExecPath, ["dist/index.js", "models", "list", "--all", "--json"], {
         cwd: params.repoRoot,
         env: {
@@ -232,18 +233,32 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
         }
       };
       const finishAbortedCatalogLoad = async () => {
-        cleanup();
+        cleanupAbortListener();
+        const graceRemainingMs =
+          forceKillAt === undefined
+            ? CATALOG_ABORT_KILL_GRACE_MS
+            : Math.max(0, forceKillAt - Date.now());
+        if (graceRemainingMs > 0) {
+          await waitForProcessTreeExit(child.pid, graceRemainingMs);
+        }
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = undefined;
+        }
         if (processTreeIsAlive(child.pid)) {
           killProcessTree(child.pid, "SIGKILL");
           await waitForProcessTreeExit(child.pid, CATALOG_ABORT_KILL_GRACE_MS);
         }
+        forceKillAt = undefined;
       };
       const abortCatalogLoad = () => {
         aborted = true;
         killProcessTree(child.pid, "SIGTERM");
+        forceKillAt = Date.now() + CATALOG_ABORT_KILL_GRACE_MS;
         forceKillTimer ??= setTimeout(() => {
+          forceKillAt = undefined;
           killProcessTree(child.pid, "SIGKILL");
-        }, 1_000);
+        }, CATALOG_ABORT_KILL_GRACE_MS);
         forceKillTimer.unref();
       };
       if (aborted) {

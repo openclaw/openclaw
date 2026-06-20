@@ -1,51 +1,9 @@
 // Ios Sync Versioning script supports OpenClaw repository automation.
 import path from "node:path";
 import { syncIosVersioning } from "./lib/ios-version.ts";
+import { parseVersionSyncArgs } from "./lib/version-script-args.ts";
 
-type Mode = "check" | "write";
-
-export function parseArgs(argv: string[]): { help: boolean; mode: Mode; rootDir: string } {
-  let help = false;
-  let mode: Mode = "write";
-  let rootDir = path.resolve(".");
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--check": {
-        mode = "check";
-        break;
-      }
-      case "--write": {
-        mode = "write";
-        break;
-      }
-      case "--root": {
-        rootDir = path.resolve(readOptionValue(argv, index, "--root"));
-        index += 1;
-        break;
-      }
-      case "-h":
-      case "--help": {
-        help = true;
-        break;
-      }
-      default: {
-        throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  return { help, mode, rootDir };
-}
-
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-  return value;
-}
+export { parseVersionSyncArgs as parseArgs } from "./lib/version-script-args.ts";
 
 function printUsage(): void {
   process.stdout.write(
@@ -54,7 +12,7 @@ function printUsage(): void {
 }
 
 function main(argv = process.argv.slice(2)): number {
-  const options = parseArgs(argv);
+  const options = parseVersionSyncArgs(argv);
   if (options.help) {
     printUsage();
     return 0;

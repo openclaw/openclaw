@@ -116,7 +116,8 @@ for arg in "$@"; do
       log "Default behavior: Auto-detect signing keys, fallback to --no-sign if none found"
       exit 0
       ;;
-    *) ;;
+    --) ;;
+    *) fail "Unknown restart option: ${arg}" ;;
   esac
 done
 

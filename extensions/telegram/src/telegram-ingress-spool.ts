@@ -10,6 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { getTelegramRuntime } from "./runtime.js";
+import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 
 const SPOOL_VERSION = 1;
 const TELEGRAM_INGRESS_SPOOL_PREFIX = "ingress-spool-";
@@ -44,14 +45,6 @@ export type ClaimedTelegramSpooledUpdate = TelegramSpooledUpdate & {
   pendingPath: string;
 };
 
-function normalizeAccountId(accountId?: string) {
-  const trimmed = accountId?.trim();
-  if (!trimmed) {
-    return "default";
-  }
-  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
-}
-
 function isValidUpdateId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -64,7 +57,7 @@ export function resolveTelegramIngressSpoolDir(params: {
   return path.join(
     stateDir,
     "telegram",
-    `${TELEGRAM_INGRESS_SPOOL_PREFIX}${normalizeAccountId(params.accountId)}`,
+    `${TELEGRAM_INGRESS_SPOOL_PREFIX}${normalizeTelegramStateAccountId(params.accountId)}`,
   );
 }
 
@@ -101,7 +94,7 @@ function resolveQueueParts(spoolDir: string): {
   stateDir: string;
 } {
   const basename = path.basename(spoolDir);
-  const accountId = normalizeAccountId(
+  const accountId = normalizeTelegramStateAccountId(
     basename.startsWith(TELEGRAM_INGRESS_SPOOL_PREFIX)
       ? basename.slice(TELEGRAM_INGRESS_SPOOL_PREFIX.length)
       : basename,

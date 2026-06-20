@@ -151,11 +151,11 @@ async function waitForHostServer(
   });
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10_000) {
-    if (child.exitCode != null) {
+    if (hasHostServerChildExited(child)) {
       if (!childClosed) {
         await Promise.race([childClose, delay(HOST_SERVER_STDERR_DRAIN_MS)]);
       }
-      die(`host artifact server exited early: ${stderr.trim() || `exit ${child.exitCode}`}`);
+      die(`host artifact server exited early: ${stderr.trim() || formatHostServerExit(child)}`);
     }
     if (await canConnect(port)) {
       return;
@@ -174,6 +174,10 @@ function appendBoundedOutput(previous: string, chunk: Buffer, limitBytes: number
     return combined.toString("utf8");
   }
   return combined.subarray(combined.byteLength - limitBytes).toString("utf8");
+}
+
+function formatHostServerExit(child: ChildProcessWithoutNullStreams): string {
+  return child.signalCode ? `signal ${child.signalCode}` : `exit ${child.exitCode ?? "unknown"}`;
 }
 
 async function canConnect(port: number): Promise<boolean> {

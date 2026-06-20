@@ -83,6 +83,17 @@ for (const signal of Object.keys(CROSS_OS_SIGNAL_EXIT_CODES) as NodeJS.Signals[]
   });
 }
 
+function exitForwardedSignalWhenChildTreesDone() {
+  if (forwardedSignalExitCode === undefined || CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.size > 0) {
+    return;
+  }
+  if (forwardedSignalForceKillTimer) {
+    clearTimeout(forwardedSignalForceKillTimer);
+    forwardedSignalForceKillTimer = undefined;
+  }
+  process.exit(forwardedSignalExitCode);
+}
+
 const providerConfig = {
   openai: {
     extensionId: "openai",
@@ -4021,6 +4032,7 @@ async function runCommandInvocation(invocation, options) {
     child.on("close", (exitCode) => {
       activeChildTree.unregister();
       if (forwardedSignalExitCode !== undefined) {
+        finalize(exitForwardedSignalWhenChildTreesDone);
         return;
       }
       finalize(() => {

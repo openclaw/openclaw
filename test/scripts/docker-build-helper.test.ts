@@ -2342,6 +2342,26 @@ fi
     );
   });
 
+  it("keeps upgrade survivor auto-auth success summary set -u safe", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+
+    const summaryDefaultIndex = runner.indexOf('startup_summary="n/a"');
+    const autoAuthIndex = runner.indexOf(
+      'if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then',
+      summaryDefaultIndex,
+    );
+    const manualSummaryIndex = runner.indexOf('startup_summary="${start_seconds}s"', autoAuthIndex);
+    const successIndex = runner.indexOf(
+      "startup=${startup_summary} status=${status_seconds}s",
+      manualSummaryIndex,
+    );
+
+    expect(summaryDefaultIndex).toBeGreaterThan(-1);
+    expect(autoAuthIndex).toBeGreaterThan(summaryDefaultIndex);
+    expect(manualSummaryIndex).toBeGreaterThan(autoAuthIndex);
+    expect(successIndex).toBeGreaterThan(manualSummaryIndex);
+  });
+
   it.each([
     ["start budget", "OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", "90s"],
     ["status budget", "OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS", "30s"],
