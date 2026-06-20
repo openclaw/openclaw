@@ -143,6 +143,36 @@ describe("registerWorkboardCli", () => {
     expect(after?.metadata?.automation?.dispatchCount).toBeUndefined();
   });
 
+  it("list hides archived cards by default", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const archived = await store.create({ title: "Archived card" });
+    await store.archive(archived.id, true);
+    await store.create({ title: "Active card" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list"], { from: "user" });
+    });
+
+    expect(output).toContain("Active card");
+    expect(output).not.toContain("Archived card");
+  });
+
+  it("list --include-archived shows archived cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const archived = await store.create({ title: "Archived card" });
+    await store.archive(archived.id, true);
+    await store.create({ title: "Active card" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--include-archived"], { from: "user" });
+    });
+
+    expect(output).toContain("Active card");
+    expect(output).toContain("Archived card");
+  });
+
   it("rejects ambiguous card id prefixes", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const prefix = await createAmbiguousPrefix(store);
