@@ -1629,6 +1629,26 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
   };
 }
 
+function buildUnavailableHistorySentinel(message?: unknown): Record<string, unknown> {
+  const role =
+    message &&
+    typeof message === "object" &&
+    typeof (message as { role?: unknown }).role === "string"
+      ? (message as { role: string }).role
+      : "assistant";
+  const timestamp =
+    message &&
+    typeof message === "object" &&
+    typeof (message as { timestamp?: unknown }).timestamp === "number"
+      ? (message as { timestamp: number }).timestamp
+      : Date.now();
+  return {
+    role,
+    timestamp,
+    content: [{ type: "text", text: "chat.history unavailable: transcript exceeded byte budget" }],
+  };
+}
+
 export function replaceOversizedChatHistoryMessages(params: {
   messages: unknown[];
   maxSingleMessageBytes: number;
@@ -1667,7 +1687,7 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
   if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
     return { messages: [placeholder], placeholderCount: 1 };
   }
-  return { messages: [], placeholderCount: 0 };
+  return { messages: [buildUnavailableHistorySentinel(last)], placeholderCount: 1 };
 }
 
 function resolveTranscriptPath(params: {
