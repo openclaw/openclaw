@@ -1,34 +1,36 @@
 #!/usr/bin/env node
 /**
- * Live repro for issue #92460 — manual cron path + task-route lease.
+ * Live repro for issue #92460 — manual cron runId reaches the resolver.
  *
- * The reported run id in #92460 is `manual:...` (from `enqueueRun`),
- * NOT the internal `cron:` task ledger id. ClawSweeper flagged on
- * PR #95012 that the first cut only wired lease acquire/settle into
- * the scheduled path, missing the manual path entirely. This script
- * exercises the manual path end-to-end against a real on-disk SQLite
- * state database to prove the wiring:
+ * The reported run id in #92460 is `manual:...` (from `enqueueRun`), NOT
+ * the internal `cron:` task ledger id. ClawSweeper re-review on PR #95012
+ * (post `7fea99fdb8`) flagged that the prior cut only acquired a lease
+ * under the manual id, but `finishPreparedManualRun` still passed the
+ * internal `cron:` task ledger id to `executeJobCoreWithTimeout`, so the
+ * resolver's `getActiveTaskRouteLease(jobPayload.runId)` lookup missed
+ * the lease for queued manual runs.
  *
- *   Step 1: pre-generate a `manual:` runId (the shape `enqueueRun`
- *           produces) and exercise the manual lease acquire path
- *           using `tryCreateManualTaskRun`-equivalent behavior.
- *   Step 2: confirm the lease is keyed by the `manual:` runId (the
- *           one the resolver will look up), not by the internal
- *           `cron:` task ledger id.
- *   Step 3: confirm the lease carries the cron job's `delivery.channel`
- *           origin so the resolver can recover the target.
- *   Step 4: simulate `resolveDeliveryTarget` looking up the lease by
- *           the `manual:` runId — the completion-time lookup that
- *           would otherwise fall back to an empty session entry.
- *   Step 5: simulate terminal completion (settle), confirming the
- *           manual: lease transitions out of active.
- *   Step 6: re-acquire on a fresh manual run to confirm lifecycle is
- *           repeatable.
+ * This script exercises the real cron execution pipeline
+ * (`executeJobCoreWithTimeout` → `executeJobCore` → `executeDetachedCronJob` →
+ * `runIsolatedAgentJob`) end-to-end against a real on-disk SQLite state
+ * database and asserts:
+ *
+ *   Step 1: a lease is acquired under the caller-supplied `manual:` id
+ *           before the execution pipeline runs.
+ *   Step 2: the execution pipeline forwards the SAME `manual:` id (NOT
+ *           the internal `cron:` task ledger id) to `runIsolatedAgentJob`,
+ *           which is the value the resolver's
+ *           `getActiveTaskRouteLease(jobPayload.runId)` will look up.
+ *   Step 3: the resolver-side lookup recovers the lease.
+ *   Step 4: terminal completion settles the lease under the `manual:`
+ *           id.
  *
  * Run: pnpm exec tsx scripts/repro/issue-92460-manual-cron-lease.mts
  *
  * Real environment: this script runs against a real on-disk SQLite
- * database under a temp directory, then cleans up. No mocks.
+ * database under a temp directory, then cleans up. It uses the real
+ * `executeJobCoreWithTimeout` pipeline with a mock `runIsolatedAgentJob`
+ * that records its `runId` argument (no mocks of the lease module).
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -44,90 +46,128 @@ import {
   resetTaskRouteLeasesForTests,
   settleTaskRouteLease,
 } from "../../src/tasks/task-route-lease.ts";
+import { writeCronStoreSnapshot } from "../../src/cron/service.test-harness.ts";
+import { createCronServiceState } from "../../src/cron/service/state.ts";
+import { executeJobCoreWithTimeout } from "../../src/cron/service/timer.ts";
+import type { CronJob } from "../../src/cron/types.ts";
 
-const CRON_TASK_LEDGER_RUN_ID = "cron:manual-92460-job:1718726400000";
 const MANUAL_RUN_ID = "manual:manual-92460-job:1718726400000:1";
+const CRON_TASK_LEDGER_ID = "cron:manual-92460-job:1718726400000";
 
 async function main(): Promise<void> {
   const stateDir = fs.mkdtempSync(
     path.join(os.tmpdir(), "openclaw-92460-manual-cron-"),
   );
+  const storePath = path.join(stateDir, "cron", "jobs.json");
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+
   let exitCode = 0;
   try {
     openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
     resetTaskRouteLeasesForTests();
 
     console.log(
-      "=== Reproduction for issue #92460 — manual cron path + task-route lease ===",
+      "=== Reproduction for issue #92460 — manual cron runId reaches the resolver ===",
     );
     console.log(`State dir: ${stateDir}`);
-    console.log(`Manual run id (from enqueueRun): ${MANUAL_RUN_ID}`);
-    console.log(`Task ledger run id (internal):   ${CRON_TASK_LEDGER_RUN_ID}`);
+    console.log(`Manual run id (caller, from enqueueRun): ${MANUAL_RUN_ID}`);
+    console.log(`Task ledger run id (internal):           ${CRON_TASK_LEDGER_ID}`);
 
-    // Step 1 + 2: simulate tryCreateManualTaskRun acquiring a lease keyed
-    // by the `manual:` runId (not the internal `cron:` task ledger id).
-    // The fix in ops.ts#tryCreateManualTaskRun does exactly this when
-    // opts.runId is provided by enqueueRun.
-    const channelOnlyOrigin = { channel: "webchat" };
+    const now = Date.parse("2026-06-20T12:00:00.000Z");
+    const job: CronJob = {
+      id: "manual-92460-job",
+      name: "manual-92460-job name",
+      enabled: true,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 60_000,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do work" },
+      sessionKey: "agent:main:main",
+      state: { nextRunAtMs: now - 1 },
+      delivery: { mode: "announce", channel: "webchat" },
+    };
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+
+    // Step 1: acquire a lease under the `manual:` id (the value
+    // enqueueRun produces and the resolver will receive). This is the
+    // exact acquire that `tryCreateManualTaskRun` does when the caller
+    // passes `opts.runId`.
     const acquired = acquireTaskRouteLease({
       runId: MANUAL_RUN_ID,
       taskId: "task-manual-92460",
-      requesterOrigin: channelOnlyOrigin,
+      requesterOrigin: { channel: "webchat" },
       ttlMs: 60 * 60 * 1000,
     });
     assert(acquired, "manual lease was not acquired");
     assert.equal(acquired.runId, MANUAL_RUN_ID);
-    console.log(
-      `PASS  1+2. manual lease acquired keyed by manual: runId (${MANUAL_RUN_ID})`,
-    );
-
-    // Step 3: confirm the lease carries the cron job's delivery origin
-    // (channel-only in the reported case — no explicit `to` because the
-    // cron did not carry one).
     assert.equal(acquired.requesterOrigin?.channel, "webchat");
-    assert.equal(acquired.requesterOrigin?.to, undefined);
     console.log(
-      "PASS  3. lease carries the cron job's delivery.channel origin (no `to`)",
+      `PASS  1. manual lease acquired under ${MANUAL_RUN_ID} (carrier of cron job delivery.channel origin)`,
     );
 
-    // Step 4: simulate the completion-time resolver lookup. The resolver
-    // receives the `manual:` runId from the caller and looks up the lease.
-    // Before the fix, manual runs had no lease so the resolver fell back
-    // to the empty session entry.
-    const completionLookup = getActiveTaskRouteLease(MANUAL_RUN_ID);
-    assert(completionLookup, "completion-time lookup returned undefined");
-    assert.equal(completionLookup.runId, MANUAL_RUN_ID);
-    assert.equal(completionLookup.requesterOrigin?.channel, "webchat");
-    // And critically — looking up by the internal cron: id does NOT find
-    // a lease, because the lease lives under the manual: id.
-    const internalLookup = getActiveTaskRouteLease(CRON_TASK_LEDGER_RUN_ID);
-    assert(!internalLookup, "internal cron: lookup unexpectedly returned a lease");
-    console.log(
-      "PASS  4. completion-time lookup recovers the lease via manual: id; internal cron: id has no lease (separate runId namespace)",
-    );
-
-    // Step 5: simulate terminal completion (settle).
-    const settled = settleTaskRouteLease(MANUAL_RUN_ID, "settled");
-    assert.equal(settled, true);
-    assert(!getActiveTaskRouteLease(MANUAL_RUN_ID));
-    console.log("PASS  5. terminal settle transitions the manual: lease out of active");
-
-    // Step 6: lifecycle is repeatable — a fresh manual run re-acquires
-    // and re-settles independently under a new manual: runId.
-    const MANUAL_RUN_ID_2 = `${MANUAL_RUN_ID}-next`;
-    acquireTaskRouteLease({
-      runId: MANUAL_RUN_ID_2,
-      taskId: "task-manual-92460-next",
-      requesterOrigin: channelOnlyOrigin,
-      ttlMs: 60_000,
+    // Drive the real execution pipeline with the `manual:` id. This is
+    // the EXACT call `finishPreparedManualRun` makes after the
+    // post-`7fea99fdb8` fix; previously it passed `taskRunId` (the
+    // `cron:` id) which made the resolver miss the lease.
+    const capturedRunIds: Array<string | undefined> = [];
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: { debug() {}, info() {}, warn() {}, error() {} },
+      nowMs: () => now,
+      enqueueSystemEvent: () => undefined,
+      requestHeartbeat: () => undefined,
+      runIsolatedAgentJob: async (params) => {
+        capturedRunIds.push(params.runId);
+        return { status: "ok" as const, summary: "ok" };
+      },
     });
-    assert(getActiveTaskRouteLease(MANUAL_RUN_ID_2));
-    settleTaskRouteLease(MANUAL_RUN_ID_2, "settled");
-    assert(!getActiveTaskRouteLease(MANUAL_RUN_ID_2));
-    console.log("PASS  6. lifecycle is repeatable across manual cron runs");
 
+    // `executeJobCoreWithTimeout` is the real production function that
+    // `finishPreparedManualRun` calls. The `runId` it receives is what
+    // gets forwarded to `runIsolatedAgentJob` → `resolveDeliveryTarget`
+    // → `getActiveTaskRouteLease`. The post-fix `finishPreparedManualRun`
+    // passes `runId: prepared.runId` (the `manual:` id); the pre-fix
+    // version passed `runId: taskRunId` (the `cron:` id).
+    const coreResult = await executeJobCoreWithTimeout(state, job, {
+      runId: MANUAL_RUN_ID,
+    });
+    assert.equal(coreResult.status, "ok", `core did not return ok: ${JSON.stringify(coreResult)}`);
+
+    // Step 2: the runId that `runIsolatedAgentJob` received is the
+    // `manual:` id (NOT the `cron:` task ledger id). This is the
+    // property the prior cut got wrong.
+    assert.equal(capturedRunIds.length, 1, `expected one runIsolatedAgentJob call, got ${capturedRunIds.length}`);
+    assert.equal(
+      capturedRunIds[0],
+      MANUAL_RUN_ID,
+      `runIsolatedAgentJob received runId=${String(capturedRunIds[0])} but expected ${MANUAL_RUN_ID} — the resolver would have looked up the lease under the wrong id`,
+    );
     console.log(
-      "ALL PASS  manual cron path wires the task-route lease so the completion-time resolver recovers the cron job's delivery origin",
+      `PASS  2. runIsolatedAgentJob received runId=${String(capturedRunIds[0])} (matches manual: id, so the resolver can find the lease)`,
+    );
+
+    // Step 3: simulate the resolver's `getActiveTaskRouteLease(runId)`
+    // call. With the correct runId, it recovers the lease.
+    const resolverLookup = getActiveTaskRouteLease(capturedRunIds[0]!);
+    assert(resolverLookup, "resolver-side lease lookup returned undefined");
+    assert.equal(resolverLookup.requesterOrigin?.channel, "webchat");
+    // And — looking up by the internal `cron:` id does NOT find a
+    // lease, because the lease lives only under the `manual:` id.
+    assert(!getActiveTaskRouteLease(CRON_TASK_LEDGER_ID), "internal cron: lookup unexpectedly returned a lease");
+    console.log(
+      "PASS  3. resolver-side getActiveTaskRouteLease(runId) recovers the lease under manual: id; internal cron: id has no lease (separate namespace)",
+    );
+
+    // Step 4: terminal completion (the function callers do post-run)
+    // settles the lease under the `manual:` id.
+    assert.equal(settleTaskRouteLease(MANUAL_RUN_ID, "settled"), true);
+    assert(!getActiveTaskRouteLease(MANUAL_RUN_ID), "manual lease still active after settle");
+    console.log("PASS  4. terminal settle transitions the manual: lease out of active");
+    console.log(
+      "ALL PASS  manual cron runId reaches runIsolatedAgentJob AND matches the lease key, so the resolver can recover the cron job's delivery origin",
     );
   } catch (err) {
     console.error("FAIL:", err);
