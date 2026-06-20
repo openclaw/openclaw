@@ -1433,6 +1433,67 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send links chat work to a task flow", async () => {
+    await withMainSessionStore(async () => {
+      const flowRes = await rpcReq<{ flow?: { id?: string } }>(ws, "taskFlows.create", {
+        sessionKey: "main",
+        goal: "Verify the build",
+      });
+      expect(flowRes.ok).toBe(true);
+      const flowId = flowRes.payload?.flow?.id;
+      expect(flowId).toEqual(expect.any(String));
+
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({ text: "Verified and done." });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
+      });
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-chat-flow-ok",
+        8000,
+      );
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "verify the build",
+        idempotencyKey: "idem-chat-flow-ok",
+        flowId,
+      });
+      expect(res.ok).toBe(true);
+      await finalPromise;
+
+      await vi.waitFor(async () => {
+        const tasks = await rpcReq<{ tasks?: Array<Record<string, unknown>> }>(ws, "tasks.list", {
+          sessionKey: "main",
+          limit: 20,
+        });
+        expect(tasks.ok).toBe(true);
+        const linkedTask = tasks.payload?.tasks?.find((task) => task.runId === "idem-chat-flow-ok");
+        expect(linkedTask).toMatchObject({
+          flowId,
+          runId: "idem-chat-flow-ok",
+          kind: "chat",
+        });
+      });
+    });
+  });
+
   test("chat.history persists assistant image data URLs as managed image blocks", async () => {
     await withMainSessionStore(
       async (dir) => {

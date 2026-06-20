@@ -15,6 +15,25 @@ import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 
+type ToolCardKind = "tool" | "command" | "proof" | "artifact";
+type ToolCardStatus = "passed" | "failed" | "running" | "blocked" | "unknown";
+
+type ToolCardFact = {
+  label: string;
+  value: string;
+};
+
+type ToolCardPresentation = {
+  kind: ToolCardKind;
+  eyebrow: string;
+  outputLabel: string;
+  status?: ToolCardStatus;
+  titleOverride?: string;
+  detail?: string;
+  facts: ToolCardFact[];
+  previewText?: string;
+};
+
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
 
 function resolveCanvasPreviewSandbox(preview: ToolPreview): string {
@@ -202,6 +221,250 @@ function serializeToolInput(args: unknown): string | undefined {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parseJsonRecord(text: string | undefined): Record<string, unknown> | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (isRecord(parsed)) {
+      return parsed;
+    }
+    if (Array.isArray(parsed)) {
+      return { items: parsed };
+    }
+  } catch {}
+  return undefined;
+}
+
+function firstStringFromRecord(
+  record: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function firstNumberFromRecord(
+  record: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): number | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function firstBooleanFromRecord(
+  record: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): boolean | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeStatus(value: string | undefined): ToolCardStatus | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    ["success", "succeeded", "passed", "pass", "ok", "complete", "completed"].includes(normalized)
+  ) {
+    return "passed";
+  }
+  if (
+    [
+      "failure",
+      "failed",
+      "fail",
+      "error",
+      "errored",
+      "cancelled",
+      "canceled",
+      "timeout",
+      "timed_out",
+    ].includes(normalized)
+  ) {
+    return "failed";
+  }
+  if (
+    ["running", "queued", "pending", "in_progress", "in-progress", "started"].includes(normalized)
+  ) {
+    return "running";
+  }
+  if (["blocked", "needs_user_input", "needs-user-input"].includes(normalized)) {
+    return "blocked";
+  }
+  return undefined;
+}
+
+function statusLabel(status: ToolCardStatus): string {
+  switch (status) {
+    case "passed":
+      return "Passed";
+    case "failed":
+      return "Failed";
+    case "running":
+      return "Running";
+    case "blocked":
+      return "Blocked";
+    case "unknown":
+      return "Status unknown";
+  }
+  return "Status unknown";
+}
+
+function statusFromEvidence(
+  outputRecord: Record<string, unknown> | undefined,
+): ToolCardStatus | undefined {
+  const exitCode = firstNumberFromRecord(outputRecord, ["exitCode", "exit_code", "code"]);
+  if (exitCode !== undefined) {
+    return exitCode === 0 ? "passed" : "failed";
+  }
+  const success = firstBooleanFromRecord(outputRecord, ["ok", "success", "passed"]);
+  if (success !== undefined) {
+    return success ? "passed" : "failed";
+  }
+  const timedOut = firstBooleanFromRecord(outputRecord, ["timedOut", "timed_out", "timeout"]);
+  if (timedOut === true) {
+    return "failed";
+  }
+  const status = normalizeStatus(
+    firstStringFromRecord(outputRecord, ["conclusion", "status", "state", "result"]),
+  );
+  if (status) {
+    return status;
+  }
+  return undefined;
+}
+
+function pushFact(facts: ToolCardFact[], label: string, value: string | number | undefined) {
+  if (value === undefined) {
+    return;
+  }
+  const text = String(value).trim();
+  if (text) {
+    facts.push({ label, value: text });
+  }
+}
+
+function inferToolCardKind(params: {
+  argsRecord?: Record<string, unknown>;
+  command?: string;
+  name: string;
+  outputRecord?: Record<string, unknown>;
+}): ToolCardKind {
+  const toolName = params.name.toLowerCase();
+  const output = params.outputRecord;
+  if (
+    firstStringFromRecord(output, [
+      "artifactId",
+      "artifact_id",
+      "artifactPath",
+      "artifact_path",
+      "filePath",
+      "file_path",
+      "screenshotPath",
+      "screenshot_path",
+      "reportPath",
+      "report_path",
+      "path",
+      "url",
+    ]) ||
+    Array.isArray(output?.artifacts) ||
+    Array.isArray(output?.artifactPaths) ||
+    Array.isArray(output?.artifact_paths) ||
+    toolName.includes("artifact")
+  ) {
+    return "artifact";
+  }
+  const command = params.command?.trim() ?? "";
+  if (
+    firstStringFromRecord(output, [
+      "workflow",
+      "workflowName",
+      "workflow_name",
+      "runUrl",
+      "run_url",
+      "runId",
+      "run_id",
+      "headSha",
+      "head_sha",
+      "proofKind",
+      "proof_kind",
+    ]) ||
+    /\b(pnpm\s+(test|check|tsgo|ui:smoke)|gh\s+(workflow|run)|workflow|proof|ci)\b/i.test(
+      command,
+    ) ||
+    toolName.includes("proof") ||
+    toolName.includes("github") ||
+    toolName.includes("workflow")
+  ) {
+    return "proof";
+  }
+  if (
+    command ||
+    firstStringFromRecord(params.argsRecord, ["cmd", "command", "script"]) ||
+    /(?:^|[._-])(exec|bash|shell|terminal|command|system\.run)(?:$|[._-])/.test(toolName)
+  ) {
+    return "command";
+  }
+  return "tool";
+}
+
+function formatDuration(value: number | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}s`;
+  }
+  return `${value}ms`;
+}
+
+function outputPreviewFromRecord(
+  outputRecord: Record<string, unknown> | undefined,
+): string | undefined {
+  return firstStringFromRecord(outputRecord, [
+    "summary",
+    "evidence",
+    "message",
+    "stdout",
+    "stderr",
+    "output",
+    "text",
+    "log",
+  ]);
+}
+
 function formatPayloadForSidebar(
   text: string | undefined,
   language: "json" | "text" = "text",
@@ -364,11 +627,135 @@ export function extractToolCardsCached(message: unknown, prefix = "tool"): ToolC
   return cards;
 }
 
+export function resolveToolCardPresentation(card: ToolCard): ToolCardPresentation {
+  const argsRecord = isRecord(card.args) ? card.args : parseJsonRecord(card.inputText);
+  const outputRecord = parseJsonRecord(card.outputText);
+  const command =
+    firstStringFromRecord(argsRecord, ["cmd", "command", "script", "shell"]) ??
+    firstStringFromRecord(outputRecord, ["cmd", "command", "script", "shell"]);
+  const kind = inferToolCardKind({
+    argsRecord,
+    command,
+    name: card.name,
+    outputRecord,
+  });
+  const facts: ToolCardFact[] = [];
+  const status = kind === "tool" ? undefined : (statusFromEvidence(outputRecord) ?? "unknown");
+  if (kind === "tool") {
+    return {
+      kind,
+      eyebrow: "Tool",
+      outputLabel: "Tool output",
+      facts,
+    };
+  }
+
+  if (status) {
+    pushFact(facts, "Status", statusLabel(status));
+  }
+  pushFact(facts, "Command", command);
+  pushFact(facts, "Exit", firstNumberFromRecord(outputRecord, ["exitCode", "exit_code", "code"]));
+  pushFact(
+    facts,
+    "Duration",
+    formatDuration(
+      firstNumberFromRecord(outputRecord, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]),
+    ),
+  );
+  pushFact(facts, "CWD", firstStringFromRecord(argsRecord, ["cwd", "path", "dir", "directory"]));
+  pushFact(
+    facts,
+    "Run",
+    firstStringFromRecord(outputRecord, ["runId", "run_id", "databaseId", "database_id"]),
+  );
+  pushFact(facts, "SHA", firstStringFromRecord(outputRecord, ["headSha", "head_sha", "sha"]));
+  pushFact(facts, "URL", firstStringFromRecord(outputRecord, ["runUrl", "run_url", "url"]));
+  pushFact(
+    facts,
+    "Artifact",
+    firstStringFromRecord(outputRecord, [
+      "artifactId",
+      "artifact_id",
+      "artifactPath",
+      "artifact_path",
+      "filePath",
+      "file_path",
+      "screenshotPath",
+      "screenshot_path",
+      "reportPath",
+      "report_path",
+      "path",
+    ]),
+  );
+
+  if (kind === "command") {
+    return {
+      kind,
+      eyebrow: "Command",
+      outputLabel: "Command output",
+      status,
+      titleOverride: "Command",
+      detail: command,
+      facts,
+      previewText: outputPreviewFromRecord(outputRecord),
+    };
+  }
+  if (kind === "proof") {
+    return {
+      kind,
+      eyebrow: "Proof",
+      outputLabel: "Proof evidence",
+      status,
+      titleOverride: "Proof result",
+      detail:
+        firstStringFromRecord(outputRecord, [
+          "workflow",
+          "workflowName",
+          "workflow_name",
+          "proofKind",
+          "proof_kind",
+        ]) ?? command,
+      facts,
+      previewText: outputPreviewFromRecord(outputRecord),
+    };
+  }
+  return {
+    kind,
+    eyebrow: "Artifact",
+    outputLabel: "Artifact details",
+    status,
+    titleOverride: firstStringFromRecord(outputRecord, ["title", "name", "label"]) ?? "Artifact",
+    detail: firstStringFromRecord(outputRecord, ["kind", "type", "mimeType", "mime_type"]),
+    facts,
+    previewText: outputPreviewFromRecord(outputRecord),
+  };
+}
+
 export function buildToolCardSidebarContent(card: ToolCard): string {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
+  const presentation = resolveToolCardPresentation(card);
   const detail = formatToolDetail(display);
   const isError = isToolCardError(card);
-  const sections = [`## ${display.label}`, `**Tool:** \`${display.name}\``];
+  const sections = [
+    `## ${presentation.titleOverride ?? display.label}`,
+    `**Tool:** \`${display.name}\``,
+  ];
+
+  if (presentation.kind !== "tool") {
+    sections.push(`**Kind:** ${presentation.eyebrow}`);
+  }
+
+  if (presentation.status) {
+    sections.push(`**Status:** ${statusLabel(presentation.status)}`);
+  }
+
+  if (presentation.facts.length > 0) {
+    sections.push(
+      `### Evidence\n${presentation.facts
+        .map((fact) => `- **${fact.label}:** ${fact.value}`)
+        .join("\n")}`,
+    );
+  }
 
   if (detail) {
     sections.push(`**Summary:** ${detail}`);
@@ -567,6 +954,44 @@ function renderToolDataBlock(params: {
   `;
 }
 
+function renderToolCardEvidence(presentation: ToolCardPresentation) {
+  if (presentation.kind === "tool") {
+    return nothing;
+  }
+  return html`
+    <div class="chat-tool-card__evidence" data-tool-card-kind=${presentation.kind}>
+      <div class="chat-tool-card__evidence-header">
+        <span class="chat-tool-card__eyebrow">${presentation.eyebrow}</span>
+        ${presentation.status
+          ? html`<span
+              class="chat-tool-card__status-pill chat-tool-card__status-pill--${presentation.status}"
+              >${statusLabel(presentation.status)}</span
+            >`
+          : nothing}
+      </div>
+      ${presentation.facts.length > 0
+        ? html`<dl class="chat-tool-card__facts">
+            ${presentation.facts.map(
+              (fact) => html`
+                <div class="chat-tool-card__fact">
+                  <dt>${fact.label}</dt>
+                  <dd>${fact.value}</dd>
+                </div>
+              `,
+            )}
+          </dl>`
+        : html`<div class="chat-tool-card__status-text muted">Status unknown</div>`}
+      ${presentation.previewText?.trim()
+        ? renderToolDataBlock({
+            label: "Evidence preview",
+            text: presentation.previewText,
+            expanded: false,
+          })
+        : nothing}
+    </div>
+  `;
+}
+
 function renderCollapsedToolSummary(params: {
   label: string;
   icon: ReturnType<typeof html> | undefined;
@@ -648,13 +1073,20 @@ export function renderToolCard(
   },
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
+  const presentation = resolveToolCardPresentation(card);
   const isError = isToolCardError(card);
-  const summary = resolveCollapsedToolSummaryParts({
-    card,
-    displayLabel: display.label,
-    displayDetail: display.detail,
-    isError,
-  });
+  const summary =
+    presentation.kind !== "tool" && !isError
+      ? {
+          label: presentation.eyebrow,
+          name: presentation.detail ?? presentation.titleOverride ?? display.label,
+        }
+      : resolveCollapsedToolSummaryParts({
+          card,
+          displayLabel: display.label,
+          displayDetail: display.detail,
+          isError,
+        });
 
   return html`
     <div
@@ -697,6 +1129,7 @@ export function renderExpandedToolCardContent(
   allowExternalEmbedUrls = false,
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
+  const presentation = resolveToolCardPresentation(card);
   const detail = formatToolDetail(display);
   const hasOutput = Boolean(card.outputText?.trim());
   const hasInput = Boolean(card.inputText?.trim());
@@ -728,7 +1161,7 @@ export function renderExpandedToolCardContent(
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
           <span class="chat-tool-card__icon">${icons[display.icon]}</span>
-          <span>${display.label}</span>
+          <span>${presentation.titleOverride ?? display.label}</span>
           ${isError
             ? html`<span class="chat-tool-card__status-badge" role="status"
                 >${icons.x}<span>Error</span></span
@@ -751,7 +1184,10 @@ export function renderExpandedToolCardContent(
             `
           : nothing}
       </div>
-      ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+      ${presentation.detail || detail
+        ? html`<div class="chat-tool-card__detail">${presentation.detail ?? detail}</div>`
+        : nothing}
+      ${renderToolCardEvidence(presentation)}
       ${hasInput
         ? renderToolDataBlock({
             label: "Tool input",
@@ -763,7 +1199,7 @@ export function renderExpandedToolCardContent(
         ? card.preview
           ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
           : renderToolDataBlock({
-              label: isError ? "Tool error" : "Tool output",
+              label: isError ? "Tool error" : presentation.outputLabel,
               text: card.outputText!,
               expanded: true,
             })

@@ -70,6 +70,34 @@ describe("OpenClawApp exec approval decisions", () => {
     expect(app.execApprovalBusy).toBe(false);
   });
 
+  it("resolves network and remote-proof approvals through plugin approval resolve", async () => {
+    const request = vi.fn<RequestFn>(async () => ({ ok: true }));
+    const network = createExecApproval({
+      id: "network-approval-1",
+      kind: "network",
+      request: { command: "Allow web search" },
+    });
+    const remoteProof = createExecApproval({
+      id: "remote-proof-approval-1",
+      kind: "remote_proof",
+      request: { command: "Run remote proof" },
+    });
+    const app = await createApp(request, [network, remoteProof]);
+
+    await app.handleExecApprovalDecision("allow-once");
+    await app.handleExecApprovalDecision("deny");
+
+    expect(request).toHaveBeenNthCalledWith(1, "plugin.approval.resolve", {
+      id: "network-approval-1",
+      decision: "allow-once",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
+      id: "remote-proof-approval-1",
+      decision: "deny",
+    });
+    expect(app.execApprovalQueue).toEqual([]);
+  });
+
   it("dismisses and refreshes when the backend reports an already resolved approval", async () => {
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "exec.approval.resolve") {

@@ -77,16 +77,17 @@ import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
+import type { ChatGoalFlowSummary } from "./chat/pursue-goal.ts";
+import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
 import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
-import {
-  reconcileRealtimeTalkCatalogSelection,
-  type RealtimeTalkCatalogProvider,
-} from "./chat/realtime-talk-catalog.ts";
 import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
@@ -95,6 +96,7 @@ import {
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
+import type { WorkSurfaceTaskSummary } from "./chat/work-snapshot.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
@@ -153,6 +155,7 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
   PresenceEntry,
+  ProjectsListResult,
   ChannelsStatusSnapshot,
   SessionCompactionCheckpoint,
   SessionsListResult,
@@ -282,6 +285,26 @@ export class OpenClawApp extends LitElement {
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
+  @state() chatWorkTasks: WorkSurfaceTaskSummary[] = [];
+  @state() chatWorkLoading = false;
+  @state() chatWorkError: string | null = null;
+  @state() chatWorkUpdatedAt: number | null = null;
+  @state() chatProjectPickerOpen = false;
+  @state() chatProjectCreateName = "";
+  @state() chatProjectCreateDescription = "";
+  @state() chatProjectCreateInstructions = "";
+  @state() chatProjectBusy = false;
+  @state() chatProjectError: string | null = null;
+  @state() chatGoalPanelOpen = false;
+  @state() chatGoalDraft = "";
+  @state() chatGoalFlows: ChatGoalFlowSummary[] = [];
+  @state() chatGoalLoading = false;
+  @state() chatGoalBusy = false;
+  @state() chatGoalError: string | null = null;
+  @state() chatGoalUpdatedAt: number | null = null;
+  @state() chatTargetRunId: string | null = null;
+  @state() chatTargetAuditTs: number | null = null;
+  @state() chatTargetStatus: "exact-run" | "timestamp-fallback" | "not-found" | null = null;
   @state() chatSideResult: ChatSideResult | null = null;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
@@ -305,6 +328,8 @@ export class OpenClawApp extends LitElement {
   @state() chatSessionPickerLoading = false;
   @state() chatSessionPickerError: string | null = null;
   @state() chatSessionPickerResult: SessionsListResult | null = null;
+  @state() projectsLoading = false;
+  @state() projectsList: ProjectsListResult | null = null;
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;
@@ -1402,7 +1427,7 @@ export class OpenClawApp extends LitElement {
     this.execApprovalBusy = true;
     this.execApprovalError = null;
     try {
-      const method = active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
+      const method = active.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
       await this.client.request(method, {
         id: active.id,
         decision,

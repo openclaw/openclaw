@@ -7,7 +7,18 @@ import {
 import { GatewayRequestError } from "../gateway.ts";
 import {
   abortChatRun,
+  attachChatSessionToProject,
+  buildCurrentChatGoalContinuationPrompt,
+  cancelChatGoal,
+  cancelChatWorkTask,
+  createAndAttachChatProject,
+  createChatSessionInProject,
+  createChatGoal,
+  detachChatSessionFromProject,
   handleChatEvent,
+  loadChatGoals,
+  loadChatProjects,
+  loadChatWorkTasks,
   loadChatHistory,
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
@@ -39,6 +50,294 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
 
 afterEach(() => {
   resetChatAttachmentPayloadStoreForTest();
+});
+
+describe("chat work task loading", () => {
+  it("loads queued and running work tasks without blocking chat", async () => {
+    const request = vi.fn().mockResolvedValueOnce({
+      tasks: [{ id: "task-1", taskId: "task-1", title: "Build proof", status: "running" }],
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatWorkTasks: [],
+      chatWorkLoading: false,
+      chatWorkError: null,
+    });
+
+    await loadChatWorkTasks(state);
+
+    expect(request).toHaveBeenCalledWith("tasks.list", {
+      status: ["queued", "running"],
+      limit: 50,
+    });
+    expect(state.chatWorkTasks).toEqual([
+      { id: "task-1", taskId: "task-1", title: "Build proof", status: "running" },
+    ]);
+    expect(state.chatWorkError).toBeNull();
+    expect(state.chatWorkLoading).toBe(false);
+  });
+
+  it("records work task load failures without throwing", async () => {
+    const request = vi.fn().mockRejectedValueOnce(new Error("offline"));
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatWorkTasks: [],
+      chatWorkLoading: false,
+      chatWorkError: null,
+    });
+
+    await expect(loadChatWorkTasks(state)).resolves.toBeUndefined();
+
+    expect(state.chatWorkError).toContain("offline");
+    expect(state.chatWorkLoading).toBe(false);
+  });
+
+  it("cancels a work task when a task id exists", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ found: true, cancelled: true })
+      .mockResolvedValueOnce({ tasks: [] });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatWorkTasks: [{ id: "task-1", taskId: "task-1", title: "Build proof" }],
+      chatWorkLoading: false,
+      chatWorkError: null,
+    });
+
+    await expect(cancelChatWorkTask(state, "task-1")).resolves.toBe(true);
+
+    expect(request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
+      taskId: "task-1",
+      reason: "cancelled from Control UI Working Now",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "tasks.list", {
+      status: ["queued", "running"],
+      limit: 50,
+    });
+  });
+});
+
+describe("chat project actions", () => {
+  it("loads projects without blocking chat", async () => {
+    const request = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      ts: 1,
+      count: 1,
+      projects: [{ id: "project-1", name: "Project 1", resources: [] }],
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      projectsList: null,
+      projectsLoading: false,
+    });
+
+    await loadChatProjects(state);
+
+    expect(request).toHaveBeenCalledWith("projects.list", { includeArchived: true });
+    expect(state.projectsList?.projects[0]?.id).toBe("project-1");
+    expect(state.chatProjectError).toBeNull();
+    expect(state.projectsLoading).toBe(false);
+  });
+
+  it("creates a project and attaches the active chat session", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        project: {
+          id: "project-new",
+          name: "New Project",
+          memoryMode: "project_only",
+          createdAt: 1,
+          updatedAt: 1,
+          resources: [],
+        },
+      })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, ts: 2, count: 1, projects: [] });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatProjectCreateName: " New Project ",
+      chatProjectCreateDescription: " Research ",
+      chatProjectCreateInstructions: " Be precise ",
+      chatProjectPickerOpen: true,
+    });
+
+    await expect(createAndAttachChatProject(state)).resolves.toBe("project-new");
+
+    expect(request).toHaveBeenNthCalledWith(1, "projects.create", {
+      name: "New Project",
+      description: "Research",
+      instructions: "Be precise",
+      memoryMode: "project_only",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "projects.sessions.attach", {
+      projectId: "project-new",
+      key: "main",
+    });
+    expect(state.chatProjectCreateName).toBe("");
+    expect(state.chatProjectPickerOpen).toBe(false);
+    expect(state.chatProjectBusy).toBe(false);
+  });
+
+  it("attaches and detaches the active chat session", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, ts: 1, count: 0, projects: [] })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, ts: 2, count: 0, projects: [] });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatProjectPickerOpen: true,
+    });
+
+    await expect(attachChatSessionToProject(state, "project-1")).resolves.toBe(true);
+    state.chatProjectPickerOpen = true;
+    await expect(detachChatSessionFromProject(state)).resolves.toBe(true);
+
+    expect(request).toHaveBeenNthCalledWith(1, "projects.sessions.attach", {
+      projectId: "project-1",
+      key: "main",
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "projects.sessions.detach", { key: "main" });
+    expect(state.chatProjectPickerOpen).toBe(false);
+  });
+
+  it("creates a new chat inside a selected project", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, key: "project:project-1:chat" })
+      .mockResolvedValueOnce({ ok: true, ts: 1, count: 0, projects: [] });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatProjectPickerOpen: true,
+    });
+
+    await expect(createChatSessionInProject(state, "project-1")).resolves.toBe(
+      "project:project-1:chat",
+    );
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
+      projectId: "project-1",
+    });
+    expect(state.chatProjectPickerOpen).toBe(false);
+  });
+
+  it("records project API failures without throwing", async () => {
+    const request = vi.fn().mockRejectedValueOnce(new Error("offline"));
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatProjectCreateName: "Project",
+    });
+
+    await expect(createAndAttachChatProject(state)).resolves.toBeNull();
+
+    expect(state.chatProjectError).toContain("offline");
+    expect(state.chatProjectBusy).toBe(false);
+  });
+});
+
+describe("chat pursue goal actions", () => {
+  it("loads task flows for the current chat session", async () => {
+    const request = vi.fn().mockResolvedValueOnce({
+      flows: [{ id: "flow-1", goal: "Ship proof", status: "running" }],
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatGoalFlows: [],
+      chatGoalLoading: false,
+      chatGoalError: null,
+    });
+
+    await loadChatGoals(state);
+
+    expect(request).toHaveBeenCalledWith("taskFlows.list", {
+      sessionKey: "main",
+      limit: 20,
+    });
+    expect(state.chatGoalFlows).toEqual([{ id: "flow-1", goal: "Ship proof", status: "running" }]);
+    expect(state.chatGoalError).toBeNull();
+    expect(state.chatGoalLoading).toBe(false);
+  });
+
+  it("creates a goal from the composer draft", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        flow: { id: "flow-new", goal: "Finish the milestone", status: "running" },
+      })
+      .mockResolvedValueOnce({ flows: [] });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatMessage: " Finish the milestone ",
+      chatGoalDraft: "",
+      chatGoalPanelOpen: false,
+    });
+
+    await expect(createChatGoal(state)).resolves.toMatchObject({ id: "flow-new" });
+
+    expect(request).toHaveBeenNthCalledWith(1, "taskFlows.create", {
+      sessionKey: "main",
+      goal: "Finish the milestone",
+      currentStep: "Goal started from Chat.",
+    });
+    expect(state.chatGoalDraft).toBe("");
+    expect(state.chatGoalPanelOpen).toBe(true);
+    expect(state.chatGoalBusy).toBe(false);
+  });
+
+  it("builds a continuation prompt for the selected goal", () => {
+    const state = createState({
+      chatGoalFlows: [{ id: "flow-1", goal: "Finish the milestone", status: "running" }],
+    });
+
+    expect(buildCurrentChatGoalContinuationPrompt(state, "flow-1")).toContain(
+      "Continue pursuing this goal",
+    );
+    expect(buildCurrentChatGoalContinuationPrompt(state, "flow-1")).toContain(
+      "Finish the milestone",
+    );
+  });
+
+  it("cancels a goal and refreshes goal state", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ found: true, cancelled: true })
+      .mockResolvedValueOnce({
+        flows: [{ id: "flow-1", goal: "Finish", status: "cancelled" }],
+      });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatGoalFlows: [{ id: "flow-1", goal: "Finish", status: "running" }],
+    });
+
+    await expect(cancelChatGoal(state, "flow-1")).resolves.toBe(true);
+
+    expect(request).toHaveBeenNthCalledWith(1, "taskFlows.cancel", {
+      flowId: "flow-1",
+      sessionKey: "main",
+      reason: "cancelled from Control UI Pursue Goal",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "taskFlows.list", {
+      sessionKey: "main",
+      limit: 20,
+    });
+    expect(state.chatGoalFlows?.[0]?.status).toBe("cancelled");
+  });
+
+  it("records goal API failures without throwing", async () => {
+    const request = vi.fn().mockRejectedValueOnce(new Error("offline"));
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      chatGoalDraft: "Finish",
+    });
+
+    await expect(createChatGoal(state)).resolves.toBeNull();
+
+    expect(state.chatGoalError).toContain("offline");
+    expect(state.chatGoalBusy).toBe(false);
+  });
 });
 
 function createDeferred<T>() {

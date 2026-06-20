@@ -6,6 +6,11 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../chat/heartbeat-display.ts";
 import { extractText } from "../chat/message-extract.ts";
+import {
+  buildChatGoalContinuationPrompt,
+  resolveCurrentChatGoal,
+  type ChatGoalFlowSummary,
+} from "../chat/pursue-goal.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
 import {
   appendChatMessageToCache,
@@ -25,6 +30,7 @@ import {
   visibleCurrentAssistantStreamTail,
 } from "../chat/stream-reconciliation.ts";
 import { buildUserChatMessageContentBlocks } from "../chat/user-message-content.ts";
+import type { WorkSurfaceTaskSummary } from "../chat/work-snapshot.ts";
 import { formatConnectError } from "../connect-error.ts";
 import {
   controlUiNowMs,
@@ -44,6 +50,8 @@ import type {
   GatewaySessionRow,
   GatewaySessionsDefaults,
   ModelCatalogEntry,
+  ProjectRecord,
+  ProjectsListResult,
 } from "../types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
@@ -408,6 +416,25 @@ export type ChatState = {
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
+  chatWorkTasks?: WorkSurfaceTaskSummary[];
+  chatWorkLoading?: boolean;
+  chatWorkError?: string | null;
+  chatWorkUpdatedAt?: number | null;
+  chatProjectPickerOpen?: boolean;
+  chatProjectCreateName?: string;
+  chatProjectCreateDescription?: string;
+  chatProjectCreateInstructions?: string;
+  chatProjectBusy?: boolean;
+  chatProjectError?: string | null;
+  chatGoalPanelOpen?: boolean;
+  chatGoalDraft?: string;
+  chatGoalFlows?: ChatGoalFlowSummary[];
+  chatGoalLoading?: boolean;
+  chatGoalBusy?: boolean;
+  chatGoalError?: string | null;
+  chatGoalUpdatedAt?: number | null;
+  projectsLoading?: boolean;
+  projectsList?: ProjectsListResult | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
@@ -424,6 +451,16 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: Array<{ id: string }>;
 };
 
+type ChatProjectCreateResponse = {
+  ok: true;
+  project?: ProjectRecord;
+};
+
+type ChatProjectSessionCreateResponse = {
+  ok: true;
+  key?: string;
+};
+
 export type ChatHistoryResult = {
   messages?: Array<unknown>;
   sessionId?: string;
@@ -437,6 +474,323 @@ export type ChatHistoryResult = {
 export type ChatMetadataResult = CommandsListResult & {
   models?: ModelCatalogEntry[];
 };
+
+type ChatGoalFlowResponse = {
+  flow?: ChatGoalFlowSummary;
+};
+
+type ChatGoalFlowsResponse = {
+  flows?: ChatGoalFlowSummary[];
+};
+
+function requireConnectedChatClient(state: ChatState): GatewayBrowserClient {
+  if (!state.client || !state.connected) {
+    throw new Error("Gateway is not connected.");
+  }
+  return state.client;
+}
+
+function normalizeOptionalText(value: string | undefined | null): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function currentChatSessionKey(state: ChatState): string {
+  const normalized = state.sessionKey.trim();
+  if (!normalized) {
+    throw new Error("No active chat session.");
+  }
+  return normalized;
+}
+
+function setChatProjectError(state: ChatState, err: unknown): void {
+  state.chatProjectError = formatConnectError(err);
+}
+
+function clearChatProjectDraft(state: ChatState): void {
+  state.chatProjectCreateName = "";
+  state.chatProjectCreateDescription = "";
+  state.chatProjectCreateInstructions = "";
+}
+
+function setChatGoalError(state: ChatState, err: unknown): void {
+  state.chatGoalError = formatConnectError(err);
+  state.chatGoalUpdatedAt = Date.now();
+}
+
+export async function loadChatProjects(state: ChatState): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.projectsLoading = true;
+  try {
+    const res = await state.client.request<ProjectsListResult>("projects.list", {
+      includeArchived: true,
+    });
+    state.projectsList = res ?? { ok: true, ts: Date.now(), count: 0, projects: [] };
+    state.chatProjectError = null;
+  } catch (err) {
+    setChatProjectError(state, err);
+  } finally {
+    state.projectsLoading = false;
+  }
+}
+
+export async function loadChatGoals(state: ChatState): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.chatGoalLoading = true;
+  try {
+    const res = await state.client.request<ChatGoalFlowsResponse>("taskFlows.list", {
+      sessionKey: state.sessionKey,
+      limit: 20,
+    });
+    state.chatGoalFlows = Array.isArray(res.flows) ? res.flows : [];
+    state.chatGoalError = null;
+    state.chatGoalUpdatedAt = Date.now();
+  } catch (err) {
+    setChatGoalError(state, err);
+  } finally {
+    state.chatGoalLoading = false;
+  }
+}
+
+export async function createChatGoal(
+  state: ChatState,
+  goalText?: string,
+): Promise<ChatGoalFlowSummary | null> {
+  const goal =
+    normalizeOptionalText(goalText) ??
+    normalizeOptionalText(state.chatGoalDraft) ??
+    normalizeOptionalText(state.chatMessage);
+  if (!goal) {
+    state.chatGoalError = "Enter a goal first.";
+    state.chatGoalUpdatedAt = Date.now();
+    return null;
+  }
+  state.chatGoalBusy = true;
+  state.chatGoalError = null;
+  try {
+    const client = requireConnectedChatClient(state);
+    const response = await client.request<ChatGoalFlowResponse>("taskFlows.create", {
+      sessionKey: currentChatSessionKey(state),
+      goal,
+      currentStep: "Goal started from Chat.",
+    });
+    if (!response.flow?.id) {
+      throw new Error("Goal was created without an id.");
+    }
+    state.chatGoalDraft = "";
+    state.chatGoalPanelOpen = true;
+    await loadChatGoals(state);
+    return response.flow;
+  } catch (err) {
+    setChatGoalError(state, err);
+    return null;
+  } finally {
+    state.chatGoalBusy = false;
+  }
+}
+
+export async function cancelChatGoal(state: ChatState, flowId: string): Promise<boolean> {
+  const normalized = flowId.trim();
+  if (!normalized) {
+    return false;
+  }
+  state.chatGoalBusy = true;
+  state.chatGoalError = null;
+  try {
+    const client = requireConnectedChatClient(state);
+    await client.request("taskFlows.cancel", {
+      flowId: normalized,
+      sessionKey: currentChatSessionKey(state),
+      reason: "cancelled from Control UI Pursue Goal",
+    });
+    await loadChatGoals(state);
+    return true;
+  } catch (err) {
+    setChatGoalError(state, err);
+    return false;
+  } finally {
+    state.chatGoalBusy = false;
+  }
+}
+
+export function buildCurrentChatGoalContinuationPrompt(
+  state: ChatState,
+  flowId: string,
+): string | null {
+  const flow =
+    (state.chatGoalFlows ?? []).find((entry) => entry.id === flowId || entry.flowId === flowId) ??
+    resolveCurrentChatGoal(state.chatGoalFlows);
+  return flow ? buildChatGoalContinuationPrompt(flow) : null;
+}
+
+export async function createAndAttachChatProject(state: ChatState): Promise<string | null> {
+  state.chatProjectBusy = true;
+  state.chatProjectError = null;
+  try {
+    const client = requireConnectedChatClient(state);
+    const name = normalizeOptionalText(state.chatProjectCreateName);
+    if (!name) {
+      throw new Error("Project name is required.");
+    }
+    const response = await client.request<ChatProjectCreateResponse>("projects.create", {
+      name,
+      description: normalizeOptionalText(state.chatProjectCreateDescription),
+      instructions: normalizeOptionalText(state.chatProjectCreateInstructions),
+      memoryMode: "project_only",
+    });
+    const projectId = response?.project?.id?.trim();
+    if (!projectId) {
+      throw new Error("Project was created without an id.");
+    }
+    await client.request("projects.sessions.attach", {
+      projectId,
+      key: currentChatSessionKey(state),
+    });
+    clearChatProjectDraft(state);
+    state.chatProjectPickerOpen = false;
+    await loadChatProjects(state);
+    return projectId;
+  } catch (err) {
+    setChatProjectError(state, err);
+    return null;
+  } finally {
+    state.chatProjectBusy = false;
+  }
+}
+
+export async function attachChatSessionToProject(
+  state: ChatState,
+  projectId: string,
+): Promise<boolean> {
+  const normalizedProjectId = projectId.trim();
+  if (!normalizedProjectId) {
+    return false;
+  }
+  state.chatProjectBusy = true;
+  state.chatProjectError = null;
+  try {
+    const client = requireConnectedChatClient(state);
+    await client.request("projects.sessions.attach", {
+      projectId: normalizedProjectId,
+      key: currentChatSessionKey(state),
+    });
+    state.chatProjectPickerOpen = false;
+    await loadChatProjects(state);
+    return true;
+  } catch (err) {
+    setChatProjectError(state, err);
+    return false;
+  } finally {
+    state.chatProjectBusy = false;
+  }
+}
+
+export async function detachChatSessionFromProject(state: ChatState): Promise<boolean> {
+  state.chatProjectBusy = true;
+  state.chatProjectError = null;
+  try {
+    const client = requireConnectedChatClient(state);
+    await client.request("projects.sessions.detach", {
+      key: currentChatSessionKey(state),
+    });
+    state.chatProjectPickerOpen = false;
+    await loadChatProjects(state);
+    return true;
+  } catch (err) {
+    setChatProjectError(state, err);
+    return false;
+  } finally {
+    state.chatProjectBusy = false;
+  }
+}
+
+export async function createChatSessionInProject(
+  state: ChatState,
+  projectId: string,
+): Promise<string | null> {
+  const normalizedProjectId = projectId.trim();
+  if (!normalizedProjectId) {
+    return null;
+  }
+  state.chatProjectBusy = true;
+  state.chatProjectError = null;
+  try {
+    const client = requireConnectedChatClient(state);
+    const response = await client.request<ChatProjectSessionCreateResponse>("sessions.create", {
+      projectId: normalizedProjectId,
+    });
+    const nextSessionKey = response?.key?.trim() ?? "";
+    if (!nextSessionKey) {
+      throw new Error("Project chat was created without a session key.");
+    }
+    state.chatProjectPickerOpen = false;
+    await loadChatProjects(state);
+    return nextSessionKey;
+  } catch (err) {
+    setChatProjectError(state, err);
+    return null;
+  } finally {
+    state.chatProjectBusy = false;
+  }
+}
+
+export async function loadChatWorkTasks(state: ChatState): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.chatWorkLoading = true;
+  try {
+    const res = await state.client.request<{ tasks?: WorkSurfaceTaskSummary[] }>("tasks.list", {
+      status: ["queued", "running"],
+      limit: 50,
+    });
+    state.chatWorkTasks = Array.isArray(res.tasks) ? res.tasks : [];
+    state.chatWorkError = null;
+    state.chatWorkUpdatedAt = Date.now();
+  } catch (err) {
+    state.chatWorkError = formatConnectError(err);
+    state.chatWorkUpdatedAt = Date.now();
+  } finally {
+    state.chatWorkLoading = false;
+  }
+}
+
+export async function cancelChatWorkTask(state: ChatState, taskId: string): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return false;
+  }
+  const normalized = taskId.trim();
+  if (!normalized) {
+    return false;
+  }
+  try {
+    await state.client.request("tasks.cancel", {
+      taskId: normalized,
+      reason: "cancelled from Control UI Working Now",
+    });
+    await loadChatWorkTasks(state);
+    return true;
+  } catch (err) {
+    state.chatWorkError = formatConnectError(err);
+    state.chatWorkUpdatedAt = Date.now();
+    return false;
+  }
+}
+
+function maybeRefreshChatWorkTasks(state: ChatState): void {
+  if (
+    "chatWorkTasks" in state ||
+    "chatWorkLoading" in state ||
+    "chatWorkError" in state ||
+    "chatWorkUpdatedAt" in state
+  ) {
+    void loadChatWorkTasks(state);
+  }
+}
 
 export type ChatEventPayload = {
   runId?: string;
@@ -847,6 +1201,7 @@ async function loadChatHistoryUncached(
       visibleMessageCount: visibleMessages.length,
       resetStream,
     });
+    maybeRefreshChatWorkTasks(state);
     return res;
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
@@ -873,6 +1228,10 @@ async function loadChatHistoryUncached(
   } finally {
     if (isLatestChatHistoryRequest(state, requestVersion)) {
       state.chatLoading = false;
+    }
+    maybeRefreshChatWorkTasks(state);
+    if (state.chatGoalPanelOpen || (state.chatGoalFlows?.length ?? 0) > 0) {
+      void loadChatGoals(state);
     }
   }
   return undefined;
@@ -965,6 +1324,7 @@ export async function requestChatSend(
     runId: string;
     sessionKey?: string;
     agentId?: string;
+    flowId?: string;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
@@ -977,6 +1337,7 @@ export async function requestChatSend(
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
+    ...(params.flowId ? { flowId: params.flowId } : {}),
     attachments: buildApiAttachments(params.attachments),
   });
   return normalizeChatSendAck(payload, params.runId);
@@ -1110,6 +1471,7 @@ export async function sendChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+  opts?: { flowId?: string },
 ): Promise<string | null> {
   if (!state.client || !state.connected) {
     return null;
@@ -1137,7 +1499,16 @@ export async function sendChatMessage(
   state.chatStreamStartedAt = now;
 
   try {
-    const ack = await requestChatSend(state, { message: msg, attachments, runId });
+    const ack = await requestChatSend(state, {
+      message: msg,
+      attachments,
+      runId,
+      flowId: opts?.flowId,
+    });
+    maybeRefreshChatWorkTasks(state);
+    if (opts?.flowId || state.chatGoalPanelOpen || (state.chatGoalFlows?.length ?? 0) > 0) {
+      void loadChatGoals(state);
+    }
     if (ack.status === "ok") {
       reconcileChatRunLifecycle(
         state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
@@ -1343,6 +1714,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
     reconcileTerminalRun("done", "done");
+    maybeRefreshChatWorkTasks(state);
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
@@ -1355,6 +1727,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
     reconcileTerminalRun("interrupted", "killed");
+    maybeRefreshChatWorkTasks(state);
   } else if (payload.state === "error") {
     const payloadMessage = hadActiveRunBeforeEvent
       ? normalizeFinalAssistantMessage(payload.message)
@@ -1380,6 +1753,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     reconcileTerminalRun("interrupted", "failed");
     setChatError(state, payload.errorMessage ?? "chat error");
+    maybeRefreshChatWorkTasks(state);
   }
   return payload.state;
 }

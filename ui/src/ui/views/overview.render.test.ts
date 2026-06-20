@@ -180,6 +180,54 @@ describe("overview view rendering", () => {
     expect(recentNames).not.toContain("telegram:123:456");
   });
 
+  it("renders recent Control Director truth diagnostics in overview cards", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 10,
+            controlDirectorTruthAudit: [
+              {
+                ts: 1,
+                runId: "run-1",
+                status: "blocked",
+                missing: ["command exit code 0"],
+                payloadsChecked: 1,
+                payloadsRewritten: 1,
+                claims: [
+                  {
+                    claim: "tests passed",
+                    claimHash: "hash-1",
+                    claimType: "verification",
+                    requiredEvidenceType: "command",
+                    matchStatus: "missing",
+                    missingCondition: "missing command evidence with exit code 0",
+                    rewriteAction: "blocked_unsupported_truth_claim",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    const card = container.querySelector('[data-kind="control-director-diagnostics"]');
+    expect(card?.textContent).toContain("Truth & Completion");
+    expect(card?.textContent).toContain("1 blocked");
+    expect(card?.textContent).toContain("missing command evidence with exit code 0");
+  });
+
   it("promotes provider quota into a dedicated overview card", async () => {
     const container = document.createElement("div");
     const props = createOverviewProps({

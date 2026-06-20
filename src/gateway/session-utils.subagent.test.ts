@@ -97,6 +97,99 @@ describe("listSessionsFromStore subagent metadata", () => {
     }
   });
 
+  test("projects Control Director diagnostic fields onto session rows", () => {
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-control-director",
+          updatedAt: 123,
+          controlDirectorGuardAudit: [
+            {
+              ts: 10,
+              runId: "run-1",
+              action: "blocked_missing_judge_approval",
+              originalStatus: "complete",
+              nextStatus: "blocked",
+              missing: ["judge approval"],
+              payloadsChecked: 1,
+              payloadsRewritten: 1,
+            },
+          ],
+          controlDirectorLivenessAudit: [
+            {
+              ts: 11,
+              runId: "run-1",
+              action: "synthesized_blocked_no_visible_output",
+              reason: "empty final output",
+              source: "terminal_empty",
+              classification: "empty",
+              nextStatus: "blocked",
+              continuationCount: 0,
+              continuationQueued: false,
+              payloadsChecked: 1,
+              payloadsSynthesized: 1,
+            },
+          ],
+          controlDirectorMissionLedger: [
+            {
+              missionId: "mission-1",
+              runId: "run-1",
+              requestSummary: "verify completion",
+              status: "blocked",
+              startedAt: 1,
+              updatedAt: 12,
+              continuationCount: 0,
+              finalStatus: "blocked",
+              nextBuildGap: "obtain Judge approval",
+              completionGrade: 8,
+              criticality: 10,
+            },
+          ],
+          controlDirectorJudgeCompletionApproval: {
+            judgeStatus: "rejected",
+            judgeVerdict: "REQUEST_MORE_EVIDENCE",
+            judgeRunId: "judge-1",
+            missionId: "mission-1",
+            evidenceSummary: "missing command proof",
+          },
+          controlDirectorTruthAudit: [
+            {
+              ts: 12,
+              runId: "run-1",
+              status: "blocked",
+              missing: ["command exit code 0"],
+              payloadsChecked: 1,
+              payloadsRewritten: 1,
+              claims: [
+                {
+                  claim: "tests passed",
+                  claimHash: "hash-1",
+                  claimType: "verification",
+                  requiredEvidenceType: "command",
+                  matchStatus: "missing",
+                  missingCondition: "missing command evidence with exit code 0",
+                  rewriteAction: "blocked_unsupported_truth_claim",
+                },
+              ],
+            },
+          ],
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    const row = result.sessions[0];
+    expect(row?.controlDirectorGuardAudit?.[0]?.action).toBe("blocked_missing_judge_approval");
+    expect(row?.controlDirectorLivenessAudit?.[0]?.source).toBe("terminal_empty");
+    expect(row?.controlDirectorMissionLedger?.[0]?.nextBuildGap).toBe("obtain Judge approval");
+    expect(row?.controlDirectorJudgeCompletionApproval?.judgeVerdict).toBe("REQUEST_MORE_EVIDENCE");
+    expect(row?.controlDirectorTruthAudit?.[0]?.claims[0]?.missingCondition).toBe(
+      "missing command evidence with exit code 0",
+    );
+  });
+
   test("includes subagent status timing and direct child session keys", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {

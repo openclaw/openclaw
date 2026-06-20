@@ -18,6 +18,7 @@ import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState } from "../chat/chat-welcome.ts";
 import { renderChatSessionSelect } from "../chat/session-controls.ts";
+import type { ExecApprovalRequest } from "../controllers/exec-approval.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
@@ -102,23 +103,39 @@ const buildChatItemsMock = vi.hoisted(() =>
   }),
 );
 const renderMessageGroupMock = vi.hoisted(() =>
-  vi.fn((group: { messages: Array<{ message: unknown }> }) => {
-    const element = document.createElement("div");
-    element.className = "chat-group";
-    element.textContent = group.messages
-      .map(({ message }) => {
-        if (typeof message === "object" && message !== null && "content" in message) {
-          const content = (message as { content?: unknown }).content;
-          if (typeof content === "string") {
-            return content;
+  vi.fn(
+    (
+      group: { messages: Array<{ message: unknown }> },
+      opts: {
+        onUseProposedPlan?: (prompt: string) => void;
+      } = {},
+    ) => {
+      const element = document.createElement("div");
+      element.className = "chat-group";
+      element.textContent = group.messages
+        .map(({ message }) => {
+          if (typeof message === "object" && message !== null && "content" in message) {
+            const content = (message as { content?: unknown }).content;
+            if (typeof content === "string") {
+              return content;
+            }
+            return content == null ? "" : JSON.stringify(content);
           }
-          return content == null ? "" : JSON.stringify(content);
-        }
-        return String(message);
-      })
-      .join("\n");
-    return element;
-  }),
+          return String(message);
+        })
+        .join("\n");
+      if (element.textContent.includes("<proposed_plan>")) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = "Use plan";
+        button.addEventListener("click", () => {
+          opts.onUseProposedPlan?.("PLEASE IMPLEMENT THIS PLAN:\n# Plan");
+        });
+        element.append(button);
+      }
+      return element;
+    },
+  ),
 );
 const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
 
@@ -579,6 +596,168 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
   render(renderChat(createChatProps(overrides)), container);
   return container;
 }
+
+describe("chat multi-agent work tree", () => {
+  it("renders active child agents in the Working Now panel", () => {
+    const container = renderChatView({
+      sessionKey: "agent:main:main",
+      sessions: {
+        count: 3,
+        defaults: { contextTokens: null, model: null, modelProvider: null },
+        path: "",
+        sessions: [
+          {
+            childSessions: ["agent:main:subagent:research"],
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 100,
+          },
+          {
+            displayName: "Research agent",
+            hasActiveRun: true,
+            key: "agent:main:subagent:research",
+            kind: "direct",
+            lastMessagePreview: "Reading source evidence",
+            spawnedBy: "agent:main:main",
+            updatedAt: 90,
+          },
+          {
+            displayName: "Other worker",
+            hasActiveRun: true,
+            key: "agent:other:subagent:worker",
+            kind: "direct",
+            spawnedBy: "agent:other:main",
+            updatedAt: 120,
+          },
+        ],
+        ts: 0,
+      },
+    });
+
+    const tree = container.querySelector(".chat-agent-work-tree");
+    expect(tree?.textContent).toContain("Agent Work Tree");
+    expect(tree?.textContent).toContain("Research agent");
+    expect(tree?.textContent).toContain("Reading source evidence");
+    expect(tree?.textContent).not.toContain("Other worker");
+  });
+
+  it("opens child sessions and cancels matching child tasks", () => {
+    const onSessionSelect = vi.fn();
+    const onWorkTaskCancel = vi.fn();
+    const container = renderChatView({
+      sessionKey: "agent:main:main",
+      sessions: {
+        count: 2,
+        defaults: { contextTokens: null, model: null, modelProvider: null },
+        path: "",
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 100,
+          },
+          {
+            displayName: "Research agent",
+            key: "agent:main:subagent:research",
+            kind: "direct",
+            spawnedBy: "agent:main:main",
+            updatedAt: 90,
+          },
+        ],
+        ts: 0,
+      },
+      workTasks: [
+        {
+          id: "task-research",
+          taskId: "task-research",
+          sessionKey: "agent:main:subagent:research",
+          status: "running",
+        },
+      ],
+      onSessionSelect,
+      onWorkTaskCancel,
+    });
+
+    const child = container.querySelector<HTMLElement>(
+      '[data-agent-work-tree-node="agent:main:subagent:research"]',
+    );
+    expect(child?.textContent).toContain("Research agent");
+
+    const buttons = Array.from(child!.querySelectorAll<HTMLButtonElement>("button"));
+    buttons.find((button) => button.textContent?.includes("Open"))?.click();
+    buttons.find((button) => button.textContent?.includes("Cancel"))?.click();
+
+    expect(onSessionSelect).toHaveBeenCalledWith("agent:main:subagent:research");
+    expect(onWorkTaskCancel).toHaveBeenCalledWith("task-research");
+  });
+});
+
+describe("chat Control Director diagnostics", () => {
+  it("renders blocked truth and completion diagnostics for the active session", () => {
+    const container = renderChatView({
+      sessionKey: "agent:main:main",
+      sessions: {
+        count: 1,
+        defaults: { contextTokens: null, model: null, modelProvider: null },
+        path: "",
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 100,
+            controlDirectorTruthAudit: [
+              {
+                ts: 10,
+                status: "blocked",
+                runId: "run-1",
+                missing: ["matching command exit code 0"],
+                payloadsChecked: 1,
+                payloadsRewritten: 1,
+                claims: [
+                  {
+                    claim: "tests passed",
+                    claimHash: "hash-1",
+                    claimType: "verification",
+                    requiredEvidenceType: "command",
+                    matchStatus: "missing",
+                    missingCondition: "missing command evidence with exit code 0",
+                    rewriteAction: "blocked_unsupported_truth_claim",
+                  },
+                ],
+              },
+            ],
+            controlDirectorMissionLedger: [
+              {
+                missionId: "mission-1",
+                runId: "run-1",
+                requestSummary: "finish diagnostics",
+                status: "blocked",
+                startedAt: 1,
+                updatedAt: 10,
+                continuationCount: 0,
+                finalStatus: "blocked",
+                completionGrade: 8,
+                criticality: 10,
+                nextBuildGap: "collect command proof",
+              },
+            ],
+          },
+        ],
+        ts: 0,
+      },
+    });
+
+    const card = container.querySelector("[data-control-director-diagnostics]");
+    expect(card?.textContent).toContain("Truth & Completion");
+    expect(card?.textContent).toContain("Blocked unsupported claim");
+    expect(card?.textContent).toContain("missing command evidence with exit code 0");
+    expect(card?.textContent).toContain("Required evidence");
+    expect(card?.textContent).toContain("command");
+    expect(card?.textContent).toContain("Completion Grade");
+    expect(card?.textContent).toContain("8/10");
+    expect(card?.textContent).not.toContain("Status: complete");
+  });
+});
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -3917,5 +4096,683 @@ describe("chat session controls", () => {
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
     expect(thinkingOptions[0]?.textContent?.trim()).toBe("Default");
     expect(thinkingSelect.title).toContain("Adaptive");
+  });
+});
+
+describe("chat Working Now surface", () => {
+  it("renders an idle empty state", () => {
+    const container = renderChatView();
+
+    expect(container.querySelector("[data-chat-work-surface]")?.textContent).toContain(
+      "Nothing running",
+    );
+    expect(container.querySelector("[data-chat-work-surface]")?.textContent).toContain(
+      "Nothing is running.",
+    );
+  });
+
+  it("renders active run, queue, task, and active session actions", () => {
+    const onAbort = vi.fn();
+    const onQueueRemove = vi.fn();
+    const onWorkTaskCancel = vi.fn();
+    const onSessionSelect = vi.fn();
+    const container = renderChatView({
+      canAbort: true,
+      currentRunId: "run-1",
+      queue: [{ id: "queue-1", text: "follow up", createdAt: 90 }],
+      workTasks: [
+        {
+          id: "task-1",
+          taskId: "task-1",
+          title: "Remote proof",
+          status: "running",
+          progressSummary: "Watching CI",
+          updatedAt: 80,
+        },
+      ],
+      sessions: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:research",
+            kind: "direct",
+            displayName: "Research lane",
+            updatedAt: 70,
+            hasActiveRun: true,
+          },
+        ],
+      },
+      onAbort,
+      onQueueRemove,
+      onWorkTaskCancel,
+      onSessionSelect,
+    });
+
+    const surface = container.querySelector<HTMLElement>("[data-chat-work-surface]");
+    expect(surface?.textContent).toContain("Working");
+    expect(surface?.textContent).toContain("Val is working…");
+    expect(surface?.textContent).toContain("follow up");
+    expect(surface?.textContent).toContain("Remote proof");
+    expect(surface?.textContent).toContain("Watching CI");
+    expect(surface?.textContent).toContain("Research lane");
+
+    const buttons = [...surface!.querySelectorAll<HTMLButtonElement>("button")];
+    buttons.find((button) => button.textContent?.includes("Stop"))?.click();
+    buttons.find((button) => button.textContent?.includes("Remove"))?.click();
+    buttons.find((button) => button.textContent?.includes("Cancel"))?.click();
+    buttons.find((button) => button.textContent?.includes("Open"))?.click();
+
+    expect(onAbort).toHaveBeenCalledTimes(1);
+    expect(onQueueRemove).toHaveBeenCalledWith("queue-1");
+    expect(onWorkTaskCancel).toHaveBeenCalledWith("task-1");
+    expect(onSessionSelect).toHaveBeenCalledWith("agent:main:research");
+  });
+
+  it("renders work status failures without hiding current work", () => {
+    const container = renderChatView({
+      workTasksError: "offline",
+      workTasks: [{ id: "task-1", title: "Still visible", status: "running" }],
+    });
+
+    const surface = container.querySelector<HTMLElement>("[data-chat-work-surface]");
+    expect(surface?.textContent).toContain("Work status unavailable");
+    expect(surface?.textContent).toContain("Still visible");
+  });
+
+  it("does not render cancel for tasks without a task id", () => {
+    const container = renderChatView({
+      workTasks: [{ title: "No id task", status: "running" }],
+    });
+
+    const surface = container.querySelector<HTMLElement>("[data-chat-work-surface]");
+    expect(surface?.textContent).toContain("No id task");
+    expect(
+      [...surface!.querySelectorAll("button")].map((button) => button.textContent),
+    ).not.toContain("Cancel");
+  });
+});
+
+describe("chat approval cards", () => {
+  const execApproval = (overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalRequest => {
+    const createdAtMs = Date.now();
+    return {
+      id: "approval-exec-1",
+      kind: "exec",
+      request: {
+        command: "pnpm test ui/src/ui/views/chat.test.ts",
+        cwd: "/Users/openclaw/OpenClaw",
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+        agentId: "main",
+        resolvedPath: "/Users/openclaw/OpenClaw/node_modules/.bin/pnpm",
+        sessionKey: "agent:main:chat",
+        commandSpans: [{ startIndex: 0, endIndex: 9 }],
+      },
+      createdAtMs,
+      expiresAtMs: createdAtMs + 120_000,
+      ...overrides,
+    };
+  };
+  const pluginApproval = (overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalRequest => {
+    const createdAtMs = Date.now();
+    return {
+      id: "approval-plugin-1",
+      kind: "plugin",
+      request: {
+        command: "Install Calendar plugin",
+        agentId: "main",
+        sessionKey: "agent:main:chat",
+      },
+      pluginTitle: "Install Calendar plugin",
+      pluginDescription: "Calendar access for scheduling tasks.",
+      pluginSeverity: "medium",
+      pluginId: "calendar",
+      createdAtMs,
+      expiresAtMs: createdAtMs + 300_000,
+      ...overrides,
+    };
+  };
+  const networkApproval = (): ExecApprovalRequest =>
+    pluginApproval({
+      id: "approval-network-1",
+      kind: "network",
+      request: {
+        command: "Allow web search",
+        agentId: "main",
+        sessionKey: "agent:main:chat",
+      },
+      pluginTitle: "Allow web search",
+      pluginDescription: "Connect to the configured search provider.",
+      pluginSeverity: "warning",
+      pluginId: "web-search",
+    });
+  const remoteProofApproval = (): ExecApprovalRequest =>
+    pluginApproval({
+      id: "approval-remote-proof-1",
+      kind: "remote_proof",
+      request: {
+        command: "Run remote proof",
+        agentId: "main",
+        sessionKey: "agent:main:chat",
+      },
+      pluginTitle: "Run remote proof",
+      pluginDescription: "Dispatch Workflow Sanity on SnowBelt.",
+      pluginSeverity: "critical",
+      pluginId: "github-actions",
+    });
+
+  it("does not render an intrusive card when no approval is pending", () => {
+    const container = renderChatView({ execApprovalQueue: [] });
+
+    expect(container.querySelector("[data-chat-approval-card]")).toBeNull();
+  });
+
+  it("renders exec approval metadata, highlighted command, and decisions", () => {
+    const onExecApprovalDecision = vi.fn();
+    const container = renderChatView({
+      execApprovalQueue: [execApproval()],
+      onExecApprovalDecision,
+    });
+
+    const card = container.querySelector<HTMLElement>("[data-chat-approval-card]")!;
+    expect(card.textContent).toContain("Approval needed");
+    expect(card.textContent).toContain("Exec approval needed");
+    expect(card.textContent).toContain("pnpm test ui/src/ui/views/chat.test.ts");
+    expect(card.textContent).toContain("gateway");
+    expect(card.textContent).toContain("main");
+    expect(card.textContent).toContain("agent:main:chat");
+    expect(card.textContent).toContain("allowlist");
+    expect(card.textContent).toContain("on-miss");
+    expect(card.textContent).toContain("Expires in");
+    expect(card.querySelector(".chat-approval-card__command-span")?.textContent).toBe("pnpm test");
+
+    const buttons = [...card.querySelectorAll<HTMLButtonElement>("button")];
+    buttons.find((button) => button.textContent?.includes("Allow once"))?.click();
+    buttons.find((button) => button.textContent?.includes("Always allow"))?.click();
+    buttons.find((button) => button.textContent?.includes("Deny"))?.click();
+
+    expect(onExecApprovalDecision).toHaveBeenNthCalledWith(1, "allow-once");
+    expect(onExecApprovalDecision).toHaveBeenNthCalledWith(2, "allow-always");
+    expect(onExecApprovalDecision).toHaveBeenNthCalledWith(3, "deny");
+  });
+
+  it("renders plugin approval details and queue count", () => {
+    const onExecApprovalDecision = vi.fn();
+    const container = renderChatView({
+      execApprovalQueue: [pluginApproval(), execApproval({ id: "approval-exec-2" })],
+      onExecApprovalDecision,
+    });
+
+    const card = container.querySelector<HTMLElement>("[data-chat-approval-card]")!;
+    expect(card.textContent).toContain("Install Calendar plugin");
+    expect(card.textContent).toContain("Calendar access for scheduling tasks.");
+    expect(card.textContent).toContain("medium");
+    expect(card.textContent).toContain("calendar");
+    expect(card.textContent).toContain("2 pending");
+
+    card
+      .querySelector<HTMLButtonElement>("button.danger, .btn.danger")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onExecApprovalDecision).toHaveBeenCalledWith("deny");
+  });
+
+  it("renders network approval details with existing decisions", () => {
+    const onExecApprovalDecision = vi.fn();
+    const container = renderChatView({
+      execApprovalQueue: [networkApproval()],
+      onExecApprovalDecision,
+    });
+
+    const card = container.querySelector<HTMLElement>("[data-chat-approval-card]")!;
+    expect(card.getAttribute("data-approval-kind")).toBe("network");
+    expect(card.textContent).toContain("Network approval needed");
+    expect(card.textContent).toContain("Connect to the configured search provider.");
+    expect(card.textContent).toContain("Network source");
+    expect(card.textContent).toContain("web-search");
+
+    card.querySelector<HTMLButtonElement>("button.primary")?.click();
+    expect(onExecApprovalDecision).toHaveBeenCalledWith("allow-once");
+  });
+
+  it("renders remote-proof approval details with existing decisions", () => {
+    const onExecApprovalDecision = vi.fn();
+    const container = renderChatView({
+      execApprovalQueue: [remoteProofApproval()],
+      onExecApprovalDecision,
+    });
+
+    const card = container.querySelector<HTMLElement>("[data-chat-approval-card]")!;
+    expect(card.getAttribute("data-approval-kind")).toBe("remote_proof");
+    expect(card.textContent).toContain("Remote proof approval needed");
+    expect(card.textContent).toContain("Dispatch Workflow Sanity on SnowBelt.");
+    expect(card.textContent).toContain("Proof source");
+    expect(card.textContent).toContain("github-actions");
+
+    card.querySelector<HTMLButtonElement>("button.danger")?.click();
+    expect(onExecApprovalDecision).toHaveBeenCalledWith("deny");
+  });
+
+  it("disables approval buttons while busy", () => {
+    const container = renderChatView({
+      execApprovalQueue: [execApproval()],
+      execApprovalBusy: true,
+    });
+
+    const buttons = [
+      ...container.querySelectorAll<HTMLButtonElement>("[data-chat-approval-card] button"),
+    ];
+    expect(buttons).toHaveLength(3);
+    expect(buttons.every((button) => button.disabled)).toBe(true);
+  });
+
+  it("renders errors while keeping the composer usable", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      draft: "continue",
+      getDraft: () => "continue",
+      execApprovalQueue: [execApproval()],
+      execApprovalError: "Approval failed: offline",
+      onSend,
+    });
+
+    expect(container.querySelector("[data-chat-approval-card]")?.textContent).toContain(
+      "Approval failed: offline",
+    );
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat polish accessibility", () => {
+  const execApproval = (): ExecApprovalRequest => {
+    const createdAtMs = Date.now();
+    return {
+      id: "approval-exec-polish",
+      kind: "exec",
+      request: {
+        command: "pnpm test ui/src/ui/views/chat.test.ts",
+        agentId: "main",
+        sessionKey: "main",
+      },
+      createdAtMs,
+      expiresAtMs: createdAtMs + 120_000,
+    };
+  };
+
+  it("labels Codex-style chat surfaces and actions for assistive technology", () => {
+    const container = renderChatView({
+      canAbort: true,
+      currentRunId: "run-1",
+      execApprovalQueue: [execApproval()],
+      goalPanelOpen: true,
+      goalDraft: "Polish the chat",
+      projectPickerOpen: true,
+      projectCreateName: "Polish",
+      projectsList: {
+        ok: true as const,
+        ts: 1,
+        count: 1,
+        projects: [
+          {
+            id: "project-polish",
+            name: "Polish Project",
+            memoryMode: "project_only" as const,
+            createdAt: 1,
+            updatedAt: 2,
+            resources: [],
+          },
+        ],
+      },
+      sessions: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "main", kind: "direct", updatedAt: 1 }],
+      },
+      workTasks: [{ id: "task-1", taskId: "task-1", title: "Remote proof", status: "running" }],
+    });
+
+    expect(
+      container
+        .querySelector<HTMLElement>(".chat-work-surface__summary")
+        ?.getAttribute("aria-label"),
+    ).toBe("Working Now: Working");
+    expect(
+      container
+        .querySelector<HTMLElement>(".chat-project-picker__summary")
+        ?.getAttribute("aria-label"),
+    ).toBe("Project: No Project");
+    expect(
+      container
+        .querySelector<HTMLElement>(".chat-approval-card__summary")
+        ?.getAttribute("aria-label"),
+    ).toContain("Exec approval needed");
+    expect(
+      container.querySelector<HTMLElement>(".chat-goal__summary")?.getAttribute("aria-label"),
+    ).toContain("Pursue Goal");
+
+    expect(container.querySelector('[aria-label="Stop Val is working…"]')).toBeTruthy();
+    expect(container.querySelector('[aria-label="Refresh projects"]')).toBeTruthy();
+    expect(container.querySelector('[aria-label="Allow approval once"]')).toBeTruthy();
+    expect(container.querySelector('[aria-label="Start pursue goal"]')).toBeTruthy();
+  });
+
+  it("closes open chat panels with Escape and keeps the composer usable", () => {
+    const onProjectPickerToggle = vi.fn();
+    const onGoalPanelToggle = vi.fn();
+    const onSend = vi.fn();
+    const container = renderChatView({
+      draft: "send after close",
+      getDraft: () => "send after close",
+      execApprovalQueue: [execApproval()],
+      goalPanelOpen: true,
+      goalDraft: "Polish the chat",
+      projectPickerOpen: true,
+      onGoalPanelToggle,
+      onProjectPickerToggle,
+      onSend,
+      workTasks: [{ id: "task-1", taskId: "task-1", title: "Remote proof", status: "running" }],
+    });
+
+    for (const selector of [
+      "[data-chat-work-surface]",
+      "[data-chat-project-picker]",
+      "[data-chat-approval-card]",
+      "[data-chat-goal]",
+    ]) {
+      const details = container.querySelector<HTMLDetailsElement>(selector);
+      expect(details).toBeInstanceOf(HTMLDetailsElement);
+      details!.open = true;
+      details!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+      expect(details!.open).toBe(false);
+    }
+
+    expect(onProjectPickerToggle).toHaveBeenCalledWith(false);
+    expect(onGoalPanelToggle).toHaveBeenCalledWith(false);
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat Plan Mode cards", () => {
+  it("loads a proposed plan into the composer without sending it", () => {
+    const onDraftChange = vi.fn();
+    const onSend = vi.fn();
+    const container = renderChatView({
+      messages: [
+        {
+          role: "assistant",
+          content: "<proposed_plan>\n# Plan\n</proposed_plan>",
+        },
+      ],
+      onDraftChange,
+      onSend,
+    });
+
+    const usePlanButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.includes("Use plan"),
+    );
+    expect(usePlanButton).toBeInstanceOf(HTMLButtonElement);
+    usePlanButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onDraftChange).toHaveBeenCalledWith("PLEASE IMPLEMENT THIS PLAN:\n# Plan");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat project picker", () => {
+  const projectsList = {
+    ok: true as const,
+    ts: 1,
+    count: 2,
+    projects: [
+      {
+        id: "project-alpha",
+        name: "Alpha Project",
+        description: "Research context",
+        memoryMode: "project_only" as const,
+        createdAt: 1,
+        updatedAt: 2,
+        resources: [],
+      },
+      {
+        id: "project-beta",
+        name: "Beta Project",
+        memoryMode: "project_only" as const,
+        createdAt: 1,
+        updatedAt: 3,
+        resources: [],
+      },
+    ],
+  };
+
+  it("renders No Project when the active chat has no project id", () => {
+    const container = renderChatView({
+      projectsList,
+      sessions: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "main", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    expect(container.querySelector("[data-chat-project-picker]")?.textContent).toContain(
+      "No Project",
+    );
+  });
+
+  it("renders the current project name from the active session row", () => {
+    const container = renderChatView({
+      projectsList,
+      sessions: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            projectId: "project-alpha",
+          },
+        ],
+      },
+    });
+
+    expect(container.querySelector("[data-chat-project-picker]")?.textContent).toContain(
+      "Alpha Project",
+    );
+  });
+
+  it("exposes attach, detach, new-chat, and create actions", () => {
+    const onProjectAttach = vi.fn();
+    const onProjectDetach = vi.fn();
+    const onNewProjectChat = vi.fn();
+    const onProjectCreateAndAttach = vi.fn();
+    const onProjectCreateFieldChange = vi.fn();
+    const container = renderChatView({
+      projectPickerOpen: true,
+      projectCreateName: "New plan",
+      projectsList,
+      sessions: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            projectId: "project-alpha",
+          },
+        ],
+      },
+      onProjectAttach,
+      onProjectDetach,
+      onNewProjectChat,
+      onProjectCreateAndAttach,
+      onProjectCreateFieldChange,
+    });
+
+    const picker = container.querySelector<HTMLElement>("[data-chat-project-picker]")!;
+    picker.querySelector<HTMLButtonElement>('[data-chat-project-action="attach"]')?.click();
+    picker.querySelector<HTMLButtonElement>('[data-chat-project-action="detach"]')?.click();
+    picker.querySelector<HTMLButtonElement>('[data-chat-project-action="new-chat"]')?.click();
+    picker
+      .querySelector<HTMLButtonElement>('[data-chat-project-action="create-and-attach"]')
+      ?.click();
+    const nameInput = picker.querySelector<HTMLInputElement>('input[placeholder="Project name"]')!;
+    nameInput.value = "Edited plan";
+    nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onProjectAttach).toHaveBeenCalledWith("project-beta");
+    expect(onProjectDetach).toHaveBeenCalledTimes(1);
+    expect(onNewProjectChat).toHaveBeenCalledWith("project-alpha");
+    expect(onProjectCreateAndAttach).toHaveBeenCalledTimes(1);
+    expect(onProjectCreateFieldChange).toHaveBeenCalledWith("name", "Edited plan");
+  });
+
+  it("renders project loading failures without disabling chat", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      projectPickerOpen: true,
+      projectError: "offline",
+      draft: "hello",
+      getDraft: () => "hello",
+      onSend,
+    });
+
+    const picker = container.querySelector<HTMLElement>("[data-chat-project-picker]");
+    expect(picker?.textContent).toContain("Project status unavailable");
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat Pursue Goal surface", () => {
+  it("renders no-goal state and starts from the draft", () => {
+    const onGoalStart = vi.fn();
+    const onGoalDraftChange = vi.fn();
+    const container = renderChatView({
+      draft: "Fix the flaky proof",
+      getDraft: () => "Fix the flaky proof",
+      goalPanelOpen: true,
+      goalDraft: "Ship the feature with proof",
+      onGoalStart,
+      onGoalDraftChange,
+    });
+
+    const surface = container.querySelector<HTMLElement>("[data-chat-goal]");
+    expect(surface?.textContent).toContain("Pursue Goal");
+    expect(surface?.textContent).toContain("No goal");
+    expect(surface?.textContent).toContain("Create durable work from the current request");
+
+    surface?.querySelector<HTMLButtonElement>('[data-chat-goal-action="start"]')?.click();
+    expect(onGoalStart).toHaveBeenCalledTimes(1);
+
+    const goalInput = surface?.querySelector<HTMLTextAreaElement>("textarea");
+    goalInput!.value = "Updated goal";
+    goalInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onGoalDraftChange).toHaveBeenCalledWith("Updated goal");
+  });
+
+  it("renders running goal details and exposes continue and cancel actions", () => {
+    const onGoalContinue = vi.fn();
+    const onGoalCancel = vi.fn();
+    const container = renderChatView({
+      goalPanelOpen: true,
+      goalFlows: [
+        {
+          id: "flow-1",
+          flowId: "flow-1",
+          status: "running",
+          goal: "Finish Pursue Goal V1",
+          currentStep: "Running local proof.",
+          tasks: [
+            {
+              taskId: "task-1",
+              status: "running",
+              progressSummary: "Testing gateway linkage",
+              judgeStatus: "pending",
+            },
+          ],
+        },
+      ],
+      onGoalContinue,
+      onGoalCancel,
+    });
+
+    const surface = container.querySelector<HTMLElement>("[data-chat-goal]")!;
+    expect(surface.textContent).toContain("Finish Pursue Goal V1");
+    expect(surface.textContent).toContain("Pursuing");
+    expect(surface.textContent).toContain("Testing gateway linkage");
+    expect(surface.textContent).toContain("Judge pending");
+
+    surface.querySelector<HTMLButtonElement>('[data-chat-goal-action="continue"]')?.click();
+    surface.querySelector<HTMLButtonElement>('[data-chat-goal-action="cancel"]')?.click();
+
+    expect(onGoalContinue).toHaveBeenCalledWith("flow-1");
+    expect(onGoalCancel).toHaveBeenCalledWith("flow-1");
+  });
+
+  it("shows blocked and cancelled states without enabling unsafe continuation", () => {
+    const blocked = renderChatView({
+      goalPanelOpen: true,
+      goalFlows: [
+        {
+          id: "flow-blocked",
+          status: "blocked",
+          goal: "Collect remote proof",
+          blockedSummary: "Waiting for GitHub Actions result.",
+        },
+      ],
+    });
+    expect(blocked.querySelector("[data-chat-goal]")?.textContent).toContain("Blocked");
+    expect(blocked.querySelector("[data-chat-goal]")?.textContent).toContain(
+      "Waiting for GitHub Actions result.",
+    );
+
+    const cancelled = renderChatView({
+      goalPanelOpen: true,
+      goalFlows: [
+        {
+          id: "flow-cancelled",
+          status: "cancelled",
+          goal: "Old goal",
+          cancelRequestedAt: 1,
+        },
+      ],
+    });
+    const continueButton = cancelled.querySelector<HTMLButtonElement>(
+      '[data-chat-goal-action="continue"]',
+    );
+    expect(cancelled.querySelector("[data-chat-goal]")?.textContent).toContain("Cancelled");
+    expect(continueButton?.disabled).toBe(true);
+  });
+
+  it("renders goal loading failures while keeping chat usable", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      goalPanelOpen: true,
+      goalError: "offline",
+      draft: "hello",
+      getDraft: () => "hello",
+      onSend,
+    });
+
+    const surface = container.querySelector<HTMLElement>("[data-chat-goal]");
+    expect(surface?.textContent).toContain("Goal status unavailable");
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 });

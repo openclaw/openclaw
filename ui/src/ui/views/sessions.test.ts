@@ -860,6 +860,71 @@ describe("sessions view", () => {
     ).toBe("123,456 to 38,920 tokens");
   });
 
+  it("renders Control Director diagnostics in expanded session details", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            controlDirectorTruthAudit: [
+              {
+                ts: 1,
+                runId: "run-1",
+                status: "blocked",
+                missing: ["command exit code 0"],
+                payloadsChecked: 1,
+                payloadsRewritten: 1,
+                claims: [
+                  {
+                    claim: "tests passed",
+                    claimHash: "hash-1",
+                    claimType: "verification",
+                    requiredEvidenceType: "command",
+                    matchStatus: "missing",
+                    missingCondition: "missing command evidence with exit code 0",
+                    rewriteAction: "blocked_unsupported_truth_claim",
+                  },
+                ],
+              },
+            ],
+            controlDirectorMissionLedger: [
+              {
+                missionId: "mission-1",
+                runId: "run-1",
+                requestSummary: "finish feature",
+                status: "blocked",
+                startedAt: 1,
+                updatedAt: 2,
+                continuationCount: 0,
+                finalStatus: "blocked",
+                nextBuildGap: "collect passing command evidence",
+                completionGrade: 8,
+                criticality: 10,
+              },
+            ],
+          }),
+        ),
+        expandedCheckpointKey: "agent:main:main",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const diagnostics = container.querySelector("[data-session-control-director-diagnostics]");
+    const text = diagnostics?.textContent ?? "";
+    expect(text).toContain("Truth & Completion");
+    expect(text).toContain("Blocked unsupported claim");
+    expect(text).toContain("missing command evidence with exit code 0");
+    expect(text).toContain("Required evidence");
+    expect(text).toContain("command");
+    expect(text).toContain("Completion Grade");
+    expect(text).toContain("8/10");
+    expect(text).not.toContain("Status: complete");
+  });
+
   it("does not expand checkpoint details when the row has none or a nested control was used", async () => {
     const container = document.createElement("div");
     const onToggleCheckpointDetails = vi.fn();

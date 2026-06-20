@@ -96,6 +96,19 @@ export type SessionsDeleteParams = SchemaType<"SessionsDeleteParams">;
 export type SessionsCompactParams = SchemaType<"SessionsCompactParams">;
 export type SessionsUsageParams = SchemaType<"SessionsUsageParams">;
 
+/** Task flow query, creation, cancellation, and detail payloads. */
+export type TaskFlowStatus = SchemaType<"TaskFlowStatus">;
+export type TaskFlowSummary = SchemaType<"TaskFlowSummary">;
+export type TaskFlowDetail = SchemaType<"TaskFlowDetail">;
+export type TaskFlowsListParams = SchemaType<"TaskFlowsListParams">;
+export type TaskFlowsListResult = SchemaType<"TaskFlowsListResult">;
+export type TaskFlowsGetParams = SchemaType<"TaskFlowsGetParams">;
+export type TaskFlowsGetResult = SchemaType<"TaskFlowsGetResult">;
+export type TaskFlowsCreateParams = SchemaType<"TaskFlowsCreateParams">;
+export type TaskFlowsCreateResult = SchemaType<"TaskFlowsCreateResult">;
+export type TaskFlowsCancelParams = SchemaType<"TaskFlowsCancelParams">;
+export type TaskFlowsCancelResult = SchemaType<"TaskFlowsCancelResult">;
+
 /** Task ledger query and cancellation payloads. */
 export type TaskSummary = SchemaType<"TaskSummary">;
 export type TasksListParams = SchemaType<"TasksListParams">;

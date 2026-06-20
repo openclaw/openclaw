@@ -18,10 +18,11 @@ export type ExecApprovalRequestPayload = {
 };
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+export type PluginBackedApprovalKind = "plugin" | "network" | "remote_proof";
 
 export type ExecApprovalRequest = {
   id: string;
-  kind: "exec" | "plugin";
+  kind: "exec" | PluginBackedApprovalKind;
   request: ExecApprovalRequestPayload;
   pluginTitle?: string;
   pluginDescription?: string | null;
@@ -103,6 +104,10 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
   return decisions.length > 0 ? decisions : undefined;
 }
 
+function parsePluginBackedApprovalKind(value: unknown): PluginBackedApprovalKind {
+  return value === "network" || value === "remote_proof" || value === "plugin" ? value : "plugin";
+}
+
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
@@ -179,10 +184,11 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
   const description = typeof request.description === "string" ? request.description : null;
   const severity = typeof request.severity === "string" ? request.severity : null;
   const pluginId = typeof request.pluginId === "string" ? request.pluginId : null;
+  const category = parsePluginBackedApprovalKind(request.category);
 
   return {
     id,
-    kind: "plugin",
+    kind: category,
     request: {
       command: title,
       agentId: typeof request.agentId === "string" ? request.agentId : null,
@@ -269,11 +275,12 @@ function sortApprovalsNewestFirst(queue: ExecApprovalRequest[]): ExecApprovalReq
   return queue.toSorted((a, b) => b.createdAtMs - a.createdAtMs);
 }
 
-function currentApprovalsForKind(
+function currentApprovalsForKinds(
   queue: ExecApprovalRequest[],
-  kind: ExecApprovalRequest["kind"],
+  kinds: readonly ExecApprovalRequest["kind"][],
 ): ExecApprovalRequest[] {
-  return pruneExecApprovalQueue(queue).filter((entry) => entry.kind === kind);
+  const allowedKinds = new Set(kinds);
+  return pruneExecApprovalQueue(queue).filter((entry) => allowedKinds.has(entry.kind));
 }
 
 function mergeRefreshedApprovalQueue(
@@ -343,11 +350,11 @@ export async function refreshPendingApprovalQueue(state: ExecApprovalPromptState
     const execApprovals =
       execResult.status === "fulfilled"
         ? (parseApprovalList(execResult.value, parseExecApprovalRequested) ?? [])
-        : currentApprovalsForKind(state.execApprovalQueue, "exec");
+        : currentApprovalsForKinds(state.execApprovalQueue, ["exec"]);
     const pluginApprovals =
       pluginResult.status === "fulfilled"
         ? (parseApprovalList(pluginResult.value, parsePluginApprovalRequested) ?? [])
-        : currentApprovalsForKind(state.execApprovalQueue, "plugin");
+        : currentApprovalsForKinds(state.execApprovalQueue, ["plugin", "network", "remote_proof"]);
     const refreshed = mergeRefreshedApprovalQueue(
       sortApprovalsNewestFirst([...execApprovals, ...pluginApprovals]),
       refreshStartedWith,

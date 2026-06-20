@@ -1968,6 +1968,50 @@ describe("connectGateway", () => {
     expect((host.execApprovalQueue[0] as { kind: string }).kind).toBe("plugin");
   });
 
+  it("routes categorized network and remote-proof plugin approvals into the approval queue", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitEvent({
+      event: "plugin.approval.requested",
+      payload: {
+        id: "network-approval-1",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 120_000,
+        request: {
+          category: "network",
+          title: "Allow web search",
+          description: "Connect to search provider",
+          severity: "warning",
+          pluginId: "web-search",
+          agentId: "agent-1",
+          sessionKey: "main",
+        },
+      },
+    });
+    client.emitEvent({
+      event: "plugin.approval.requested",
+      payload: {
+        id: "remote-proof-approval-1",
+        createdAtMs: Date.now() + 1,
+        expiresAtMs: Date.now() + 120_000,
+        request: {
+          category: "remote_proof",
+          title: "Run remote proof",
+          description: "Dispatch Workflow Sanity",
+          severity: "critical",
+          pluginId: "github-actions",
+          agentId: "agent-1",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    expect(host.execApprovalQueue.map((entry) => entry.kind)).toEqual(["remote_proof", "network"]);
+  });
+
   it("routes plugin.approval.resolved to remove from execApprovalQueue", () => {
     const host = createHost();
 

@@ -3,6 +3,11 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
+import {
+  countBlockedControlDirectorDiagnostics,
+  latestControlDirectorDiagnosticsRows,
+  summarizeControlDirectorDiagnostics,
+} from "../chat/control-director-diagnostics.ts";
 import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
@@ -188,6 +193,22 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   ];
   if (quotaCard) {
     cards.splice(1, 0, quotaCard);
+  }
+
+  const diagnosticRows = latestControlDirectorDiagnosticsRows(props.sessionsResult?.sessions ?? []);
+  if (diagnosticRows.length > 0) {
+    const blockedDiagnostics = countBlockedControlDirectorDiagnostics(diagnosticRows);
+    const latestDiagnostic = summarizeControlDirectorDiagnostics(diagnosticRows[0]);
+    cards.push({
+      kind: "control-director-diagnostics",
+      tab: "sessions",
+      label: "Truth & Completion",
+      value:
+        blockedDiagnostics > 0
+          ? html`<span class="danger">${blockedDiagnostics} blocked</span>`
+          : "Truth OK",
+      hint: latestDiagnostic.detail,
+    });
   }
 
   // Model auth card — show providers whose auth needs monitoring.

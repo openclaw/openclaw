@@ -14,6 +14,7 @@ export type PluginApprovalActionView = {
 
 /** Request payload supplied by plugin approval callers. */
 export type PluginApprovalRequestPayload = {
+  category?: "plugin" | "network" | "remote_proof" | null;
   pluginId?: string | null;
   title: string;
   description: string;

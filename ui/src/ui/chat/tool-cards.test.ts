@@ -8,6 +8,7 @@ import {
   isToolErrorOutput,
   renderToolCard,
   renderToolCardSidebar,
+  resolveToolCardPresentation,
 } from "./tool-cards.ts";
 
 function requireFirstMockArg(
@@ -602,5 +603,115 @@ describe("tool-cards", () => {
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
     expect(sidebar.kind).toBe("markdown");
     expect(sidebar.fullMessageRequest).toBeUndefined();
+  });
+
+  it("renders command cards with verified exit-code evidence", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "cmd:1",
+          name: "system.run",
+          args: { command: "echo tool-card-ok", cwd: "/repo" },
+          inputText: JSON.stringify({
+            command: "echo tool-card-ok",
+            cwd: "/repo",
+          }),
+          outputText: JSON.stringify({
+            exitCode: 0,
+            durationMs: 1234,
+            stdout: "tool-card-ok",
+          }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Command");
+    expect(container.textContent).toContain("Passed");
+    expect(container.textContent).toContain("Exit");
+    expect(container.textContent).toContain("0");
+    expect(container.textContent).toContain("1.2s");
+    expect(container.textContent).toContain("tool-card-ok");
+  });
+
+  it("renders proof cards from workflow evidence without inferring success from prose", () => {
+    const passed = resolveToolCardPresentation({
+      id: "proof:1",
+      name: "github.run",
+      outputText: JSON.stringify({
+        workflow: "Workflow Sanity",
+        runId: "27818122460",
+        runUrl: "https://github.com/SnowBelt/openclaw/actions/runs/27818122460",
+        headSha: "0963807b1a",
+        conclusion: "success",
+      }),
+    });
+    const unknown = resolveToolCardPresentation({
+      id: "proof:2",
+      name: "github.run",
+      outputText: "Remote proof passed, allegedly.",
+    });
+
+    expect(passed.kind).toBe("proof");
+    expect(passed.status).toBe("passed");
+    expect(unknown.kind).toBe("proof");
+    expect(unknown.status).toBe("unknown");
+  });
+
+  it("renders failed command cards from nonzero exit codes", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "cmd:failed",
+          name: "exec.command",
+          args: { command: "node missing-script.js" },
+          outputText: JSON.stringify({
+            exitCode: 1,
+            stderr: "missing-script failed",
+          }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Command");
+    expect(container.textContent).toContain("Failed");
+    expect(container.textContent).toContain("missing-script failed");
+  });
+
+  it("renders artifact cards with path evidence and preserves raw details", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "artifact:1",
+          name: "artifacts.write",
+          outputText: JSON.stringify({
+            title: "Smoke summary",
+            kind: "report",
+            artifactPath: ".artifacts/chat-tool-proof/summary.json",
+            ok: true,
+            summary: "Artifact summary was written.",
+          }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Smoke summary");
+    expect(container.textContent).toContain("Artifact");
+    expect(container.textContent).toContain(".artifacts/chat-tool-proof/summary.json");
+    expect(container.textContent).toContain("Artifact summary was written.");
+
+    const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
+    expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
+    sidebarButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onOpenSidebar).toHaveBeenCalledWith(expect.objectContaining({ kind: "markdown" }));
   });
 });
