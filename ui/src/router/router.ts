@@ -108,8 +108,15 @@ export function createRouter<
     const previous = matches.getActiveMatch();
     const deps = route.loaderDeps?.(context, location) ?? "";
     const sameRoute = previous?.routeId === routeId && locationsEqual(previous.location, location);
+    const sameMatch = sameRoute && previous?.deps === deps;
     const revalidating = navigationOptions.revalidate === true && previous?.routeId === routeId;
-    if (sameRoute && previous?.status === "success" && !previous.invalid && !revalidating) {
+    const staleTime = route.staleTime ?? options.staleTime ?? DEFAULT_STALE_TIME;
+    const fresh =
+      previous &&
+      previous.status === "success" &&
+      !previous.invalid &&
+      Date.now() - previous.updatedAt < staleTime;
+    if (sameMatch && fresh && !revalidating) {
       return;
     }
 
@@ -123,7 +130,7 @@ export function createRouter<
     const matchId = matchIdForLocation(routeId, location, deps);
     const cached = matches.getCachedMatch(matchId);
     const match =
-      sameRoute && previous
+      sameMatch && previous
         ? {
             ...previous,
             abortController: controller,
@@ -164,7 +171,7 @@ export function createRouter<
     };
     const previousLocation = matches.getState().resolvedLocation;
 
-    if (sameRoute) {
+    if (sameMatch) {
       matches.updateMatch(match.id, () => match);
     } else {
       matches.setPending([match]);
@@ -221,7 +228,7 @@ export function createRouter<
         lastAccessedAt: Date.now(),
       };
       const currentActive = matches.getActiveMatch();
-      if (!sameRoute && currentActive) {
+      if (!sameMatch && currentActive) {
         matches.setCached([...matches.getState().cachedMatches, currentActive]);
         const currentRoute = compiled.byId.get(currentActive.routeId);
         if (currentRoute) {
