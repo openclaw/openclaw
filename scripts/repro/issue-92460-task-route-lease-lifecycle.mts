@@ -52,9 +52,10 @@ import {
 async function main(): Promise<void> {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-92460-repro-"));
   let exitCode = 0;
+  const leaseEnv = { OPENCLAW_STATE_DIR: stateDir };
   try {
-    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    resetTaskRouteLeasesForTests();
+    openOpenClawStateDatabase({ env: leaseEnv });
+    resetTaskRouteLeasesForTests({ env: leaseEnv });
 
     console.log("=== Reproduction for issue #92460 — task-route lease lifecycle ===");
     console.log(`State dir: ${stateDir}`);
@@ -71,24 +72,25 @@ async function main(): Promise<void> {
       taskId: "task-92460-repro",
       requesterOrigin: origin,
       ttlMs: 60_000,
+      env: leaseEnv,
     });
     assert(acquired, "acquireTaskRouteLease returned undefined");
     assert.equal(acquired.runId, "run-92460-repro");
     assert.equal(acquired.status, "active");
     console.log("PASS  1. acquire → getActive round-trip");
-    const fetched = getActiveTaskRouteLease("run-92460-repro");
+    const fetched = getActiveTaskRouteLease("run-92460-repro", { env: leaseEnv });
     assert(fetched, "getActiveTaskRouteLease returned undefined after acquire");
     assert.deepEqual(fetched.requesterOrigin, origin);
     console.log("PASS  2. lease carries the captured requesterOrigin");
 
     // 3. settle → getActive returns undefined.
-    const settled = settleTaskRouteLease("run-92460-repro", "settled");
+    const settled = settleTaskRouteLease("run-92460-repro", "settled", { env: leaseEnv });
     assert.equal(settled, true);
-    assert(!getActiveTaskRouteLease("run-92460-repro"), "lease still active after settle");
+    assert(!getActiveTaskRouteLease("run-92460-repro", { env: leaseEnv }), "lease still active after settle");
     console.log("PASS  3. settle transitions the lease out of active");
 
     // 4. extend on a settled lease is a no-op.
-    assert.equal(extendTaskRouteLease("run-92460-repro", 60_000), false);
+    assert.equal(extendTaskRouteLease("run-92460-repro", 60_000, { env: leaseEnv }), false);
     console.log("PASS  4. extend on settled lease is a no-op");
 
     // 5. expireStaleTaskRouteLeases: acquire two leases with different TTLs.
@@ -97,19 +99,21 @@ async function main(): Promise<void> {
       taskId: "task-stale",
       requesterOrigin: { channel: "telegram", to: "111", accountId: "default" },
       ttlMs: 1,
+      env: leaseEnv,
     });
     acquireTaskRouteLease({
       runId: "run-fresh",
       taskId: "task-fresh",
       requesterOrigin: { channel: "telegram", to: "222", accountId: "default" },
       ttlMs: 60_000,
+      env: leaseEnv,
     });
     // Wait past the 1ms TTL.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const expired = expireStaleTaskRouteLeases();
+    const expired = expireStaleTaskRouteLeases({ env: leaseEnv });
     assert(expired >= 1, `expected at least 1 expired lease, got ${expired}`);
-    assert(!getActiveTaskRouteLease("run-stale"), "stale lease still active after GC");
-    assert(getActiveTaskRouteLease("run-fresh"), "fresh lease GC'd prematurely");
+    assert(!getActiveTaskRouteLease("run-stale", { env: leaseEnv }), "stale lease still active after GC");
+    assert(getActiveTaskRouteLease("run-fresh", { env: leaseEnv }), "fresh lease GC'd prematurely");
     console.log(`PASS  5. expireStaleTaskRouteLeases GC (${expired} lease(s) expired)`);
 
     // 6. mapDeliveryStatusToLeaseRetirement.
@@ -125,10 +129,11 @@ async function main(): Promise<void> {
       taskId: "task-persist",
       requesterOrigin: { channel: "telegram", to: "333", accountId: "default" },
       ttlMs: 60_000,
+      env: leaseEnv,
     });
     closeOpenClawStateDatabase();
     openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    const afterReopen = getActiveTaskRouteLease("run-persist");
+    const afterReopen = getActiveTaskRouteLease("run-persist", { env: leaseEnv });
     assert(afterReopen, "lease lost after DB close + reopen");
     console.log("PASS  7. lease persists across SQLite close + reopen");
 
@@ -141,15 +146,17 @@ async function main(): Promise<void> {
       taskId: "task-reacquire-settled-at",
       requesterOrigin: { channel: "telegram", to: "444", accountId: "default" },
       ttlMs: 60_000,
+      env: leaseEnv,
     });
-    settleTaskRouteLease("run-reacquire-settled-at", "settled");
+    settleTaskRouteLease("run-reacquire-settled-at", "settled", { env: leaseEnv });
     acquireTaskRouteLease({
       runId: "run-reacquire-settled-at",
       taskId: "task-reacquire-settled-at",
       requesterOrigin: { channel: "telegram", to: "444-reset", accountId: "default" },
       ttlMs: 60_000,
+      env: leaseEnv,
     });
-    const reacquired = getActiveTaskRouteLease("run-reacquire-settled-at");
+    const reacquired = getActiveTaskRouteLease("run-reacquire-settled-at", { env: leaseEnv });
     assert(reacquired, "re-acquired lease not active");
     assert.equal(reacquired.status, "active");
     assert.equal(
@@ -169,26 +176,29 @@ async function main(): Promise<void> {
       taskId: "task-cascade-repro",
       requesterOrigin: { channel: "telegram", to: "555", accountId: "default" },
       ttlMs: 60_000,
+      env: leaseEnv,
     });
     acquireTaskRouteLease({
       runId: "run-cascade-B",
       taskId: "task-cascade-repro",
       requesterOrigin: { channel: "telegram", to: "555", accountId: "default" },
       ttlMs: 60_000,
+      env: leaseEnv,
     });
     acquireTaskRouteLease({
       runId: "run-cascade-other",
       taskId: "task-cascade-other",
       requesterOrigin: { channel: "telegram", to: "666", accountId: "default" },
       ttlMs: 60_000,
+      env: leaseEnv,
     });
-    const { db } = openOpenClawStateDatabase();
+    const { db } = openOpenClawStateDatabase({ env: leaseEnv });
     const deleted = deleteTaskRouteLeasesByTaskIdInDb(db, "task-cascade-repro");
     assert.equal(deleted, 2, `expected 2 leases deleted, got ${deleted}`);
-    assert(!getActiveTaskRouteLease("run-cascade-A"), "run-cascade-A still active");
-    assert(!getActiveTaskRouteLease("run-cascade-B"), "run-cascade-B still active");
+    assert(!getActiveTaskRouteLease("run-cascade-A", { env: leaseEnv }), "run-cascade-A still active");
+    assert(!getActiveTaskRouteLease("run-cascade-B", { env: leaseEnv }), "run-cascade-B still active");
     assert(
-      getActiveTaskRouteLease("run-cascade-other"),
+      getActiveTaskRouteLease("run-cascade-other", { env: leaseEnv }),
       "unrelated task's lease was incorrectly deleted",
     );
     console.log("PASS  9. deleteTaskRouteLeasesByTaskIdInDb cascade");

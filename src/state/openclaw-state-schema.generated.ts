@@ -1146,8 +1146,13 @@ CREATE TABLE IF NOT EXISTS task_delivery_state (
 );
 
 CREATE TABLE IF NOT EXISTS task_route_leases (
-  -- Lease row keyed by detached run id (NOT task_id — a single task may
-  -- produce multiple runs over time, each owning its own route lease).
+  -- Lease row keyed by the (run_id, runtime, scope_kind, owner_key,
+  -- child_session_key) tuple — the same scope facts the task registry
+  -- uses to distinguish shared-runId task records. A raw runId is not
+  -- unique: current main deliberately supports multiple task records
+  -- sharing a runId when runtime/scopeKind/ownerKey/childSessionKey
+  -- differ, so the lease key must mirror that scope to avoid one task
+  -- replacing or exposing another task's requester origin.
   -- See docs/concepts/task-completion.md for the full invariant.
   --
   -- No FOREIGN KEY on task_id: leases are acquired before the parent
@@ -1155,7 +1160,16 @@ CREATE TABLE IF NOT EXISTS task_route_leases (
   -- lease module owns its own lifecycle independent of task_runs. The
   -- task_id column is kept for indexed lookup and forensic correlation,
   -- not referential integrity.
-  run_id TEXT NOT NULL PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  -- runtime mirrors TaskRecord.runtime (e.g. "cron", "subagent",
+  -- "codex", "acp"). scope_kind mirrors TaskRecord.scopeKind ("system",
+  -- "owner", "session"). owner_key / child_session_key mirror the
+  -- matching task-registry fields; empty string is the default for
+  -- caller paths that do not yet expose these fields.
+  runtime TEXT NOT NULL DEFAULT 'detached',
+  scope_kind TEXT NOT NULL DEFAULT 'owner',
+  owner_key TEXT NOT NULL DEFAULT '',
+  child_session_key TEXT NOT NULL DEFAULT '',
   task_id TEXT NOT NULL,
   -- requester_origin is the original DeliveryContext captured at acquire
   -- time. Persisted as JSON so the lease is durable across gateway
@@ -1166,7 +1180,8 @@ CREATE TABLE IF NOT EXISTS task_route_leases (
   settled_at INTEGER,
   -- 'active' / 'settling' / 'settled' / 'retired' / 'expired'
   -- 'settling' is reserved for in-flight delivery settlement.
-  status TEXT NOT NULL DEFAULT 'active'
+  status TEXT NOT NULL DEFAULT 'active',
+  PRIMARY KEY (run_id, runtime, scope_kind, owner_key, child_session_key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_route_leases_task_id

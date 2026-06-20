@@ -423,6 +423,144 @@ describe("deleteTaskRouteLeasesByTaskIdInDb (PR #95352 retention review)", () =>
   });
 });
 
+describe("task-route lease scoped key (PR #95352 P1 review)", () => {
+  // PR #95352 ClawSweeper review (P1, confidence 0.91): current main
+  // deliberately supports multiple task records sharing a runId when
+  // runtime/scopeKind/ownerKey/childSessionKey differ, so the lease key
+  // must mirror that scope to avoid one task replacing or exposing
+  // another task's requester origin. These tests prove the (runId, scope)
+  // tuple is the actual primary key: same runId + different scope fields
+  // → two independent lease rows.
+  const SHARED_RUN_ID = "run-shared-across-scopes";
+
+  it("two leases with the same runId but different scope coexist as independent rows", () => {
+    const cronA = acquireTaskRouteLease({
+      runId: SHARED_RUN_ID,
+      taskId: "task-cron-A",
+      scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+      requesterOrigin: { channel: "webchat", to: "user:user-A", accountId: "default" },
+      ttlMs: 60_000,
+    });
+    const subagentB = acquireTaskRouteLease({
+      runId: SHARED_RUN_ID,
+      taskId: "task-subagent-B",
+      scope: { runtime: "subagent", scopeKind: "owner", ownerKey: "agent:B", childSessionKey: "" },
+      requesterOrigin: { channel: "telegram", to: "chat:thread-B", accountId: "default" },
+      ttlMs: 60_000,
+    });
+
+    expect(cronA?.requesterOrigin?.channel).toBe("webchat");
+    expect(subagentB?.requesterOrigin?.channel).toBe("telegram");
+
+    const seenCronA = getActiveTaskRouteLease(SHARED_RUN_ID, {
+      scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+    });
+    const seenSubagentB = getActiveTaskRouteLease(SHARED_RUN_ID, {
+      scope: { runtime: "subagent", scopeKind: "owner", ownerKey: "agent:B", childSessionKey: "" },
+    });
+
+    expect(seenCronA?.taskId).toBe("task-cron-A");
+    expect(seenCronA?.requesterOrigin?.channel).toBe("webchat");
+    expect(seenSubagentB?.taskId).toBe("task-subagent-B");
+    expect(seenSubagentB?.requesterOrigin?.channel).toBe("telegram");
+  });
+
+  it("re-acquire on the same scope replaces the row; the other scope is untouched", () => {
+    acquireTaskRouteLease({
+      runId: SHARED_RUN_ID,
+      taskId: "task-cron-A",
+      scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+      requesterOrigin: { channel: "webchat", to: "user:user-A", accountId: "default" },
+      ttlMs: 60_000,
+    });
+    acquireTaskRouteLease({
+      runId: SHARED_RUN_ID,
+      taskId: "task-subagent-B",
+      scope: { runtime: "subagent", scopeKind: "owner", ownerKey: "agent:B", childSessionKey: "" },
+      requesterOrigin: { channel: "telegram", to: "chat:thread-B", accountId: "default" },
+      ttlMs: 60_000,
+    });
+
+    // Re-acquire cron-A with a different origin; subagent-B must remain intact.
+    const reacquired = acquireTaskRouteLease({
+      runId: SHARED_RUN_ID,
+      taskId: "task-cron-A",
+      scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+      requesterOrigin: { channel: "discord", to: "user:user-A-2", accountId: "default" },
+      ttlMs: 60_000,
+    });
+    expect(reacquired?.requesterOrigin?.channel).toBe("discord");
+
+    const stillCronA = getActiveTaskRouteLease(SHARED_RUN_ID, {
+      scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+    });
+    const stillSubagentB = getActiveTaskRouteLease(SHARED_RUN_ID, {
+      scope: { runtime: "subagent", scopeKind: "owner", ownerKey: "agent:B", childSessionKey: "" },
+    });
+
+    expect(stillCronA?.requesterOrigin?.channel).toBe("discord");
+    expect(stillCronA?.taskId).toBe("task-cron-A");
+    expect(stillSubagentB?.requesterOrigin?.channel).toBe("telegram");
+    expect(stillSubagentB?.taskId).toBe("task-subagent-B");
+  });
+
+  it("settling a scoped lease does not affect a sibling lease with a different scope on the same runId", () => {
+    acquireTaskRouteLease({
+      runId: SHARED_RUN_ID,
+      taskId: "task-cron-A",
+      scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+      requesterOrigin: { channel: "webchat", to: "user:user-A", accountId: "default" },
+      ttlMs: 60_000,
+    });
+    acquireTaskRouteLease({
+      runId: SHARED_RUN_ID,
+      taskId: "task-subagent-B",
+      scope: { runtime: "subagent", scopeKind: "owner", ownerKey: "agent:B", childSessionKey: "" },
+      requesterOrigin: { channel: "telegram", to: "chat:thread-B", accountId: "default" },
+      ttlMs: 60_000,
+    });
+
+    const settled = settleTaskRouteLease(SHARED_RUN_ID, "settled", {
+      scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+    });
+    expect(settled).toBe(true);
+
+    expect(
+      getActiveTaskRouteLease(SHARED_RUN_ID, {
+        scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+      }),
+    ).toBeUndefined();
+    expect(
+      getActiveTaskRouteLease(SHARED_RUN_ID, {
+        scope: { runtime: "subagent", scopeKind: "owner", ownerKey: "agent:B", childSessionKey: "" },
+      })?.taskId,
+    ).toBe("task-subagent-B");
+  });
+
+  it("omitting scope falls back to the default (detached/owner/<empty>) tuple and matches only that scope", () => {
+    acquireTaskRouteLease({
+      runId: SHARED_RUN_ID,
+      taskId: "task-default",
+      ttlMs: 60_000,
+    });
+    acquireTaskRouteLease({
+      runId: SHARED_RUN_ID,
+      taskId: "task-explicit",
+      scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+      ttlMs: 60_000,
+    });
+
+    // Default-scope lookup should see only the default-scope row.
+    const defaultLease = getActiveTaskRouteLease(SHARED_RUN_ID);
+    expect(defaultLease?.taskId).toBe("task-default");
+
+    const explicitLease = getActiveTaskRouteLease(SHARED_RUN_ID, {
+      scope: { runtime: "cron", scopeKind: "system", ownerKey: "", childSessionKey: "agent:cron-A:main" },
+    });
+    expect(explicitLease?.taskId).toBe("task-explicit");
+  });
+});
+
 // Sanity check on the test temp dir cleanup so we don't leave sqlite
 // files in /tmp after a run. afterEach closes the DB; this block only
 // guards against the rare case where the test failed before afterEach.

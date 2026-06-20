@@ -836,9 +836,13 @@ export interface TaskDeliveryState {
 
 export interface TaskRouteLeases {
   acquired_at: number;
+  child_session_key: Generated<string>;
   expires_at: number;
+  owner_key: Generated<string>;
   requester_origin_json: string;
   run_id: string;
+  runtime: Generated<string>;
+  scope_kind: Generated<string>;
   settled_at: number | null;
   status: Generated<string>;
   task_id: string;
