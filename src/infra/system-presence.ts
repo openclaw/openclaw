@@ -69,7 +69,13 @@ function initSelfPresence() {
       encoding: "utf-8",
     });
     const out = normalizeOptionalString(res.stdout) ?? "";
-    return out.length > 0 ? out : os.release();
+    if (out) return out;
+    const release = os.release();
+    const major = parseInt(release.split(".")[0], 10);
+    if (!isNaN(major) && major >= 12 && major <= 24) {
+      return `${major - 9}.0`;
+    }
+    return release;
   };
   const platform = (() => {
     const p = os.platform();
