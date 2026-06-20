@@ -473,9 +473,9 @@ export async function noteMemorySearchHealth(
       return;
     }
     // When the probe was intentionally skipped (skipped: true / checked: false
-    // due to probe:false path), we have no embedding status information — do
-    // not warn. A skipped probe means the user ran `openclaw doctor` without
-    // --deep; it does not mean embeddings are unavailable.
+    // due to probe:false path, e.g. when the gateway sends probe:false even
+    // during --deep), we have no embedding status information — do not warn.
+    // A skipped probe does not mean embeddings are unavailable.
     if (opts?.gatewayMemoryProbe?.skipped) {
       return;
     }

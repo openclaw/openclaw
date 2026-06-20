@@ -272,6 +272,23 @@ describe("noteMemorySearchHealth", () => {
     expect(firstNoteMessage()).toContain("a local model path is configured");
   });
 
+  it("does not warn when local provider probe was skipped (skipped: true)", async () => {
+    // When gateway probe is skipped (checked: false, skipped: true), the
+    // local provider should not produce a false warning — it just means the
+    // probe was not run, not that embeddings are broken.
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("does not emit provider guidance when no memory runtime is active", async () => {
     resolveActiveMemoryBackendConfig.mockReturnValue(null);
     resolveMemorySearchConfig.mockReturnValue({
