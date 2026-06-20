@@ -1,6 +1,7 @@
 /** CLI entrypoint for `openclaw gateway status`. */
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { withProgress } from "../cli/progress.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -40,6 +41,7 @@ function loadGatewayTlsModule() {
 export async function gatewayStatusCommand(
   opts: {
     url?: string;
+    port?: unknown;
     token?: string;
     password?: string;
     timeout?: unknown;
@@ -52,15 +54,19 @@ export async function gatewayStatusCommand(
 ) {
   const startedAt = Date.now();
   const cfg = await readBestEffortConfig();
+  const portOverride = parsePort(opts.port);
+  if (opts.port !== undefined && portOverride === null) {
+    throw new Error(`Invalid --port value: ${String(opts.port)}`);
+  }
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = Math.max(3000, cfg.gateway?.handshakeTimeoutMs ?? 0);
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
-  const baseTargets = resolveTargets(cfg, opts.url);
+  const baseTargets = resolveTargets(cfg, opts.url, portOverride ?? undefined);
   const network = buildNetworkHints(cfg);
-  const remotePort = resolveGatewayPort(cfg);
+  const remotePort = portOverride ?? resolveGatewayPort(cfg);
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
 
   let sshTarget = sanitizeSshTarget(opts.ssh) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
