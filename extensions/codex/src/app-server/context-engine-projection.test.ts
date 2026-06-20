@@ -255,11 +255,11 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(fitted).toContain("[truncated ");
   });
 
-  it("keeps the current request when a hook appends oversized context", () => {
+  it("keeps the current request and fitting hook context after projecting history", () => {
     const before = "OpenClaw assembled context for this turn:\n<conversation_context>\n";
-    const context = `recent context ${"c".repeat(200)}`;
+    const context = `recent context ${"c".repeat(800)}`;
     const request = "\n</conversation_context>\n\nCurrent user request:\nkeep this request";
-    const hookAppend = `\n\nhook context ${"h".repeat(800)}`;
+    const hookAppend = "\n\nhook context survives";
     const promptText = `${before}${context}${request}${hookAppend}`;
     const maxChars = 420;
 
@@ -274,9 +274,9 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
 
     expect(fitted.length).toBeLessThanOrEqual(maxChars);
-    expect(fitted).toContain("recent context");
+    expect(fitted).toContain("[truncated ");
     expect(fitted).toContain("Current user request:\nkeep this request");
-    expect(fitted).not.toContain("hook context");
+    expect(fitted).toContain("hook context survives");
   });
 
   it("keeps the original input when a hook appends context without a projection", () => {

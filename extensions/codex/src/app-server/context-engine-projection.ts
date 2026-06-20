@@ -168,10 +168,16 @@ export function fitCodexProjectedContextForTurnStart(params: {
     if (request.length >= maxChars) {
       return truncateOlderContext(request, maxChars);
     }
-    const contextBudget = maxChars - request.length;
+    const appendedContext = params.promptText.slice(requestRange.end);
+    // Hook-appended context is newer than the projected history. Retain it
+    // before trimming the projection, while the full current request remains
+    // the hard boundary that must survive a bounded turn/start input.
+    const fittedAppendedContext = truncateOlderContext(appendedContext, maxChars - request.length);
+    const contextBudget = maxChars - request.length - fittedAppendedContext.length;
     const fittedContext = truncateOlderContext(context, contextBudget);
-    const beforeContextBudget = maxChars - fittedContext.length - request.length;
-    return `${truncateOlderContext(beforeContext, beforeContextBudget)}${fittedContext}${request}`;
+    const beforeContextBudget =
+      maxChars - fittedContext.length - request.length - fittedAppendedContext.length;
+    return `${truncateOlderContext(beforeContext, beforeContextBudget)}${fittedContext}${request}${fittedAppendedContext}`;
   }
   const contextBudget = maxChars - beforeContext.length - afterContext.length;
   if (contextBudget > 0) {
