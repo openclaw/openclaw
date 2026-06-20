@@ -416,10 +416,7 @@ function formatProgressAsMarkdownCode(text: string): string {
 }
 
 function formatTelegramProgressLine(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.startsWith("_") && trimmed.endsWith("_")
-    ? trimmed
-    : formatProgressAsMarkdownCode(text);
+  return text.trim();
 }
 
 function escapeTelegramProgressHtml(text: string): string {
@@ -436,7 +433,7 @@ function renderTelegramProgressStringLine(text: string): string {
   if (italic) {
     return `<i>${escapeTelegramProgressHtml(italic[1] ?? "")}</i>`;
   }
-  return `<code>${escapeTelegramProgressHtml(clipped)}</code>`;
+  return escapeTelegramProgressHtml(clipped);
 }
 
 function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): string {
@@ -450,7 +447,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
   const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
   const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
   if (detail) {
-    parts.push(`<code>${escapeTelegramProgressHtml(clipProgressMarkdownText(detail))}</code>`);
+    parts.push(escapeTelegramProgressHtml(clipProgressMarkdownText(detail)));
   } else {
     const text = line.text.trim();
     if (text && text !== label) {
@@ -476,7 +473,7 @@ function renderTelegramProgressDraftPreview(
     : renderedLines;
   const html = htmlParts.join("<br>");
   if (!richMessages) {
-    return { text: html, parseMode: "HTML" };
+    return { text: trimmed };
   }
   return {
     text: trimmed,

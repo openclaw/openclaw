@@ -1,5 +1,6 @@
 // Telegram tests cover send plugin behavior.
 import fs from "node:fs";
+import path from "node:path";
 import type { Bot } from "grammy";
 import {
   createPluginStateKeyedStoreForTests,
@@ -806,7 +807,9 @@ describe("sendMessageTelegram", () => {
   });
 
   it("records sent text messages into the Telegram prompt context cache", async () => {
-    const storePath = `/tmp/openclaw-telegram-send-context-${process.pid}-${Date.now()}.json`;
+    const storePath = path.resolve(
+      `/tmp/openclaw-telegram-send-context-${process.pid}-${Date.now()}.json`,
+    );
     const cfg = { session: { store: storePath } };
     botApi.sendMessage.mockResolvedValueOnce({
       message_id: 1497,
