@@ -69,9 +69,11 @@ export interface EventBridgeController {
   recordSendResult(result: SessionEvent | undefined): boolean;
   awaitCompactionChain(): Promise<void>;
   awaitCompactionCompletion(): Promise<void>;
+  awaitSessionIdle(): Promise<void>;
   settleCompactionWait(): void;
   awaitDeltaChain(): Promise<void>;
   hasObservedCompaction(): boolean;
+  hasObservedSessionIdle(): boolean;
   isCompacting(): boolean;
   snapshot(): EventBridgeSnapshot;
   buildAssistantMessage(args: BuildAssistantMessageArgs): AssistantMessage | undefined;
@@ -104,6 +106,11 @@ export function attachEventBridge(
   let compactionChain = Promise.resolve();
   let compactionIdle = Promise.resolve();
   let resolveCompactionIdle: (() => void) | undefined;
+  let observedSessionIdle = false;
+  let resolveSessionIdle: (() => void) | undefined;
+  const sessionIdle = new Promise<void>((resolve) => {
+    resolveSessionIdle = resolve;
+  });
   let firstDeltaError: unknown;
   let detached = false;
   const unsubscribeFns: Array<() => void> = [];
@@ -217,6 +224,12 @@ export function attachEventBridge(
     }
   });
 
+  registerListener(session, unsubscribeFns, "session.idle", () => {
+    observedSessionIdle = true;
+    resolveSessionIdle?.();
+    resolveSessionIdle = undefined;
+  });
+
   registerListener(session, unsubscribeFns, "session.error", (event) => {
     if (!options.isAborted()) {
       streamError = createPromptError(
@@ -254,6 +267,9 @@ export function attachEventBridge(
       }
       await compactionChain;
     },
+    awaitSessionIdle() {
+      return observedSessionIdle ? Promise.resolve() : sessionIdle;
+    },
     settleCompactionWait() {
       activeCompactionCount = 0;
       resolveCompactionIdle?.();
@@ -264,6 +280,9 @@ export function attachEventBridge(
     },
     hasObservedCompaction() {
       return observedCompaction;
+    },
+    hasObservedSessionIdle() {
+      return observedSessionIdle;
     },
     isCompacting() {
       return activeCompactionCount > 0;

@@ -17,6 +17,7 @@ const REGISTERED_EVENT_TYPES = [
   "tool.execution_complete",
   "session.compaction_start",
   "session.compaction_complete",
+  "session.idle",
   "session.error",
   "abort",
 ] as const;
@@ -660,6 +661,21 @@ describe("attachEventBridge", () => {
 
     expect(complete).toHaveBeenCalledWith({ messagesRemoved: 3, success: true });
     expect(bridge.isCompacting()).toBe(false);
+  });
+
+  it("waits for the SDK terminal idle event", async () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    const idle = bridge.awaitSessionIdle();
+    await flushAsync();
+    session.emit("session.idle", makeEvent("session.idle", {}));
+    await idle;
+
+    expect(bridge.hasObservedSessionIdle()).toBe(true);
   });
 
   it("keeps compaction pending after an abort until the SDK reports completion", async () => {

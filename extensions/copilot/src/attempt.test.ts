@@ -468,6 +468,7 @@ describe("runCopilotAttempt", () => {
 
     releaseBeforeCompaction.resolve();
     activeSession?.emit("session.compaction_complete", { success: true });
+    activeSession?.emit("session.idle", {});
     await vi.waitFor(() => {
       expect(activeSession?.disconnect).toHaveBeenCalledTimes(1);
     });
@@ -1814,6 +1815,10 @@ describe("runCopilotAttempt", () => {
       }),
       expect.anything(),
     );
+    sdk.sessions[0]?.emit("session.idle", {});
+    await vi.waitFor(() => {
+      expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("marks a timeout during active SDK compaction", async () => {
@@ -1837,6 +1842,7 @@ describe("runCopilotAttempt", () => {
     expect(sdk.sessions[0]?.disconnect).not.toHaveBeenCalled();
 
     sdk.sessions[0]?.emit("session.compaction_complete", { messagesRemoved: 3, success: true });
+    sdk.sessions[0]?.emit("session.idle", {});
     await vi.waitFor(() => {
       expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
     });
@@ -1848,12 +1854,54 @@ describe("runCopilotAttempt", () => {
     );
   });
 
+  it("retains a timed-out session until later compaction reaches session.idle", async () => {
+    const afterCompaction = vi.fn();
+    const onDeferredCompaction = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
+    let activeSession: FakeSession | undefined;
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        activeSession = session;
+        session.sendAndWait.mockRejectedValueOnce(
+          new Error("Timeout after 60000ms waiting for session.idle"),
+        );
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams(), {
+      onDeferredCompaction,
+      pool: makeFakePool(sdk),
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.timedOutDuringCompaction).toBe(false);
+    expect(onDeferredCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({ sdkSessionId: "sess-1" }),
+    );
+    expect(activeSession?.disconnect).not.toHaveBeenCalled();
+
+    activeSession?.emit("session.compaction_start", {});
+    activeSession?.emit("session.compaction_complete", { messagesRemoved: 3, success: true });
+    await vi.waitFor(() => {
+      expect(afterCompaction).toHaveBeenCalledTimes(1);
+    });
+    expect(activeSession?.disconnect).not.toHaveBeenCalled();
+
+    activeSession?.emit("session.idle", {});
+    await vi.waitFor(() => {
+      expect(activeSession?.disconnect).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("does not mark a timeout after SDK compaction has completed as active compaction", async () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
           session.emit("session.compaction_start", {});
           session.emit("session.compaction_complete", { success: true });
+          session.emit("session.idle", {});
           return undefined;
         });
       },
@@ -1935,6 +1983,7 @@ describe("runCopilotAttempt", () => {
       expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
     });
     sdk.sessions[0]?.emit("session.compaction_complete", { success: true });
+    sdk.sessions[0]?.emit("session.idle", {});
     mirror.resolve();
 
     const result = await attempt;
@@ -1978,6 +2027,10 @@ describe("runCopilotAttempt", () => {
     // replay-shim incorrectly treated the attempt as side-effect-safe.
     expect(result.replayMetadata?.hadPotentialSideEffects).toBe(true);
     expect(result.replayMetadata?.replaySafe).toBe(false);
+    sdk.sessions[0]?.emit("session.idle", {});
+    await vi.waitFor(() => {
+      expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("G1: SDK timeout flushes the in-flight delta chain before snapshot so assistant text is preserved", async () => {
@@ -2019,6 +2072,10 @@ describe("runCopilotAttempt", () => {
     expect(result.timedOut).toBe(true);
     expect(onAssistantDelta).toHaveBeenCalledTimes(1);
     expect(result.assistantTexts?.join("")).toContain("partial-");
+    session.emit("session.idle", {});
+    await vi.waitFor(() => {
+      expect(session.disconnect).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("model translation: unsupported provider", async () => {

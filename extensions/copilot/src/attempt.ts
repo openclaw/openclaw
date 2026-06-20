@@ -186,34 +186,39 @@ async function finalizeCopilotAttempt(
   return result;
 }
 
-async function awaitCompactionCompletionOrAbort(
-  bridge: ReturnType<typeof attachEventBridge>,
-  abortSignal: AbortSignal | undefined,
-): Promise<"aborted" | "completed"> {
-  if (!abortSignal) {
-    await bridge.awaitCompactionCompletion();
+async function awaitDeferredCleanupCompletionOrAbort(params: {
+  abortSignal: AbortSignal | undefined;
+  awaitSessionIdle: boolean;
+  bridge: ReturnType<typeof attachEventBridge>;
+}): Promise<"aborted" | "completed"> {
+  const awaitCompletion = async () => {
+    if (params.awaitSessionIdle) {
+      await params.bridge.awaitSessionIdle();
+    }
+    await params.bridge.awaitCompactionCompletion();
+  };
+  if (!params.abortSignal) {
+    await awaitCompletion();
     return "completed";
   }
-  if (abortSignal.aborted) {
+  if (params.abortSignal.aborted) {
     return "aborted";
   }
   let resolveAbort: () => void = () => undefined;
   const aborted = new Promise<"aborted">((resolve) => {
     resolveAbort = () => resolve("aborted");
   });
-  abortSignal.addEventListener("abort", resolveAbort, { once: true });
+  params.abortSignal.addEventListener("abort", resolveAbort, { once: true });
   try {
-    return await Promise.race([
-      bridge.awaitCompactionCompletion().then(() => "completed" as const),
-      aborted,
-    ]);
+    return await Promise.race([awaitCompletion().then(() => "completed" as const), aborted]);
   } finally {
-    abortSignal.removeEventListener("abort", resolveAbort);
+    params.abortSignal.removeEventListener("abort", resolveAbort);
   }
 }
 
 function deferBackgroundCompactionCleanup(params: {
   abortSignal: AbortSignal | undefined;
+  awaitSessionIdle: boolean;
   bridge: ReturnType<typeof attachEventBridge>;
   handle: PooledClient;
   pool: CopilotClientPool;
@@ -226,8 +231,9 @@ function deferBackgroundCompactionCleanup(params: {
   return (async () => {
     let outcome: "aborted" | "completed" | "deadline" = "deadline";
     try {
-      outcome = await awaitCompactionCompletionBeforeDeadline({
+      outcome = await awaitDeferredCleanupBeforeDeadline({
         abortSignal: params.abortSignal,
+        awaitSessionIdle: params.awaitSessionIdle,
         bridge: params.bridge,
         timeoutMs: params.timeoutMs,
       });
@@ -284,8 +290,9 @@ async function cancelBackgroundCompactionBeforeTeardown(session: SessionLike): P
   }
 }
 
-async function awaitCompactionCompletionBeforeDeadline(params: {
+async function awaitDeferredCleanupBeforeDeadline(params: {
   abortSignal: AbortSignal | undefined;
+  awaitSessionIdle: boolean;
   bridge: ReturnType<typeof attachEventBridge>;
   timeoutMs: number;
 }): Promise<"aborted" | "completed" | "deadline"> {
@@ -294,10 +301,7 @@ async function awaitCompactionCompletionBeforeDeadline(params: {
     timeoutId = setTimeout(() => resolve("deadline"), params.timeoutMs);
   });
   try {
-    return await Promise.race([
-      awaitCompactionCompletionOrAbort(params.bridge, params.abortSignal),
-      deadline,
-    ]);
+    return await Promise.race([awaitDeferredCleanupCompletionOrAbort(params), deadline]);
   } finally {
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
@@ -802,7 +806,9 @@ export async function runCopilotAttempt(
     }
   } finally {
     settled = true;
-    if (bridge?.hasObservedCompaction() && session && handle) {
+    const retainSessionForDeferredCleanup =
+      bridge?.hasObservedCompaction() || (timedOut && bridge?.hasObservedSessionIdle() === false);
+    if (retainSessionForDeferredCleanup && bridge && session && handle) {
       const cleanupAbort = new AbortController();
       const abortCleanup = () => cleanupAbort.abort();
       if (params.abortSignal?.aborted) {
@@ -812,6 +818,7 @@ export async function runCopilotAttempt(
       }
       const cleanup = deferBackgroundCompactionCleanup({
         abortSignal: cleanupAbort.signal,
+        awaitSessionIdle: !bridge.hasObservedSessionIdle(),
         bridge,
         handle,
         pool: deps.pool,
@@ -837,8 +844,9 @@ export async function runCopilotAttempt(
       }
       params.abortSignal?.removeEventListener("abort", onAbort);
     } else {
-      // `sendAndWait` resolves on `session.idle`, which the SDK defines as
-      // no background agents in flight. Only an observed compaction needs retention.
+      // A normal sendAndWait result has observed session.idle, which the SDK
+      // defines as no background agents in flight. Timeouts retain the bridge
+      // until that event so compaction that starts after the timer still completes.
       await bridge?.awaitCompactionChain();
       bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);
