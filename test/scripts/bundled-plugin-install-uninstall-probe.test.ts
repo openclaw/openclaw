@@ -768,6 +768,72 @@ describe("bundled plugin install/uninstall probe", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "keeps closed runtime command groups tracked for parent cleanup",
+    async () => {
+      const root = makePackageRoot();
+      const commandPath = path.join(root, "closed-command.mjs");
+      const runnerPath = path.join(root, "run-closed-runtime-command.mjs");
+      const commandSettledPath = path.join(root, "command-settled");
+      const descendantPidPath = path.join(root, "closed-command-descendant.pid");
+      const descendantScript = [
+        "import fs from 'node:fs';",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      fs.writeFileSync(
+        commandPath,
+        [
+          "import childProcess from 'node:child_process';",
+          `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "child.unref();",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      fs.writeFileSync(
+        runnerPath,
+        [
+          "import fs from 'node:fs';",
+          `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
+          `runtimeSmoke.runCommand(process.execPath, [${JSON.stringify(commandPath)}], {`,
+          "  timeoutMs: 60_000,",
+          "}).finally(() => {",
+          `  fs.writeFileSync(${JSON.stringify(commandSettledPath)}, "1");`,
+          "});",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const runner = spawn(process.execPath, [runnerPath], {
+        stdio: "ignore",
+      });
+      let descendantPid: number | undefined;
+      try {
+        await waitForFile(descendantPidPath, 1000);
+        descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        expect(pidIsAlive(descendantPid)).toBe(true);
+        await waitForFile(commandSettledPath, 1000);
+
+        runner.kill("SIGTERM");
+
+        await waitForDead(descendantPid, 2000);
+      } finally {
+        if (runner.pid && pidIsAlive(runner.pid)) {
+          runner.kill("SIGKILL");
+        }
+        if (descendantPid !== undefined && pidIsAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "cleans detached runtime gateway groups when the parent is signaled",
     async () => {
       const root = makePackageRoot();

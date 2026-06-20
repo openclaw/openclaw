@@ -17,6 +17,7 @@ import {
   runNodeSteps,
   runNodeStepsInParallel,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
 
@@ -167,6 +168,49 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           process.kill(descendantPid, "SIGKILL");
         }
       }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "lets aborted sibling descendants drain during kill grace",
+    async () => {
+      const rootDir = makeTempDir(tempRoots, "openclaw-boundary-abort-drain-");
+      const readyPath = path.join(rootDir, "descendant.ready");
+      const drainedPath = path.join(rootDir, "descendant.drained");
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {",
+        "  setTimeout(() => {",
+        `    fs.writeFileSync(${JSON.stringify(drainedPath)}, 'drained');`,
+        "    process.exit(0);",
+        "  }, 50);",
+        "});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const command = runNodeStepsInParallel([
+        {
+          label: "delayed-fail",
+          args: ["--eval", "setTimeout(() => process.exit(2), 150)"],
+          timeoutMs: 5_000,
+        },
+        {
+          label: "abort-group-drain",
+          args: ["--eval", parentScript],
+          timeoutMs: 60_000,
+        },
+      ]);
+
+      await waitForFile(readyPath, 1_000);
+      await expect(command).rejects.toThrow("delayed-fail failed with exit code 2");
+      expect(fs.readFileSync(drainedPath, "utf8")).toBe("drained");
     },
   );
 

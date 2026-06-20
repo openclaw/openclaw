@@ -552,7 +552,9 @@ function trackGatewayChild(child) {
 function trackCommandChild(child) {
   activeCommandChildren.add(child);
   const untrack = () => {
-    activeCommandChildren.delete(child);
+    if (!processTreeIsAlive(child)) {
+      activeCommandChildren.delete(child);
+    }
   };
   child.once("error", untrack);
   child.once("close", untrack);

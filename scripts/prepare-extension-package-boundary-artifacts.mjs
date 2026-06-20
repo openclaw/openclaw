@@ -444,9 +444,43 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
     let settled = false;
     let canceled = false;
     let killTimer;
+    let killDeadlineAt = 0;
     const stdoutWriter = createPrefixedOutputWriter(label, process.stdout);
     const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
     const killNodeStep = (signal) => signalNodeStep(child, signal);
+    const processGroupAlive = () => {
+      if (process.platform === "win32" || !child.pid) {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return Boolean(error && error.code === "EPERM");
+      }
+    };
+    const waitForProcessGroupExit = async (waitMs) => {
+      const deadlineAt = Date.now() + waitMs;
+      while (Date.now() < deadlineAt) {
+        if (!processGroupAlive()) {
+          return true;
+        }
+        await new Promise((resolvePoll) => {
+          setTimeout(resolvePoll, 25);
+        });
+      }
+      return !processGroupAlive();
+    };
+    const waitForCanceledStepTeardown = async () => {
+      const remainingGraceMs = Math.max(0, killDeadlineAt - Date.now());
+      if (remainingGraceMs > 0) {
+        await waitForProcessGroupExit(remainingGraceMs);
+      }
+      if (processGroupAlive()) {
+        killNodeStep("SIGKILL");
+        await waitForProcessGroupExit(100);
+      }
+    };
     ACTIVE_NODE_STEP_KILLERS.add(killNodeStep);
     const abortStep = () => {
       if (settled || canceled) {
@@ -454,6 +488,7 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
       }
       canceled = true;
       killNodeStep("SIGTERM");
+      killDeadlineAt = Date.now() + NODE_STEP_ABORT_KILL_GRACE_MS;
       killTimer = setTimeout(() => {
         killTimer = undefined;
         killNodeStep("SIGKILL");
@@ -508,27 +543,29 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
       if (settled) {
         return;
       }
-      settled = true;
-      stdoutWriter.flush();
-      stderrWriter.flush();
-      if (exitingAfterParentSignal) {
-        killNodeStep("SIGKILL");
+      void (async () => {
+        settled = true;
+        stdoutWriter.flush();
+        stderrWriter.flush();
+        if (exitingAfterParentSignal) {
+          killNodeStep("SIGKILL");
+          cleanup();
+          return;
+        }
+        if (canceled) {
+          await waitForCanceledStepTeardown();
+          cleanup();
+          rejectPromise(new Error(`${label} canceled after sibling failure`));
+          return;
+        }
         cleanup();
-        return;
-      }
-      if (canceled) {
-        killNodeStep("SIGKILL");
-        cleanup();
-        rejectPromise(new Error(`${label} canceled after sibling failure`));
-        return;
-      }
-      cleanup();
-      if (code === 0) {
-        resolvePromise();
-        return;
-      }
-      abortSiblingSteps(abortController);
-      rejectPromise(new Error(`${label} failed with exit code ${code ?? 1}`));
+        if (code === 0) {
+          resolvePromise();
+          return;
+        }
+        abortSiblingSteps(abortController);
+        rejectPromise(new Error(`${label} failed with exit code ${code ?? 1}`));
+      })();
     });
   });
 }

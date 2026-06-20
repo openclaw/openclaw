@@ -36,6 +36,34 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (fs.existsSync(filePath)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for pid ${pid} to exit`);
+}
+
 function writeGroupedReport(filePath: string) {
   fs.writeFileSync(
     filePath,
@@ -687,6 +715,64 @@ describe("scripts/test-group-report child process guard", () => {
         timedOut: true,
       });
       expect(parsed.output).toContain("sending SIGKILL");
+    } finally {
+      if (childPid !== undefined && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("finishes promptly when timed process-group descendants exit cleanly", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = makeTempDir();
+    const childPidPath = path.join(tempDir, "child.pid");
+    const readyPath = path.join(tempDir, "child.ready");
+    const cleanupPath = path.join(tempDir, "child.cleanup");
+    let childPid: number | undefined;
+    try {
+      const childScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {",
+        "  setTimeout(() => {",
+        `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, "clean");`,
+        "    process.exit(0);",
+        "  }, 75);",
+        "});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const startedAt = Date.now();
+      const runPromise = spawnText(process.execPath, ["--eval", parentScript], {
+        cwd: process.cwd(),
+        env: process.env,
+        killGraceMs: 1_000,
+        timeoutMs: 1_000,
+      });
+
+      await waitForFile(readyPath, 2_000);
+      childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+      const result = await runPromise;
+
+      expect(result).toMatchObject({
+        status: 1,
+        signal: null,
+        timedOut: true,
+      });
+      expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
+      expect(Date.now() - startedAt).toBeLessThan(1_700);
+      await waitForDead(childPid, 2_000);
     } finally {
       if (childPid !== undefined && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
