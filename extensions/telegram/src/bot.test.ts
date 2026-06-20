@@ -6,6 +6,7 @@ import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createPluginStateKeyedStoreForTests,
@@ -38,6 +39,7 @@ import {
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
 } from "./message-cache.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -155,6 +157,13 @@ const FIRE_EMOJI = "\u{1F525}";
 const PARTY_EMOJI = "\u{1F389}";
 const EYES_EMOJI = "\u{1F440}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
+const TELEGRAM_POLL_REGISTRY_NAMESPACE = "telegram.poll-registry";
+const TELEGRAM_POLL_REGISTRY_MAX_ENTRIES = 100;
+
+type TelegramPollRegistryEntry = Omit<
+  Parameters<typeof recordTelegramPollRegistryEntry>[0],
+  "accountId" | "env"
+> & { createdAt: number };
 
 async function withTelegramSpooledReplayUpdate<T>(
   update: object,
@@ -208,6 +217,36 @@ function setTelegramPluginStateRuntimeForTests() {
 
 function getTelegramCallbackHandlerForTests() {
   return getOnHandler("callback_query") as (ctx: Record<string, unknown>) => Promise<void>;
+}
+
+async function installTelegramPollRegistryForTests(
+  entry?: Omit<TelegramPollRegistryEntry, "createdAt">,
+) {
+  setTelegramPluginStateRuntimeForTests();
+  const store = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+    namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+    maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+  });
+  await store.clear();
+  if (entry) {
+    await recordTelegramPollRegistryEntry(entry);
+  }
+  return store;
+}
+
+function setTelegramPollRegistryRuntimeForTests(
+  store: PluginStateKeyedStore<TelegramPollRegistryEntry>,
+): void {
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
+}
+
+function getTelegramPollAnswerHandlerForTests() {
+  return getOnHandler("poll_answer") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
 async function loadEnvelopeTimestampHelpers() {
@@ -511,6 +550,201 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
 
     expect(getOnHandler("message")).toEqual(expect.any(Function));
+  });
+
+  it("routes poll answers through the originating configured topic agent", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getChatSpy.mockResolvedValue({ id: -1001234567890, type: "supergroup", is_forum: true });
+    await installTelegramPollRegistryForTests({
+      pollId: "poll-topic-agent",
+      chatId: "-1001234567890",
+      messageThreadId: 99,
+      question: "Escalate?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: {
+              "-1001234567890": {
+                requireMention: false,
+                topics: { "99": { agentId: "forum-agent", requireMention: false } },
+              },
+            },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+
+      await getTelegramPollAnswerHandlerForTests()({
+        pollAnswer: {
+          poll_id: "poll-topic-agent",
+          option_ids: [0],
+          user: { id: 9, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+        'Telegram poll vote: "Escalate?" — Ada (@ada) voted: Yes',
+        expect.objectContaining({
+          contextKey: "telegram:poll_answer:poll-topic-agent:9:0",
+          sessionKey: expect.stringContaining(
+            "agent:forum-agent:telegram:group:-1001234567890:topic:99",
+          ),
+        }),
+      );
+      expect(getChatSpy).toHaveBeenCalledWith(-1001234567890);
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("blocks direct poll answers when requireTopic has no persisted topic", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getChatSpy.mockClear();
+    await installTelegramPollRegistryForTests({
+      pollId: "poll-dm-topic",
+      chatId: "9876",
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["9876"],
+            direct: { "9876": { requireTopic: true } },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+
+      await getTelegramPollAnswerHandlerForTests()({
+        pollAnswer: {
+          poll_id: "poll-dm-topic",
+          option_ids: [0],
+          user: { id: 9876, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      expect(getChatSpy).not.toHaveBeenCalled();
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("ignores unknown poll ids without enqueueing", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    await installTelegramPollRegistryForTests();
+
+    try {
+      createTelegramBot({ token: "tok" });
+      await getTelegramPollAnswerHandlerForTests()({
+        pollAnswer: {
+          poll_id: "missing-poll",
+          option_ids: [0],
+          user: { id: 9, first_name: "Ada" },
+        },
+      });
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it.each([
+    {
+      name: "bot voter",
+      pollAnswer: {
+        poll_id: "poll-skip",
+        option_ids: [0],
+        user: { id: 9, first_name: "Bot", is_bot: true },
+      },
+    },
+    {
+      name: "vote retraction",
+      pollAnswer: {
+        poll_id: "poll-skip",
+        option_ids: [],
+        user: { id: 9, first_name: "Ada" },
+      },
+    },
+    {
+      name: "voter chat without a user identity",
+      pollAnswer: {
+        poll_id: "poll-skip",
+        option_ids: [0],
+        voter_chat: { id: -100123, type: "supergroup", title: "Reviewers" },
+      },
+    },
+  ])("drops $name before registry I/O", async ({ pollAnswer }) => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    const lookup = vi.fn(async () => {
+      throw new Error("registry should not be read");
+    });
+    setTelegramPollRegistryRuntimeForTests({
+      lookup,
+    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>);
+
+    try {
+      createTelegramBot({ token: "tok" });
+      await getTelegramPollAnswerHandlerForTests()({ pollAnswer });
+      expect(lookup).not.toHaveBeenCalled();
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("marks spooled registry read failures retryable", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    const readError = new Error("registry db unavailable");
+    setTelegramPollRegistryRuntimeForTests({
+      lookup: async () => {
+        throw readError;
+      },
+    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>);
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const update = {
+        update_id: 98082,
+        poll_answer: {
+          poll_id: "poll-read-error",
+          option_ids: [0],
+          user: { id: 9, first_name: "Ada" },
+        },
+      };
+      const { result } = await runWithTelegramUpdateProcessingFrame(() =>
+        withTelegramSpooledReplayUpdate(update, () =>
+          getTelegramPollAnswerHandlerForTests()({
+            update,
+            pollAnswer: update.poll_answer,
+          }),
+        ),
+      );
+
+      expect(result).toEqual({ kind: "failed-retryable", error: readError });
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
   });
 
   it("dedupes outbound prompt-context sends with ambient group history", async () => {

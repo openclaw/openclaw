@@ -16,6 +16,7 @@ import {
   hasProviderObservedTelegramThreadBinding,
   resolveTelegramMessageCacheScope,
 } from "./message-cache.js";
+import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
 import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
 import { setTelegramRuntime } from "./runtime.js";
@@ -144,6 +145,12 @@ const sendMessageTelegram: typeof sendMessageTelegramImpl = async (to, text, opt
   );
 
 const TELEGRAM_TEST_CFG = {};
+const TELEGRAM_POLL_REGISTRY_NAMESPACE = "telegram.poll-registry";
+const TELEGRAM_POLL_REGISTRY_MAX_ENTRIES = 100;
+type TelegramPollRegistryEntry = Omit<
+  Parameters<typeof recordTelegramPollRegistryEntry>[0],
+  "accountId" | "env"
+> & { createdAt: number };
 type PersistedSentMessageForTest = {
   scopeKey: string;
   chatId: string;
@@ -4573,6 +4580,15 @@ describe("editMessageTelegram", () => {
 });
 
 describe("sendPollTelegram", () => {
+  async function installPollRegistryStore() {
+    const store = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await store.clear();
+    return store;
+  }
+
   it("sends polls with 12 options", async () => {
     const api = {
       sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
@@ -4658,6 +4674,106 @@ describe("sendPollTelegram", () => {
     expect(sendPollCall[1]).toBe("Q");
     expect(sendPollCall[2]).toEqual(["A", "B"]);
     expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
+  });
+
+  it("records a public poll origin with its resolved topic", async () => {
+    const store = await installPollRegistryStore();
+    const api = {
+      sendPoll: vi.fn(async () => ({
+        message_id: 123,
+        chat: { id: -1001234567890 },
+        poll: { id: "poll-public" },
+      })),
+    };
+
+    await sendPollTelegram(
+      "-1001234567890:topic:99",
+      { question: " Ready? ", options: [" Yes ", "No "] },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "t",
+        api: api as unknown as Bot["api"],
+        isAnonymous: false,
+      },
+    );
+
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({
+          pollId: "poll-public",
+          chatId: "-1001234567890",
+          messageThreadId: 99,
+          question: "Ready?",
+          options: ["Yes", "No"],
+        }),
+      }),
+    ]);
+  });
+
+  it("does not register anonymous polls", async () => {
+    const store = await installPollRegistryStore();
+    const api = {
+      sendPoll: vi.fn(async () => ({
+        message_id: 123,
+        chat: { id: 555 },
+        poll: { id: "poll-anonymous" },
+      })),
+    };
+
+    await sendPollTelegram(
+      "555",
+      { question: "Ready?", options: ["Yes", "No"] },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "t",
+        api: api as unknown as Bot["api"],
+        isAnonymous: true,
+      },
+    );
+
+    expect(await store.entries()).toHaveLength(0);
+  });
+
+  it("does not retry an already-sent poll when origin storage fails", async () => {
+    const register = vi.fn(async () => {
+      throw new Error("registry db unavailable");
+    });
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: (() => ({
+          register,
+        })) as unknown as TelegramRuntime["state"]["openKeyedStore"],
+        openSyncKeyedStore: (() =>
+          sentMessageStore) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+    const api = {
+      sendPoll: vi.fn(async () => ({
+        message_id: 123,
+        chat: { id: 555 },
+        poll: { id: "poll-write-error" },
+      })),
+    };
+
+    await expect(
+      sendPollTelegram(
+        "555",
+        { question: "Ready?", options: ["Yes", "No"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+          isAnonymous: false,
+        },
+      ),
+    ).resolves.toEqual({
+      messageId: "123",
+      chatId: "555",
+      pollId: "poll-write-error",
+    });
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
+    expect(register).toHaveBeenCalledTimes(1);
   });
 
   it("fails poll sends instead of retrying without message_thread_id", async () => {
