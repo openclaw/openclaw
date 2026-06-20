@@ -713,6 +713,64 @@ describe("feishuPlugin actions", () => {
     expect(details.contentType).toBe("post");
   });
 
+  it("edits messages with presentation containing content blocks", async () => {
+    editMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_2", contentType: "interactive" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "edit",
+      params: {
+        messageId: "om_2",
+        text: "updated via presentation",
+        presentation: {
+          title: "Edit Title",
+          tone: "info",
+          blocks: [{ type: "text", text: "Updated content" }],
+        },
+      },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    const cardArg = mockCallArg(editMessageFeishuMock, 0, 0, "editMessageFeishu").card;
+    expect(cardArg).toBeDefined();
+    expect(cardArg.schema).toBe("2.0");
+    expect(cardArg.body?.elements?.length).toBeGreaterThanOrEqual(1);
+    // text should be undefined when card is provided (editMessageFeishu requires exactly one)
+    expect(mockCallArg(editMessageFeishuMock, 0, 0, "editMessageFeishu").text).toBeUndefined();
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.contentType).toBe("interactive");
+  });
+
+  it("edits messages with presentation containing empty blocks (issue #93197)", async () => {
+    editMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_2", contentType: "post" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "edit",
+      params: {
+        messageId: "om_2",
+        text: "updated via presentation with empty blocks",
+        presentation: { title: "", tone: "info", blocks: [] },
+      },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    // When presentation has no meaningful content (empty blocks, empty title),
+    // normalizeMessagePresentation returns null, so edit falls through to text-only mode.
+    // This prevents sending invalid card JSON to the Feishu API.
+    expect(mockCallArg(editMessageFeishuMock, 0, 0, "editMessageFeishu")).toMatchObject({
+      cfg,
+      messageId: "om_2",
+      text: "updated via presentation with empty blocks",
+      card: undefined,
+      accountId: undefined,
+    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.contentType).toBe("post");
+  });
+
   it("sends explicit thread replies with reply_in_thread semantics", async () => {
     sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_reply", chatId: "oc_group_1" });
 

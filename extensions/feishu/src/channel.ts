@@ -876,15 +876,20 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu edit requires messageId.");
             }
             const text = readFirstString(ctx.params, ["text", "message"]);
-            const card =
-              ctx.params.card && typeof ctx.params.card === "object"
+            // Normalize presentation to card, consistent with send/thread-reply handler.
+            // Prevents sending empty card JSON to Feishu API when the message tool
+            // generates a presentation with empty blocks (see issue #93197).
+            const presentation = normalizeMessagePresentation(ctx.params.presentation);
+            const card = presentation
+              ? buildFeishuPresentationCard({ presentation, fallbackText: text })
+              : ctx.params.card && typeof ctx.params.card === "object"
                 ? (ctx.params.card as Record<string, unknown>)
                 : undefined;
             const { editMessageFeishu } = await loadFeishuChannelRuntime();
             const result = await editMessageFeishu({
               cfg: ctx.cfg,
               messageId,
-              text,
+              text: card ? undefined : text,
               card,
               accountId: ctx.accountId ?? undefined,
             });
