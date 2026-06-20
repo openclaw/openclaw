@@ -188,6 +188,11 @@ export type SDKError = {
 };
 
 /** Parameters for direct tool invocation through the SDK. */
+export type ToolsEffectiveParams = {
+  sessionKey: string;
+  agentId?: string;
+};
+
 export type ToolInvokeParams = {
   args?: JsonObject;
   sessionKey?: string;

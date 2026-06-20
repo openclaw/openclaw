@@ -25,6 +25,7 @@ import type {
   TasksGetResult,
   TasksListParams,
   TasksListResult,
+  ToolsEffectiveParams,
   ToolInvokeParams,
   ToolInvokeResult,
 } from "./types.js";
@@ -230,6 +231,18 @@ function hasArtifactQueryScope(params: unknown): params is ArtifactQuery {
 function requireArtifactQueryScope(api: string, params: unknown): ArtifactQuery {
   if (!hasArtifactQueryScope(params)) {
     throw new Error(`${api} requires one of sessionKey, runId, or taskId`);
+  }
+  return params;
+}
+
+function hasToolsEffectiveSessionKey(params: unknown): params is ToolsEffectiveParams {
+  const record = asRecord(params);
+  return typeof record.sessionKey === "string" && record.sessionKey.trim().length > 0;
+}
+
+function requireToolsEffectiveSessionKey(params: unknown): ToolsEffectiveParams {
+  if (!hasToolsEffectiveSessionKey(params)) {
+    throw new Error("oc.tools.effective requires sessionKey");
   }
   return params;
 }
@@ -857,8 +870,8 @@ export class ToolsNamespace extends RpcNamespace {
     return await this.call("catalog", params === undefined ? {} : params);
   }
 
-  async effective(params?: unknown): Promise<unknown> {
-    return await this.call("effective", params);
+  async effective(params: ToolsEffectiveParams): Promise<unknown> {
+    return await this.call("effective", requireToolsEffectiveSessionKey(params));
   }
 
   async invoke(name: string, params?: ToolInvokeParams): Promise<ToolInvokeResult> {
