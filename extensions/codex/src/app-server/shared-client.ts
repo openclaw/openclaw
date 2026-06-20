@@ -109,15 +109,14 @@ type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   authProfileId?: string | null;
+  authProfileStore?: AuthProfileStore;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   onStartedClient?: (client: CodexAppServerClient) => void;
   abandonSignal?: AbortSignal;
 };
 
-type IsolatedCodexAppServerClientOptions = CodexAppServerClientOptions & {
-  authProfileStore?: AuthProfileStore;
-};
+type IsolatedCodexAppServerClientOptions = CodexAppServerClientOptions;
 
 type ResolvedCodexAppServerClientStartContext = {
   agentDir: string;
@@ -128,7 +127,7 @@ type ResolvedCodexAppServerClientStartContext = {
 };
 
 async function resolveCodexAppServerClientStartContext(
-  options?: IsolatedCodexAppServerClientOptions,
+  options?: CodexAppServerClientOptions,
 ): Promise<ResolvedCodexAppServerClientStartContext> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const usesNativeAuth = options?.authProfileId === null;
