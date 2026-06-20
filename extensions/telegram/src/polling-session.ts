@@ -765,11 +765,52 @@ export class TelegramPollingSession {
     return laneKeys;
   }
 
+  #isTimedOutSpooledUpdateClaim(claim: ClaimedTelegramSpooledUpdate): boolean {
+    const claimedAt = claim.claim?.claimedAt;
+    return claimedAt !== undefined && Date.now() - claimedAt >= this.#spooledUpdateHandlerTimeoutMs;
+  }
+
+  async #failTimedOutLiveOwnedSpooledUpdateClaims(params: {
+    activeLaneKeys: Set<string>;
+    spoolDir: string;
+  }): Promise<void> {
+    const claims = await listTelegramSpooledUpdateClaims({ spoolDir: params.spoolDir });
+    for (const claim of claims) {
+      if (this.#isDeferredSpooledUpdateClaim(claim)) {
+        continue;
+      }
+      if (params.activeLaneKeys.has(this.#spooledUpdateLaneKey(claim))) {
+        continue;
+      }
+      if (!this.#isTimedOutSpooledUpdateClaim(claim)) {
+        continue;
+      }
+      if (!isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim)) {
+        continue;
+      }
+      const claimedForMs = Date.now() - (claim.claim?.claimedAt ?? Date.now());
+      const failed = await failTelegramSpooledUpdateClaim({
+        update: claim,
+        reason: "lane-released-on-stuck",
+        message: `Telegram spooled update claim held by a live worker for ${formatDurationPrecise(claimedForMs)} without active handler state.`,
+      });
+      if (failed) {
+        this.opts.log(
+          `[telegram][diag] spooled update ${claim.updateId} claim held by live worker for ${formatDurationPrecise(claimedForMs)}; marking failed so lane can continue`,
+        );
+      }
+    }
+  }
+
   async #drainSpooledUpdates(params: {
     bot: TelegramBot;
     spoolDir: string;
   }): Promise<SpooledUpdateDrainResult> {
     const activeLaneKeys = this.#activeSpooledUpdateLaneKeysForSpool(params.spoolDir);
+    await this.#failTimedOutLiveOwnedSpooledUpdateClaims({
+      activeLaneKeys,
+      spoolDir: params.spoolDir,
+    });
     await recoverStaleTelegramSpooledUpdateClaims({
       spoolDir: params.spoolDir,
       staleMs: 0,
