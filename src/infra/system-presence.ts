@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
+import { resolveMacosProductVersion } from "./os-summary.js";
 
 export type SystemPresence = {
   host?: string;
@@ -64,18 +65,11 @@ function initSelfPresence() {
     }
     return os.arch();
   })();
-  const macOSVersion = () => {
-    const res = spawnSync("sw_vers", ["-productVersion"], {
-      encoding: "utf-8",
-    });
-    const out = normalizeOptionalString(res.stdout) ?? "";
-    return out.length > 0 ? out : os.release();
-  };
   const platform = (() => {
     const p = os.platform();
     const rel = os.release();
     if (p === "darwin") {
-      return `macos ${macOSVersion()}`;
+      return `macos ${resolveMacosProductVersion()}`;
     }
     if (p === "win32") {
       return `windows ${rel}`;

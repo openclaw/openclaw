@@ -8,11 +8,23 @@ type OsSummary = {
   arch: string;
   release: string;
   label: string;
+  /**
+   * Compact OS identifier without arch, shaped for the agent runtime.os prompt
+   * field. Darwin reports the macOS product version; other platforms keep
+   * os.type()+release so their prompts stay unchanged.
+   */
+  runtimeOsLabel: string;
 };
 
 const cachedOsSummaryByKey = new Map<string, OsSummary>();
 
-function macosVersion(): string {
+/**
+ * macOS product version (e.g. "26.5.1") via `sw_vers -productVersion`. The Darwin
+ * kernel release from `os.release()` (e.g. "25.5.0") is only a fallback: starting
+ * with macOS 26 (Tahoe) the Darwin and marketing versions diverge, so the kernel
+ * release no longer identifies the macOS product version (#95145).
+ */
+export function resolveMacosProductVersion(): string {
   const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
   const out = normalizeOptionalString(res.stdout) ?? "";
   return out || os.release();
@@ -30,16 +42,21 @@ export function resolveOsSummary(): OsSummary {
   if (cached) {
     return cached;
   }
+  // Darwin reports the macOS product version (kernel release diverged in Tahoe);
+  // other platforms keep os.type()+release so non-macOS prompts stay byte-identical.
+  const macosVersion = platform === "darwin" ? resolveMacosProductVersion() : null;
+  const runtimeOsLabel =
+    macosVersion !== null ? `macos ${macosVersion}` : `${os.type()} ${release}`;
   const label = (() => {
-    if (platform === "darwin") {
-      return `macos ${macosVersion()} (${arch})`;
+    if (macosVersion !== null) {
+      return `macos ${macosVersion} (${arch})`;
     }
     if (platform === "win32") {
       return `windows ${release} (${arch})`;
     }
     return `${platform} ${release} (${arch})`;
   })();
-  const summary = { platform, arch, release, label };
+  const summary = { platform, arch, release, label, runtimeOsLabel };
   cachedOsSummaryByKey.set(cacheKey, summary);
   return summary;
 }
