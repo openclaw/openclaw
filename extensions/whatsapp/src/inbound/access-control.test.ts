@@ -637,10 +637,12 @@ describe("WhatsApp dmPolicy precedence", () => {
             senderJid: `${lidDigits}@lid`,
             selfE164: "+15550009999",
           },
-          accountId: "default",
-          chatType: "group",
-          from: "120363401234567890@g.us",
-          conversationId: "120363401234567890@g.us",
+          admission: {
+            conversation: {
+              id: "120363401234567890@g.us",
+              kind: "group",
+            },
+          },
         }) as never,
         authDir,
       });
