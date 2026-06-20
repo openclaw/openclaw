@@ -78,9 +78,9 @@ function installOllamaThinkingProvider() {
       auth: [],
       resolveThinkingProfile: ({ reasoning }: { reasoning?: boolean }) => ({
         levels:
-          reasoning === true
-            ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
-            : [{ id: "off" }],
+          reasoning === false
+            ? [{ id: "off" }]
+            : [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
         defaultLevel: "off",
       }),
     } as never,

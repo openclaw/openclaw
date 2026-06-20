@@ -56,5 +56,14 @@ export function resolveThinkingProfile({
 }: {
   reasoning?: boolean;
 }): ProviderThinkingProfile {
-  return reasoning ? OLLAMA_REASONING_THINKING_PROFILE : OLLAMA_NON_REASONING_THINKING_PROFILE;
+  // When reasoning is explicitly false (catalog marks the model as non-reasoning),
+  // return only the off level. When reasoning is true or undefined (live-discovered
+  // model without explicit catalog metadata), return the full thinking profile.
+  // Treating undefined as reasoning-capable fixes the Telegram /think menu for
+  // live-discovered Ollama models that report thinking capabilities via the Ollama API
+  // but have no explicit catalog entry (see #93835).
+  if (reasoning === false) {
+    return OLLAMA_NON_REASONING_THINKING_PROFILE;
+  }
+  return OLLAMA_REASONING_THINKING_PROFILE;
 }

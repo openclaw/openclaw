@@ -69,5 +69,15 @@ describe("ollama provider policy public artifact", () => {
       levels: [{ id: "off" }],
       defaultLevel: "off",
     });
+    // Undefined reasoning (live-discovered model without catalog metadata)
+    // should default to full thinking profile to avoid hiding valid options (#93835)
+    expect(resolveThinkingProfile({ reasoning: undefined })).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+    expect(resolveThinkingProfile({})).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
   });
 });
