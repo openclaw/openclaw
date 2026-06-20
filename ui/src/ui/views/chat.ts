@@ -40,6 +40,12 @@ import {
   resolveCurrentChatGoal,
   type ChatGoalFlowSummary,
 } from "../chat/pursue-goal.ts";
+import {
+  REALTIME_TALK_FALLBACK_PROVIDERS,
+  listSelectableRealtimeTalkProviders,
+  resolveControlUiRealtimeTalkProviderTransports,
+  type RealtimeTalkCatalogProvider,
+} from "../chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
@@ -82,13 +88,12 @@ import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type {
-  AgentFileEntry,
-  AgentsFilesListResult,
   ProjectRecord,
   ProjectsListResult,
   SessionGoal,
   SessionsListResult,
   GatewaySessionRow,
+  SessionWorkspaceListResult,
 } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
@@ -173,6 +178,7 @@ export type ChatProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
+  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: {
     provider: string;
     model: string;
@@ -223,6 +229,7 @@ export type ChatProps = {
     next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
   ) => void;
   onDismissError?: () => void;
+  onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -265,14 +272,20 @@ export type ChatProps = {
   onChatScroll?: (event: Event) => void;
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing | ReturnType<typeof guard>;
-  workspaceFiles?: {
-    agentId: string;
-    list: AgentsFilesListResult | null;
+  sessionWorkspace?: {
+    collapsed: boolean;
+    sessionKey: string;
+    list: SessionWorkspaceListResult | null;
     loading: boolean;
     error: string | null;
-    activeName: string | null;
+    activeId: string | null;
+    onToggleCollapsed: () => void;
     onRefresh: () => void;
-    onOpenFile: (name: string) => void;
+    onBrowsePath: (path: string) => void;
+    onCopyPath: (path: string) => void;
+    onOpenFile: (path: string) => void;
+    onSearch: (search: string) => void;
+    onOpenArtifact: (artifactId: string) => void;
   };
 };
 
@@ -301,10 +314,13 @@ const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
   { label: "Medium", value: "0.5" },
   { label: "High", value: "0.35" },
 ];
-const TALK_PROVIDER_OPTIONS: TalkSelectOption[] = [
-  { label: "Auto", value: "" },
-  { label: "OpenAI", value: "openai" },
-  { label: "Google", value: "google" },
+const TALK_PROVIDER_AUTO_OPTION: TalkSelectOption = { label: "Auto", value: "" };
+const TALK_PROVIDER_FALLBACK_OPTIONS: TalkSelectOption[] = [
+  TALK_PROVIDER_AUTO_OPTION,
+  ...REALTIME_TALK_FALLBACK_PROVIDERS.map((provider) => ({
+    label: provider.label,
+    value: provider.id,
+  })),
 ];
 const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
   { label: "Auto", value: "" },
@@ -384,6 +400,28 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
     return nothing;
   }
+  const catalogProviders = props.realtimeTalkCatalogProviders;
+  const selectableProviders = listSelectableRealtimeTalkProviders(catalogProviders ?? []);
+  const providerOptions: TalkSelectOption[] = catalogProviders
+    ? [
+        TALK_PROVIDER_AUTO_OPTION,
+        ...selectableProviders.map((provider) => ({ label: provider.label, value: provider.id })),
+      ]
+    : TALK_PROVIDER_FALLBACK_OPTIONS;
+  const selectedCatalogProvider = options.provider
+    ? selectableProviders.find((provider) => provider.id === options.provider)
+    : null;
+  const selectedProviderTransports = selectedCatalogProvider
+    ? resolveControlUiRealtimeTalkProviderTransports(selectedCatalogProvider)
+    : undefined;
+  const transportOptions: TalkSelectOption[] = selectedProviderTransports
+    ? [
+        { label: "Auto", value: "" },
+        ...TALK_TRANSPORT_OPTIONS.filter(
+          (opt) => opt.value !== "" && selectedProviderTransports.includes(opt.value),
+        ),
+      ]
+    : TALK_TRANSPORT_OPTIONS;
   const update = (key: keyof NonNullable<ChatProps["realtimeTalkOptions"]>) => (event: Event) => {
     const value = (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
     onChange({ [key]: value });
@@ -438,13 +476,24 @@ function renderRealtimeTalkOptions(props: ChatProps) {
           ${renderNativeTalkSelect({
             label: "Provider",
             value: options.provider,
-            options: TALK_PROVIDER_OPTIONS,
-            onSelect: (provider) => onChange({ provider }),
+            options: providerOptions,
+            onSelect: (provider) => {
+              const selectedProvider = selectableProviders.find((entry) => entry.id === provider);
+              const transports = selectedProvider
+                ? resolveControlUiRealtimeTalkProviderTransports(selectedProvider)
+                : null;
+              const transport = options.transport;
+              onChange(
+                transports && transport && !transports.includes(transport)
+                  ? { provider, transport: "" }
+                  : { provider },
+              );
+            },
           })}
           ${renderNativeTalkSelect({
             label: "Transport",
             value: options.transport,
-            options: TALK_TRANSPORT_OPTIONS,
+            options: transportOptions,
             onSelect: (transport) => onChange({ transport }),
           })}
           ${renderNativeTalkSelect({
@@ -539,6 +588,7 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  composerComposing: boolean;
   historyRenderSessionKey: string | null;
   historyRenderMessagesRef: unknown[] | null;
   historyRenderMessageCount: number;
@@ -565,6 +615,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    composerComposing: false,
     historyRenderSessionKey: null,
     historyRenderMessagesRef: null,
     historyRenderMessageCount: 0,
@@ -1075,7 +1126,7 @@ function renderChatGoal(goal: SessionGoal | undefined): TemplateResult | typeof 
   `;
 }
 
-function formatWorkspaceFileSize(file: AgentFileEntry): string {
+function formatWorkspaceFileSize(file: { size?: number }): string {
   const size = file.size;
   if (typeof size !== "number" || !Number.isFinite(size) || size < 0) {
     return "";
@@ -1089,74 +1140,432 @@ function formatWorkspaceFileSize(file: AgentFileEntry): string {
   return `${size} B`;
 }
 
-function renderWorkspaceFileRail(
-  workspaceFiles: NonNullable<ChatProps["workspaceFiles"]> | undefined,
+function renderWorkspaceArtifactSize(artifact: { sizeBytes?: number }): string {
+  return formatWorkspaceFileSize({ size: artifact.sizeBytes });
+}
+
+function renderWorkspaceRailSection(
+  title: string,
+  content: TemplateResult | typeof nothing,
 ): TemplateResult | typeof nothing {
-  if (!workspaceFiles) {
+  if (content === nothing) {
     return nothing;
   }
-  const files = workspaceFiles.list?.files ?? [];
   return html`
-    <aside class="chat-workspace-rail" aria-label="Workspace files">
+    <section class="chat-workspace-rail__section">
+      <div class="chat-workspace-rail__section-title">${title}</div>
+      ${content}
+    </section>
+  `;
+}
+
+function renderSessionWorkspaceRail(
+  sessionWorkspace: NonNullable<ChatProps["sessionWorkspace"]> | undefined,
+): TemplateResult | typeof nothing {
+  if (!sessionWorkspace) {
+    return nothing;
+  }
+  if (sessionWorkspace.collapsed) {
+    return html`
+      <aside
+        class="chat-workspace-rail chat-workspace-rail--collapsed"
+        aria-label=${t("chat.workspaceFiles.label")}
+      >
+        <button
+          type="button"
+          class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
+          title=${t("chat.workspaceFiles.expand")}
+          aria-label=${t("chat.workspaceFiles.expand")}
+          aria-expanded="false"
+          @click=${sessionWorkspace.onToggleCollapsed}
+        >
+          <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.panelRightOpen}</span>
+        </button>
+        <span class="chat-workspace-rail__collapsed-icon" aria-hidden="true"
+          >${icons.fileText}</span
+        >
+      </aside>
+    `;
+  }
+  const files = sessionWorkspace.list?.files ?? [];
+  const modifiedFiles = files.filter((file) => file.kind === "modified");
+  const readFiles = files.filter((file) => file.kind === "read");
+  const artifacts = sessionWorkspace.list?.artifacts ?? [];
+  const browser = sessionWorkspace.list?.browser ?? null;
+  const hasSessionItems = files.length > 0 || artifacts.length > 0;
+  const hasBrowserItems = (browser?.entries.length ?? 0) > 0;
+  const hasItems = hasSessionItems || hasBrowserItems;
+  const renderPathActions = (
+    path: string,
+    options: { preview?: boolean } = {},
+  ): TemplateResult => html`
+    <span
+      class="chat-workspace-rail__row-actions"
+      role="group"
+      aria-label=${t("chat.workspaceFiles.actions")}
+    >
+      ${options.preview === false
+        ? nothing
+        : html`<button
+            class="chat-workspace-rail__row-action"
+            type="button"
+            title=${t("chat.workspaceFiles.preview")}
+            aria-label=${t("chat.workspaceFiles.preview")}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              sessionWorkspace.onOpenFile(path);
+            }}
+          >
+            ${icons.eye}
+          </button>`}
+      <button
+        class="chat-workspace-rail__row-action"
+        type="button"
+        title=${t("chat.workspaceFiles.copyPath")}
+        aria-label=${t("chat.workspaceFiles.copyPath")}
+        @click=${(event: Event) => {
+          event.stopPropagation();
+          sessionWorkspace.onCopyPath(path);
+        }}
+      >
+        ${icons.copy}
+      </button>
+    </span>
+  `;
+  const renderSessionSummary = (): TemplateResult | typeof nothing => {
+    if (!sessionWorkspace.list) {
+      return nothing;
+    }
+    const browserCount = browser?.entries.length ?? 0;
+    return html`
+      <div class="chat-workspace-rail__summary" aria-label=${t("chat.workspaceFiles.summary")}>
+        <span
+          >${t("chat.workspaceFiles.changedCount", { count: String(modifiedFiles.length) })}</span
+        >
+        <span>${t("chat.workspaceFiles.readCount", { count: String(readFiles.length) })}</span>
+        <span>${t("chat.workspaceFiles.artifactCount", { count: String(artifacts.length) })}</span>
+        <span>${t("chat.workspaceFiles.browserCount", { count: String(browserCount) })}</span>
+      </div>
+    `;
+  };
+  const renderFileRows = (rows: typeof files): TemplateResult | typeof nothing =>
+    rows.length === 0
+      ? nothing
+      : html`
+          <div class="chat-workspace-rail__list" role="list">
+            ${rows.map((file) => {
+              const size = formatWorkspaceFileSize(file);
+              const itemId = `file:${file.path}`;
+              const isActive = itemId === sessionWorkspace.activeId;
+              return html`
+                <div
+                  class="chat-workspace-rail__file ${isActive
+                    ? "chat-workspace-rail__file--active"
+                    : ""}"
+                  role="listitem"
+                  title=${file.path || file.name}
+                >
+                  <button
+                    class="chat-workspace-rail__file-open"
+                    type="button"
+                    @click=${() => sessionWorkspace.onOpenFile(file.path)}
+                  >
+                    <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
+                    <span class="chat-workspace-rail__file-main">
+                      <span class="chat-workspace-rail__file-name">${file.path || file.name}</span>
+                      ${size
+                        ? html`<span class="chat-workspace-rail__file-meta">${size}</span>`
+                        : nothing}
+                    </span>
+                  </button>
+                  ${file.missing
+                    ? html`<span class="chat-workspace-rail__file-badge"
+                        >${t("chat.workspaceFiles.missing")}</span
+                      >`
+                    : nothing}
+                  ${renderPathActions(file.path)}
+                </div>
+              `;
+            })}
+          </div>
+        `;
+  const renderBrowserBadge = (
+    sessionKind: "modified" | "read" | "mixed" | undefined,
+  ): TemplateResult | typeof nothing => {
+    if (!sessionKind) {
+      return nothing;
+    }
+    const label =
+      sessionKind === "modified"
+        ? t("chat.workspaceFiles.changed")
+        : sessionKind === "read"
+          ? t("chat.workspaceFiles.read")
+          : t("chat.workspaceFiles.session");
+    return html`<span class="chat-workspace-rail__file-badge">${label}</span>`;
+  };
+  const renderBrowserBreadcrumbs = (): TemplateResult | typeof nothing => {
+    if (!browser || browser.search) {
+      return nothing;
+    }
+    const parts = browser.path ? browser.path.split("/").filter(Boolean) : [];
+    let currentPath = "";
+    return html`
+      <div class="chat-workspace-rail__breadcrumbs" aria-label=${t("chat.workspaceFiles.path")}>
+        <button
+          class="chat-workspace-rail__crumb"
+          type="button"
+          @click=${() => sessionWorkspace.onBrowsePath("")}
+        >
+          ${t("chat.workspaceFiles.root")}
+        </button>
+        ${parts.map((part) => {
+          currentPath = currentPath ? `${currentPath}/${part}` : part;
+          const pathForPart = currentPath;
+          return html`
+            <span class="chat-workspace-rail__crumb-separator">/</span>
+            <button
+              class="chat-workspace-rail__crumb"
+              type="button"
+              @click=${() => sessionWorkspace.onBrowsePath(pathForPart)}
+            >
+              ${part}
+            </button>
+          `;
+        })}
+      </div>
+    `;
+  };
+  const renderBrowserRows = (): TemplateResult => {
+    const entries = browser?.entries ?? [];
+    const parentPath = browser?.parentPath;
+    return html`
+      <section class="chat-workspace-rail__browser">
+        <div class="chat-workspace-rail__browser-tools">
+          <label class="chat-workspace-rail__search">
+            <span class="chat-workspace-rail__search-icon" aria-hidden="true">${icons.search}</span>
+            <input
+              type="search"
+              placeholder=${t("chat.workspaceFiles.search")}
+              aria-label=${t("chat.workspaceFiles.search")}
+              .value=${browser?.search ?? ""}
+              @input=${(event: Event) => {
+                const target = event.target as HTMLInputElement;
+                sessionWorkspace.onSearch(target.value);
+              }}
+            />
+          </label>
+        </div>
+        ${renderBrowserBreadcrumbs()}
+        ${browser?.search
+          ? html`<div class="chat-workspace-rail__browser-caption">
+              ${t("chat.workspaceFiles.searchResults")}
+            </div>`
+          : nothing}
+        <div class="chat-workspace-rail__list chat-workspace-rail__list--browser" role="list">
+          ${!browser?.search && parentPath != null
+            ? html`
+                <div
+                  class="chat-workspace-rail__file chat-workspace-rail__file--directory"
+                  role="listitem"
+                >
+                  <button
+                    class="chat-workspace-rail__file-open"
+                    type="button"
+                    @click=${() => sessionWorkspace.onBrowsePath(parentPath)}
+                  >
+                    <span class="chat-workspace-rail__file-icon">${icons.folder}</span>
+                    <span class="chat-workspace-rail__file-main">
+                      <span class="chat-workspace-rail__file-name">..</span>
+                      <span class="chat-workspace-rail__file-meta"
+                        >${t("chat.workspaceFiles.parentFolder")}</span
+                      >
+                    </span>
+                  </button>
+                </div>
+              `
+            : nothing}
+          ${entries.length === 0
+            ? html`<div class="chat-workspace-rail__state">
+                ${browser?.search
+                  ? t("chat.workspaceFiles.noSearchResults")
+                  : t("chat.workspaceFiles.noBrowserFiles")}
+              </div>`
+            : entries.map((entry) => {
+                const size = entry.kind === "file" ? formatWorkspaceFileSize(entry) : "";
+                const itemId = `file:${entry.path}`;
+                const isActive = itemId === sessionWorkspace.activeId;
+                const canPreview = entry.kind === "file" && Boolean(entry.sessionKind);
+                return html`
+                  <div
+                    class="chat-workspace-rail__file ${entry.kind === "directory"
+                      ? "chat-workspace-rail__file--directory"
+                      : ""} ${isActive ? "chat-workspace-rail__file--active" : ""}"
+                    role="listitem"
+                    title=${entry.path || entry.name}
+                  >
+                    <button
+                      class="chat-workspace-rail__file-open"
+                      type="button"
+                      ?disabled=${entry.kind === "file" && !canPreview}
+                      @click=${() =>
+                        entry.kind === "directory"
+                          ? sessionWorkspace.onBrowsePath(entry.path)
+                          : canPreview
+                            ? sessionWorkspace.onOpenFile(entry.path)
+                            : undefined}
+                    >
+                      <span class="chat-workspace-rail__file-icon"
+                        >${entry.kind === "directory" ? icons.folder : icons.fileText}</span
+                      >
+                      <span class="chat-workspace-rail__file-main">
+                        <span class="chat-workspace-rail__file-name">${entry.name}</span>
+                        <span class="chat-workspace-rail__file-meta">
+                          ${entry.kind === "directory"
+                            ? entry.path || t("chat.workspaceFiles.root")
+                            : [entry.path, size].filter(Boolean).join(" / ")}
+                        </span>
+                      </span>
+                    </button>
+                    ${renderBrowserBadge(entry.sessionKind)}
+                    ${entry.kind === "file"
+                      ? renderPathActions(entry.path, { preview: canPreview })
+                      : nothing}
+                  </div>
+                `;
+              })}
+        </div>
+        ${browser?.truncated
+          ? html`<div class="chat-workspace-rail__state">
+              ${t("chat.workspaceFiles.truncated")}
+            </div>`
+          : nothing}
+      </section>
+    `;
+  };
+  const renderArtifactRows = (): TemplateResult | typeof nothing =>
+    artifacts.length === 0
+      ? nothing
+      : html`
+          <div class="chat-workspace-rail__list" role="list">
+            ${artifacts.map((artifact) => {
+              const size = renderWorkspaceArtifactSize(artifact);
+              const itemId = `artifact:${artifact.id}`;
+              const isActive = itemId === sessionWorkspace.activeId;
+              const isImage = artifact.mimeType?.startsWith("image/");
+              return html`
+                <div
+                  class="chat-workspace-rail__file ${isActive
+                    ? "chat-workspace-rail__file--active"
+                    : ""}"
+                  role="listitem"
+                  title=${artifact.title}
+                >
+                  <button
+                    class="chat-workspace-rail__file-open"
+                    type="button"
+                    @click=${() => sessionWorkspace.onOpenArtifact(artifact.id)}
+                  >
+                    <span class="chat-workspace-rail__file-icon"
+                      >${isImage ? icons.image : icons.paperclip}</span
+                    >
+                    <span class="chat-workspace-rail__file-main">
+                      <span class="chat-workspace-rail__file-name">${artifact.title}</span>
+                      ${size || artifact.mimeType
+                        ? html`<span class="chat-workspace-rail__file-meta"
+                            >${[artifact.mimeType, size].filter(Boolean).join(" / ")}</span
+                          >`
+                        : nothing}
+                    </span>
+                  </button>
+                  <span class="chat-workspace-rail__row-actions">
+                    <button
+                      class="chat-workspace-rail__row-action"
+                      type="button"
+                      title=${t("chat.workspaceFiles.preview")}
+                      aria-label=${t("chat.workspaceFiles.preview")}
+                      @click=${(event: Event) => {
+                        event.stopPropagation();
+                        sessionWorkspace.onOpenArtifact(artifact.id);
+                      }}
+                    >
+                      ${icons.eye}
+                    </button>
+                  </span>
+                </div>
+              `;
+            })}
+          </div>
+        `;
+  return html`
+    <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
       <div class="chat-workspace-rail__header">
         <div class="chat-workspace-rail__title">
-          <span class="chat-workspace-rail__eyebrow">Workspace</span>
-          <strong>Files</strong>
+          <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
+          <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
-        <button
-          class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
-          type="button"
-          title="Refresh files"
-          aria-label="Refresh files"
-          ?disabled=${workspaceFiles.loading}
-          @click=${workspaceFiles.onRefresh}
-        >
-          ${icons.refresh}
-        </button>
+        <div class="chat-workspace-rail__actions">
+          <button
+            class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+            type="button"
+            title=${t("chat.workspaceFiles.refresh")}
+            aria-label=${t("chat.workspaceFiles.refresh")}
+            ?disabled=${sessionWorkspace.loading}
+            @click=${sessionWorkspace.onRefresh}
+          >
+            ${icons.refresh}
+          </button>
+          <button
+            type="button"
+            class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
+            title=${t("chat.workspaceFiles.collapse")}
+            aria-label=${t("chat.workspaceFiles.collapse")}
+            aria-expanded="true"
+            @click=${sessionWorkspace.onToggleCollapsed}
+          >
+            <span class="nav-collapse-toggle__icon" aria-hidden="true"
+              >${icons.panelRightClose}</span
+            >
+          </button>
+        </div>
       </div>
-      ${workspaceFiles.list?.workspace
-        ? html`<div class="chat-workspace-rail__path" title=${workspaceFiles.list.workspace}>
-            ${workspaceFiles.list.workspace}
+      ${sessionWorkspace.list?.root
+        ? html`<div class="chat-workspace-rail__path" title=${sessionWorkspace.list.root}>
+            ${sessionWorkspace.list.root}
           </div>`
         : nothing}
-      ${workspaceFiles.error
+      ${renderSessionSummary()}
+      ${sessionWorkspace.error
         ? html`<div class="chat-workspace-rail__state chat-workspace-rail__state--error">
-            ${workspaceFiles.error}
+            ${sessionWorkspace.error}
           </div>`
-        : workspaceFiles.loading && files.length === 0
-          ? html`<div class="chat-workspace-rail__state">Loading files...</div>`
-          : files.length === 0
-            ? html`<div class="chat-workspace-rail__state">No workspace files</div>`
-            : html`
-                <div class="chat-workspace-rail__list" role="list">
-                  ${files.map((file) => {
-                    const size = formatWorkspaceFileSize(file);
-                    const isActive = file.name === workspaceFiles.activeName;
-                    return html`
-                      <button
-                        class="chat-workspace-rail__file ${isActive
-                          ? "chat-workspace-rail__file--active"
-                          : ""}"
-                        type="button"
-                        role="listitem"
-                        title=${file.path || file.name}
-                        @click=${() => workspaceFiles.onOpenFile(file.name)}
-                      >
-                        <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
-                        <span class="chat-workspace-rail__file-main">
-                          <span class="chat-workspace-rail__file-name">${file.name}</span>
-                          ${size
-                            ? html`<span class="chat-workspace-rail__file-meta">${size}</span>`
-                            : nothing}
-                        </span>
-                        ${file.missing
-                          ? html`<span class="chat-workspace-rail__file-badge">Missing</span>`
-                          : nothing}
-                      </button>
-                    `;
-                  })}
-                </div>
-              `}
+        : sessionWorkspace.loading && !hasItems
+          ? html`<div class="chat-workspace-rail__state">${t("chat.workspaceFiles.loading")}</div>`
+          : html`
+              <div class="chat-workspace-rail__scroll">
+                ${!hasSessionItems
+                  ? html`<div class="chat-workspace-rail__state">
+                      ${t("chat.workspaceFiles.empty")}
+                    </div>`
+                  : html`
+                      ${renderWorkspaceRailSection(
+                        t("chat.workspaceFiles.changed"),
+                        renderFileRows(modifiedFiles),
+                      )}
+                      ${renderWorkspaceRailSection(
+                        t("chat.workspaceFiles.read"),
+                        renderFileRows(readFiles),
+                      )}
+                      ${renderWorkspaceRailSection(
+                        t("chat.workspaceFiles.artifacts"),
+                        renderArtifactRows(),
+                      )}
+                    `}
+                ${renderWorkspaceRailSection(
+                  t("chat.workspaceFiles.browser"),
+                  browser ? renderBrowserRows() : nothing,
+                )}
+              </div>
+            `}
     </aside>
   `;
 }
@@ -1438,7 +1847,6 @@ function closeDetailsOnEscape(event: KeyboardEvent, onClose?: () => void) {
   event.stopPropagation();
   details.open = false;
   onClose?.();
-  details.querySelector<HTMLElement>("summary")?.focus();
 }
 
 function renderWorkItemActions(props: ChatProps, item: WorkSurfaceItem) {
@@ -2855,6 +3263,10 @@ export function renderChat(props: ChatProps) {
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
+    if (vs.composerComposing || e.isComposing || e.keyCode === 229) {
+      return;
+    }
+
     // Slash menu navigation — arg mode
     if (vs.slashMenuOpen && vs.slashMenuMode === "args" && vs.slashMenuArgItems.length > 0) {
       const len = vs.slashMenuArgItems.length;
@@ -2978,15 +3390,34 @@ export function renderChat(props: ChatProps) {
     }
   };
 
-  const handleInput = (e: Event) => {
-    const target = e.target as HTMLTextAreaElement;
+  const syncComposerValue = (
+    target: HTMLTextAreaElement,
+    options: { forceCommit?: boolean } = {},
+  ) => {
     adjustTextareaHeight(target);
     draftMirror.value = target.value;
     const hostDraftNeeded = isBusy || showAbortableUi || props.queue.length > 0;
-    if (hostDraftNeeded || target.value.startsWith("/") || hasVisibleSlashMenuState()) {
+    if (
+      options.forceCommit ||
+      hostDraftNeeded ||
+      target.value.startsWith("/") ||
+      hasVisibleSlashMenuState()
+    ) {
       commitComposerDraft(props, target.value);
     }
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
+  };
+  const handleInput = (e: InputEvent) => {
+    const target = e.target as HTMLTextAreaElement;
+    if (vs.composerComposing || e.isComposing) {
+      draftMirror.value = target.value;
+      return;
+    }
+    syncComposerValue(target);
+  };
+  const handleCompositionEnd = (e: CompositionEvent) => {
+    vs.composerComposing = false;
+    syncComposerValue(e.target as HTMLTextAreaElement, { forceCommit: true });
   };
   const handleBlur = (e: FocusEvent) => {
     const target = e.target as HTMLTextAreaElement;
@@ -3043,45 +3474,51 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
-      <div class="chat-workbench">
-        <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
-          <div
-            class="chat-main"
-            style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
-          >
-            ${thread}
-          </div>
+      <div
+        class="chat-workbench ${props.sessionWorkspace?.collapsed
+          ? "chat-workbench--workspace-collapsed"
+          : ""}"
+      >
+        ${renderSessionWorkspaceRail(props.sessionWorkspace)}
+        <div class="chat-workbench__main">
+          <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
+            <div
+              class="chat-main"
+              style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
+            >
+              ${thread}
+            </div>
 
-          ${sidebarOpen
-            ? html`
-                <resizable-divider
-                  .splitRatio=${splitRatio}
-                  .label=${t("nav.resize")}
-                  @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
-                ></resizable-divider>
-                <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
-                  ${renderMarkdownSidebar({
-                    content: props.sidebarContent ?? null,
-                    error: props.sidebarError ?? null,
-                    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                    embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                    onClose: props.onCloseSidebar!,
-                    onViewRawText: () => {
-                      if (!props.onOpenSidebar) {
-                        return;
-                      }
-                      const rawContent = buildRawSidebarContent(props.sidebarContent);
-                      if (rawContent) {
-                        props.onOpenSidebar(rawContent);
-                      }
-                    },
-                  })}
-                </div>
-              `
-            : nothing}
+            ${sidebarOpen
+              ? html`
+                  <resizable-divider
+                    .splitRatio=${splitRatio}
+                    .label=${t("nav.resize")}
+                    @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
+                  ></resizable-divider>
+                  <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
+                    ${renderMarkdownSidebar({
+                      content: props.sidebarContent ?? null,
+                      error: props.sidebarError ?? null,
+                      canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+                      embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                      allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                      onClose: props.onCloseSidebar!,
+                      onViewRawText: () => {
+                        if (!props.onOpenSidebar) {
+                          return;
+                        }
+                        const rawContent = buildRawSidebarContent(props.sidebarContent);
+                        if (rawContent) {
+                          props.onOpenSidebar(rawContent);
+                        }
+                      },
+                    })}
+                  </div>
+                `
+              : nothing}
+          </div>
         </div>
-        ${renderWorkspaceFileRail(props.workspaceFiles)}
       </div>
 
       ${renderChatProjectPicker(props)} ${renderChatApprovalCard(props)} ${renderPursueGoal(props)}
@@ -3131,16 +3568,34 @@ export function renderChat(props: ChatProps) {
         ${renderRealtimeTalkOptions(props)}
         ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
           ? html`
-              <div class="agent-chat__stt-interim agent-chat__talk-status">
-                ${props.realtimeTalkDetail ??
-                ((props.realtimeTalkConversation?.length ?? 0) === 0
-                  ? props.realtimeTalkTranscript
-                  : null) ??
-                (props.realtimeTalkStatus === "thinking"
-                  ? "Asking OpenClaw..."
-                  : props.realtimeTalkStatus === "connecting"
-                    ? "Connecting Talk..."
-                    : "Talk live")}
+              <div
+                class="agent-chat__stt-interim agent-chat__talk-status"
+                role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
+              >
+                <span class="agent-chat__talk-status-text">
+                  ${props.realtimeTalkDetail ??
+                  ((props.realtimeTalkConversation?.length ?? 0) === 0
+                    ? props.realtimeTalkTranscript
+                    : null) ??
+                  (props.realtimeTalkStatus === "thinking"
+                    ? "Asking OpenClaw..."
+                    : props.realtimeTalkStatus === "connecting"
+                      ? "Connecting Talk..."
+                      : "Talk live")}
+                </span>
+                ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
+                  ? html`
+                      <button
+                        class="callout__dismiss"
+                        type="button"
+                        @click=${props.onDismissRealtimeTalkError}
+                        aria-label=${t("chat.composer.dismissTalkError")}
+                        title=${t("chat.composer.dismissTalkError")}
+                      >
+                        ${icons.x}
+                      </button>
+                    `
+                  : nothing}
               </div>
             `
           : nothing}
@@ -3162,6 +3617,10 @@ export function renderChat(props: ChatProps) {
             aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
             @keydown=${handleKeyDown}
             @input=${handleInput}
+            @compositionstart=${() => {
+              vs.composerComposing = true;
+            }}
+            @compositionend=${handleCompositionEnd}
             @blur=${handleBlur}
             @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
             placeholder=${placeholder}
