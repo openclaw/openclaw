@@ -143,6 +143,11 @@ export function acquireTaskRouteLease(
               acquired_at: (eb) => eb.ref("excluded.acquired_at"),
               expires_at: (eb) => eb.ref("excluded.expires_at"),
               status: (eb) => eb.ref("excluded.status"),
+              // Re-acquire is a fresh lifecycle: any stale `settled_at` from
+              // a prior terminal transition must be cleared, otherwise
+              // getActiveTaskRouteLease would return a lease whose
+              // `.settledAt` field still reflects the old terminal state.
+              settled_at: null,
             }),
           ),
       );

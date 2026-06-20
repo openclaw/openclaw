@@ -209,6 +209,32 @@ describe("task-route lease", () => {
     expect(after).toBeDefined();
     expect(after?.status).toBe("active");
     expect(after?.requesterOrigin).toEqual(newOrigin);
+    // Settled-at must be cleared on re-acquire, otherwise getActive would
+    // return a lease whose `.settledAt` still reflects the prior terminal
+    // transition. ClawSweeper review finding (P3, confidence 0.82).
+    expect(after?.settledAt).toBeUndefined();
+  });
+
+  it("re-acquire after retire also clears settledAt", () => {
+    // Pin that `settled_at` is reset on re-acquire regardless of which
+    // terminal retirement status (settled vs retired) preceded it. This
+    // covers both terminal branches of mapDeliveryStatusToLeaseRetirement.
+    acquireTaskRouteLease({
+      runId: "run-reacquire-after-retire",
+      taskId: "task-reacquire-after-retire",
+      requesterOrigin: SAMPLE_ORIGIN,
+      ttlMs: 60_000,
+    });
+    settleTaskRouteLease("run-reacquire-after-retire", "retired");
+    acquireTaskRouteLease({
+      runId: "run-reacquire-after-retire",
+      taskId: "task-reacquire-after-retire",
+      requesterOrigin: SAMPLE_ORIGIN,
+      ttlMs: 60_000,
+    });
+    const after = getActiveTaskRouteLease("run-reacquire-after-retire");
+    expect(after?.settledAt).toBeUndefined();
+    expect(after?.status).toBe("active");
   });
 
   it("mapDeliveryStatusToLeaseRetirement maps terminal statuses correctly", () => {
