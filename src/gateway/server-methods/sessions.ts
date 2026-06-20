@@ -916,7 +916,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
-    const configuredAgentsOnly = p.configuredAgentsOnly === true;
+    const allAgents = p.allAgents === true;
+    // `allAgents` is the cross-agent visibility path: it pulls every configured
+    // agent's store and opts out of the per-agent scope filter so child-spawned
+    // subagent sessions whose owning agent differs from the viewer's current
+    // scope still surface in the Control UI (issue #95295).
+    const configuredAgentsOnly = allAgents || p.configuredAgentsOnly === true;
+    const loadAgentId = allAgents ? undefined : p.agentId;
     const payload = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list",
       async () => {
@@ -924,7 +930,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           "gateway.sessions.list.store_load",
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
-              agentId: p.agentId,
+              ...(loadAgentId ? { agentId: loadAgentId } : {}),
+              ...(allAgents ? { configuredAgentsOnly: true } : {}),
             }),
           {
             config: cfg,
@@ -932,6 +939,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             attributes: {
               agentId: p.agentId ?? null,
               configuredAgentsOnly,
+              allAgents,
             },
           },
         );

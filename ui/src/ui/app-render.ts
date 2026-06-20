@@ -2860,6 +2860,7 @@ export function renderApp(state: AppViewState) {
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
                 showArchived: state.sessionsShowArchived,
+                allAgents: state.sessionsAllAgents,
                 filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
@@ -2899,12 +2900,22 @@ export function renderApp(state: AppViewState) {
                 onToggleFiltersCollapsed: () => {
                   state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
                 },
+                onAllAgentsChange: (next) => {
+                  state.sessionsAllAgents = next;
+                  state.sessionsSelectedKeys = new Set();
+                  state.sessionsPage = 0;
+                  // `allAgents` is the cross-agent visibility path: it omits the
+                  // per-agent `agentId` scope filter so child-spawned subagent
+                  // sessions from other agents become visible (issue #95295).
+                  void loadSessions(state, { allAgents: next });
+                },
                 onClearFilters: () => {
                   state.sessionsFilterActive = "";
                   state.sessionsFilterLimit = "";
                   state.sessionsIncludeGlobal = true;
                   state.sessionsIncludeUnknown = true;
                   state.sessionsShowArchived = true;
+                  state.sessionsAllAgents = false;
                   state.sessionsSearchQuery = "";
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
@@ -2914,6 +2925,7 @@ export function renderApp(state: AppViewState) {
                     includeGlobal: true,
                     includeUnknown: true,
                     showArchived: true,
+                    allAgents: false,
                   });
                 },
                 onSearchChange: (q) => {

@@ -559,6 +559,88 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
   ]);
 });
 
+test("sessions.list allAgents surfaces cross-agent child-spawned subagent sessions (#95295)", async () => {
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
+  }
+  // Viewer is scoped to `main`; orchestrator is a configured peer agent. Issue #95295 reports
+  // that sessions.list, when called with the per-agent scope filter, hides child-spawned
+  // subagent sessions owned by other agents.
+  testState.agentsConfig = {
+    list: [{ id: "main", default: true }, { id: "orchestrator" }],
+  };
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway session tests");
+  }
+  await fs.writeFile(configPath, JSON.stringify({}, null, 2), "utf-8");
+  testState.sessionConfig = {
+    store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+  };
+
+  const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+  const orchStorePath = path.join(stateDir, "agents", "orchestrator", "sessions", "sessions.json");
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(orchStorePath), { recursive: true });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify(
+      {
+        "agent:main:main": { sessionId: "sess-main", updatedAt: 30 },
+        "agent:orchestrator:subagent:review-1": {
+          sessionId: "sess-cross-agent-child",
+          updatedAt: 40,
+          spawnedBy: "agent:orchestrator:worker",
+        },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  await fs.writeFile(
+    orchStorePath,
+    JSON.stringify(
+      {
+        "agent:orchestrator:worker": { sessionId: "sess-orch", updatedAt: 50 },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+
+  // Baseline: per-agent scope filter (current Control UI default) hides the orchestrator child.
+  const scoped = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    {
+      agentId: "main",
+      includeGlobal: false,
+      includeUnknown: false,
+      configuredAgentsOnly: true,
+    },
+  );
+  expect(scoped.ok).toBe(true);
+  expect(scoped.payload?.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
+
+  // Fix path: `allAgents: true` drops the per-agent scope filter so the cross-agent
+  // child-spawned subagent session surfaces alongside the viewer's own sessions.
+  const cross = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    {
+      allAgents: true,
+      includeGlobal: false,
+      includeUnknown: false,
+    },
+  );
+  expect(cross.ok).toBe(true);
+  const crossKeys = (cross.payload?.sessions ?? []).map((session) => session.key).sort();
+  expect(crossKeys).toEqual(
+    ["agent:main:main", "agent:orchestrator:subagent:review-1", "agent:orchestrator:worker"].sort(),
+  );
+});
+
 test("sessions.list hides phantom agent store placeholder rows", async () => {
   await createSessionStoreDir();
   await writeSessionStore({

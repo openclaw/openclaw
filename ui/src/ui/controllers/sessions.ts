@@ -50,6 +50,13 @@ export type SessionsState = SessionsChatRunState & {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsShowArchived: boolean;
+  /**
+   * When true, the next `sessions.list` call pulls every configured agent's
+   * store and skips the per-agent `agentId` scope filter so child-spawned
+   * subagent sessions owned by other agents become visible (issue #95295).
+   * The view's default is to scope to the assistant's agent.
+   */
+  sessionsAllAgents: boolean;
   sessionsExpandedCheckpointKey: string | null;
   sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;
@@ -73,6 +80,13 @@ export type LoadSessionsOverrides = {
   includeUnknown?: boolean;
   showArchived?: boolean;
   configuredAgentsOnly?: boolean;
+  /**
+   * Cross-agent visibility flag. When true, the request omits the per-agent
+   * `agentId` scope filter so child-spawned subagent sessions owned by other
+   * agents surface in the result (issue #95295). Implies
+   * `configuredAgentsOnly: true`.
+   */
+  allAgents?: boolean;
   append?: boolean;
   publishChatRunStatus?: boolean;
 };
@@ -1117,13 +1131,20 @@ async function loadSessionsOnce(
     const limit =
       normalizeSessionsFilterOverride(overrides?.limit) ??
       parseSessionsFilterInteger(state.sessionsFilterLimit);
-    const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
+    const allAgents = overrides?.allAgents ?? state.sessionsAllAgents;
+    // `allAgents` implies `configuredAgentsOnly: true`; when it is on we drop
+    // the per-agent `agentId` so child-spawned subagent sessions from every
+    // configured agent become visible (issue #95295).
+    const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? (allAgents || true);
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
       configuredAgentsOnly,
     };
-    const agentId = overrides?.agentId?.trim();
+    if (allAgents) {
+      params.allAgents = true;
+    }
+    const agentId = allAgents ? "" : overrides?.agentId?.trim();
     const resultAgentId = agentId ? normalizeAgentId(agentId) : null;
     if (agentId) {
       params.agentId = agentId;

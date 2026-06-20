@@ -522,8 +522,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     const cfg = getRuntimeConfig();
+    const allAgents = opts?.allAgents === true;
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
-      agentId: opts?.agentId,
+      ...(allAgents ? {} : opts?.agentId ? { agentId: opts.agentId } : {}),
+      ...(allAgents ? { configuredAgentsOnly: true } : {}),
     });
     return (await listSessionsFromStoreAsync({
       cfg,

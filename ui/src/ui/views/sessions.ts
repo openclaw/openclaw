@@ -32,6 +32,7 @@ export type SessionsProps = {
   includeGlobal: boolean;
   includeUnknown: boolean;
   showArchived: boolean;
+  allAgents: boolean;
   filtersCollapsed: boolean;
   basePath: string;
   searchQuery: string;
@@ -53,6 +54,7 @@ export type SessionsProps = {
     includeUnknown: boolean;
     showArchived: boolean;
   }) => void;
+  onAllAgentsChange: (next: boolean) => void;
   onToggleFiltersCollapsed: () => void;
   onClearFilters: () => void;
   onSearchChange: (query: string) => void;
@@ -657,6 +659,14 @@ export function renderSessions(props: SessionsProps) {
                         includeUnknown: props.includeUnknown,
                         showArchived: checked,
                       }),
+                  })}
+                  ${renderFilterToggle({
+                    name: "allAgents",
+                    checked: props.allAgents,
+                    label: t("sessionsView.allAgents"),
+                    title: t("sessionsView.allAgentsTooltip"),
+                    extraClass: "session-all-agents-toggle",
+                    onChange: (checked) => props.onAllAgentsChange(checked),
                   })}
                 </div>
               </div>

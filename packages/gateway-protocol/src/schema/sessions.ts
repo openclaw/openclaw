@@ -172,6 +172,13 @@ export const SessionsListParamsSchema = Type.Object(
      */
     configuredAgentsOnly: Type.Optional(Type.Boolean()),
     /**
+     * Show sessions across every configured agent and skip the per-agent
+     * `agentId` scope filter. Required for Control UI surfaces that want to
+     * surface child-spawned subagent sessions whose owning agent differs from
+     * the viewer's current scope. Implies `configuredAgentsOnly: true`.
+     */
+    allAgents: Type.Optional(Type.Boolean()),
+    /**
      * Read first 8KB of each session transcript to derive title from first user message.
      * Performs a file read per session - use `limit` to bound result set on large stores.
      */

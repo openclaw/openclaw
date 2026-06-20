@@ -2532,9 +2532,11 @@ function filterSessionEntries(params: {
   const { cfg, store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
+  const allAgents = opts.allAgents === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
-  const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
+  const agentId =
+    !allAgents && typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
@@ -2551,6 +2553,13 @@ function filterSessionEntries(params: {
       }
       if (!includeUnknown && key === "unknown") {
         return false;
+      }
+      // `allAgents` opts out of the per-agent scope filter so Control UI surfaces can
+      // surface child-spawned subagent sessions whose owning agent differs from the
+      // viewer's current scope (issue #95295). `global`/`unknown` still honor their
+      // explicit include flags so consumers can keep their existing strict views.
+      if (allAgents) {
+        return true;
       }
       if (agentId) {
         if (key === "global") {

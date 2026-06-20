@@ -52,6 +52,7 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
     sessionsShowArchived: false,
+    sessionsAllAgents: false,
     sessionsExpandedCheckpointKey: null,
     sessionsCheckpointItemsByKey: {},
     sessionsCheckpointLoadingKey: null,
@@ -621,6 +622,56 @@ describe("loadSessions", () => {
       "agent:main:subagent:archived",
     ]);
     expect(state.sessionsResult?.count).toBe(2);
+  });
+
+  it("omits the per-agent scope filter and forwards allAgents when requested (#95295)", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request, { sessionsAllAgents: true });
+
+    await loadSessions(state, { agentId: "main", allAgents: true });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      allAgents: true,
+    });
+  });
+
+  it("keeps the per-agent scope filter when allAgents is not requested", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, { agentId: "main" });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "main",
+    });
   });
 
   it("keeps terminal non-archived sessions visible by default", async () => {
