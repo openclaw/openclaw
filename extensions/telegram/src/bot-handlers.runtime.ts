@@ -14,6 +14,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
@@ -824,6 +825,20 @@ export const registerTelegramHandlers = ({
       resolveGroupRequireMention(chatId),
     );
     if (!requireMention) {
+      return false;
+    }
+
+    const telegramGroupPolicy = resolveChannelGroupPolicy({
+      cfg: runtimeCfg,
+      channel: "telegram",
+      groupId: String(chatId),
+      accountId,
+    });
+    const ingestEnabled =
+      topicConfig?.ingest ??
+      telegramGroupPolicy.groupConfig?.ingest ??
+      telegramGroupPolicy.defaultConfig?.ingest;
+    if (ingestEnabled === true) {
       return false;
     }
 
