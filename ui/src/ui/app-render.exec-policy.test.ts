@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { extractQuickSettingsSecurity } from "./app-render.ts";
+import { extractQuickSettingsSecurity } from "../pages/config/page.ts";
 import type { AppViewState } from "./app-view-state.ts";
 
 function makeState(config: Record<string, unknown>): AppViewState {

@@ -10,9 +10,9 @@ const handleChatEventMock = vi.fn((_state?: any) => "idle");
 const handleSessionOperationEventMock = vi.fn();
 const recordFirstAssistantChatTimingMock = vi.fn();
 
-vi.mock("../app/active-route.ts", () => ({
-  loadCron: vi.fn(),
-  refreshActiveRoute: vi.fn(),
+vi.mock("../app-routes.ts", () => ({
+  appRouter: { revalidate: vi.fn() },
+  routeLoadContext: (host: unknown) => host,
 }));
 
 vi.mock("./app-chat.ts", () => ({
@@ -101,7 +101,7 @@ const { addExecApproval } = await vi.importActual<typeof import("./controllers/e
 );
 
 afterAll(() => {
-  vi.doUnmock("../app/active-route.ts");
+  vi.doUnmock("../app-routes.ts");
   vi.doUnmock("./app-chat.ts");
   vi.doUnmock("./app-settings.ts");
   vi.doUnmock("./app-tool-stream.ts");

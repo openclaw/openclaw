@@ -6,7 +6,6 @@ import {
   applyResolvedTheme,
   applySettings,
   applySettingsFromUrl,
-  setRouteFromLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
@@ -187,38 +186,7 @@ const createHost = (routeId: RouteId): SettingsHost => ({
   wikiMemoryPalace: null,
 });
 
-describe("setRouteFromLocation", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("starts and stops log polling based on the route", async () => {
-    const host = createHost("chat");
-
-    await setRouteFromLocation(host, "logs");
-    expect(host.debugPollInterval).toBeNull();
-    expect(host.logsPollInterval).not.toBe(host.debugPollInterval);
-
-    await setRouteFromLocation(host, "chat");
-    expect(host.logsPollInterval).toBeNull();
-  });
-
-  it("starts and stops debug polling based on the route", async () => {
-    const host = createHost("chat");
-
-    await setRouteFromLocation(host, "debug");
-    expect(host.logsPollInterval).toBeNull();
-    expect(host.debugPollInterval).not.toBe(host.logsPollInterval);
-
-    await setRouteFromLocation(host, "chat");
-    expect(host.debugPollInterval).toBeNull();
-  });
-
+describe("app settings", () => {
   it("re-resolves the active palette when only themeMode changes", () => {
     const host = createHost("chat");
     host.settings.theme = "knot";

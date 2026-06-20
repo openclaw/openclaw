@@ -1,12 +1,5 @@
-import {
-  inferBasePathFromPathname,
-  normalizeBasePath,
-  normalizePath,
-  pathForRoute,
-  type RouteId,
-} from "../app-routes.ts";
+import { inferBasePathFromPathname, normalizeBasePath } from "../app-routes.ts";
 // Control UI module implements app settings behavior.
-import { applyActiveRouteTransition, refreshActiveRoute } from "../app/active-route.ts";
 import type { SettingsHost } from "../app/app-host.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import {
@@ -194,10 +187,6 @@ export function applySettingsFromUrl(host: SettingsHost) {
   updateBrowserHistory(url, true);
 }
 
-export function setRoute(host: SettingsHost, next: RouteId) {
-  return applyRouteSelection(host, next, { syncUrl: true });
-}
-
 function applyThemeTransition(
   host: SettingsHost,
   nextTheme: ResolvedTheme,
@@ -353,10 +342,6 @@ export function syncSessionWithLocation(host: SettingsHost) {
   }
 }
 
-export function setRouteFromLocation(host: SettingsHost, next: RouteId) {
-  return applyRouteSelection(host, next, {});
-}
-
 function updateBrowserHistory(url: URL, replace: boolean) {
   const history = typeof window === "undefined" ? undefined : window.history;
   if (!history) {
@@ -366,49 +351,6 @@ function updateBrowserHistory(url: URL, replace: boolean) {
     return history.replaceState({}, "", url.toString());
   }
   return history.pushState({}, "", url.toString());
-}
-
-function applyRouteSelection(
-  host: SettingsHost,
-  next: RouteId,
-  options: { syncUrl?: boolean },
-): Promise<void> | undefined {
-  const prev = host.routeId;
-  host.routeId = next;
-  const transition = applyActiveRouteTransition(host, prev, next, {
-    history: options.syncUrl ? "push" : "none",
-  });
-  if (prev === next) {
-    void refreshActiveRoute(host).catch(() => undefined);
-  }
-
-  if (options.syncUrl) {
-    syncUrlWithRoute(host, next, true);
-  }
-  return transition;
-}
-
-export function syncUrlWithRoute(host: SettingsHost, routeId: RouteId, replace: boolean) {
-  const href = typeof window === "undefined" ? undefined : window.location?.href;
-  const pathname = typeof window === "undefined" ? undefined : window.location?.pathname;
-  if (!href || !pathname) {
-    return;
-  }
-  const targetPath = normalizePath(pathForRoute(routeId, host.basePath));
-  const currentPath = normalizePath(pathname);
-  const url = new URL(href);
-
-  if (routeId === "chat" && host.sessionKey) {
-    url.searchParams.set("session", host.sessionKey);
-  } else {
-    url.searchParams.delete("session");
-  }
-
-  if (currentPath !== targetPath) {
-    url.pathname = targetPath;
-  }
-
-  updateBrowserHistory(url, replace);
 }
 
 export function syncUrlWithSessionKey(

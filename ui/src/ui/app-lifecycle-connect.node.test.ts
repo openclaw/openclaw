@@ -6,23 +6,27 @@ const {
   applySettingsFromUrlMock,
   connectGatewayMock,
   loadBootstrapMock,
-  enterInitialActiveRouteMock,
+  appRouterStartMock,
   restoreComposerMock,
 } = vi.hoisted(() => ({
   applySettingsFromUrlMock: vi.fn(),
   connectGatewayMock: vi.fn(),
   loadBootstrapMock: vi.fn(),
-  enterInitialActiveRouteMock: vi.fn(),
+  appRouterStartMock: vi.fn(),
   restoreComposerMock: vi.fn<(...args: unknown[]) => boolean>(() => false),
+}));
+
+vi.mock("../app-routes.ts", () => ({
+  appRouter: {
+    subscribe: vi.fn(() => vi.fn()),
+    start: appRouterStartMock,
+    stop: vi.fn(),
+  },
+  routeLoadContext: (host: unknown) => host,
 }));
 
 vi.mock("./app-gateway.ts", () => ({
   connectGateway: connectGatewayMock,
-}));
-
-vi.mock("../app/active-route.ts", () => ({
-  cancelActiveRouteTransition: vi.fn(),
-  enterInitialActiveRoute: enterInitialActiveRouteMock,
 }));
 
 vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
@@ -112,7 +116,7 @@ describe("handleConnected", () => {
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
-    enterInitialActiveRouteMock.mockReset();
+    appRouterStartMock.mockReset();
     restoreComposerMock.mockReset();
     restoreComposerMock.mockReturnValue(false);
     scheduleChatScrollMock.mockReset();
@@ -214,17 +218,17 @@ describe("handleConnected", () => {
     const chatHost = createHost();
 
     handleConnected(chatHost as never);
-    expect(enterInitialActiveRouteMock).toHaveBeenCalledWith(chatHost);
+    expect(appRouterStartMock).toHaveBeenCalledWith(expect.anything(), chatHost.basePath, chatHost);
 
     const nodesHost = createHost();
     nodesHost.routeId = "nodes";
     handleConnected(nodesHost as never);
-    expect(enterInitialActiveRouteMock).toHaveBeenCalledWith(nodesHost);
+    expect(appRouterStartMock).toHaveBeenCalledTimes(2);
 
     const logsHost = createHost();
     logsHost.routeId = "logs";
     handleConnected(logsHost as never);
-    expect(enterInitialActiveRouteMock).toHaveBeenCalledWith(logsHost);
+    expect(appRouterStartMock).toHaveBeenCalledTimes(3);
   });
 
   it("keeps realtime Talk turns pinned in the chat flow", () => {

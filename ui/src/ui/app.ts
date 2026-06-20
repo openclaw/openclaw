@@ -1,12 +1,10 @@
 // Control UI module implements app behavior.
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
-import type { RouteId } from "../app-routes.ts";
-import {
-  loadCron as loadCronInternal,
-  loadOverview as loadOverviewInternal,
-} from "../app/active-route.ts";
+import { appRouter, routeLoadContext, type RouteId } from "../app-routes.ts";
+import type { SettingsHost } from "../app/app-host.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
+import { loadCron as loadCronPage, loadOverview as loadOverviewPage } from "../pages/loaders.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -61,7 +59,6 @@ import {
 import {
   applySettings as applySettingsInternal,
   applyLocalUserIdentity as applyLocalUserIdentityInternal,
-  setRoute as setRouteInternal,
   setTheme as setThemeInternal,
   setThemeMode as setThemeModeInternal,
   syncSessionWithLocation as syncSessionWithLocationInternal,
@@ -216,6 +213,7 @@ export class OpenClawApp extends LitElement {
   readonly i18nController = new I18nController(this);
   clientInstanceId = generateUUID();
   connectGeneration = 0;
+
   @state() settings: UiSettings = loadSettings();
   constructor() {
     super();
@@ -226,9 +224,9 @@ export class OpenClawApp extends LitElement {
   @state() password = "";
   @state() loginShowGatewayToken = false;
   @state() loginShowGatewayPassword = false;
-  @state() routeId: RouteId = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
+  @state() routeId: RouteId = "chat";
   @state() theme: ThemeName = this.settings.theme ?? "claw";
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
@@ -1018,7 +1016,30 @@ export class OpenClawApp extends LitElement {
   }
 
   setRoute(next: RouteId) {
-    setRouteInternal(this as unknown as Parameters<typeof setRouteInternal>[0], next);
+    const location = {
+      pathname: appRouter.pathForRoute(next, this.basePath),
+      search:
+        next === "chat" && this.sessionKey ? `?session=${encodeURIComponent(this.sessionKey)}` : "",
+      hash: "",
+    };
+    const routeState = appRouter.getState();
+    const revalidate = routeState.status === "resolved" && routeState.resolvedRouteId === next;
+    const browserLocation = typeof window === "undefined" ? null : window.location;
+    const sameLocation =
+      (browserLocation?.pathname ?? routeState.resolved?.pathname) === location.pathname &&
+      (browserLocation?.search ?? routeState.resolved?.search) === location.search &&
+      (browserLocation?.hash ?? routeState.resolved?.hash) === location.hash;
+    void appRouter
+      .navigate(
+        next,
+        routeLoadContext(this as unknown as SettingsHost),
+        {
+          history: revalidate && sameLocation ? "none" : "push",
+          revalidate,
+        },
+        location,
+      )
+      .catch(() => undefined);
     if (next !== "chat") {
       this.setChatMobileControlsOpen(false);
     }
@@ -1197,11 +1218,11 @@ export class OpenClawApp extends LitElement {
   }
 
   async loadOverview(opts?: { refresh?: boolean }) {
-    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0], opts);
+    await loadOverviewPage(this as unknown as Parameters<typeof loadOverviewPage>[0], opts);
   }
 
   async loadCron() {
-    await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
+    await loadCronPage(this as unknown as Parameters<typeof loadCronPage>[0]);
   }
 
   async handleAbortChat(opts?: Parameters<typeof handleAbortChatInternal>[1]) {
