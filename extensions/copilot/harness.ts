@@ -95,6 +95,10 @@ type LegacyCopilotSessionBinding = {
 
 type CopilotAttemptSessionBinding = Pick<CopilotSessionBinding, "compatKey" | "sdkSessionId">;
 type DeferredCompactionCleanupOutcome = "aborted" | "completed" | "deadline";
+type DeferredCompactionCleanup = {
+  abort: () => void;
+  sdkSessionId: string;
+};
 
 type CopilotSessionBindingStore = Pick<
   PluginStateSyncKeyedStore<CopilotSessionBinding>,
@@ -427,7 +431,7 @@ export function createCopilotAgentHarness(
   const inFlight = new Set<Promise<unknown>>();
   const deferredCompactionCleanups = new Map<
     string,
-    Map<Promise<DeferredCompactionCleanupOutcome>, () => void>
+    Map<Promise<DeferredCompactionCleanupOutcome>, DeferredCompactionCleanup>
   >();
   // Maps OpenClaw session id (from AgentHarnessAttemptParams.sessionId) to
   // the SDK session id + client that owns it. Populated by
@@ -454,11 +458,12 @@ export function createCopilotAgentHarness(
     abort: () => void;
     cleanup: Promise<DeferredCompactionCleanupOutcome>;
     sessionId: string;
+    sdkSessionId: string;
   }): void {
     const cleanups =
       deferredCompactionCleanups.get(params.sessionId) ??
-      new Map<Promise<DeferredCompactionCleanupOutcome>, () => void>();
-    cleanups.set(params.cleanup, params.abort);
+      new Map<Promise<DeferredCompactionCleanupOutcome>, DeferredCompactionCleanup>();
+    cleanups.set(params.cleanup, { abort: params.abort, sdkSessionId: params.sdkSessionId });
     deferredCompactionCleanups.set(params.sessionId, cleanups);
     void params.cleanup.then(
       () => removeDeferredCompactionCleanup(params.sessionId, params.cleanup),
@@ -480,14 +485,28 @@ export function createCopilotAgentHarness(
     }
   }
 
+  function hasPendingDeferredCompactionCleanup(sessionId: string): boolean {
+    const cleanups = deferredCompactionCleanups.get(sessionId);
+    if (!cleanups) {
+      return false;
+    }
+    const currentSdkSessionId =
+      trackedSessions.get(sessionId)?.sdkSessionId ??
+      lookupStoredBinding(options?.sessionStore, sessionId)?.sdkSessionId;
+    return (
+      currentSdkSessionId !== undefined &&
+      [...cleanups.values()].some((cleanup) => cleanup.sdkSessionId === currentSdkSessionId)
+    );
+  }
+
   async function abortDeferredCompactionCleanups(sessionId: string): Promise<void> {
     const cleanups = deferredCompactionCleanups.get(sessionId);
     if (!cleanups) {
       return;
     }
     const pending = [...cleanups.entries()];
-    for (const [, abort] of pending) {
-      abort();
+    for (const [, cleanup] of pending) {
+      cleanup.abort();
     }
     await Promise.allSettled(pending.map(([cleanup]) => cleanup));
   }
@@ -553,7 +572,7 @@ export function createCopilotAgentHarness(
         const currentCompatKey = computeSessionCompatKey(params);
         const currentCompactKey = computeSessionCompactKey(params);
         const compactionCleanupPending =
-          openclawSessionId !== undefined && deferredCompactionCleanups.has(openclawSessionId);
+          openclawSessionId !== undefined && hasPendingDeferredCompactionCleanup(openclawSessionId);
         const tracked =
           openclawSessionId && !compactionCleanupPending
             ? trackedSessions.get(openclawSessionId)
@@ -635,6 +654,7 @@ export function createCopilotAgentHarness(
                   abort,
                   cleanup,
                   sessionId: openclawSessionId,
+                  sdkSessionId,
                 });
                 // The attempt retains this SDK session until its background
                 // compaction resolves. Preserve its binding for a successful
@@ -730,7 +750,7 @@ export function createCopilotAgentHarness(
           reason: "missing-required-params",
         };
       }
-      if (deferredCompactionCleanups.has(openclawSessionId)) {
+      if (hasPendingDeferredCompactionCleanup(openclawSessionId)) {
         return {
           ok: false,
           compacted: false,
