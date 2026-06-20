@@ -1301,7 +1301,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
       {
         path: ["models", "providers"],
         message:
-          'models.providers.openai-codex is legacy; run "openclaw doctor --fix" to move it to models.providers.openai.',
+          'models.providers.openai-codex is legacy; run "openclaw doctor --fix" to move it to models.providers.openai. After migration, re-establish OAuth credentials with "openclaw models auth login --provider openai".',
         match: (value) => hasAutoFixableLegacyOpenAICodexProvider(value),
       },
       {
