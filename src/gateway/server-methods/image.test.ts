@@ -2,18 +2,14 @@ import { describe, it, expect, vi } from "vitest";
 import { imageHandlers } from "./image.js";
 
 describe("imageHandlers", () => {
-  it("image.providers returns provider list", async () => {
+  it("returns provider list", async () => {
     const mockRespond = vi.fn();
     const mockContext = {
       getRuntimeConfig: () => ({
         models: { providers: {} },
         plugins: { entries: {} },
         auth: { profiles: {} },
-        agents: {
-          defaults: {
-            imageGenerationModel: { providers: {} },
-          },
-        },
+        agents: { defaults: { imageGenerationModel: {} } },
       }),
     };
 
@@ -24,9 +20,7 @@ describe("imageHandlers", () => {
 
     expect(mockRespond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({
-        providers: expect.any(Array),
-      }),
+      expect.objectContaining({ providers: expect.any(Array) }),
     );
   });
 });
