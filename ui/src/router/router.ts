@@ -223,6 +223,10 @@ export function createRouter<
       const currentActive = matches.getActiveMatch();
       if (!sameRoute && currentActive) {
         matches.setCached([...matches.getState().cachedMatches, currentActive]);
+        const currentRoute = compiled.byId.get(currentActive.routeId);
+        if (currentRoute) {
+          loading.scheduleGc(currentActive, currentRoute);
+        }
       }
       matches.setActive([resolvedMatch]);
       matches.setPending([]);

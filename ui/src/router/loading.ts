@@ -14,6 +14,10 @@ export type RouteLoading<TRouteId extends string, TLoadContext, TModule, TData> 
     hookOptions: RouteHookOptions,
     force: boolean,
   ) => Promise<RouteLoadResult<TModule, TData>>;
+  scheduleGc: (
+    match: RouteMatch<TRouteId, TModule, TData>,
+    route: PageDefinition<TRouteId, TLoadContext, TModule, TData>,
+  ) => void;
   clear: () => void;
 };
 
@@ -36,6 +40,9 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
     match: RouteMatch<TRouteId, TModule, TData>,
     route: PageDefinition<TRouteId, TLoadContext, TModule, TData>,
   ) => {
+    if (!matchStore.getCachedMatch(match.id)) {
+      return;
+    }
     const previousTimer = gcTimers.get(match.id);
     if (previousTimer) {
       globalThis.clearTimeout(previousTimer);
@@ -180,6 +187,7 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
 
   return {
     loadRoute,
+    scheduleGc,
     clear() {
       const state = matchStore.getState();
       for (const match of [...state.matches, ...state.pendingMatches, ...state.cachedMatches]) {
