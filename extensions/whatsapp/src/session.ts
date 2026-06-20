@@ -135,9 +135,7 @@ export async function createWaSocket(
   opts: {
     authDir?: string;
     onQr?: (qr: string) => void;
-    /** Baileys getMessage callback for message retry/decryption support. */
     getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
-    /** Baileys cachedGroupMetadata callback to use OpenClaw's group metadata cache. */
     cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
@@ -190,9 +188,6 @@ export async function createWaSocket(
     // Baileys types still model `fetchAgent` as a Node agent even though the
     // runtime path accepts an undici dispatcher for upload fetches.
     fetchAgent: fetchAgent as Agent | undefined,
-    // Baileys retry/decryption and group metadata cache callbacks.
-    // Spread conditionally to avoid overriding Baileys default handlers
-    // (async () => undefined) with undefined.
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
     ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
   });

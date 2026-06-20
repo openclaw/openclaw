@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements monitor behavior.
+import type { WAMessageKey } from "baileys";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
@@ -27,7 +28,13 @@ import {
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
-import { attachWebInboxToSocket, type WhatsAppGroupMetadataCache } from "../inbound/monitor.js";
+import {
+  attachWebInboxToSocket,
+  readWhatsAppBaileysCacheEntry,
+  type WhatsAppBaileysGroupMetadataCache,
+  type WhatsAppBaileysMessageCache,
+  type WhatsAppGroupMetadataCache,
+} from "../inbound/monitor.js";
 import type { WebInboundMessageInput } from "../inbound/types.js";
 import {
   newConnectionId,
@@ -193,10 +200,8 @@ export async function monitorWebChannel(
   >();
   const groupMemberNames = new Map<string, Map<string, string>>();
   const groupMetadataCache: WhatsAppGroupMetadataCache = new Map();
-  // Bounded in-memory message store for Baileys getMessage retry support.
-  const recentMessageKeys = new Map<string, import("baileys").proto.IMessage>();
-  // Baileys-level group metadata cache for cachedGroupMetadata socket option.
-  const baileysGroupMetaCache = new Map<string, import("baileys").GroupMetadata>();
+  const recentMessageKeys: WhatsAppBaileysMessageCache = new Map();
+  const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache = new Map();
   const echoTracker = createEchoTracker({ maxItems: 100, logVerbose });
 
   const sleep =
@@ -272,13 +277,14 @@ export async function monitorWebChannel(
       try {
         connection = await controller.openConnection({
           connectionId,
-          getMessage: async (key: import("baileys").WAMessageKey) => {
-            if (!key.id || !key.remoteJid) {
-              return undefined;
-            }
-            return recentMessageKeys.get(`${key.remoteJid}:${key.id}`);
+          getMessage: async (key: WAMessageKey) =>
+            key.id && key.remoteJid
+              ? readWhatsAppBaileysCacheEntry(recentMessageKeys, `${key.remoteJid}:${key.id}`)
+              : undefined,
+          cachedGroupMetadata: async (jid: string) => {
+            const meta = readWhatsAppBaileysCacheEntry(baileysGroupMetaCache, jid);
+            return meta?.participants?.length ? meta : undefined;
           },
-          cachedGroupMetadata: async (jid: string) => baileysGroupMetaCache.get(jid),
           createListener: async ({ sock, connection: connectionLocal }) => {
             const onMessage = createWebOnMessageHandler({
               cfg,

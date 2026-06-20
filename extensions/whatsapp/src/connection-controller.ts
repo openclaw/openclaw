@@ -1,5 +1,5 @@
 // Whatsapp plugin module implements connection controller behavior.
-import type { WASocket } from "baileys";
+import type { GroupMetadata, WASocket, WAMessageKey, proto } from "baileys";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -528,12 +528,8 @@ export class WhatsAppConnectionController {
     }) => Promise<ManagedWhatsAppListener>;
     onHeartbeat?: (snapshot: WhatsAppConnectionSnapshot) => void;
     onWatchdogTimeout?: (snapshot: WhatsAppConnectionSnapshot) => void;
-    /** Baileys getMessage callback for message retry/decryption support. */
-    getMessage?: (
-      key: import("baileys").WAMessageKey,
-    ) => Promise<import("baileys").proto.IMessage | undefined>;
-    /** Baileys cachedGroupMetadata callback. */
-    cachedGroupMetadata?: (jid: string) => Promise<import("baileys").GroupMetadata | undefined>;
+    getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
+    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
   }): Promise<WhatsAppLiveConnection> {
     if (this.current) {
       await this.closeCurrentConnection();
