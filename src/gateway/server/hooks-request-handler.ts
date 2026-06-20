@@ -1,5 +1,4 @@
-// Hook request handler validates hook tokens, applies mappings, dedupes requests, and dispatches wake or agent work.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
@@ -38,6 +37,16 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
+const LOG_FIELD_MAX_LENGTH = 128;
+const BODY_BYTES_LOG_MAX = 1_000_000;
+
+type HookRejectReason =
+  | "body-read"
+  | "direct-validation"
+  | "agent-policy"
+  | "agent-session-key"
+  | "mapping-validation"
+  | "mapping-dispatch";
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -67,6 +76,85 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
+}
+
+function sanitizeHookLogValue(value: string | undefined, maxLength = LOG_FIELD_MAX_LENGTH): string {
+  const raw = replaceHookLogControlCharacters(value ?? "")
+    .trim()
+    .replace(/\s+/gu, "_");
+  if (!raw) {
+    return "n/a";
+  }
+  return raw.length <= maxLength ? raw : raw.slice(0, maxLength);
+}
+
+function replaceHookLogControlCharacters(value: string): string {
+  let result = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    if (
+      codePoint !== undefined &&
+      (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+    ) {
+      result += " ";
+      continue;
+    }
+    result += char;
+  }
+  return result;
+}
+
+function firstHeaderValue(headers: IncomingMessage["headers"], key: string): string | undefined {
+  const value = headers[key];
+  if (typeof value === "string") {
+    return value;
+  }
+  return Array.isArray(value) ? value.at(0) : undefined;
+}
+
+function inferHookBodyType(payload: unknown): string {
+  if (payload === null) {
+    return "null";
+  }
+  if (Array.isArray(payload)) {
+    return "array";
+  }
+  return typeof payload;
+}
+
+function resolveHookLogRequestId(req: IncomingMessage): string {
+  return sanitizeHookLogValue(
+    firstHeaderValue(req.headers, "x-request-id") ??
+      firstHeaderValue(req.headers, "request-id") ??
+      randomUUID(),
+  );
+}
+
+function resolveHookBodyBytes(req: IncomingMessage): number | undefined {
+  const raw = firstHeaderValue(req.headers, "content-length");
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return Math.min(parsed, BODY_BYTES_LOG_MAX);
+}
+
+function logHookRejection(params: {
+  logHooks: SubsystemLogger;
+  req: IncomingMessage;
+  subPath: string;
+  status: number;
+  reason: HookRejectReason;
+  bodyType: string;
+}) {
+  const bodyBytes = resolveHookBodyBytes(params.req);
+  const bodyBytesField = bodyBytes === undefined ? "" : ` body-bytes=${bodyBytes}`;
+  params.logHooks.warn(
+    `hook rejected path=${sanitizeHookLogValue(params.subPath || "/")} code=${params.status} reason=${params.reason} method=${sanitizeHookLogValue(params.req.method, 16)} content-type=${sanitizeHookLogValue(firstHeaderValue(params.req.headers, "content-type"), 64)} body-type=${sanitizeHookLogValue(params.bodyType)}${bodyBytesField} request-id=${resolveHookLogRequestId(params.req)}`,
+  );
 }
 
 function resolveMappedHookExternalContentSource(params: {
@@ -225,6 +313,16 @@ export function createHooksRequestHandler(
     hookAuthLimiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
 
     const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
+    const rejectJson = (
+      status: number,
+      reason: HookRejectReason,
+      error: string,
+      bodyType: string,
+    ): true => {
+      logHookRejection({ logHooks, req, subPath, status, reason, bodyType });
+      sendJson(res, status, { ok: false, error });
+      return true;
+    };
     if (!subPath) {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -240,10 +338,10 @@ export function createHooksRequestHandler(
           : body.error === "request body timeout"
             ? 408
             : 400;
-      sendJson(res, status, { ok: false, error: body.error });
-      return true;
+      return rejectJson(status, "body-read", body.error, "unparsed");
     }
 
+    const requestBodyType = inferHookBodyType(body.value);
     const payload = typeof body.value === "object" && body.value !== null ? body.value : {};
     const headers = normalizeHookHeaders(req);
     const idempotencyKey = resolveHookIdempotencyKey({
@@ -254,6 +352,7 @@ export function createHooksRequestHandler(
     const resolveDispatchSessionKeyOrRespond = (
       sessionKeyValue: string,
       targetAgentId: string,
+      reason: "agent-session-key" | "mapping-dispatch",
     ): string | null => {
       const dispatchSessionKey = normalizeHookDispatchSessionKey({
         sessionKey: sessionKeyValue,
@@ -261,7 +360,7 @@ export function createHooksRequestHandler(
       });
       const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
       if (allowedPrefixes && !isSessionKeyAllowedByPrefix(dispatchSessionKey, allowedPrefixes)) {
-        sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+        rejectJson(400, reason, getHookSessionKeyPrefixError(allowedPrefixes), requestBodyType);
         return null;
       }
       return dispatchSessionKey;
@@ -270,8 +369,7 @@ export function createHooksRequestHandler(
     if (subPath === "wake") {
       const normalized = normalizeWakePayload(payload as Record<string, unknown>);
       if (!normalized.ok) {
-        sendJson(res, 400, { ok: false, error: normalized.error });
-        return true;
+        return rejectJson(400, "direct-validation", normalized.error, requestBodyType);
       }
       dispatchWakeHook(normalized.value);
       sendJson(res, 200, { ok: true, mode: normalized.value.mode });
@@ -281,12 +379,10 @@ export function createHooksRequestHandler(
     if (subPath === "agent") {
       const normalized = normalizeAgentPayload(payload as Record<string, unknown>);
       if (!normalized.ok) {
-        sendJson(res, 400, { ok: false, error: normalized.error });
-        return true;
+        return rejectJson(400, "direct-validation", normalized.error, requestBodyType);
       }
       if (!isHookAgentAllowed(hooksConfig, normalized.value.agentId)) {
-        sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
-        return true;
+        return rejectJson(400, "agent-policy", getHookAgentPolicyError(), requestBodyType);
       }
       const sessionKey = resolveHookSessionKey({
         hooksConfig,
@@ -294,8 +390,7 @@ export function createHooksRequestHandler(
         sessionKey: normalized.value.sessionKey,
       });
       if (!sessionKey.ok) {
-        sendJson(res, 400, { ok: false, error: sessionKey.error });
-        return true;
+        return rejectJson(400, "agent-session-key", sessionKey.error, requestBodyType);
       }
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
       const effectiveTargetAgentId = resolveEffectiveHookTargetAgentId(
@@ -329,6 +424,7 @@ export function createHooksRequestHandler(
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
         sessionKey.value,
         effectiveTargetAgentId,
+        "agent-session-key",
       );
       if (dispatchSessionKey === null) {
         return true;
@@ -356,8 +452,7 @@ export function createHooksRequestHandler(
         });
         if (mapped) {
           if (!mapped.ok) {
-            sendJson(res, 400, { ok: false, error: mapped.error });
-            return true;
+            return rejectJson(400, "mapping-validation", mapped.error, requestBodyType);
           }
           if (mapped.action === null) {
             res.statusCode = 204;
@@ -374,12 +469,10 @@ export function createHooksRequestHandler(
           }
           const channel = resolveHookChannel(mapped.action.channel);
           if (!channel) {
-            sendJson(res, 400, { ok: false, error: getHookChannelError() });
-            return true;
+            return rejectJson(400, "mapping-dispatch", getHookChannelError(), requestBodyType);
           }
           if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
-            sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
-            return true;
+            return rejectJson(400, "mapping-dispatch", getHookAgentPolicyError(), requestBodyType);
           }
           const sessionKey = resolveHookSessionKey({
             hooksConfig,
@@ -388,8 +481,7 @@ export function createHooksRequestHandler(
             sessionKey: mapped.action.sessionKey,
           });
           if (!sessionKey.ok) {
-            sendJson(res, 400, { ok: false, error: sessionKey.error });
-            return true;
+            return rejectJson(400, "mapping-dispatch", sessionKey.error, requestBodyType);
           }
           const targetAgentId = resolveHookTargetAgentId(hooksConfig, mapped.action.agentId);
           const effectiveTargetAgentId = resolveEffectiveHookTargetAgentId(
@@ -399,6 +491,7 @@ export function createHooksRequestHandler(
           const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
             sessionKey.value,
             effectiveTargetAgentId,
+            "mapping-dispatch",
           );
           if (dispatchSessionKey === null) {
             return true;

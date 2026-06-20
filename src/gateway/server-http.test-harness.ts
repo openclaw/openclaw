@@ -217,6 +217,8 @@ export function createHooksHandler(
   params:
     | string
     | {
+        logHooks?: HooksHandlerDeps["logHooks"];
+        getHooksConfig?: HooksHandlerDeps["getHooksConfig"];
         dispatchWakeHook?: HooksHandlerDeps["dispatchWakeHook"];
         dispatchAgentHook?: HooksHandlerDeps["dispatchAgentHook"];
         bindHost?: string;
@@ -224,16 +226,19 @@ export function createHooksHandler(
       },
 ) {
   const options = typeof params === "string" ? { bindHost: params } : params;
-  return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
-    bindHost: options.bindHost ?? "127.0.0.1",
-    port: 18789,
-    logHooks: {
+  const logHooks: HooksHandlerDeps["logHooks"] =
+    options.logHooks ??
+    ({
       warn: vi.fn(),
       debug: vi.fn(),
       info: vi.fn(),
       error: vi.fn(),
-    } as unknown as ReturnType<typeof createSubsystemLogger>,
+    } as unknown as ReturnType<typeof createSubsystemLogger>);
+  return createHooksRequestHandler({
+    getHooksConfig: options.getHooksConfig ?? (() => createHooksConfig()),
+    bindHost: options.bindHost ?? "127.0.0.1",
+    port: 18789,
+    logHooks,
     getClientIpConfig: options.getClientIpConfig,
     dispatchWakeHook: options.dispatchWakeHook ?? (() => {}),
     dispatchAgentHook: options.dispatchAgentHook ?? (() => "run-1"),
