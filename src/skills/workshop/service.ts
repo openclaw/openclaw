@@ -22,6 +22,7 @@ import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-ta
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillContent, scanSource } from "../security/scanner.js";
 import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "./config.js";
+import { assertCreateProposalDoesNotPatchExistingSkills } from "./create-target-guard.js";
 import {
   readProposalFrontmatter,
   renderProposalMarkdown,
@@ -252,6 +253,10 @@ export async function proposeCreateSkill(
   if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
     throw new Error(`Skill already exists at ${target.skillFile}.`);
   }
+  assertCreateProposalDoesNotPatchExistingSkills({
+    workspaceDir: input.workspaceDir,
+    content: input.content,
+  });
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
   const now = new Date().toISOString();
@@ -413,6 +418,12 @@ export async function reviseSkillProposal(
         ? await readProposalSupportFiles(record)
         : prepareSkillProposalSupportFiles(input.supportFiles);
     assertProposalContentWithinLimit(input.content, config.maxSkillBytes);
+    if (record.kind === "create") {
+      assertCreateProposalDoesNotPatchExistingSkills({
+        workspaceDir: input.workspaceDir,
+        content: input.content,
+      });
+    }
     const supportFileMetadata =
       supportFiles.length > 0
         ? await buildSupportFileMetadata(

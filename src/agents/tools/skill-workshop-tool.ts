@@ -55,7 +55,7 @@ const SkillWorkshopToolSchema = Type.Object(
   {
     action: stringEnum(SKILL_WORKSHOP_ACTIONS, {
       description:
-        "create for a new skill proposal, update for an existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery, apply/reject/quarantine for explicit proposal lifecycle actions.",
+        "create for a new skill proposal that does not target existing skills/<name>/ paths, update for an existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery, apply/reject/quarantine for explicit proposal lifecycle actions.",
     }),
     proposal_id: Type.Optional(
       Type.String({
@@ -95,7 +95,7 @@ const SkillWorkshopToolSchema = Type.Object(
     proposal_content: Type.Optional(
       Type.String({
         description:
-          "Full proposed procedure markdown for action=create, action=update, or action=revise. It will be stored as PROPOSAL.md. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
+          "Full proposed procedure markdown for action=create, action=update, or action=revise. action=create rejects proposal_content that references existing workspace skills/<name>/ paths; use action=update with skill_name for those. It will be stored as PROPOSAL.md. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
       }),
     ),
     support_files: Type.Optional(

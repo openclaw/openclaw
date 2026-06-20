@@ -142,6 +142,70 @@ describe("skill workshop proposals", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
   });
 
+  it("rejects create proposals that point at existing workspace skill paths", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "foo"),
+      name: "foo",
+      description: "Existing Foo skill",
+      body: "# Foo\n\nExisting workflow.\n",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "bar"),
+      name: "bar",
+      description: "Existing Bar skill",
+      body: "# Bar\n\nExisting workflow.\n",
+    });
+
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        name: "foo-hardening",
+        description: "Improve existing skill workflows",
+        content:
+          "# Foo hardening\n\n" +
+          "| Target | Change |\n" +
+          "| --- | --- |\n" +
+          "| `skills/foo/SKILL.md` | Add stronger preflight rules. |\n" +
+          "| `skills/bar/scripts/new-helper.js` | Add a helper script. |\n",
+      }),
+    ).rejects.toThrow(
+      "action=create cannot propose changes to existing workspace skills: skills/bar/, skills/foo/",
+    );
+    await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+  });
+
+  it("rejects revisions that turn create proposals toward existing workspace skill paths", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "foo"),
+      name: "foo",
+      description: "Existing Foo skill",
+      body: "# Foo\n\nExisting workflow.\n",
+    });
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "new-helper",
+      description: "New helper workflow",
+      content: "# New Helper\n\nUse this as a new skill.\n",
+    });
+
+    await expect(
+      reviseSkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        content:
+          "# Foo hardening\n\n" +
+          "Patch the existing `skills/foo/SKILL.md` instead of creating a sibling.\n",
+      }),
+    ).rejects.toThrow(
+      "action=create cannot propose changes to existing workspace skills: skills/foo/",
+    );
+    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: { proposedVersion: "v1" },
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "applies updates through opted-in trusted workspace skills symlink targets",
     async () => {

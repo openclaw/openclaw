@@ -28,6 +28,10 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
 - **Workspace scoped:** creates target the workspace `skills/` root. Updates
   are allowed only for writable workspace skills.
 - **No clobber:** create fails if the target skill already exists.
+- **No wrong-target creates:** create also fails when the proposal content
+  references an existing workspace path such as `skills/<name>/SKILL.md` or
+  `skills/<name>/scripts/...`. Use update for existing skills, and split
+  multi-skill changes into separate update proposals.
 - **Hash bound:** update proposals bind to the current target hash and become
   stale if the live skill changes before apply.
 - **Scanner gated:** apply reruns scanning before writing.
@@ -166,6 +170,12 @@ The model uses `skill_workshop`:
 ```text
 action: create | update | revise | list | inspect | apply | reject | quarantine
 ```
+
+Use `action=create` only for a new workspace skill. If the proposed markdown
+references an existing workspace skill path such as `skills/<name>/SKILL.md` or
+`skills/<name>/scripts/...`, use `action=update` with `skill_name` for that
+existing skill. Split multi-skill changes into one update proposal per live
+skill.
 
 Agents must use `skill_workshop` for generated skill work. They must not create
 or change proposal files through `write`, `edit`, `exec`, shell commands, or
