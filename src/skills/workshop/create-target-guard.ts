@@ -1,15 +1,25 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveOsHomeRelativePath } from "../../infra/home-dir.js";
-import { isPathInside } from "../../infra/path-safety.js";
+import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 
 // Create proposals are for new skills; existing workspace skill paths must be
 // updated through action=update so the live target hash/rollback guard applies.
-const WORKSPACE_SKILL_PATH_REFERENCE_PATTERN =
-  /(?:^|[\s"'`([{|<>])((?:(?:\.\/|[ab]\/)?(?:skills|\.agents\/skills))\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
-const ABSOLUTE_WORKSPACE_SKILL_PATH_REFERENCE_PATTERN =
-  /(?:^|[\s"'`([{|<>])((?:~(?=\/)|\/)[^\s"'`)\]}|<>]*\/skills\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
+const PATH_REFERENCE_BOUNDARY_CHARS = new Set([
+  " ",
+  "\n",
+  "\r",
+  "\t",
+  '"',
+  "'",
+  "`",
+  "(",
+  "[",
+  "{",
+  "|",
+  "<",
+  ">",
+]);
 
 export function assertCreateProposalDoesNotPatchExistingSkills(params: {
   workspaceDir: string;
@@ -33,15 +43,15 @@ function collectExistingWorkspaceSkillRefs(params: {
   content: string;
 }): string[] {
   const workspaceDir = path.resolve(params.workspaceDir);
-  const references = collectWorkspaceSkillPathReferences(params.content, workspaceDir);
-  if (references.length === 0) {
+  const normalizedContent = normalizePathText(params.content);
+  if (!normalizedContent.includes("skills/")) {
     return [];
   }
   const workspaceSkillEntries = loadWorkspaceSkillEntries(workspaceDir, {
     config: params.config,
     workspaceOnly: true,
   });
-  const projectAgentSkillEntries = referencesIncludeProjectAgentSkills(references, workspaceDir)
+  const projectAgentSkillEntries = normalizedContent.includes(".agents/skills")
     ? loadWorkspaceSkillEntries(workspaceDir, { config: params.config }).filter(
         (entry) => entry.skill.source === "agents-skills-project",
       )
@@ -50,70 +60,92 @@ function collectExistingWorkspaceSkillRefs(params: {
     .map((entry) => path.resolve(entry.skill.baseDir))
     .toSorted((a, b) => b.length - a.length);
   const refs = new Set<string>();
-  for (const reference of references) {
-    const skillDir = skillDirs.find(
-      (candidate) => reference === candidate || isPathInside(candidate, reference),
-    );
-    if (skillDir) {
+  for (const skillDir of skillDirs) {
+    if (contentReferencesExistingSkillDir(normalizedContent, workspaceDir, skillDir)) {
       refs.add(formatWorkspaceSkillRef(workspaceDir, skillDir));
     }
   }
   return [...refs].sort((a, b) => a.localeCompare(b));
 }
 
-function collectWorkspaceSkillPathReferences(content: string, workspaceDir: string): string[] {
-  const references = new Set<string>();
-  const normalizedContent = content.replace(/\\/g, "/");
-  for (const match of normalizedContent.matchAll(WORKSPACE_SKILL_PATH_REFERENCE_PATTERN)) {
-    const reference = resolveWorkspacePathReference(workspaceDir, match[1] ?? "");
-    if (reference) {
-      references.add(reference);
-    }
-  }
-  for (const match of normalizedContent.matchAll(ABSOLUTE_WORKSPACE_SKILL_PATH_REFERENCE_PATTERN)) {
-    const reference = resolveWorkspacePathReference(workspaceDir, match[1] ?? "");
-    if (reference) {
-      references.add(reference);
-    }
-  }
-  return [...references].sort((a, b) => a.localeCompare(b));
-}
-
-function resolveWorkspacePathReference(workspaceDir: string, rawReference: string): string | null {
-  const reference = rawReference.replace(/^(?:\.\/|[ab]\/)/, "");
-  if (reference.startsWith("~/") || path.isAbsolute(reference)) {
-    const resolved = reference.startsWith("~/")
-      ? resolveOsHomeRelativePath(reference)
-      : path.resolve(reference);
-    return resolved === workspaceDir || isPathInside(workspaceDir, resolved) ? resolved : null;
-  }
-  const parts = reference.split("/");
-  const isProjectAgentSkill = parts[0] === ".agents" && parts[1] === "skills";
-  if (isProjectAgentSkill ? parts.length < 4 : parts[0] !== "skills" || parts.length < 3) {
-    return null;
-  }
-  if (
-    parts.some((part, index) => {
-      if (isProjectAgentSkill && index === 0 && part === ".agents") {
-        return false;
-      }
-      return !part || part === "." || part === ".." || part.startsWith(".");
-    })
-  ) {
-    return null;
-  }
-  return path.resolve(workspaceDir, ...parts);
-}
-
-function referencesIncludeProjectAgentSkills(
-  references: readonly string[],
+function contentReferencesExistingSkillDir(
+  normalizedContent: string,
   workspaceDir: string,
+  skillDir: string,
 ): boolean {
-  const projectAgentSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
-  return references.some(
-    (reference) =>
-      reference === projectAgentSkillsDir || isPathInside(projectAgentSkillsDir, reference),
-  );
+  for (const referencePrefix of skillReferencePrefixes(workspaceDir, skillDir)) {
+    if (hasBoundedReference(normalizedContent, referencePrefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function skillReferencePrefixes(workspaceDir: string, skillDir: string): string[] {
+  const relativePrefix = formatWorkspaceSkillRef(workspaceDir, skillDir);
+  const absolutePrefix = ensureTrailingSlash(toPortablePath(skillDir));
+  return uniqueStrings([
+    relativePrefix,
+    `./${relativePrefix}`,
+    `a/${relativePrefix}`,
+    `b/${relativePrefix}`,
+    absolutePrefix,
+    ...homeRelativeSkillReferencePrefixes(absolutePrefix),
+    ...driveLetterSkillReferencePrefixes(absolutePrefix),
+  ]);
+}
+
+function homeRelativeSkillReferencePrefixes(absolutePrefix: string): string[] {
+  const home = resolveOsHomeDir();
+  if (!home) {
+    return [];
+  }
+  const homePrefix = ensureTrailingSlash(toPortablePath(path.resolve(home)));
+  return absolutePrefix.startsWith(homePrefix)
+    ? [`~/${absolutePrefix.slice(homePrefix.length)}`]
+    : [];
+}
+
+function driveLetterSkillReferencePrefixes(absolutePrefix: string): string[] {
+  if (/^[A-Za-z]:\//u.test(absolutePrefix)) {
+    const alternateCase =
+      absolutePrefix[0] === absolutePrefix[0].toUpperCase()
+        ? absolutePrefix[0].toLowerCase()
+        : absolutePrefix[0].toUpperCase();
+    return [`${alternateCase}${absolutePrefix.slice(1)}`];
+  }
+  return absolutePrefix.startsWith("/") ? [`C:${absolutePrefix}`] : [];
+}
+
+function hasBoundedReference(content: string, referencePrefix: string): boolean {
+  let index = content.indexOf(referencePrefix);
+  while (index !== -1) {
+    if (hasReferenceBoundary(content, index)) {
+      return true;
+    }
+    index = content.indexOf(referencePrefix, index + 1);
+  }
+  return false;
+}
+
+function hasReferenceBoundary(content: string, index: number): boolean {
+  return index === 0 || PATH_REFERENCE_BOUNDARY_CHARS.has(content[index - 1] ?? "");
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value : `${value}/`;
+}
+
+function normalizePathText(content: string): string {
+  return content.replace(/\\/g, "/");
+}
+
+function toPortablePath(filePath: string): string {
+  return filePath.split(path.sep).join("/");
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
 }
 
 function formatWorkspaceSkillRef(workspaceDir: string, skillDir: string): string {

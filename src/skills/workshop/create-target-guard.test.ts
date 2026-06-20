@@ -74,7 +74,7 @@ describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
 
   it("rejects prompted absolute and home-relative existing workspace skill refs", async () => {
     const homeDir = await tempDirs.make("openclaw-skill-workshop-create-target-home-");
-    const workspaceDir = path.join(homeDir, "workspace");
+    const workspaceDir = path.join(homeDir, "Open Claw", "workspace");
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "foo"),
       name: "foo",
@@ -96,7 +96,7 @@ describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
       expect(() =>
         assertCreateProposalDoesNotPatchExistingSkills({
           workspaceDir,
-          content: "Change `~/workspace/skills/foo/SKILL.md`.",
+          content: "Change `~/Open Claw/workspace/skills/foo/SKILL.md`.",
         }),
       ).toThrow("action=create cannot propose changes to existing workspace skills: skills/foo/");
     } finally {
@@ -129,15 +129,25 @@ describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
 
   it("rejects prompted absolute paths with native Windows separators", async () => {
     const workspaceDir = await makeWorkspaceWithSkills(workspaceSkills);
-    const absoluteSkillFile = path
+    const backslashSkillFile = path
       .join(workspaceDir, "skills", "foo", "SKILL.md")
       .split(path.sep)
       .join("\\");
+    const driveLetterSkillFile = `C:${path
+      .join(workspaceDir, "skills", "foo", "SKILL.md")
+      .split(path.sep)
+      .join("/")}`;
 
     expect(() =>
       assertCreateProposalDoesNotPatchExistingSkills({
         workspaceDir,
-        content: `<location>${absoluteSkillFile}</location>`,
+        content: `<location>${backslashSkillFile}</location>`,
+      }),
+    ).toThrow("action=create cannot propose changes to existing workspace skills: skills/foo/");
+    expect(() =>
+      assertCreateProposalDoesNotPatchExistingSkills({
+        workspaceDir,
+        content: `<location>${driveLetterSkillFile}</location>`,
       }),
     ).toThrow("action=create cannot propose changes to existing workspace skills: skills/foo/");
   });
