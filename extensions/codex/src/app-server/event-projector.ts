@@ -196,6 +196,7 @@ export class CodexAppServerEventProjector {
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
+  private streamedPartialAssistantItemId: string | undefined;
   private completedTurn: CodexTurn | undefined;
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
@@ -522,19 +523,26 @@ export class CodexAppServerEventProjector {
     if (this.isCommentaryAssistantItem(itemId)) {
       this.emitCommentaryProgress({ itemId, text });
     } else {
+      const replace =
+        this.streamedPartialAssistantItemId !== undefined &&
+        this.streamedPartialAssistantItemId !== itemId;
+      this.streamedPartialAssistantItemId = itemId;
+      const streamPayload = {
+        text,
+        delta,
+        ...(replace ? { replace: true as const } : {}),
+      };
       this.emitAgentEvent({
         stream: "assistant",
-        data: { text, delta },
+        data: streamPayload,
       });
-      await this.params.onPartialReply?.({ text, delta });
+      await this.params.onPartialReply?.(streamPayload);
     }
     // Stream non-commentary assistant deltas as partial replies and assistant
     // agent events so live surfaces (TUI, WebChat) render incremental answer
-    // text via gateway emitChatDelta. Older Codex app-servers tag the terminal
-    // item with phase "final_answer", but newer builds may omit that phase
-    // mid-stream, so gating on it silently disabled streaming entirely.
-    // Commentary items stay progress-only, and turn completion still selects the
-    // final user-visible reply, so any superseded intermediate item is replaced.
+    // text via gateway emitChatDelta. When Codex switches to a new non-commentary
+    // item, mark the first delta with replace so append-oriented onPartialReply
+    // consumers do not concatenate superseded coordination text.
   }
 
   private async handleReasoningDelta(

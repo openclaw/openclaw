@@ -372,6 +372,35 @@ describe("CodexAppServerEventProjector", () => {
     ]);
   });
 
+  it("marks partial replacement when an unphased intermediate item is superseded by a final item", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    await projector.handleNotification(agentMessageDelta("coordination ", "msg-intermediate"));
+    await projector.handleNotification(agentMessageDelta("draft", "msg-intermediate"));
+    await projector.handleNotification(agentMessageDelta("final ", "msg-final"));
+    await projector.handleNotification(agentMessageDelta("answer", "msg-final"));
+
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "coordination ", delta: "coordination " },
+      { text: "coordination draft", delta: "draft" },
+      { text: "final ", delta: "final ", replace: true },
+      { text: "final answer", delta: "answer" },
+    ]);
+    expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
+      { stream: "assistant", data: { text: "coordination ", delta: "coordination " } },
+      { stream: "assistant", data: { text: "coordination draft", delta: "draft" } },
+      { stream: "assistant", data: { text: "final ", delta: "final ", replace: true } },
+      { stream: "assistant", data: { text: "final answer", delta: "answer" } },
+    ]);
+  });
+
   it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {
     const params = await createParams();
     const projector = await createProjector({
@@ -1072,9 +1101,16 @@ describe("CodexAppServerEventProjector", () => {
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
     // Intermediate (non-commentary) deltas stream live and are then superseded by
     // the final item; turn completion still keeps them out of the persisted reply.
-    expect(onPartialReply.mock.calls.map((call) => call[0]?.text)).toEqual([
-      "checking thread context; then post a tight progress reply here.",
-      "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      {
+        text: "checking thread context; then post a tight progress reply here.",
+        delta: "checking thread context; then post a tight progress reply here.",
+      },
+      {
+        text: "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+        delta: "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+        replace: true,
+      },
     ]);
     expect(result.assistantTexts).toEqual([
       "release fixes first. please drop affected PRs, failing checks, and blockers here.",
