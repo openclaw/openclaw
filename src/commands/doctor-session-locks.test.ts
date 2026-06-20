@@ -237,6 +237,9 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(lock?.staleReasons).toEqual(["too-old"]);
+    expect(sessionLockToHealthFinding(lock!).fixHint).toBe(
+      "OpenClaw is preserving this live owned lock; inspect the owning process if it appears stuck.",
+    );
     expect(sessionLockToRepairEffect(lock!)).toEqual({
       kind: "state",
       action: "would-preserve-report-only-stale-session-lock",

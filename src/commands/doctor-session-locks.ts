@@ -15,6 +15,13 @@ import { shortenHomePath } from "../utils.js";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
 
+function isReportOnlyStaleLock(lock: SessionLockInspection): boolean {
+  return (
+    lock.staleReasons.length > 0 &&
+    lock.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))
+  );
+}
+
 function formatAge(ageMs: number | null): string {
   if (ageMs === null) {
     return "unknown";
@@ -69,7 +76,9 @@ export async function detectStaleSessionLocks(params?: {
 export function sessionLockToHealthFinding(lock: SessionLockInspection): HealthFinding {
   const fixHint = lock.removable
     ? 'Run "openclaw doctor --fix" to remove this stale lock file automatically.'
-    : 'Run "openclaw doctor --fix" after the cleanup grace period if this stale lock remains.';
+    : isReportOnlyStaleLock(lock)
+      ? "OpenClaw is preserving this live owned lock; inspect the owning process if it appears stuck."
+      : 'Run "openclaw doctor --fix" after the cleanup grace period if this stale lock remains.';
   return {
     checkId: SESSION_LOCKS_CHECK_ID,
     severity: "warning",
@@ -82,8 +91,7 @@ export function sessionLockToHealthFinding(lock: SessionLockInspection): HealthF
 export function sessionLockToRepairEffect(lock: SessionLockInspection): HealthRepairEffect {
   const action = lock.removable
     ? "would-remove-stale-session-lock"
-    : lock.staleReasons.length > 0 &&
-        lock.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))
+    : isReportOnlyStaleLock(lock)
       ? "would-preserve-report-only-stale-session-lock"
       : "would-preserve-mtime-gated-stale-session-lock";
   return {
