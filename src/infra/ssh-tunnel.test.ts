@@ -31,9 +31,13 @@ describe("parseSshTarget", () => {
   });
 
   it("rejects hostnames with stray leading or trailing colons", () => {
+    // Default-port branch: the whole host part keeps the stray colon.
     expect(parseSshTarget("host:")).toBeNull();
     expect(parseSshTarget(":22")).toBeNull();
     expect(parseSshTarget("user@:22")).toBeNull();
     expect(parseSshTarget("user@host:")).toBeNull();
+    // Explicit-port branch: the port split slices a stray colon into the host.
+    expect(parseSshTarget("host::22")).toBeNull();
+    expect(parseSshTarget(":host:22")).toBeNull();
   });
 });
