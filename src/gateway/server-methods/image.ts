@@ -6,25 +6,19 @@ import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 /**
- * Check if a provider has generic config (auth profile, model config, plugin config, or env var).
+ * Check if a provider has generic config (auth profile, model config, plugin config).
  * Reuses the same logic as CLI capability-cli.ts for consistency.
  */
 function providerHasGenericConfig(cfg: OpenClawConfig, providerId: string): boolean {
   const modelsProviders = (cfg.models?.providers ?? {}) as Record<string, unknown>;
   const pluginEntries = (cfg.plugins?.entries ?? {}) as Record<string, { config?: unknown }>;
-  const imageProviders = (cfg.agents?.defaults?.imageGenerationModel?.providers ?? {}) as Record<
-    string,
-    unknown
-  >;
   return (
     // Has auth profile
     Object.keys(cfg.auth?.profiles ?? {}).some((key) => key.startsWith(providerId)) ||
     // Has model config
     Boolean(modelsProviders[providerId]) ||
     // Has plugin config
-    Boolean(pluginEntries[providerId]?.config) ||
-    // Has image model config
-    Boolean(imageProviders[providerId])
+    Boolean(pluginEntries[providerId]?.config)
   );
 }
 
@@ -33,12 +27,22 @@ function providerHasGenericConfig(cfg: OpenClawConfig, providerId: string): bool
  * Uses agents.defaults.imageGenerationModel.primary if set.
  */
 function resolveActiveImageProvider(cfg: OpenClawConfig): string | null {
-  const primary = cfg.agents?.defaults?.imageGenerationModel?.primary;
+  const imageConfig = cfg.agents?.defaults?.imageGenerationModel;
+  if (!imageConfig) return null;
+
+  // Handle string format like "openai" or "openai/dall-e-3"
+  if (typeof imageConfig === "string") {
+    const [providerId] = imageConfig.split("/");
+    return providerId || imageConfig;
+  }
+
+  // Handle object format with primary field
+  const primary = imageConfig.primary;
   if (primary) {
-    // Parse "provider/model" or just "provider"
     const [providerId] = primary.split("/");
     return providerId || primary;
   }
+
   return null;
 }
 
