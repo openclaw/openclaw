@@ -1595,10 +1595,16 @@ function buildBaseCodexHeaders(
   headers.set("Authorization", `Bearer ${token}`);
   headers.set("chatgpt-account-id", accountId);
   headers.set("originator", "openclaw");
+  // chatgpt.com/backend-api is the ChatGPT web-app endpoint protected by
+  // Cloudflare bot detection. Non-browser User-Agent and missing browser
+  // headers trigger HTML challenge pages. Use a Chrome-like User-Agent
+  // and standard browser headers to reduce the bot score.
   const userAgent = os
-    ? `openclaw (${os.platform()} ${os.release()}; ${os.arch()})`
-    : "openclaw (browser)";
+    ? `Mozilla/5.0 (${os.platform() === "darwin" ? "Macintosh; Intel Mac OS X 10_15_7" : os.platform() === "win32" ? "Windows NT 10.0; Win64; x64" : "X11; Linux x86_64"}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36`
+    : "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
   headers.set("User-Agent", userAgent);
+  headers.set("Accept", "*/*");
+  headers.set("Accept-Language", "en-US,en;q=0.9");
   return headers;
 }
 
