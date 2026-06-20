@@ -46,10 +46,9 @@ export type CompiledRoutes<TRouteId extends string, TLoadContext, TModule, TData
 
 export function matchIdForLocation<TRouteId extends string>(
   routeId: TRouteId,
-  location: RouteLocation,
   deps: string,
 ): string {
-  return `${routeId}\u0000${location.pathname}\u0000${location.search}\u0000${deps}`;
+  return `${routeId}\u0000${deps}`;
 }
 
 export function createRouteMatch<TRouteId extends string, TModule, TData>(
@@ -61,7 +60,7 @@ export function createRouteMatch<TRouteId extends string, TModule, TData>(
   preload = false,
 ): RouteMatch<TRouteId, TModule, TData> {
   return {
-    id: matchIdForLocation(routeId, location, deps),
+    id: matchIdForLocation(routeId, deps),
     routeId,
     location,
     deps,
@@ -69,7 +68,6 @@ export function createRouteMatch<TRouteId extends string, TModule, TData>(
     isFetching: false,
     updatedAt: 0,
     fetchCount: 0,
-    lastAccessedAt: 0,
     abortController,
     cause,
     preload,
@@ -255,7 +253,13 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
         for (const pool of [active, pending, cached]) {
           for (const [id, match] of pool) {
             if (routeId === undefined || match.routeId === routeId) {
-              pool.set(id, { ...match, invalid: true });
+              pool.set(id, {
+                ...match,
+                invalid: true,
+                ...(match.status === "error" || match.status === "notFound"
+                  ? { status: "pending" as const, error: undefined }
+                  : {}),
+              });
               notify(id);
             }
           }
@@ -342,16 +346,6 @@ export function normalizeLocation(location: RouteLocation): RouteLocation {
     search: location.search,
     hash: location.hash,
   };
-}
-
-export function locationsEqual(left: RouteLocation | null, right: RouteLocation): boolean {
-  return Boolean(
-    left &&
-    right &&
-    left.pathname === right.pathname &&
-    left.search === right.search &&
-    left.hash === right.hash,
-  );
 }
 
 function pathnameWithoutBase(pathname: string, basePath: string): string {

@@ -17,7 +17,7 @@ export type RouteLoadCause = "navigation" | "preload" | "revalidate";
 
 export type RouteMatchStatus = "pending" | "success" | "error" | "notFound" | "redirected";
 
-export type RouteMatchFetching = false | "loader" | "component";
+export type RouteMatchFetching = false | "loader";
 
 export type RouteNotFound = {
   type: "notFound";
@@ -27,18 +27,14 @@ export type RouteNotFound = {
 export type RouteRedirect = {
   type: "redirect";
   location: RouteLocation;
-  replace?: boolean;
 };
 
 export function notFound(data?: unknown): RouteNotFound {
   return { type: "notFound", data };
 }
 
-export function redirect(
-  location: RouteLocation,
-  options: { replace?: boolean } = {},
-): RouteRedirect {
-  return { type: "redirect", location, ...options };
+export function redirect(location: RouteLocation): RouteRedirect {
+  return { type: "redirect", location };
 }
 
 export type RouteHookOptions = {
@@ -66,13 +62,18 @@ export type PageDefinition<
   id: TRouteId;
   path: string;
   aliases?: readonly string[];
-  component?: () => MaybePromise<TModule>;
+  component: () => MaybePromise<TModule>;
   loaderDeps?: (context: TLoadContext, location: RouteLocation) => string;
   loader?: (context: TLoadContext, options: RouteLoaderOptions) => MaybePromise<TData>;
   staleTime?: number;
   preloadStaleTime?: number;
+  preloadGcTime?: number;
   gcTime?: number;
-  onEnter?: (context: TLoadContext, data: TData, options: RouteHookOptions) => MaybePromise<void>;
+  onEnter?: (
+    context: TLoadContext,
+    data: TData | undefined,
+    options: RouteHookOptions,
+  ) => MaybePromise<void>;
   onLeave?: (
     context: TLoadContext,
     data: TData | undefined,
@@ -91,7 +92,6 @@ export type RouteMatch<TRouteId extends string = string, TModule = unknown, TDat
   module?: TModule;
   error?: unknown;
   updatedAt: number;
-  lastAccessedAt: number;
   fetchCount: number;
   abortController: AbortController;
   cause: RouteLoadCause;
@@ -115,6 +115,7 @@ export type RouterOptions<TRouteId extends string, TLoadContext, TModule, TData>
   defaultRouteId?: TRouteId;
   staleTime?: number;
   preloadStaleTime?: number;
+  preloadGcTime?: number;
   gcTime?: number;
 };
 

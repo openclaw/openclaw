@@ -4,7 +4,6 @@ import {
   createMatchStore,
   createRouteMatch,
   locationForPath,
-  locationsEqual,
   matchIdForLocation,
   normalizeLocation,
   normalizeRouteBasePath,
@@ -25,6 +24,8 @@ import type {
 type NavigationRun = {
   controller: AbortController;
   matchId: string;
+  location: RouteLocation;
+  promise?: Promise<void>;
 };
 
 const DEFAULT_STALE_TIME = 0;
@@ -37,6 +38,12 @@ function isCurrentRun(current: NavigationRun | null, run: NavigationRun): boolea
 
 function cancelRun(run: NavigationRun | null): void {
   run?.controller.abort();
+}
+
+function canCacheMatch<TRouteId extends string, TModule, TData>(
+  match: RouteMatch<TRouteId, TModule, TData>,
+): boolean {
+  return match.status !== "error" && match.status !== "notFound" && match.status !== "redirected";
 }
 
 function isRouteNotFound(error: unknown): error is RouteNotFound {
@@ -66,6 +73,7 @@ export function createRouter<
     {
       staleTime: options.staleTime ?? DEFAULT_STALE_TIME,
       preloadStaleTime: options.preloadStaleTime ?? DEFAULT_PRELOAD_STALE_TIME,
+      preloadGcTime: options.preloadGcTime ?? DEFAULT_GC_TIME,
       gcTime: options.gcTime ?? DEFAULT_GC_TIME,
     },
     matches,
@@ -74,7 +82,6 @@ export function createRouter<
   let basePath = "";
   let stopHistory: (() => void) | undefined;
   let currentRun: NavigationRun | null = null;
-  let activeNavigation: Promise<void> | null = null;
   let lastContext: TLoadContext | undefined;
   let hasLastContext = false;
 
@@ -111,33 +118,40 @@ export function createRouter<
     const location = normalizeLocation(requestedLocation);
     const previous = matches.getActiveMatch();
     const deps = route.loaderDeps?.(context, location) ?? "";
-    const sameRoute = previous?.routeId === routeId && locationsEqual(previous.location, location);
-    const sameMatch = sameRoute && previous?.deps === deps;
+    const sameRoute = previous?.routeId === routeId;
+    const matchId = matchIdForLocation(routeId, deps);
+    const sameMatch = previous?.id === matchId;
     const revalidating = navigationOptions.revalidate === true && previous?.routeId === routeId;
     const backgroundReload = sameMatch && revalidating;
-    const staleTime = route.staleTime ?? options.staleTime ?? DEFAULT_STALE_TIME;
-    const fresh =
-      previous &&
-      previous.status === "success" &&
-      !previous.invalid &&
-      Date.now() - previous.updatedAt < staleTime;
-    if (sameMatch && fresh && !revalidating) {
-      return;
-    }
 
     if (history && navigationOptions.history && navigationOptions.history !== "none") {
       history[navigationOptions.history](location);
     }
 
+    const ongoing = currentRun;
+    if (ongoing?.matchId === matchId && ongoing.promise && !ongoing.controller.signal.aborted) {
+      matches.updateMatch(matchId, (current) => ({ ...current, location }));
+      matches.setLocation(location, matches.getState().resolvedLocation);
+      ongoing.location = location;
+      return ongoing.promise;
+    }
+
+    if (sameMatch && previous?.status === "success" && !previous.invalid && !revalidating) {
+      matches.updateMatch(previous.id, (current) => ({ ...current, location }));
+      matches.setLocation(location, location);
+      matches.setStatus("success");
+      return;
+    }
+
     cancelRun(currentRun);
     const controller = new AbortController();
     const cause: RouteLoadCause = revalidating ? "revalidate" : "navigation";
-    const matchId = matchIdForLocation(routeId, location, deps);
     const cached = matches.getCachedMatch(matchId);
     const match =
       sameMatch && previous
         ? {
             ...previous,
+            location,
             abortController: controller,
             cause,
             error: undefined,
@@ -148,12 +162,13 @@ export function createRouter<
         : cached
           ? {
               ...cached,
+              location,
               abortController: controller,
               cause,
               error: undefined,
               invalid: cached.invalid,
               isFetching: false as const,
-              preload: cached.preload,
+              preload: false,
             }
           : {
               ...createRouteMatch<TRouteId, TModule, TData>(
@@ -164,7 +179,7 @@ export function createRouter<
                 controller,
               ),
             };
-    const run: NavigationRun = { controller, matchId: match.id };
+    const run: NavigationRun = { controller, matchId, location };
     currentRun = run;
     const hookOptions: RouteHookOptions = {
       signal: controller.signal,
@@ -198,20 +213,48 @@ export function createRouter<
         if (!hookOptions.shouldRun()) {
           return;
         }
-        if (isRouteNotFound(error) || isRouteRedirect(error)) {
-          const status = isRouteNotFound(error) ? "notFound" : "redirected";
+        if (isRouteRedirect(error)) {
           matches.updateMatch(match.id, (current) => ({
             ...current,
-            status,
+            status: "redirected",
             isFetching: false,
             error,
             updatedAt: Date.now(),
           }));
-          matches.setStatus(status);
+          matches.setStatus("redirected");
           currentRun = null;
+          if (hookOptions.cause !== "preload") {
+            await handleLocation(error.location, context, false, "replace");
+          }
           return;
         }
-        matches.setStatus("error");
+        const status = isRouteNotFound(error) ? "notFound" : "error";
+        const failedMatch = matches.getMatch(match.id);
+        if (failedMatch) {
+          const currentActive = matches.getActiveMatch();
+          matches.batch(() => {
+            if (!sameMatch && currentActive && canCacheMatch(currentActive)) {
+              matches.setCached([...matches.getState().cachedMatches, currentActive]);
+              const currentRoute = compiled.byId.get(currentActive.routeId);
+              if (currentRoute) {
+                loading.scheduleGc(currentActive, currentRoute);
+              }
+            }
+            matches.updateMatch(match.id, (current) => ({
+              ...current,
+              status,
+              isFetching: false,
+              error,
+              updatedAt: Date.now(),
+            }));
+            matches.setActive([matches.getMatch(match.id) ?? failedMatch]);
+            matches.setPending([]);
+            matches.setLocation(location, location);
+            matches.setStatus(status);
+          });
+        } else {
+          matches.setStatus(status);
+        }
         if (isCurrentRun(currentRun, run)) {
           currentRun = null;
         }
@@ -230,11 +273,10 @@ export function createRouter<
         error: undefined,
         invalid: false,
         updatedAt: Date.now(),
-        lastAccessedAt: Date.now(),
       };
       const currentActive = matches.getActiveMatch();
       matches.batch(() => {
-        if (!sameMatch && currentActive) {
+        if (!sameMatch && currentActive && canCacheMatch(currentActive)) {
           matches.setCached([...matches.getState().cachedMatches, currentActive]);
           const currentRoute = compiled.byId.get(currentActive.routeId);
           if (currentRoute) {
@@ -243,7 +285,7 @@ export function createRouter<
         }
         matches.setActive([resolvedMatch]);
         matches.setPending([]);
-        matches.setLocation(location, location);
+        matches.setLocation(run.location, run.location);
         matches.setStatus("success");
       });
 
@@ -280,30 +322,19 @@ export function createRouter<
         currentRun = null;
       }
     })();
-    activeNavigation = navigation;
+    run.promise = navigation;
     if (backgroundReload) {
-      void navigation
-        .finally(() => {
-          if (activeNavigation === navigation) {
-            activeNavigation = null;
-          }
-        })
-        .catch(() => undefined);
+      void navigation.catch(() => undefined);
       return;
     }
-    try {
-      await navigation;
-    } finally {
-      if (activeNavigation === navigation) {
-        activeNavigation = null;
-      }
-    }
+    await navigation;
   };
 
   const handleLocation = async (
     location: RouteLocation,
     context: TLoadContext,
     revalidate = false,
+    history: RouterNavigationOptions["history"] = "none",
   ): Promise<void> => {
     const normalized = normalizeLocation(location);
     const matched = compiled.routeIdFromPath(normalized.pathname, basePath);
@@ -318,7 +349,7 @@ export function createRouter<
     if (!matched && history) {
       history.replace(target);
     }
-    await navigate(routeId, context, { history: "none", revalidate }, target);
+    await navigate(routeId, context, { history, revalidate }, target);
   };
 
   const preloadAtLocation = (
@@ -333,9 +364,13 @@ export function createRouter<
     lastContext = context;
     hasLastContext = true;
     const deps = route.loaderDeps?.(context, location) ?? "";
-    const matchId = matchIdForLocation(routeId, location, deps);
+    const matchId = matchIdForLocation(routeId, deps);
     const existing = matches.getMatch(matchId);
     const cached = matches.getCachedMatch(matchId);
+    const active = matches.getActiveMatch();
+    if (active?.id === matchId && active.status === "success" && !active.invalid) {
+      return Promise.resolve();
+    }
     const match =
       existing ??
       createRouteMatch<TRouteId, TModule, TData>(
@@ -362,7 +397,16 @@ export function createRouter<
       deps,
       cause,
     };
-    return loading.loadRoute(match, route, context, hookOptions, false).then(() => undefined);
+    return loading
+      .loadRoute(match, route, context, hookOptions, false)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        if (isRouteRedirect(error)) {
+          matches.removeCached(match.id);
+          return preloadLocation(error.location, context);
+        }
+        matches.removeCached(match.id);
+      });
   };
 
   const preloadRoute = (routeId: TRouteId, context: TLoadContext): Promise<void> =>
@@ -389,7 +433,7 @@ export function createRouter<
       return navigate(
         active.routeId,
         lastContext as TLoadContext,
-        { history: "none", revalidate: true },
+        { history: "none" },
         active.location,
       );
     },
@@ -439,8 +483,9 @@ export function createRouter<
       stopHistory = undefined;
       cancelRun(currentRun);
       currentRun = null;
-      activeNavigation = null;
       history = undefined;
+      lastContext = undefined;
+      hasLastContext = false;
       loading.clear();
       matches.clear();
     },

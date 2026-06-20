@@ -6,6 +6,11 @@ export type RouteLoadResult<TModule, TData> = {
   module: TModule;
 };
 
+type RouteDataResult<TData> = {
+  data: TData;
+  updatedAt: number;
+};
+
 export type RouteLoading<TRouteId extends string, TLoadContext, TModule, TData> = {
   loadRoute: (
     match: RouteMatch<TRouteId, TModule, TData>,
@@ -24,6 +29,7 @@ export type RouteLoading<TRouteId extends string, TLoadContext, TModule, TData> 
 type RouteLoadingOptions = {
   staleTime: number;
   preloadStaleTime: number;
+  preloadGcTime: number;
   gcTime: number;
 };
 
@@ -40,7 +46,15 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
     match: RouteMatch<TRouteId, TModule, TData>,
     route: PageDefinition<TRouteId, TLoadContext, TModule, TData>,
   ) => {
-    if (!matchStore.getCachedMatch(match.id)) {
+    const gcTime = match.preload
+      ? (route.preloadGcTime ?? options.preloadGcTime)
+      : (route.gcTime ?? options.gcTime);
+    const remaining = gcTime - (now() - match.updatedAt);
+    if (!matchStore.getCachedMatch(match.id) || remaining <= 0) {
+      if (remaining <= 0) {
+        matchStore.removeCached(match.id);
+        gcTimers.delete(match.id);
+      }
       return;
     }
     const previousTimer = gcTimers.get(match.id);
@@ -53,13 +67,13 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
         gcTimers.delete(match.id);
         return;
       }
-      if (now() - current.lastAccessedAt < (route.gcTime ?? options.gcTime)) {
+      if (now() - current.updatedAt < gcTime) {
         scheduleGc(current, route);
         return;
       }
       matchStore.removeCached(match.id);
       gcTimers.delete(match.id);
-    }, route.gcTime ?? options.gcTime);
+    }, remaining);
     gcTimers.set(match.id, timer);
     (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
   };
@@ -70,9 +84,6 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
   ): Promise<TModule> => {
     if (match.module !== undefined) {
       return Promise.resolve(match.module);
-    }
-    if (!route.component) {
-      return Promise.resolve(undefined as TModule);
     }
     const cached = moduleCache.get(route.id);
     if (cached) {
@@ -90,7 +101,7 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
     context: TLoadContext,
     hookOptions: RouteHookOptions,
     force: boolean,
-  ): Promise<TData> => {
+  ): Promise<RouteDataResult<TData>> => {
     const current = matchStore.getMatch(match.id) ?? match;
     const freshFor =
       current.preload || hookOptions.cause === "preload"
@@ -104,18 +115,17 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
     ) {
       matchStore.updateMatch(current.id, (next) => ({
         ...next,
-        lastAccessedAt: now(),
         preload: hookOptions.cause === "preload",
       }));
       scheduleGc(current, route);
-      return Promise.resolve(current.data as TData);
+      return Promise.resolve({ data: current.data as TData, updatedAt: current.updatedAt });
     }
     return Promise.resolve(
       route.loader?.(context, {
         ...hookOptions,
         deps: current.deps,
       }) as MaybePromise<TData>,
-    );
+    ).then((data) => ({ data, updatedAt: now() }));
   };
 
   const loadRoute = async (
@@ -145,30 +155,30 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
       }
       return module;
     });
-    const promise = Promise.all([dataPromise, visibleModulePromise]).then(([data, module]) => {
-      const latest = matchStore.getMatch(current.id);
-      if (latest?.fetchCount !== fetchCount || hookOptions.signal.aborted) {
-        return { data, module };
-      }
-      const updatedAt = now();
-      matchStore.updateMatch(current.id, (next) => ({
-        ...next,
-        data,
-        module,
-        status: "success",
-        isFetching: false,
-        error: undefined,
-        invalid: false,
-        preload: hookOptions.cause === "preload",
-        updatedAt,
-        lastAccessedAt: updatedAt,
-      }));
-      const resolved = matchStore.getMatch(current.id);
-      if (resolved) {
-        scheduleGc(resolved, route);
-      }
-      return { data, module };
-    });
+    const promise = Promise.all([dataPromise, visibleModulePromise]).then(
+      ([dataResult, module]) => {
+        const latest = matchStore.getMatch(current.id);
+        if (latest?.fetchCount !== fetchCount || hookOptions.signal.aborted) {
+          return { data: dataResult.data, module };
+        }
+        matchStore.updateMatch(current.id, (next) => ({
+          ...next,
+          data: dataResult.data,
+          module,
+          status: "success",
+          isFetching: false,
+          error: undefined,
+          invalid: false,
+          preload: hookOptions.cause === "preload",
+          updatedAt: dataResult.updatedAt,
+        }));
+        const resolved = matchStore.getMatch(current.id);
+        if (resolved) {
+          scheduleGc(resolved, route);
+        }
+        return { data: dataResult.data, module };
+      },
+    );
     inFlight.set(match.id, promise);
     try {
       return await promise;
