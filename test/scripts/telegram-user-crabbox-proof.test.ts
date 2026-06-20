@@ -311,6 +311,55 @@ setInterval(() => {}, 1000);
     }
   });
 
+  posixIt("lets timed-out command descendants exit during kill grace", async () => {
+    const root = makeTempDir();
+    const scriptPath = path.join(root, "trap-term-grace.mjs");
+    const readyPath = path.join(root, "descendant.ready");
+    const donePath = path.join(root, "descendant.done");
+
+    fs.writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+
+const descendant = spawn(process.execPath, [
+  "--input-type=module",
+  "--eval",
+  ${JSON.stringify(
+    `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(readyPath)}, "ready");
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    writeFileSync(${JSON.stringify(donePath)}, "done");
+    process.exit(0);
+  }, 75);
+});
+setInterval(() => {}, 1000);`,
+  )},
+], { stdio: "ignore" });
+descendant.unref();
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const runPromise = runCommand({
+      args: [scriptPath],
+      command: process.execPath,
+      cwd: root,
+      timeoutKillGraceMs: 500,
+      timeoutMs: 500,
+    });
+
+    await waitFor(() => fs.existsSync(readyPath));
+    await expect(runPromise).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: expect.stringContaining("timed out after 500ms"),
+    });
+    expect(fs.readFileSync(donePath, "utf8")).toBe("done");
+  });
+
   posixIt("keeps closed command groups tracked for parent cleanup", async () => {
     const root = makeTempDir();
     const commandPath = path.join(root, "closed-command.mjs");

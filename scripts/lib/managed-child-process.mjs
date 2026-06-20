@@ -103,6 +103,9 @@ export async function runManagedCommand({
         if (managedChild.forceKillTimer) {
           clearTimeout(managedChild.forceKillTimer);
         }
+        if (managedChild.receivedSignal) {
+          terminateManagedChild(child, "SIGKILL");
+        }
         resolve(
           managedChild.receivedSignal
             ? signalExitCode(managedChild.receivedSignal)

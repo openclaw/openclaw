@@ -610,7 +610,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   let lastOutputAt = Date.now();
   let forceKillAt = null;
 
-  const useProcessGroup = timeoutMs !== null && process.platform !== "win32";
+  const useProcessGroup = process.platform !== "win32";
   const child = spawn(invocation.command, invocation.args, {
     ...invocation.options,
     detached: useProcessGroup,
@@ -631,6 +631,31 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
       }
     }
     child.kill(signal);
+  }
+
+  const parentSignalHandlers = [];
+  function cleanupParentSignalHandlers() {
+    for (const { signal, handler } of parentSignalHandlers) {
+      process.off(signal, handler);
+    }
+    parentSignalHandlers.length = 0;
+  }
+
+  function relayParentSignal(signal) {
+    const handler = () => {
+      signalChild(signal);
+      signalChild("SIGKILL");
+      cleanupParentSignalHandlers();
+      process.kill(process.pid, signal);
+    };
+    parentSignalHandlers.push({ signal, handler });
+    process.once(signal, handler);
+  }
+
+  if (useProcessGroup) {
+    relayParentSignal("SIGINT");
+    relayParentSignal("SIGTERM");
+    relayParentSignal("SIGHUP");
   }
 
   function processTreeAlive() {
@@ -722,6 +747,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   return new Promise((resolve) => {
     child.once("error", (error) => {
       settled = true;
+      cleanupParentSignalHandlers();
       clearInterval(heartbeat);
       clearTimeout(timeout);
       stderr.write(`[tsdown-build] failed to start: ${String(error)}\n`);
@@ -736,6 +762,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
     child.once("close", (status, signal) => {
       function finish() {
         settled = true;
+        cleanupParentSignalHandlers();
         clearInterval(heartbeat);
         clearTimeout(timeout);
         resolve({

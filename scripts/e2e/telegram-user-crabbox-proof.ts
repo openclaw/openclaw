@@ -148,6 +148,7 @@ export const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
 export const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
 export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 export const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
+const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 25;
 export const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
@@ -608,6 +609,44 @@ function commandProcessTreeAlive(child: ChildProcess) {
   }
 }
 
+async function waitForCommandProcessTreeExit(child: ChildProcess, timeoutMs: number) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!commandProcessTreeAlive(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !commandProcessTreeAlive(child);
+}
+
+async function finishTimedOutCommandProcessTree(
+  child: ChildProcess,
+  options: {
+    forceKillAt: number | undefined;
+    timeoutKillGraceMs: number;
+  },
+) {
+  if (!commandProcessTreeAlive(child)) {
+    activeCommandChildren.delete(child);
+    return;
+  }
+  const graceRemainingMs =
+    options.forceKillAt === undefined
+      ? options.timeoutKillGraceMs
+      : Math.max(0, options.forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForCommandProcessTreeExit(child, graceRemainingMs);
+  }
+  if (commandProcessTreeAlive(child)) {
+    signalCommandTree(child, "SIGKILL");
+    await waitForCommandProcessTreeExit(child, options.timeoutKillGraceMs);
+  }
+  activeCommandChildren.delete(child);
+}
+
 function untrackCommandChild(child: ChildProcess) {
   if (!commandProcessTreeAlive(child)) {
     activeCommandChildren.delete(child);
@@ -664,6 +703,7 @@ export function runCommand(params: {
     let settled = false;
     let stdoutLimitError: string | null = null;
     let timeoutError: Error | null = null;
+    let forceKillAt: number | undefined;
     let killTimer: NodeJS.Timeout | undefined;
     const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
     const timeoutKillGraceMs = params.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS;
@@ -684,6 +724,7 @@ export function runCommand(params: {
         )}`,
       );
       signalCommandTree(child, "SIGTERM");
+      forceKillAt = Date.now() + timeoutKillGraceMs;
       killTimer = setTimeout(() => {
         signalCommandTree(child, "SIGKILL");
       }, timeoutKillGraceMs);
@@ -736,9 +777,16 @@ export function runCommand(params: {
       settled = true;
       untrackCommandChild(child);
       if (timeoutError) {
-        signalCommandTree(child, "SIGKILL");
+        const error = timeoutError;
         clearTimers();
-        reject(timeoutError);
+        void finishTimedOutCommandProcessTree(child, {
+          forceKillAt,
+          timeoutKillGraceMs,
+        }).then(
+          () => reject(error),
+          (cleanupError: unknown) =>
+            reject(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))),
+        );
         return;
       }
       clearTimers();

@@ -10,10 +10,12 @@ import {
   die,
   ensureValue,
   extractLastOpenClawVersionFromLog,
+  isLikelyMacosDesktopHome,
   makeTempDir,
   packOpenClaw,
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
+  parseMacosDsclUserHomeLine,
   parsePlatformList,
   parseProvider,
   readPositiveIntEnv,
@@ -1096,10 +1098,11 @@ export class NpmUpdateSmoke {
       { check: false, quiet: true, timeoutMs: 30_000 },
     ).stdout.replaceAll("\r", "");
     for (const line of users.split("\n")) {
-      const [user, home] = line.trim().split(/\s+/);
+      const parsed = parseMacosDsclUserHomeLine(line);
+      const user = parsed?.user;
       if (
         user &&
-        home?.startsWith("/Users/") &&
+        isLikelyMacosDesktopHome(parsed?.home) &&
         !user.startsWith("_") &&
         user !== "Shared" &&
         user !== ".localized"
@@ -1116,8 +1119,8 @@ export class NpmUpdateSmoke {
       ["exec", this.macosVm, "/usr/bin/dscl", ".", "-read", `/Users/${user}`, "NFSHomeDirectory"],
       { check: false, quiet: true, timeoutMs: 30_000 },
     ).stdout.replaceAll("\r", "");
-    const match = /NFSHomeDirectory:\s*(\S+)/.exec(output);
-    return match?.[1] ?? `/Users/${user}`;
+    const match = /^NFSHomeDirectory:\s+(.+)$/m.exec(output);
+    return match?.[1]?.trim() || `/Users/${user}`;
   }
 
   private async guestWindows(
@@ -1226,6 +1229,8 @@ export class NpmUpdateSmoke {
 
       let timedOut = false;
       let killTimer: NodeJS.Timeout | undefined;
+      let forceKillAt: number | undefined;
+      const timeoutKillGraceMs = freshLaneTimeoutKillGraceMs;
       const signalChild = (signal: NodeJS.Signals): void => {
         if (!child.pid) {
           return;
@@ -1246,7 +1251,8 @@ export class NpmUpdateSmoke {
         }
         timedOut = true;
         signalChild("SIGTERM");
-        killTimer = setTimeout(() => signalChild("SIGKILL"), 2_000);
+        forceKillAt = Date.now() + timeoutKillGraceMs;
+        killTimer = setTimeout(() => signalChild("SIGKILL"), timeoutKillGraceMs);
         killTimer.unref();
       };
       if (ctx.signal.aborted) {
@@ -1273,8 +1279,10 @@ export class NpmUpdateSmoke {
           clearTimeout(killTimer);
         }
         if (timedOut) {
-          signalChild("SIGKILL");
-          resolve(124);
+          void finishTimedOutLoggedProcessTree(child, {
+            forceKillAt,
+            timeoutKillGraceMs,
+          }).then(() => resolve(124), reject);
           return;
         }
         resolve(code ?? (signal ? 128 : 1));

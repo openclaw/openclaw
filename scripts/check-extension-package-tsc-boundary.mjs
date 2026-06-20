@@ -471,6 +471,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
     abortSignal?.addEventListener("abort", abortListener, { once: true });
     const teardownProcessCleanup = installVitestProcessGroupCleanup({
       child,
+      forceSignal: "SIGKILL",
       onSignal: (signal) => {
         forwardedSignal ??= signal;
       },
@@ -566,7 +567,10 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       cleanup();
       settled = true;
       if (forwardedSignal) {
-        process.kill(process.pid, forwardedSignal);
+        signalChild("SIGKILL");
+        void waitAfterForceKill().finally(() => {
+          process.kill(process.pid, forwardedSignal);
+        });
         return;
       }
       if (abortController?.signal.aborted) {

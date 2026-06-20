@@ -1,9 +1,11 @@
 // Parallels Smoke Model tests cover parallels smoke model script behavior.
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -18,7 +20,9 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   extractLastOpenClawVersionFromLog,
+  isLikelyMacosDesktopHome,
   modelProviderConfigBatchJson,
+  parseMacosDsclUserHomeLine,
   readPositiveIntEnv,
   resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
@@ -42,6 +46,7 @@ import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-s
 import { parseArgs as parseLinuxSmokeArgs } from "../../scripts/e2e/parallels/linux-smoke.ts";
 import { parseArgs as parseMacosSmokeArgs } from "../../scripts/e2e/parallels/macos-smoke.ts";
 import { parseArgs as parseNpmUpdateSmokeArgs } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
+import { testing as packageArtifactTesting } from "../../scripts/e2e/parallels/package-artifact.ts";
 import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
 import {
   posixCodexPlatformPackageRepairFunction,
@@ -189,6 +194,21 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<voi
   throw new Error("condition was not met before timeout");
 }
 
+async function waitForProcessClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 3_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("child process did not close before timeout"));
+    }, timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+  });
+}
+
 describe("Parallels smoke model selection", () => {
   let invalidProviderResult: ReturnType<typeof spawnNodeEvalSync>;
   let missingProviderKeyResult: ReturnType<typeof spawnNodeEvalSync>;
@@ -202,6 +222,15 @@ describe("Parallels smoke model selection", () => {
   let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+
+  it("parses macOS dscl user homes with spaces on mounted volumes", () => {
+    expect(parseMacosDsclUserHomeLine("clawuser /Volumes/Macintosh HD/Users/clawuser")).toEqual({
+      user: "clawuser",
+      home: "/Volumes/Macintosh HD/Users/clawuser",
+    });
+    expect(isLikelyMacosDesktopHome("/Volumes/Macintosh HD/Users/clawuser")).toBe(true);
+    expect(isLikelyMacosDesktopHome("/var/empty")).toBe(false);
+  });
 
   it("extracts the last OpenClaw version from a bounded log tail", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-log-tail-"));
@@ -416,6 +445,21 @@ describe("Parallels smoke model selection", () => {
     expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
   });
 
+  it("reclaims package locks with malformed owner pids", async () => {
+    const lockDir = makeTempDir(tempDirs, "openclaw-parallels-package-lock-");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(join(lockDir, "owner.json"), '{"pid":-1,"token":"stale"}\n');
+
+    await expect(packageArtifactTesting.readLockOwner(lockDir)).resolves.toEqual({
+      pid: undefined,
+      token: "stale",
+    });
+
+    await packageArtifactTesting.removeStalePackageLock(lockDir, 2 * 60 * 60_000);
+
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
   it("keeps JSON-mode progress off stdout", async () => {
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -535,6 +579,42 @@ exit 42
         expect(result.stderr).toContain("TAIL_MARKER");
         expect(result.stderr).not.toContain("BEGIN_MARKER");
         expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThan(90 * 1024);
+      } finally {
+        rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reports signaled host artifact server startup exits immediately",
+    async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-server-signal-"));
+      const fakePython = join(tempDir, "python3");
+      writeFileSync(
+        fakePython,
+        `#!/usr/bin/env bash
+kill -TERM "$$"
+`,
+      );
+      chmodSync(fakePython, 0o755);
+
+      try {
+        const port = await unusedLoopbackPort();
+        const result = spawnNodeEvalSync(
+          `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${port}, artifactPath: "artifact.tgz", label: "artifact" });`,
+          {
+            env: {
+              ...process.env,
+              PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}`,
+            },
+            imports: ["tsx"],
+            maxBuffer: 1024 * 1024,
+          },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("host artifact server exited early: signal SIGTERM");
+        expect(result.stderr).not.toContain("did not start");
       } finally {
         rmSync(tempDir, { force: true, recursive: true });
       }
@@ -1413,6 +1493,78 @@ setInterval(() => {}, 1000);
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "reaps externally signaled timed host command descendants",
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-signal-");
+      const runnerPath = join(tempDir, "runner.mjs");
+      const readyPath = join(tempDir, "ready");
+      const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const hostCommandUrl = pathToFileURL(join(process.cwd(), TS_PATHS.hostCommand)).href;
+      let runnerPid = 0;
+      let grandchildPid = 0;
+
+      try {
+        const grandchildScript = [
+          "const { writeFileSync } = require('node:fs');",
+          "writeFileSync(process.env.OPENCLAW_TEST_GRANDCHILD_PID, String(process.pid));",
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const parentScript = [
+          "const { spawn } = require('node:child_process');",
+          "const { writeFileSync } = require('node:fs');",
+          `spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { env: process.env, stdio: 'ignore' });`,
+          "writeFileSync(process.env.OPENCLAW_TEST_READY_FILE, 'ready');",
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        writeFileSync(
+          runnerPath,
+          [
+            `import { run } from ${JSON.stringify(hostCommandUrl)};`,
+            `run(process.execPath, ['-e', ${JSON.stringify(parentScript)}], {`,
+            "  check: false,",
+            "  env: {",
+            "    ...process.env,",
+            `    OPENCLAW_TEST_GRANDCHILD_PID: ${JSON.stringify(grandchildPidPath)},`,
+            `    OPENCLAW_TEST_READY_FILE: ${JSON.stringify(readyPath)},`,
+            "  },",
+            "  quiet: true,",
+            "  timeoutMs: 30_000,",
+            "});",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
+          cwd: process.cwd(),
+          detached: true,
+          stdio: "ignore",
+        });
+        runnerPid = runner.pid ?? 0;
+        expect(runnerPid).toBeGreaterThan(0);
+        await waitFor(() => existsSync(readyPath) && existsSync(grandchildPidPath), 2_000);
+        grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
+
+        process.kill(-runnerPid, "SIGTERM");
+
+        await expect(waitForProcessClose(runner, 3_000)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitFor(() => !isProcessAlive(grandchildPid), 3_000);
+      } finally {
+        if (runnerPid && isProcessAlive(runnerPid)) {
+          process.kill(-runnerPid, "SIGKILL");
+        }
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32")("preserves timed host command spawn errors", () => {
     expect(() =>
       run("openclaw-definitely-missing-host-command", [], {
@@ -1494,6 +1646,78 @@ setInterval(() => {}, 1000);
         expect(readFileSync(drainFile, "utf8")).toBe("drained");
       } finally {
         cleanupTempDirs(tempDirs);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reaps externally signaled streaming host command descendants before re-raising",
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-streaming-host-command-signal-");
+      const runnerPath = join(tempDir, "runner.mjs");
+      const readyPath = join(tempDir, "ready");
+      const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const logPath = join(tempDir, "stream.log");
+      const hostCommandUrl = pathToFileURL(join(process.cwd(), TS_PATHS.hostCommand)).href;
+      let runnerPid = 0;
+      let grandchildPid = 0;
+
+      try {
+        const grandchildScript = [
+          "const { writeFileSync } = require('node:fs');",
+          "writeFileSync(process.env.OPENCLAW_TEST_GRANDCHILD_PID, String(process.pid));",
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const parentScript = [
+          "const { spawn } = require('node:child_process');",
+          "const { writeFileSync } = require('node:fs');",
+          `spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { env: process.env, stdio: 'ignore' });`,
+          "writeFileSync(process.env.OPENCLAW_TEST_READY_FILE, 'ready');",
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        writeFileSync(
+          runnerPath,
+          [
+            `import { runStreaming } from ${JSON.stringify(hostCommandUrl)};`,
+            `await runStreaming(process.execPath, ['-e', ${JSON.stringify(parentScript)}], {`,
+            "  env: {",
+            "    ...process.env,",
+            `    OPENCLAW_TEST_GRANDCHILD_PID: ${JSON.stringify(grandchildPidPath)},`,
+            `    OPENCLAW_TEST_READY_FILE: ${JSON.stringify(readyPath)},`,
+            "  },",
+            `  logPath: ${JSON.stringify(logPath)},`,
+            "  quiet: true,",
+            "  timeoutMs: 30_000,",
+            "});",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
+          cwd: process.cwd(),
+          stdio: "ignore",
+        });
+        runnerPid = runner.pid ?? 0;
+        expect(runnerPid).toBeGreaterThan(0);
+        await waitFor(() => existsSync(readyPath) && existsSync(grandchildPidPath), 2_000);
+        grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
+
+        runner.kill("SIGTERM");
+
+        await expect(waitForProcessClose(runner, 3_000)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitFor(() => !isProcessAlive(grandchildPid), 3_000);
+      } finally {
+        if (runnerPid && isProcessAlive(runnerPid)) {
+          process.kill(runnerPid, "SIGKILL");
+        }
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
       }
     },
   );

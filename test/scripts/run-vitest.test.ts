@@ -716,14 +716,21 @@ describe("scripts/run-vitest", () => {
       os.tmpdir(),
       `openclaw-run-vitest-delegated-child-${process.pid}-${Date.now()}.pid`,
     );
+    const descendantPidPath = nodePath.join(
+      os.tmpdir(),
+      `openclaw-run-vitest-delegated-descendant-${process.pid}-${Date.now()}.pid`,
+    );
 
     fs.writeFileSync(
       fixturePath,
       [
+        'import { spawn } from "node:child_process";',
         'import fs from "node:fs";',
         'import { it } from "vitest";',
         'it("waits for wrapper termination", async () => {',
+        '  const child = spawn(process.execPath, ["-e", "process.on(\\\'SIGTERM\\\', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });',
         "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID!, String(process.pid));",
+        "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID!, String(child.pid));",
         "  await new Promise(() => {});",
         "});",
         "",
@@ -737,24 +744,31 @@ describe("scripts/run-vitest", () => {
         env: {
           ...process.env,
           OPENCLAW_DELEGATED_SIGNAL_CHILD_PID: childPidPath,
+          OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID: descendantPidPath,
         },
         stdio: "ignore",
       },
     );
     let childPid = 0;
+    let descendantPid = 0;
 
     try {
       await waitFor(() => fs.existsSync(childPidPath), 10_000);
+      await waitFor(() => fs.existsSync(descendantPidPath), 10_000);
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
       expect(Number.isInteger(childPid)).toBe(true);
+      expect(Number.isInteger(descendantPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
 
       expect(runner.pid).toBeGreaterThan(0);
       process.kill(runner.pid!, "SIGTERM");
       const result = await waitForClose(runner);
 
-      expect(result).toEqual({ code: 143, signal: null });
+      expect(result).toEqual({ code: null, signal: "SIGTERM" });
       await waitFor(() => !isProcessAlive(childPid), 5_000);
+      await waitFor(() => !isProcessAlive(descendantPid), 5_000);
     } finally {
       if (runner.pid && isProcessAlive(runner.pid)) {
         process.kill(runner.pid, "SIGKILL");
@@ -762,8 +776,12 @@ describe("scripts/run-vitest", () => {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
       }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
       fs.rmSync(fixturePath, { force: true });
       fs.rmSync(childPidPath, { force: true });
+      fs.rmSync(descendantPidPath, { force: true });
     }
   });
 

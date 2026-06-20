@@ -319,15 +319,52 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       signalCode: null,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    expect(signalGatewayProcess(child, "SIGTERM", kill)).toBe(true);
+    expect(signalGatewayProcess(child, "SIGTERM", kill, { runTaskkill })).toBe(true);
 
     if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenCalledWith(-12345, "SIGTERM");
       expect(child.kill).not.toHaveBeenCalled();
     }
+  });
+
+  it("signals Windows gateway process trees with taskkill", () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      pid: 12345,
+      signalCode: null,
+    });
+    const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    expect(
+      signalGatewayProcess(child, "SIGTERM", kill, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    expect(
+      signalGatewayProcess(child, "SIGKILL", kill, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(kill).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("treats missing gateway process groups as already exited", () => {
@@ -340,8 +377,9 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const kill = vi.fn(() => {
       throw Object.assign(new Error("no such process"), { code: "ESRCH" });
     });
+    const runTaskkill = vi.fn(() => ({ error: new Error("not found"), status: 1 }));
 
-    expect(signalGatewayProcess(child, "SIGTERM", kill)).toBe(false);
+    expect(signalGatewayProcess(child, "SIGTERM", kill, { runTaskkill })).toBe(false);
   });
 
   it("checks process group liveness instead of only the pnpm wrapper", () => {
@@ -369,12 +407,18 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       signalCode: null,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    await stopGateway(child, { killGraceMs: 1, killProcess: kill });
+    await stopGateway(child, { killGraceMs: 1, killProcess: kill, runTaskkill });
 
     if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12346", "/T"], {
+        stdio: "ignore",
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12346", "/T", "/F"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12346, 0);
       expect(kill).toHaveBeenNthCalledWith(2, -12346, "SIGTERM");
@@ -405,12 +449,23 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       }
       return true;
     });
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    await stopGateway(child, { forceKillGraceMs: 50, killGraceMs: 1, killProcess: kill });
+    await stopGateway(child, {
+      forceKillGraceMs: 50,
+      killGraceMs: 1,
+      killProcess: kill,
+      runTaskkill,
+    });
 
     if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12350", "/T"], {
+        stdio: "ignore",
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12350", "/T", "/F"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenCalledWith(-12350, "SIGKILL");
       expect(postKillLivenessChecks).toBe(2);
@@ -426,8 +481,9 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       signalCode: null,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    await stopGateway(child, { killGraceMs: 1, killProcess: kill });
+    await stopGateway(child, { killGraceMs: 1, killProcess: kill, runTaskkill });
 
     if (process.platform === "win32") {
       expect(child.kill).not.toHaveBeenCalled();
@@ -452,16 +508,21 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       pid: 98765,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
     try {
       const removeCleanup = installGatewayParentCleanup(child, {
         killProcess: kill,
         processLike,
+        runTaskkill,
       });
       processLike.emit("SIGTERM");
 
       if (process.platform === "win32") {
-        expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+        expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "12348", "/T"], {
+          stdio: "ignore",
+        });
+        expect(child.kill).not.toHaveBeenCalled();
         expect(processLike.kill).toHaveBeenCalledWith(98765, "SIGTERM");
       } else {
         expect(kill).toHaveBeenNthCalledWith(1, -12348, "SIGTERM");
@@ -494,15 +555,20 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       pid: 98766,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
     const removeCleanup = installGatewayParentCleanup(child, {
       killProcess: kill,
       processLike,
+      runTaskkill,
     });
     processLike.emit("exit");
 
     if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "12349", "/T"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12349, "SIGTERM");
       expect(kill).toHaveBeenNthCalledWith(2, -12349, "SIGKILL");

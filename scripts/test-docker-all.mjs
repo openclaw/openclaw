@@ -563,6 +563,9 @@ export function runShellCommand({
   noOutputTimeoutMs,
   timeoutKillGraceMs = SHELL_TIMEOUT_KILL_GRACE_MS,
 }) {
+  if (activeChildrenShutdownPromise) {
+    return activeChildrenShutdownPromise.then(() => shellCommandSkippedForShutdown());
+  }
   return new Promise((resolve) => {
     const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
     const child = spawn("bash", ["-c", command], {
@@ -684,6 +687,9 @@ export function runShellCaptureCommand({
   timeoutMs,
   timeoutKillGraceMs = SHELL_TIMEOUT_KILL_GRACE_MS,
 }) {
+  if (activeChildrenShutdownPromise) {
+    return activeChildrenShutdownPromise.then(() => shellCaptureSkippedForShutdown(label));
+  }
   return new Promise((resolve) => {
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
@@ -1262,6 +1268,29 @@ async function printFailureSummary(failures, tailLines) {
 }
 
 const activeChildren = new Set();
+let activeChildrenShutdownPromise;
+
+function shellCommandSkippedForShutdown() {
+  return {
+    noOutputTimedOut: false,
+    signal: null,
+    status: 143,
+    timedOut: false,
+  };
+}
+
+function shellCaptureSkippedForShutdown(label) {
+  return {
+    label,
+    signal: null,
+    status: 143,
+    stderr: "",
+    stderrTruncated: false,
+    stdout: "",
+    stdoutTruncated: false,
+    timedOut: false,
+  };
+}
 
 function shellProcessGroupAlive(child) {
   if (process.platform === "win32" || !child.pid) {
@@ -1321,13 +1350,31 @@ function terminateActiveChildren(signal) {
   }
 }
 
+async function shutdownActiveChildren(signal, exitCode) {
+  if (activeChildrenShutdownPromise) {
+    terminateActiveChildren("SIGKILL");
+    return activeChildrenShutdownPromise;
+  }
+  const children = [...activeChildren];
+  terminateActiveChildren(signal);
+  activeChildrenShutdownPromise = Promise.all(
+    children.map((child) =>
+      finishTimedOutShellProcessTree(child, {
+        killAt: Date.now() + SHELL_TIMEOUT_KILL_GRACE_MS,
+        timeoutKillGraceMs: SHELL_TIMEOUT_KILL_GRACE_MS,
+      }),
+    ),
+  ).finally(() => {
+    process.exit(exitCode);
+  });
+  return activeChildrenShutdownPromise;
+}
+
 process.on("SIGINT", () => {
-  terminateActiveChildren("SIGINT");
-  process.exit(130);
+  void shutdownActiveChildren("SIGINT", 130);
 });
 process.on("SIGTERM", () => {
-  terminateActiveChildren("SIGTERM");
-  process.exit(143);
+  void shutdownActiveChildren("SIGTERM", 143);
 });
 
 async function main() {

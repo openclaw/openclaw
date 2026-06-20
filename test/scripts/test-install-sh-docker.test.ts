@@ -1,5 +1,5 @@
 // Test Install Sh Docker tests cover test install sh docker script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
@@ -100,6 +100,30 @@ function runDefaultSmokePlatform(env: Record<string, string>, hostArch: string):
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);
   return result.stdout;
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function extractReadPackTarballFilename(): string {
@@ -809,6 +833,78 @@ describe("bun global install smoke", () => {
       expect(result.stderr).toContain("command timed out after 500ms: /usr/bin/time");
       expect(readFileSync(readyPath, "utf8")).toBe("ready");
       expect(readFileSync(drainedPath, "utf8")).toBe("drained");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "cleans Bun global smoke descendants on parent signal",
+    async () => {
+      const tempDir = tempDirs.make("openclaw-bun-global-parent-signal-");
+      const readyPath = path.join(tempDir, "ready");
+      const descendantPidPath = path.join(tempDir, "descendant.pid");
+      let descendantPid = 0;
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const childProcess = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `childProcess.spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const runner = spawn(
+        process.execPath,
+        [
+          BUN_GLOBAL_ASSERTIONS_PATH,
+          "run-with-timeout",
+          "60000",
+          process.execPath,
+          "-e",
+          parentScript,
+        ],
+        {
+          env: {
+            ...process.env,
+            OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "100",
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      const runnerExit = new Promise<{ status: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => {
+          runner.once("exit", (status, signal) => resolve({ status, signal }));
+        },
+      );
+
+      try {
+        await waitForCondition(
+          () => existsSync(readyPath) && existsSync(descendantPidPath),
+          "Bun global smoke descendant readiness",
+        );
+        descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
+        await waitForCondition(
+          () => !isProcessAlive(descendantPid),
+          "Bun global smoke descendant cleanup",
+        );
+      } finally {
+        if (runner.pid && isProcessAlive(runner.pid)) {
+          process.kill(runner.pid, "SIGKILL");
+        }
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
     },
   );
 

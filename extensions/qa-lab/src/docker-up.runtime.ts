@@ -12,6 +12,7 @@ import {
   type FetchLike,
   type RunCommand,
 } from "./docker-runtime.js";
+import { shellQuote } from "./shell-quote.js";
 
 type QaDockerUpResult = {
   outputDir: string;
@@ -147,6 +148,6 @@ export async function runQaDockerUp(
     composeFile,
     qaLabUrl,
     gatewayUrl,
-    stopCommand: `docker compose -f ${composeFile} down`,
+    stopCommand: `docker compose -f ${shellQuote(composeFile)} down`,
   };
 }

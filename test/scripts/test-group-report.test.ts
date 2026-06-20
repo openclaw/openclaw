@@ -1,5 +1,5 @@
 // Test Group Report tests cover test group report script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -62,6 +62,21 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     await sleep(25);
   }
   throw new Error(`timed out waiting for pid ${pid} to exit`);
+}
+
+function waitForChildClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 5_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("child did not close before timeout"));
+    }, timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
 }
 
 function writeGroupedReport(filePath: string) {
@@ -716,6 +731,67 @@ describe("scripts/test-group-report child process guard", () => {
       });
       expect(parsed.output).toContain("sending SIGKILL");
     } finally {
+      if (childPid !== undefined && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans process-group descendants before forwarding parent SIGTERM", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = makeTempDir();
+    const childPidPath = path.join(tempDir, "child.pid");
+    const readyPath = path.join(tempDir, "child.ready");
+    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mjs")).href;
+    let childPid: number | undefined;
+    let runner: ReturnType<typeof spawn> | undefined;
+    try {
+      const childScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
+        `require("node:fs").writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const runnerScript = [
+        `import { spawnText } from ${JSON.stringify(reportModuleUrl)};`,
+        "await spawnText(",
+        "  process.execPath,",
+        `  ["--eval", ${JSON.stringify(parentScript)}],`,
+        "  { cwd: process.cwd(), env: process.env, killGraceMs: 5_000, timeoutMs: 60_000 },",
+        ");",
+      ].join("\n");
+
+      runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      await waitForFile(readyPath, 2_000);
+      await waitForFile(childPidPath, 2_000);
+      childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+      expect(isProcessAlive(childPid)).toBe(true);
+
+      runner.kill("SIGTERM");
+
+      await expect(waitForChildClose(runner)).resolves.toEqual({
+        code: null,
+        signal: "SIGTERM",
+      });
+      await waitForDead(childPid, 2_000);
+    } finally {
+      if (runner?.pid && isProcessAlive(runner.pid)) {
+        runner.kill("SIGKILL");
+      }
       if (childPid !== undefined && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
       }

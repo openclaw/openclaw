@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
@@ -241,6 +242,22 @@ const ENTRY_SHIMS_INPUTS = [
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
 ];
+const ENTRY_SHIM_RUNTIME_OUTPUTS = ["dist/plugin-sdk/webhook-path.js"];
+
+/**
+ * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
+ */
+export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
+  const entries =
+    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : publicPluginSdkEntrypoints;
+  return [
+    ...entries.flatMap((entry) => [
+      `dist/plugin-sdk/${entry}.d.ts`,
+      `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
+    ]),
+    ...ENTRY_SHIM_RUNTIME_OUTPUTS,
+  ].toSorted((a, b) => a.localeCompare(b));
+}
 
 function isRelevantTypeInput(filePath) {
   const basename = path.basename(filePath);
@@ -621,7 +638,10 @@ async function main(argv = process.argv.slice(2)) {
         "dist/plugin-sdk/.tsbuildinfo",
         "packages/plugin-sdk/dist/.tsbuildinfo",
       ],
-      outputPaths: ["dist/plugin-sdk/.boundary-entry-shims.stamp"],
+      outputPaths: [
+        "dist/plugin-sdk/.boundary-entry-shims.stamp",
+        ...resolveBoundaryEntryShimRequiredOutputs(),
+      ],
     });
     const qaChannelDtsFresh =
       isArtifactSetFresh({

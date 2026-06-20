@@ -111,7 +111,7 @@ describe("package acceptance workflow", () => {
       'if [[ "$main_version" != "$release_package_version" &&',
     );
     const evidenceDownloadIndex = workflow.indexOf(
-      'if ! gh release download "$evidence_source_tag"',
+      'gh_with_retry release download "$evidence_source_tag"',
     );
     const partialRepairIndex = workflow.indexOf('if [[ -f "$closeout_json_path" ]]; then');
     const existingCloseoutEvidenceMatchIndex = workflow.indexOf(
@@ -122,7 +122,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
     expect(workflow).toContain('fallback_package_version="${BASH_REMATCH[1]}"');
     expect(workflow).toContain('tag_package_content="$RUNNER_TEMP/tag-package-content.b64"');
-    expect(workflow).toContain('gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag"');
+    expect(workflow).toContain(
+      'gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag"',
+    );
     expect(workflow).toContain("for attempt in 1 2 3; do");
     expect(workflow).toContain("sleep $((attempt * 5))");
     expect(workflow).toContain(
@@ -133,7 +135,7 @@ describe("package acceptance workflow", () => {
     );
     expect(workflow).toContain('tag_package_version="$(jq -r');
     expect(workflow).toContain('evidence_source_tag="v$fallback_package_version"');
-    expect(workflow).toContain('gh release download "$evidence_source_tag"');
+    expect(workflow).toContain('gh_with_retry release download "$evidence_source_tag"');
     expect(workflow).toContain("Checkout fallback evidence tag");
     expect(workflow).toContain("Bind fallback correction to the published package source");
     expect(workflow).toContain(

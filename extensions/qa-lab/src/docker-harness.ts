@@ -18,6 +18,10 @@ function toPosixRelative(fromDir: string, toPath: string): string {
   return path.relative(fromDir, toPath).split(path.sep).join("/");
 }
 
+function yamlDoubleQuoted(value: string) {
+  return JSON.stringify(value);
+}
+
 function renderImageBlock(params: {
   outputDir: string;
   repoRoot: string;
@@ -28,7 +32,7 @@ function renderImageBlock(params: {
     return `    image: ${params.imageName}\n`;
   }
   const context = toPosixRelative(params.outputDir, params.repoRoot) || ".";
-  return `    build:\n      context: ${context}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "qa-channel qa-lab"\n`;
+  return `    build:\n      context: ${yamlDoubleQuoted(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "qa-channel qa-lab"\n`;
 }
 
 function renderCompose(params: {
@@ -81,7 +85,7 @@ ${imageBlock}    pull_policy: never
       - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
-${params.bindUiDist ? `      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
+${params.bindUiDist ? `      - ${yamlDoubleQuoted(`${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro`)}\n` : ""}    healthcheck:
       test:
         - CMD
         - node
@@ -124,7 +128,7 @@ ${imageBlock}    pull_policy: never
       OPENCLAW_PROFILE: ""
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
-      - ${repoMount}:/opt/openclaw-repo:ro
+      - ${yamlDoubleQuoted(`${repoMount}:/opt/openclaw-repo:ro`)}
     healthcheck:
       test:
         - CMD
