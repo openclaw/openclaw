@@ -243,12 +243,26 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   }
 }
 
+function normalizeCronToolKeys(value: Record<string, unknown>): Record<string, unknown> {
+  // Some small/local tool-call parsers can produce JSON with trailing spaces in
+  // property names (e.g. "schedule " instead of "schedule"). Normalize keys by
+  // trimming whitespace so downstream matching against CRON_RECOVERABLE_OBJECT_KEYS
+  // and schema validation sees the expected names.
+  const next: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(value)) {
+    const trimmed = key.trim();
+    if (trimmed.length === 0) continue;
+    next[trimmed] = val;
+  }
+  return next;
+}
+
 /** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
 export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
-  const next = { ...unwrapped };
+  const next = normalizeCronToolKeys({ ...unwrapped });
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);
