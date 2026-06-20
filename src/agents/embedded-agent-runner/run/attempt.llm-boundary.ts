@@ -1,7 +1,10 @@
 /**
  * Installs runtime-context and prompt-transform boundaries before LLM calls.
  */
-import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
+import {
+  resolveTrustedInboundBareBody,
+  stripInboundMetadata,
+} from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
@@ -474,6 +477,7 @@ function stripHistoricalInboundMetadataFromUserMessages(
     const messageTimestamp = useCurrentUserTimestampOverride
       ? override.timestamp
       : runtimeTimestamp;
+    const trustedBareBody = isActive ? undefined : resolveTrustedInboundBareBody(message);
 
     // Historical turns strip inbound metadata blocks (Conversation info, Sender
     // info, etc.); the active turn keeps its metadata for the current request.
@@ -495,9 +499,9 @@ function stripHistoricalInboundMetadataFromUserMessages(
         const envelope = envelopeMatch ? envelopeMatch[0] : "";
         const body = envelope ? raw.slice(envelope.length) : raw;
         // Strip metadata from the body but re-attach the original envelope.
-        return `${envelope}${stripInboundMetadata(body)}`;
+        return `${envelope}${trustedBareBody ?? stripInboundMetadata(body)}`;
       }
-      const stripped = isActive ? raw : stripInboundMetadata(raw);
+      const stripped = isActive ? raw : (trustedBareBody ?? stripInboundMetadata(raw));
       return stampUserTextWithMessageTimestamp(
         stripped,
         messageTimestamp,
@@ -517,6 +521,31 @@ function stripHistoricalInboundMetadataFromUserMessages(
 
     if (!Array.isArray(content)) {
       return message;
+    }
+
+    if (trustedBareBody !== undefined) {
+      const text = stampUserTextWithMessageTimestamp(
+        trustedBareBody,
+        messageTimestamp,
+        options?.timezone,
+        options?.includeTimestamp,
+      );
+      const nonTextBlocks = content.filter((block) => {
+        if (!block || typeof block !== "object") {
+          return true;
+        }
+        const textBlock = block as { type?: unknown; text?: unknown };
+        return textBlock.type !== "text" || typeof textBlock.text !== "string";
+      });
+      changed = true;
+      return (
+        nonTextBlocks.length === 0
+          ? { ...message, content: text }
+          : {
+              ...message,
+              content: text.trim() ? [{ type: "text", text }, ...nonTextBlocks] : nonTextBlocks,
+            }
+      ) as AgentMessage;
     }
 
     // Collapse a single-text-block array to a plain string first so text-only

@@ -176,6 +176,8 @@ describe("user turn transcript persistence", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: {
           text: "display prompt",
+          bareBody: "trusted bare prompt",
+          inboundDecorated: true,
           media: [{ path: "/tmp/image.png", contentType: "image/png" }],
           timestamp: 123,
         },
@@ -196,6 +198,8 @@ describe("user turn transcript persistence", () => {
         content: "display prompt",
         provenance: { sourceChannel: "telegram" },
         timestamp: 123,
+        inboundDecorated: true,
+        bareBody: "trusted bare prompt",
         MediaPath: "/tmp/image.png",
         MediaType: "image/png",
       });

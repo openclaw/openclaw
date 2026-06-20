@@ -1250,11 +1250,22 @@ export async function runPreparedReply(
   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
     hasMedia: userTurnMediaForPersistence.length > 0,
   });
+  const userTurnBareBody =
+    promptSessionCtx.BareBody ?? sessionCtx.BareBody ?? ctx.BareBody ?? userTurnTranscriptText;
+  const userTurnInboundDecorated =
+    promptSessionCtx.InboundDecorated === true ||
+    sessionCtx.InboundDecorated === true ||
+    ctx.InboundDecorated === true ||
+    Boolean(currentInboundContext?.text);
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
+          ...(userTurnInboundDecorated ? { inboundDecorated: true } : {}),
+          ...(userTurnInboundDecorated && userTurnBareBody !== undefined
+            ? { bareBody: userTurnBareBody }
+            : {}),
           ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(userTurnMediaForPersistence.length > 0
             ? {
