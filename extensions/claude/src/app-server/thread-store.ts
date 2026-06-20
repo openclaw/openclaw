@@ -141,10 +141,12 @@ export async function writeClaudeAppServerBinding(
       await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
       await fs.rename(tmp, target);
     } catch (err) {
+      await fs.unlink(tmp).catch(() => undefined);
       embeddedAgentLog.warn("claude-bridge: failed to persist binding", {
         sessionFile,
         error: err instanceof Error ? err.message : String(err),
       });
+      throw err;
     }
   });
 }

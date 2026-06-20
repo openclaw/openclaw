@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -9,6 +9,7 @@ import type { ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { isThreadNotFound, startOrResumeClaudeThread } from "./thread-lifecycle.js";
 import {
   readClaudeAppServerBinding,
+  resolveClaudeAppServerBindingPath,
   writeClaudeAppServerBinding,
   type ClaudeAppServerBinding,
 } from "./thread-store.js";
@@ -134,6 +135,24 @@ describe("startOrResumeClaudeThread", () => {
     expect(binding?.threadId).toBe("thr_fresh_001");
     expect(binding?.dynamicToolsFingerprint).toBe(STABLE_DYNAMIC_TOOLS_FP);
     expect(binding?.developerInstructionsFingerprint).toBe(STABLE_DEVINSTRUCTIONS_FP);
+  });
+
+  it("rejects when binding persistence fails", async () => {
+    await mkdir(resolveClaudeAppServerBindingPath(sessionFile));
+    const client = makeClient({});
+    await expect(
+      startOrResumeClaudeThread({
+        client,
+        params: makeParams(sessionFile),
+        cfg: BASE_CFG,
+        bridge: makeBridge(),
+        developerInstructions: "x",
+        developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+        dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+        effectiveWorkspace: "/tmp/ws",
+        nativeDisallowedTools: [],
+      }),
+    ).rejects.toThrow();
   });
 
   it("resumes when an existing binding matches the dynamic-tools fingerprint", async () => {
