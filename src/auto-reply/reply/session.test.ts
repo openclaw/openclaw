@@ -3075,6 +3075,11 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       contextTokens: 400_000,
       verboseLevel: "on",
     } as const;
+    const explicitUserOverride = {
+      providerOverride: "minimax",
+      modelOverride: "m2.7",
+      modelOverrideSource: "user",
+    } as const;
     const cases = [
       { name: "new clears stale runtime model cache", body: "/new" },
       { name: "reset clears stale runtime model cache", body: "/reset" },
@@ -3085,8 +3090,16 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         storePath,
         sessionKey,
         sessionId: existingSessionId,
-        overrides: { ...runtimeModelCache },
+        overrides: { ...runtimeModelCache, ...explicitUserOverride },
       });
+      const seeded = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        SessionEntry
+      >;
+      expect(seeded[sessionKey]?.modelProvider, testCase.name).toBe(
+        runtimeModelCache.modelProvider,
+      );
+      expect(seeded[sessionKey]?.model, testCase.name).toBe(runtimeModelCache.model);
 
       const cfg = {
         session: { store: storePath, idleMinutes: 999 },
@@ -3113,12 +3126,33 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
       expect(result.sessionEntry.modelProvider, testCase.name).toBeUndefined();
       expect(result.sessionEntry.model, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.providerOverride, testCase.name).toBe(
+        explicitUserOverride.providerOverride,
+      );
+      expect(result.sessionEntry.modelOverride, testCase.name).toBe(
+        explicitUserOverride.modelOverride,
+      );
+      expect(result.sessionEntry.modelOverrideSource, testCase.name).toBe(
+        explicitUserOverride.modelOverrideSource,
+      );
       // Unrelated behavior overrides still carry across the reset.
       expect(result.sessionEntry.verboseLevel, testCase.name).toBe(runtimeModelCache.verboseLevel);
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        SessionEntry
+      >;
       expect(stored[sessionKey].modelProvider, testCase.name).toBeUndefined();
       expect(stored[sessionKey].model, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].providerOverride, testCase.name).toBe(
+        explicitUserOverride.providerOverride,
+      );
+      expect(stored[sessionKey].modelOverride, testCase.name).toBe(
+        explicitUserOverride.modelOverride,
+      );
+      expect(stored[sessionKey].modelOverrideSource, testCase.name).toBe(
+        explicitUserOverride.modelOverrideSource,
+      );
       expect(stored[sessionKey].contextTokens, testCase.name).toBeUndefined();
       expect(stored[sessionKey].verboseLevel, testCase.name).toBe(runtimeModelCache.verboseLevel);
     }

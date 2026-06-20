@@ -806,9 +806,9 @@ export async function initSessionState(params: {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
-    // Runtime model fields are a cache of the previous run, not a user
-    // selection. A reset should resolve the next run from current defaults or
-    // explicit preserved overrides.
+    // Runtime model fields are persisted last-run cache, not user selection.
+    // Reset must drop them so the next turn resolves current defaults or the
+    // explicit providerOverride/modelOverride values preserved above.
     sessionEntry.modelProvider = undefined;
     sessionEntry.model = undefined;
     // Clear stale context hash so the first flush in the new session is not
