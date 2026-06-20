@@ -2046,6 +2046,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
       }),
   );
 
+  const postCoreCompatibilityHostVersion = await readPackageVersion(params.root);
+
   // Mandatory post-core convergence: repair any configured plugin install
   // records that are still missing payloads on disk and run a static smoke
   // check that the repaired payloads are at least loadable. Failures here
@@ -2063,6 +2065,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     env: process.env,
     baselineInstallRecords: convergenceBaselineRecords,
     ...clawHubRiskAcknowledgementOptions,
+    compatibilityHostVersion: postCoreCompatibilityHostVersion,
   });
   for (const change of convergence.changes) {
     if (!params.opts.json) {
@@ -3982,19 +3985,13 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
         : undefined,
     );
     postUpdateConfigSnapshot = restoredConfig.snapshot;
-    // Current-process post-core convergence still reports the pre-update
-    // VERSION. During downgrades, pin compatibility checks to the installed
-    // target so incompatible newer plugins are disabled before restart.
+    // Current-process post-core plugin updates still report the pre-update
+    // VERSION. Pin compatibility checks to the installed target so plugin
+    // discovery/update policy matches the gateway that will be restarted.
     const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
-    const versionComparison =
-      postUpdateInstalledVersion && VERSION
-        ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
-        : null;
-    const compatibilityDowngradeTarget =
-      versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
     const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    if (compatibilityDowngradeTarget) {
-      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
+    if (postUpdateInstalledVersion) {
+      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = postUpdateInstalledVersion;
     }
     try {
       postCorePluginUpdate = await runPostCorePluginUpdate({
@@ -4008,7 +4005,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
         pluginInstallRecords: preUpdatePluginInstallRecords,
       });
     } finally {
-      if (compatibilityDowngradeTarget) {
+      if (postUpdateInstalledVersion) {
         if (previousCompatibilityHostVersion === undefined) {
           delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
         } else {
