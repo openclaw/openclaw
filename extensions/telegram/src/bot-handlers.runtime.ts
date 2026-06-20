@@ -1910,6 +1910,103 @@ export const registerTelegramHandlers = ({
       throw err;
     }
   });
+
+  bot.on("poll_answer", async (ctx) => {
+    try {
+      const pollAnswer = ctx.pollAnswer;
+      if (!pollAnswer) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+
+      const pollId = pollAnswer.poll_id?.trim();
+      if (!pollId) {
+        return;
+      }
+      const pollContext = telegramDeps.getTelegramPollContext(accountId, pollId, cfg);
+      if (!pollContext) {
+        logVerbose(`telegram: skipped poll_answer for unknown poll ${pollId}`);
+        return;
+      }
+
+      const chatId = Number.parseInt(pollContext.chatId, 10);
+      if (!Number.isFinite(chatId)) {
+        logVerbose(`telegram: skipped poll_answer for non-numeric chat ${pollContext.chatId}`);
+        return;
+      }
+
+      const user = pollAnswer.user;
+      if (user?.is_bot) {
+        return;
+      }
+      const senderId = user?.id != null ? String(user.id) : "";
+      const senderUsername = user?.username ?? "";
+      const isGroup = pollContext.chatId.startsWith("-");
+      const isForum = isGroup && pollContext.messageThreadId != null;
+      const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        chatId,
+        isGroup,
+        isForum,
+        senderId,
+        messageThreadId: pollContext.messageThreadId,
+      });
+      const senderAuthorization = await authorizeTelegramEventSender({
+        chatId,
+        isGroup,
+        senderId,
+        senderUsername,
+        mode: "reaction",
+        context: eventAuthContext,
+      });
+      if (!senderAuthorization) {
+        return;
+      }
+
+      const sessionState = resolveTelegramSessionState({
+        chatId,
+        isGroup,
+        isForum,
+        messageThreadId: pollContext.messageThreadId,
+        senderId,
+      });
+
+      const optionIds = [...new Set((pollAnswer.option_ids ?? []).filter(Number.isInteger))];
+      const selectedOptions = optionIds
+        .map((index) => pollContext.options[index])
+        .filter((option): option is string => typeof option === "string" && option.length > 0);
+      const selectionLabel =
+        selectedOptions.length > 0
+          ? selectedOptions.join(", ")
+          : optionIds.length > 0
+            ? optionIds.map(String).join(", ")
+            : "none";
+
+      const senderName = user && [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+      const senderUsernameLabel = user?.username ? `@${user.username}` : undefined;
+      let senderLabel = senderName;
+      if (senderName && senderUsernameLabel) {
+        senderLabel = `${senderName} (${senderUsernameLabel})`;
+      } else if (!senderName && senderUsernameLabel) {
+        senderLabel = senderUsernameLabel;
+      }
+      if (!senderLabel && user?.id) {
+        senderLabel = `id:${user.id}`;
+      }
+
+      const text = `Telegram poll answered by ${senderLabel || "unknown"}: ${pollContext.question} -> ${selectionLabel}`;
+      telegramDeps.enqueueSystemEvent(text, {
+        sessionKey: sessionState.sessionKey,
+        contextKey: `telegram:poll_answer:${pollContext.chatId}:${pollId}:${user?.id ?? "anon"}:${optionIds.join(",") || "none"}`,
+      });
+      logVerbose(`telegram: poll answer event enqueued: ${text}`);
+    } catch (err) {
+      runtime.error?.(danger(`telegram poll_answer handler failed: ${String(err)}`));
+      throw err;
+    }
+  });
+
   const processInboundMessage = async (params: {
     ctx: TelegramContext;
     msg: Message;

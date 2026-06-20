@@ -30,6 +30,7 @@ import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import { getTelegramPollContext } from "./poll-context-store.js";
 import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
@@ -54,6 +55,7 @@ export type TelegramBotDeps = {
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
   syncTelegramMenuCommands?: typeof syncTelegramMenuCommands;
   wasSentByBot: typeof wasSentByBot;
+  getTelegramPollContext: typeof getTelegramPollContext;
   resolveExecApproval?: typeof resolveTelegramExecApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
   deliverReplies?: typeof deliverReplies;
@@ -124,6 +126,9 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get wasSentByBot() {
     return wasSentByBot;
+  },
+  get getTelegramPollContext() {
+    return getTelegramPollContext;
   },
   get resolveExecApproval() {
     return resolveTelegramExecApproval;

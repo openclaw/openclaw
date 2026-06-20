@@ -35,6 +35,7 @@ import {
   isTelegramServerError,
 } from "./network-errors.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import { recordTelegramPollContext } from "./poll-context-store.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
   buildTelegramThreadReplyParams,
@@ -1889,6 +1890,21 @@ export async function sendPollTelegram(
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   const pollId = result?.poll?.id;
   recordSentMessage(chatId, messageId, opts.cfg);
+  if (pollId?.trim()) {
+    recordTelegramPollContext(
+      pollId,
+      {
+        accountId: account.accountId,
+        chatId: resolvedChatId,
+        question: normalizedPoll.question,
+        options: normalizedPoll.options,
+        ...(threadParams.message_thread_id !== undefined
+          ? { messageThreadId: threadParams.message_thread_id }
+          : {}),
+      },
+      opts.cfg,
+    );
+  }
 
   recordChannelActivity({
     channel: "telegram",

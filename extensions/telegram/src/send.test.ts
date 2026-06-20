@@ -15,6 +15,11 @@ import {
   resolveTelegramMessageCacheScope,
   resetTelegramMessageCacheBucketsForTest,
 } from "./message-cache.js";
+import {
+  clearTelegramPollContextCache,
+  getTelegramPollContext,
+  resetTelegramPollContextCacheForTest,
+} from "./poll-context-store.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramApiOverride } from "./send.js";
@@ -319,6 +324,8 @@ afterEach(() => {
   setLoggerOverride(null);
   resetLogger();
   resetTelegramMessageCacheBucketsForTest();
+  clearTelegramPollContextCache();
+  resetTelegramPollContextCacheForTest();
   vi.restoreAllMocks();
 });
 
@@ -3573,6 +3580,33 @@ describe("sendPollTelegram", () => {
     expect(sendPollCall[1]).toBe("Q");
     expect(sendPollCall[2]).toEqual(["A", "B"]);
     expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
+  });
+
+  it("records poll context for poll_answer routing", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: -100555 }, poll: { id: "p1" } })),
+    };
+
+    await sendPollTelegram(
+      "-100555",
+      { question: " Q ", options: [" A ", "B "] },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "t",
+        api: api as unknown as Bot["api"],
+        accountId: "work",
+        messageThreadId: 77,
+      },
+    );
+
+    expect(getTelegramPollContext("work", "p1", TELEGRAM_TEST_CFG)).toEqual({
+      accountId: "work",
+      chatId: "-100555",
+      question: "Q",
+      options: ["A", "B"],
+      messageThreadId: 77,
+      updatedAt: expect.any(Number),
+    });
   });
 
   it("fails poll sends instead of retrying without message_thread_id", async () => {

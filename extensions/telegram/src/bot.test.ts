@@ -30,6 +30,7 @@ const {
   getLoadConfigMock,
   getLoadWebMediaMock,
   getReadChannelAllowFromStoreMock,
+  getTelegramPollContext,
   getOnHandler,
   listSkillCommandsForAgents,
   onSpy,
@@ -3861,6 +3862,16 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("registers poll_answer handler", () => {
+    onSpy.mockClear();
+    createTelegramBot({ token: "tok" });
+    const pollAnswerHandler = onSpy.mock.calls.find((call) => call[0] === "poll_answer");
+    expect(pollAnswerHandler?.[0]).toBe("poll_answer");
+    if (typeof pollAnswerHandler?.[1] !== "function") {
+      throw new Error("expected poll_answer handler");
+    }
+  });
+
   it("enqueues system event for reaction", async () => {
     onSpy.mockClear();
     enqueueSystemEventSpy.mockClear();
@@ -3893,6 +3904,73 @@ describe("createTelegramBot", () => {
       `Telegram reaction added: ${THUMBS_UP_EMOJI} by Ada (@ada_bot) on msg 42`,
     );
     expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:1234:42:9");
+  });
+
+  it("enqueues system event for poll_answer with stored poll context", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getTelegramPollContext.mockReturnValue({
+      accountId: "default",
+      chatId: "-1005678",
+      question: "Release now?",
+      options: ["Ship", "Wait"],
+      messageThreadId: 91,
+      updatedAt: Date.now(),
+    });
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("poll_answer") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      update: { update_id: 520 },
+      pollAnswer: {
+        poll_id: "poll-1",
+        user: { id: 10, first_name: "Bob", username: "bob_user" },
+        option_ids: [1],
+      },
+    });
+
+    expect(getTelegramPollContext).toHaveBeenCalledWith("default", "poll-1", expect.anything());
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+    expect(firstSystemEventArg(0)).toBe(
+      "Telegram poll answered by Bob (@bob_user): Release now? -> Wait",
+    );
+    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:-1005678:topic:91");
+    expect(String(systemEventOptions().contextKey)).toContain(
+      "telegram:poll_answer:-1005678:poll-1:10:1",
+    );
+  });
+
+  it("skips poll_answer when poll context is missing", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getTelegramPollContext.mockReturnValue(undefined);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("poll_answer") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      update: { update_id: 521 },
+      pollAnswer: {
+        poll_id: "missing-poll",
+        user: { id: 10, first_name: "Bob" },
+        option_ids: [0],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -288,6 +288,17 @@ vi.doMock("./sent-message-cache.js", () => ({
   clearSentMessageCache: vi.fn(),
 }));
 
+const pollContextStoreHoisted = vi.hoisted(() => ({
+  getTelegramPollContext: vi.fn(() => undefined),
+}));
+export const getTelegramPollContext = pollContextStoreHoisted.getTelegramPollContext;
+
+vi.doMock("./poll-context-store.js", () => ({
+  getTelegramPollContext: pollContextStoreHoisted.getTelegramPollContext,
+  recordTelegramPollContext: vi.fn(),
+  clearTelegramPollContextCache: vi.fn(),
+}));
+
 // All spy variables used inside vi.mock("grammy", ...) must be created via
 // vi.hoisted() so they are available when the hoisted factory runs, regardless
 // of module evaluation order across different test files.
@@ -465,6 +476,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   syncTelegramMenuCommands: syncTelegramMenuCommands as TelegramBotDeps["syncTelegramMenuCommands"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
+  getTelegramPollContext: getTelegramPollContext as TelegramBotDeps["getTelegramPollContext"],
   resolveExecApproval: resolveExecApprovalSpy as NonNullable<
     TelegramBotDeps["resolveExecApproval"]
   >,
@@ -629,6 +641,8 @@ beforeEach(() => {
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);
+  getTelegramPollContext.mockReset();
+  getTelegramPollContext.mockReturnValue(undefined);
   listSkillCommandsForAgents.mockReset();
   listSkillCommandsForAgents.mockReturnValue([]);
   buildModelsProviderData.mockReset();
