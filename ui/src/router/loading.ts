@@ -181,6 +181,12 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
   return {
     loadRoute,
     clear() {
+      const state = matchStore.getState();
+      for (const match of [...state.matches, ...state.pendingMatches, ...state.cachedMatches]) {
+        if (match.isFetching || match.status === "pending") {
+          match.abortController.abort();
+        }
+      }
       for (const timer of gcTimers.values()) {
         globalThis.clearTimeout(timer);
       }
