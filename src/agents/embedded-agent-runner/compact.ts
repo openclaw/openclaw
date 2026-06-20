@@ -24,6 +24,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { macosVersion } from "../../infra/os-summary.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -1035,7 +1036,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
 
     const runtimeInfo = {
       host: machineName,
-      os: `${os.type()} ${os.release()}`,
+      os:
+        process.platform === "darwin" ? `macos ${macosVersion()}` : `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
       model: `${provider}/${modelId}`,

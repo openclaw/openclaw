@@ -12,7 +12,8 @@ type OsSummary = {
 
 const cachedOsSummaryByKey = new Map<string, OsSummary>();
 
-function macosVersion(): string {
+/** Resolve the macOS product version (e.g. "26.5.1") via sw_vers, falling back to kernel release. */
+export function macosVersion(): string {
   const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
   const out = normalizeOptionalString(res.stdout) ?? "";
   return out || os.release();

@@ -19,6 +19,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { macosVersion } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -157,7 +158,8 @@ export function buildCliAgentSystemPrompt(params: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       host: "openclaw",
-      os: `${os.type()} ${os.release()}`,
+      os:
+        process.platform === "darwin" ? `macos ${macosVersion()}` : `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
       model: params.modelDisplay,
