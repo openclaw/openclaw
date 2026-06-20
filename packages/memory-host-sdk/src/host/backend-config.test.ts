@@ -168,21 +168,21 @@ describe("resolveMemoryBackendConfig", () => {
 
   it("repairs windows paths whose backslashes were stripped by json parsing", () => {
     // FIX #92302: When a user writes a Windows path with single backslashes
-    // in a JSON config, the JSON parser strips them because \ is an escape
-    // character.  The resulting path C:Users... is not path.isAbsolute on
-    // Windows and would be joined with workspaceDir instead of kept absolute.
+    // in a JSON config file, JSON parsing strips them because \\ is an escape
+    // character.  The resulting drive-relative path C:Users... is not
+    // path.isAbsolute on Windows and would be joined with workspaceDir.
+    //
+    // The test uses simple strings to simulate post-JSON-parse corruption:
+    // "C:\\Tools\\qmd.js" with single backslashes becomes "C:Toolsqmd.js".
     const cfg = {
       agents: { defaults: { workspace: "/workspace/root" } },
       memory: {
         backend: "qmd",
         qmd: {
-          // Simulate a Windows path where JSON parsing stripped backslashes:
-          // Original: C:\Users\...\qmd.js → After JSON: C:Users...qmd.js
-          command:
-            "C:Users\\user\\AppData\\Roaming\\npm\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js",
+          command: "C:Toolsqmd.js",
           paths: [
             {
-              path: "C:My Drive\\Vault One",
+              path: "C:MyDriveVault",
               name: "vault-1",
               pattern: "**/*.md",
             },
@@ -192,15 +192,12 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const qmd = requireQmdConfig(resolved);
-    // The repaired path must NOT be joined with workspaceDir — it should
-    // contain the drive letter and a separator, not the workspace prefix.
+    // The repaired path must NOT be joined with workspaceDir.
     expect(qmd.command).not.toContain("/workspace/root");
     expect(qmd.command).toContain(":\\");
-    // The vault path should also be repaired (not joined with workspaceDir).
     const vault = requireQmdCollection(resolved, "vault-1");
     expect(vault.path).not.toContain("/workspace/root");
     expect(vault.path).toContain(":\\");
-    // On Windows the repaired path should be absolute.
     if (process.platform === "win32") {
       expect(path.isAbsolute(qmd.command)).toBe(true);
       expect(path.isAbsolute(vault.path)).toBe(true);
