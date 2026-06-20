@@ -1581,6 +1581,7 @@ export async function spawnSubagentDirect(
         cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
+        model: resolvedModel || undefined,
         timeout: runTimeoutSeconds,
         label: label || undefined,
         ...(bootstrapContextMode
@@ -1591,6 +1592,7 @@ export async function spawnSubagentDirect(
           : {}),
         ...publicSpawnedMetadata,
       },
+      ...(resolvedModel ? { scopes: [ADMIN_SCOPE] } : {}),
       timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
     });
     const runId = readGatewayRunId(response);

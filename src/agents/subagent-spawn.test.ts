@@ -962,8 +962,12 @@ describe("spawnSubagentDirect seam flow", () => {
       if (call.method === "sessions.patch" || call.method === "sessions.delete") {
         // Admin-only methods must be pinned to operator.admin.
         expect(call.scopes).toEqual(["operator.admin"]);
+      } else if (call.method === "agent") {
+        // The agent method receives admin scope when a model override is
+        // present (#91171) so the gateway authorizes the model forwarding.
+        expect(call.scopes).toEqual(["operator.admin"]);
       } else {
-        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope.
+        // Other non-admin methods must NOT be forced to admin scope.
         expect(call.scopes).toBeUndefined();
       }
     }
@@ -1000,6 +1004,42 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentCall = calls.find((call) => call.method === "agent");
     const params = requireRecord(agentCall?.params);
     expect(params.thinking).toBe("high");
+  });
+
+  it("forwards the resolved model and admin scope to the agent run (#91171)", async () => {
+    const calls: Array<{ method?: string; params?: unknown; scopes?: string[] }> = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown; scopes?: string[] }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-model", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "verify model forwarding",
+        model: "openai/gpt-5.4",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall).toBeDefined();
+    const params = requireRecord(agentCall?.params);
+    expect(params.model).toBe("openai/gpt-5.4");
+    // Admin scope is required so the gateway authorizes the model override.
+    expect(agentCall?.scopes).toEqual(["operator.admin"]);
   });
 
   it("does not forward inherited requester thinking as an explicit agent override", async () => {
