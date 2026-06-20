@@ -21,6 +21,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
   });
 }
 
+import { readResponseTextSnippet } from "@openclaw/media-core/read-response-with-limit";
 import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
@@ -61,6 +62,9 @@ import { buildBaseOptions } from "./simple-options.js";
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
+const CODEX_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const CODEX_ERROR_BODY_MAX_CHARS = 400;
+const CODEX_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
 const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
@@ -338,7 +342,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             break;
           }
 
-          const errorText = await response.text();
+          const errorText = await readCodexErrorBodySnippet(response);
           if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
             let delayMs = BASE_DELAY_MS * 2 ** attempt;
 
@@ -1519,10 +1523,34 @@ async function processWebSocketStream(
 // Error Handling
 // ============================================================================
 
+async function readCodexErrorBodySnippet(response: Response): Promise<string> {
+  try {
+    return (
+      (await readResponseTextSnippet(response, {
+        maxBytes: CODEX_ERROR_BODY_MAX_BYTES,
+        maxChars: CODEX_ERROR_BODY_MAX_CHARS,
+        chunkTimeoutMs: CODEX_ERROR_BODY_READ_IDLE_TIMEOUT_MS,
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(
+            `ChatGPT Responses error response stalled: no data received for ${chunkTimeoutMs}ms`,
+          ),
+      })) ?? ""
+    );
+  } catch (error: unknown) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("ChatGPT Responses error response stalled:")
+    ) {
+      return error.message;
+    }
+    return "";
+  }
+}
+
 async function parseErrorResponse(
   response: Response,
 ): Promise<{ message: string; friendlyMessage?: string }> {
-  const raw = await response.text();
+  const raw = await readCodexErrorBodySnippet(response);
   let message = raw || response.statusText || "Request failed";
   let friendlyMessage: string | undefined;
 

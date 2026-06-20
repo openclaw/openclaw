@@ -8,6 +8,11 @@ import {
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
 
+// Mirror the (non-exported) bounded-error-body constants in
+// openai-chatgpt-responses.ts so the assertions stay in lockstep with the source.
+const CODEX_ERROR_BODY_TEST_MAX_BYTES = 8 * 1024;
+const CODEX_ERROR_BODY_TEST_IDLE_MS = 10_000;
+
 function createJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -504,5 +509,103 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.stopReason).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("bounds oversized streamed error responses without buffering the full body", async () => {
+    const encoder = new TextEncoder();
+    const chunk = encoder.encode("E".repeat(64 * 1024));
+    let maxBytesPulledPerResponse = 0;
+    let cancelCount = 0;
+    // Each attempt gets a fresh, oversized stream. The bounded reader caps the
+    // body at 8 KiB and cancels the stream, so a single 64 KiB chunk is pulled
+    // at most once per response instead of being drained to multiple megabytes.
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => {
+      let bytesPulled = 0;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            bytesPulled += chunk.byteLength;
+            maxBytesPulledPerResponse = Math.max(maxBytesPulledPerResponse, bytesPulled);
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            cancelCount += 1;
+          },
+        }),
+        { status: 400, statusText: "Bad Request" },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // Collapse the short inter-attempt backoff sleeps (<= 4s) without disturbing
+    // the bounded reader's 10s idle-timeout guard, which must keep real timing.
+    const realSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (typeof callback === "function" && (delay ?? 0) < CODEX_ERROR_BODY_TEST_IDLE_MS) {
+        callback(...args);
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return realSetTimeout(callback, delay, ...(args as []));
+    }) as typeof setTimeout);
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      transport: "sse",
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    // The error message is collapsed to the byte/char cap (8 KiB / 400 chars),
+    // never the full multi-megabyte body that an unbounded read() would buffer.
+    expect(result.errorMessage).toBe(`${"E".repeat(400)}…`);
+    // Each attempt cancels its stream once the cap is hit instead of draining it,
+    // so only a tiny, bounded prefix is ever held in memory per response. A
+    // ReadableStream may pre-pull one extra chunk for backpressure, so allow a
+    // small slack; the body itself is effectively unbounded (chunks keep coming
+    // until cancelled), and without the cap this would balloon without limit.
+    expect(cancelCount).toBeGreaterThanOrEqual(1);
+    expect(maxBytesPulledPerResponse).toBeLessThanOrEqual(
+      CODEX_ERROR_BODY_TEST_MAX_BYTES + chunk.byteLength * 2,
+    );
+  });
+
+  it("still surfaces the friendly message from a normal-sized JSON error body", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "usage_limit_reached",
+            message: "You are out of credits.",
+            plan_type: "Plus",
+          },
+        }),
+        // 400 is non-retryable, so the very first attempt reaches parseErrorResponse.
+        { status: 400, statusText: "Bad Request" },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      transport: "sse",
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.errorMessage).toContain("You have hit your ChatGPT usage limit (plus plan)");
   });
 });
