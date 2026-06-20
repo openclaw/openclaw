@@ -16,6 +16,10 @@
     "target": "المهارات"
   },
   {
+    "source": "Workboard",
+    "target": "لوحة العمل"
+  },
+  {
     "source": "Tailscale",
     "target": "Tailscale"
   },
