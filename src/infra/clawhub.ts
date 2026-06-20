@@ -1018,11 +1018,7 @@ export async function fetchClawHubSkillInstallResolution(params: {
   if (!response.ok && !isStructuredBlock) {
     throw await buildClawHubError(response, url, hasToken);
   }
-  try {
-    return (await response.json()) as ClawHubSkillInstallResolutionResponse;
-  } catch (cause) {
-    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
-  }
+  return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(response, url);
 }
 
 export async function fetchClawHubSkillVerification(params: {

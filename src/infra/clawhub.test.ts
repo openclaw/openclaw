@@ -854,6 +854,42 @@ describe("clawhub helpers", () => {
     expect(message.length).toBeLessThanOrEqual(500);
   });
 
+  it("bounds oversized ClawHub install-resolution JSON responses and cancels the stream", async () => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+    const overshootChunks = 34; // 34 * 512 KiB = 17 MiB > 16 MiB cap
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted >= overshootChunks) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancel();
+      },
+    });
+
+    await expect(
+      fetchClawHubSkillInstallResolution({
+        slug: "weather",
+        fetchImpl: async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow(
+      /ClawHub \/api\/v1\/skills\/weather\/install response exceeded 16777216 bytes/,
+    );
+    // Same bounded reader covers the sibling install-resolution JSON path so a
+    // hostile install response cannot exhaust memory either.
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
     await expect(
