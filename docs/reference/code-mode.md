@@ -25,10 +25,13 @@ different `exec` contracts:
   configured. It runs in the OpenClaw generic agent runtime, where the model
   writes JavaScript or TypeScript programs through an `exec.code` contract.
 
-Codex Code Mode and Codex-native dynamic tool search are stable Codex harness
-surfaces. OpenClaw code mode is an OpenClaw-owned experimental tool-surface
-adapter for generic OpenClaw runs. It uses `quickjs-wasi`, a hidden OpenClaw
-tool catalog, and the normal OpenClaw tool executor.
+Codex Code Mode and Codex-native dynamic tool search are Codex-owned harness
+surfaces that upstream Codex still marks as under development (`code_mode` and
+`code_mode_only` are `Stage::UnderDevelopment`). OpenClaw enables them for Codex
+app-server threads but does not own their stability. OpenClaw code mode is an
+OpenClaw-owned experimental tool-surface adapter for generic OpenClaw runs. It
+uses `quickjs-wasi`, a hidden OpenClaw tool catalog, and the normal OpenClaw tool
+executor.
 
 ## OpenClaw code mode vs Codex Code Mode
 
@@ -40,7 +43,7 @@ tool catalog, and the normal OpenClaw tool executor.
 | Model-visible `exec` input | `exec.code` (and `exec.command` as an alias) with JavaScript or TypeScript              | `exec` with raw JavaScript source code                                                      |
 | Visible tool surface       | `exec` and `wait`, plus the hidden OpenClaw tool catalog behind guest helpers           | Codex-native code mode plus Codex-native dynamic tool surfaces                              |
 | Policy path                | Nested calls still run through normal OpenClaw tools, hooks, approvals, auth, and audit | Native Codex thread/tool policy, with OpenClaw bridging selected app-server and hook events |
-| Stability                  | Experimental OpenClaw feature                                                           | Stable Codex harness surface                                                                |
+| Stability                  | Experimental OpenClaw feature                                                           | Codex-owned feature; upstream marks `code_mode`/`code_mode_only` as under development       |
 
 If you are using the bundled Codex harness, see
 [Codex harness](/plugins/codex-harness) for the Codex-native side of the split.
