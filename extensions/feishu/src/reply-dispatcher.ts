@@ -255,6 +255,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
+  const sendIntervalMs = account.config?.sendIntervalMs;
   const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
   const coreBlockStreamingEnabled = account.config?.blockStreaming === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
@@ -498,6 +499,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       chunkText(chunkSource, textChunkLimit, chunkMode),
     );
     for (const [index, chunk] of chunks.entries()) {
+      if (index > 0 && sendIntervalMs && sendIntervalMs > 0) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, sendIntervalMs);
+        });
+      }
       await paramsLocal.sendChunk({
         chunk,
         isFirst: index === 0,

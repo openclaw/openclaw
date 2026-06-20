@@ -191,6 +191,7 @@ const FeishuSharedConfigShape = {
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema).optional(),
   textChunkLimit: z.number().int().positive().optional(),
+  sendIntervalMs: z.number().int().min(0).optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
   blockStreaming: BlockStreamingSchema,
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
