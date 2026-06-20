@@ -183,6 +183,17 @@ function resolvePath(raw: string, workspaceDir: string): string {
   if (trimmed.startsWith("~") || path.isAbsolute(trimmed)) {
     return path.normalize(resolveUserPath(trimmed));
   }
+  // FIX #92302: JSON parsers treat single backslashes as escape sequences,
+  // so a Windows path like C:\Users\... stored with single backslashes becomes
+  // C:Users... after JSON parsing.  Node's path.isAbsolute() returns false for
+  // drive-relative paths (C:Users), treating them as relative to workspaceDir.
+  // Detect the likely-original drive letter pattern and insert a separator so
+  // the path resolves as absolute.
+  const driveRelative = /^[A-Za-z]:([^\\/])/.exec(trimmed);
+  if (driveRelative) {
+    const repaired = `${trimmed.slice(0, 2)}\\${trimmed.slice(2)}`;
+    return path.normalize(resolveUserPath(repaired));
+  }
   return path.normalize(path.resolve(workspaceDir, trimmed));
 }
 
@@ -440,7 +451,13 @@ export function resolveMemoryBackendConfig(params: {
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  // FIX #92302: Resolve the command through resolvePath so Windows paths
+  // whose backslashes were stripped by JSON parsing are repaired.
+  const commandedResolved = resolvePath(
+    parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd",
+    workspaceDir,
+  );
+  const command = commandedResolved;
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
