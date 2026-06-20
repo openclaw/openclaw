@@ -253,6 +253,38 @@ describe("config schema", () => {
     }
   });
 
+  it("accepts stdio transport for command-bearing MCP servers", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          myTool: {
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-filesystem"],
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unsupported transport values for MCP servers", () => {
+    for (const transport of ["tcp", "websocket", "grpc", ""]) {
+      expect(() =>
+        OpenClawSchema.parse({
+          mcp: {
+            servers: {
+              bad: {
+                url: "https://mcp.example.com/mcp",
+                transport,
+              },
+            },
+          },
+        }),
+      ).toThrow();
+    }
+  });
+
   it("merges plugin ui hints", () => {
     const res = buildConfigSchema(pluginUiHintInput);
 
