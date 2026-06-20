@@ -867,6 +867,9 @@ function handleClaudeLiveControlRequest(
   if (!requestId) {
     return;
   }
+  const input = { ...request };
+  delete input.subtype;
+  delete input.tool_use_id;
   const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
   const input = { ...request };
   delete input.subtype;
