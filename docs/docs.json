@@ -1217,6 +1217,7 @@
                 "pages": [
                   "concepts/messages",
                   "concepts/message-lifecycle-refactor",
+                  "concepts/task-completion",
                   "concepts/streaming",
                   "concepts/progress-drafts",
                   "concepts/retry",
