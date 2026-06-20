@@ -1046,6 +1046,8 @@ function configApplyHintForOperations(
     expandActualChangedPathsWithRequestedDescendants(
       diffConfigPaths(beforeConfig, afterConfig),
       requestedPaths,
+      beforeConfig,
+      afterConfig,
     ),
   );
 }
@@ -1053,21 +1055,55 @@ function configApplyHintForOperations(
 function expandActualChangedPathsWithRequestedDescendants(
   actualChangedPaths: string[],
   requestedPaths: string[],
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
 ): string[] {
   const expanded = new Set<string>();
   for (const actualPath of actualChangedPaths) {
     const requestedDescendants = requestedPaths.filter(
-      (requestedPath) => requestedPath === actualPath || requestedPath.startsWith(`${actualPath}.`),
+      (requestedPath) => requestedPath !== actualPath && requestedPath.startsWith(`${actualPath}.`),
     );
-    if (requestedDescendants.length === 0) {
-      expanded.add(actualPath);
+    if (requestedDescendants.length > 0) {
+      for (const requestedPath of requestedDescendants) {
+        expanded.add(requestedPath);
+      }
       continue;
     }
-    for (const requestedPath of requestedDescendants) {
-      expanded.add(requestedPath);
+    for (const expandedPath of expandWholeValueChangePath(actualPath, beforeConfig, afterConfig)) {
+      expanded.add(expandedPath);
     }
   }
   return [...expanded];
+}
+
+function expandWholeValueChangePath(
+  actualPath: string,
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string[] {
+  const path = actualPath === "<root>" ? [] : actualPath.split(".");
+  const before = getAtPath(beforeConfig, path);
+  const after = getAtPath(afterConfig, path);
+  if (before.found && !after.found) {
+    return collectChangedLeafPaths(before.value, actualPath);
+  }
+  if (!before.found && after.found) {
+    return collectChangedLeafPaths(after.value, actualPath);
+  }
+  return [actualPath];
+}
+
+function collectChangedLeafPaths(value: unknown, prefix: string): string[] {
+  if (!isPlainRecord(value)) {
+    return [prefix];
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0) {
+    return [prefix];
+  }
+  return entries.flatMap(([key, child]) =>
+    collectChangedLeafPaths(child, prefix ? `${prefix}.${key}` : key),
+  );
 }
 
 function parseSecretRefSource(raw: string, label: string): SecretRefSource {
