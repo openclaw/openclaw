@@ -1,4 +1,4 @@
-import type { RouteState, Router } from "../router/types.ts";
+import type { Router, RouterState } from "../router/types.ts";
 
 type RenderableModule<TContext, TData> = {
   render: (context: TContext, data: TData | undefined) => unknown;
@@ -6,11 +6,15 @@ type RenderableModule<TContext, TData> = {
 
 export type RouterOutletOptions<TRouteId extends string, TData = unknown> = {
   fallbackRouteId?: TRouteId;
-  pending?: (state: RouteState<TRouteId, TData>) => unknown;
-  error?: (error: unknown, state: RouteState<TRouteId, TData>, render?: () => unknown) => unknown;
+  pending?: (state: RouterState<TRouteId, unknown, TData>) => unknown;
+  error?: (
+    error: unknown,
+    state: RouterState<TRouteId, unknown, TData>,
+    render?: () => unknown,
+  ) => unknown;
   onRender?: (
     routeId: TRouteId,
-    state: RouteState<TRouteId, TData>,
+    state: RouterState<TRouteId, unknown, TData>,
     render: () => unknown,
   ) => unknown;
 };
@@ -38,29 +42,37 @@ export function renderRouterOutlet<
   options: RouterOutletOptions<TRouteId, TData> = {},
 ): unknown {
   const state = router.getState();
+  const activeMatch = state.matches[0];
+  const pendingMatch = state.pendingMatches[0];
+  const errorMatch = pendingMatch?.error ? pendingMatch : activeMatch;
   const routeId =
-    state.resolvedRouteId ??
+    activeMatch?.routeId ??
     (state.status === "idle" || state.status === "loading" ? options.fallbackRouteId : null);
   if (!routeId) {
-    if (state.status === "error") {
-      return options.error?.(state.error, state) ?? null;
+    if (errorMatch?.error) {
+      return options.error?.(errorMatch.error, state) ?? null;
     }
     return options.pending?.(state) ?? null;
   }
 
   const route = router.getRoute(routeId);
-  const module = router.getLoadedModule(routeId);
+  const module =
+    activeMatch?.routeId === routeId
+      ? activeMatch.module
+      : pendingMatch?.routeId === routeId
+        ? pendingMatch.module
+        : undefined;
   if (route?.component && !module) {
     return options.pending?.(state) ?? null;
   }
   if (!isRenderableModule<TContext, TData>(module)) {
-    return state.status === "error" ? (options.error?.(state.error, state) ?? null) : null;
+    return errorMatch?.error ? (options.error?.(errorMatch.error, state) ?? null) : null;
   }
-  const renderPage = () => module.render(context, state.resolvedData);
+  const renderPage = () => module.render(context, activeMatch?.data);
   const renderedPage = options.onRender
     ? () => options.onRender?.(routeId, state, renderPage)
     : renderPage;
-  return state.status === "error"
-    ? (options.error?.(state.error, state, renderedPage) ?? renderedPage())
+  return errorMatch?.error
+    ? (options.error?.(errorMatch.error, state, renderedPage) ?? renderedPage())
     : renderedPage();
 }

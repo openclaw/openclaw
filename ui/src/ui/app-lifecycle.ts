@@ -147,22 +147,20 @@ export function handleConnected(host: LifecycleHost) {
   host.routeSubscription?.();
   host.routeSubscription = appRouter.subscribe((next) => {
     const previousRouteId = host.routeId;
-    if (
-      next.status === "loading" &&
-      next.pendingRouteId &&
-      next.pendingRouteId !== previousRouteId
-    ) {
+    const pendingRouteId = next.pendingMatches[0]?.routeId;
+    const resolvedRouteId = next.matches[0]?.routeId;
+    if (next.status === "loading" && pendingRouteId && pendingRouteId !== previousRouteId) {
       clearPendingSessionsChangedReload(host);
-      beginControlUiRouteTiming(host, previousRouteId, next.pendingRouteId);
+      beginControlUiRouteTiming(host, previousRouteId, pendingRouteId);
     } else if (next.status === "error") {
       cancelControlUiRouteTiming(host);
     }
     // Keep the committed page active while the next route loads. This matches
     // the router contract: pending navigation must not switch app rendering
     // before the target route has completed loading and committed.
-    host.routeId = next.resolvedRouteId ?? host.routeId ?? "chat";
-    if (next.resolvedRouteId) {
-      completeControlUiRouteTiming(host, next.resolvedRouteId);
+    if (next.status === "success" && resolvedRouteId) {
+      host.routeId = resolvedRouteId;
+      completeControlUiRouteTiming(host, resolvedRouteId);
     }
     host.requestUpdate?.();
   });

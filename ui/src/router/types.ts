@@ -15,6 +15,10 @@ export type RouterHistory = {
 
 export type RouteLoadCause = "navigation" | "preload" | "revalidate";
 
+export type RouteMatchStatus = "pending" | "success" | "error" | "notFound" | "redirected";
+
+export type RouteMatchFetching = false | "loader" | "component";
+
 export type RouteHookOptions = {
   signal: AbortSignal;
   shouldRun: () => boolean;
@@ -54,16 +58,31 @@ export type PageDefinition<
   ) => MaybePromise<void>;
 };
 
-export type RouteState<TRouteId extends string = string, TData = unknown> = {
-  requested: RouteLocation;
-  resolved: RouteLocation | null;
-  pendingRouteId: TRouteId | null;
-  resolvedRouteId: TRouteId | null;
-  pendingData: TData | undefined;
-  resolvedData: TData | undefined;
-  status: "idle" | "loading" | "resolved" | "error";
-  revalidating: boolean;
+export type RouteMatch<TRouteId extends string = string, TModule = unknown, TData = unknown> = {
+  id: string;
+  routeId: TRouteId;
+  location: RouteLocation;
+  deps: string;
+  status: RouteMatchStatus;
+  isFetching: RouteMatchFetching;
+  data?: TData;
+  module?: TModule;
   error?: unknown;
+  updatedAt: number;
+  fetchCount: number;
+  abortController: AbortController;
+  cause: RouteLoadCause;
+  preload: boolean;
+  invalid: boolean;
+};
+
+export type RouterState<TRouteId extends string = string, TModule = unknown, TData = unknown> = {
+  location: RouteLocation;
+  resolvedLocation: RouteLocation | null;
+  status: "idle" | "loading" | "success" | "error";
+  matches: readonly RouteMatch<TRouteId, TModule, TData>[];
+  pendingMatches: readonly RouteMatch<TRouteId, TModule, TData>[];
+  cachedMatches: readonly RouteMatch<TRouteId, TModule, TData>[];
 };
 
 export type RouterOptions<TRouteId extends string, TLoadContext, TModule, TData> = {
@@ -77,12 +96,16 @@ export type RouterOptions<TRouteId extends string, TLoadContext, TModule, TData>
 export type Router<TRouteId extends string, TLoadContext, TModule, TData> = {
   routes: readonly PageDefinition<TRouteId, TLoadContext, TModule, TData>[];
   getRoute: (routeId: TRouteId) => PageDefinition<TRouteId, TLoadContext, TModule, TData> | null;
-  getLoadedModule: (routeId: TRouteId) => TModule | undefined;
+  getMatch: (matchId: string) => RouteMatch<TRouteId, TModule, TData> | undefined;
   preloadRoute: (routeId: TRouteId, context: TLoadContext) => Promise<void>;
   preloadLocation: (location: RouteLocation, context: TLoadContext) => Promise<void>;
   invalidate: (routeId?: TRouteId) => void;
-  getState: () => RouteState<TRouteId, TData>;
-  subscribe: (listener: (next: RouteState<TRouteId, TData>) => void) => () => boolean;
+  getState: () => RouterState<TRouteId, TModule, TData>;
+  subscribe: (listener: (next: RouterState<TRouteId, TModule, TData>) => void) => () => boolean;
+  subscribeMatch: (
+    matchId: string,
+    listener: (next: RouteMatch<TRouteId, TModule, TData> | undefined) => void,
+  ) => () => boolean;
   pathForRoute: (routeId: TRouteId, basePath?: string) => string;
   routeIdFromPath: (pathname: string, basePath?: string) => TRouteId | null;
   start: (history: RouterHistory, basePath: string, context: TLoadContext) => Promise<void>;

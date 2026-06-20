@@ -292,10 +292,9 @@ export function renderApp(state: AppViewState) {
   }
 
   const routeState = appRouter.getState();
-  const renderedRouteId = routeState.resolvedRouteId ?? state.routeId;
-  const activeRouteModule = renderedRouteId
-    ? appRouter.getLoadedModule(renderedRouteId)
-    : undefined;
+  const activeMatch = routeState.matches[0];
+  const renderedRouteId = activeMatch?.routeId ?? state.routeId;
+  const activeRouteModule = activeMatch?.module;
   const isChat =
     typeof activeRouteModule === "object" &&
     activeRouteModule !== null &&
@@ -319,7 +318,8 @@ export function renderApp(state: AppViewState) {
       `,
       error: (error, nextState, render) => {
         const routeError = error instanceof Error ? error.message : String(error);
-        const routeErrorId = nextState.pendingRouteId ?? nextState.resolvedRouteId ?? state.routeId;
+        const routeErrorId =
+          nextState.pendingMatches[0]?.routeId ?? nextState.matches[0]?.routeId ?? state.routeId;
         return html`
           ${render?.() ?? nothing}
           <div class="callout danger" role="alert">

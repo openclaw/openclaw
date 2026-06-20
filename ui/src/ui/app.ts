@@ -1035,12 +1035,13 @@ export class OpenClawApp extends LitElement {
       hash: "",
     };
     const routeState = appRouter.getState();
-    const revalidate = routeState.status === "resolved" && routeState.resolvedRouteId === next;
+    const activeMatch = routeState.matches[0];
+    const revalidate = routeState.status === "success" && activeMatch?.routeId === next;
     const browserLocation = typeof window === "undefined" ? null : window.location;
     const sameLocation =
-      (browserLocation?.pathname ?? routeState.resolved?.pathname) === location.pathname &&
-      (browserLocation?.search ?? routeState.resolved?.search) === location.search &&
-      (browserLocation?.hash ?? routeState.resolved?.hash) === location.hash;
+      (browserLocation?.pathname ?? routeState.resolvedLocation?.pathname) === location.pathname &&
+      (browserLocation?.search ?? routeState.resolvedLocation?.search) === location.search &&
+      (browserLocation?.hash ?? routeState.resolvedLocation?.hash) === location.hash;
     void appRouter
       .navigate(
         next,

@@ -1,4 +1,32 @@
-import type { PageDefinition, RouteLocation, RouterOptions } from "./types.ts";
+import type {
+  PageDefinition,
+  RouteLocation,
+  RouteMatch,
+  RouterOptions,
+  RouterState,
+} from "./types.ts";
+
+export type MatchStore<TRouteId extends string, TModule, TData> = {
+  getState: () => RouterState<TRouteId, TModule, TData>;
+  getMatch: (matchId: string) => RouteMatch<TRouteId, TModule, TData> | undefined;
+  getActiveMatch: () => RouteMatch<TRouteId, TModule, TData> | undefined;
+  setLocation: (location: RouteLocation, resolvedLocation: RouteLocation | null) => void;
+  setStatus: (status: RouterState<TRouteId, TModule, TData>["status"]) => void;
+  setActive: (matches: readonly RouteMatch<TRouteId, TModule, TData>[]) => void;
+  setPending: (matches: readonly RouteMatch<TRouteId, TModule, TData>[]) => void;
+  setCached: (matches: readonly RouteMatch<TRouteId, TModule, TData>[]) => void;
+  updateMatch: (
+    matchId: string,
+    update: (match: RouteMatch<TRouteId, TModule, TData>) => RouteMatch<TRouteId, TModule, TData>,
+  ) => boolean;
+  invalidate: (routeId?: TRouteId) => void;
+  clear: () => void;
+  subscribe: (listener: (state: RouterState<TRouteId, TModule, TData>) => void) => () => boolean;
+  subscribeMatch: (
+    matchId: string,
+    listener: (match: RouteMatch<TRouteId, TModule, TData> | undefined) => void,
+  ) => () => boolean;
+};
 
 export type CompiledRoutes<TRouteId extends string, TLoadContext, TModule, TData> = {
   byId: Map<TRouteId, PageDefinition<TRouteId, TLoadContext, TModule, TData>>;
@@ -6,6 +34,238 @@ export type CompiledRoutes<TRouteId extends string, TLoadContext, TModule, TData
   pathForRoute: (routeId: TRouteId, basePath?: string) => string;
   routeIdFromPath: (pathname: string, basePath?: string) => TRouteId | null;
 };
+
+export function matchIdForLocation<TRouteId extends string>(
+  routeId: TRouteId,
+  location: RouteLocation,
+  deps: string,
+): string {
+  return `${routeId}\u0000${location.pathname}\u0000${location.search}\u0000${deps}`;
+}
+
+export function createRouteMatch<TRouteId extends string, TModule, TData>(
+  routeId: TRouteId,
+  location: RouteLocation,
+  deps: string,
+  cause: RouteMatch<TRouteId, TModule, TData>["cause"],
+  abortController: AbortController,
+  preload = false,
+): RouteMatch<TRouteId, TModule, TData> {
+  return {
+    id: matchIdForLocation(routeId, location, deps),
+    routeId,
+    location,
+    deps,
+    status: "pending",
+    isFetching: false,
+    updatedAt: 0,
+    fetchCount: 0,
+    abortController,
+    cause,
+    preload,
+    invalid: false,
+  };
+}
+
+export function createMatchStore<TRouteId extends string, TModule, TData>(): MatchStore<
+  TRouteId,
+  TModule,
+  TData
+> {
+  const active = new Map<string, RouteMatch<TRouteId, TModule, TData>>();
+  const pending = new Map<string, RouteMatch<TRouteId, TModule, TData>>();
+  const cached = new Map<string, RouteMatch<TRouteId, TModule, TData>>();
+  const listeners = new Set<(state: RouterState<TRouteId, TModule, TData>) => void>();
+  const matchListeners = new Map<
+    string,
+    Set<(match: RouteMatch<TRouteId, TModule, TData> | undefined) => void>
+  >();
+  let location = locationForPath("/");
+  let resolvedLocation: RouteLocation | null = null;
+  let status: RouterState<TRouteId, TModule, TData>["status"] = "idle";
+  let transactionDepth = 0;
+  let dirty = false;
+  const changedMatchIds = new Set<string>();
+
+  const readPool = (pool: Map<string, RouteMatch<TRouteId, TModule, TData>>) => [...pool.values()];
+
+  const readState = (): RouterState<TRouteId, TModule, TData> => ({
+    location,
+    resolvedLocation,
+    status,
+    matches: readPool(active),
+    pendingMatches: readPool(pending),
+    cachedMatches: readPool(cached),
+  });
+
+  const notify = (matchId?: string) => {
+    dirty = true;
+    if (matchId) {
+      changedMatchIds.add(matchId);
+    }
+    if (transactionDepth > 0) {
+      return;
+    }
+    const next = readState();
+    const ids = [...changedMatchIds];
+    changedMatchIds.clear();
+    dirty = false;
+    for (const listener of listeners) {
+      listener(next);
+    }
+    for (const id of ids) {
+      const match = active.get(id) ?? pending.get(id) ?? cached.get(id);
+      for (const listener of matchListeners.get(id) ?? []) {
+        listener(match);
+      }
+    }
+  };
+
+  const batch = (operation: () => void) => {
+    transactionDepth += 1;
+    try {
+      operation();
+    } finally {
+      transactionDepth -= 1;
+      if (transactionDepth === 0 && dirty) {
+        notify();
+      }
+    }
+  };
+
+  const removeFromOtherPools = (
+    id: string,
+    keep: Map<string, RouteMatch<TRouteId, TModule, TData>>,
+  ) => {
+    for (const pool of [active, pending, cached]) {
+      if (pool !== keep && pool.delete(id)) {
+        changedMatchIds.add(id);
+      }
+    }
+  };
+
+  const setPool = (
+    pool: Map<string, RouteMatch<TRouteId, TModule, TData>>,
+    matches: readonly RouteMatch<TRouteId, TModule, TData>[],
+  ) => {
+    let changed = false;
+    const nextIds = new Set(matches.map((match) => match.id));
+    for (const id of pool.keys()) {
+      if (!nextIds.has(id)) {
+        pool.delete(id);
+        changedMatchIds.add(id);
+        changed = true;
+      }
+    }
+    for (const match of matches) {
+      const previous = pool.get(match.id);
+      removeFromOtherPools(match.id, pool);
+      if (previous !== match) {
+        pool.set(match.id, match);
+        changedMatchIds.add(match.id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      notify();
+    }
+  };
+
+  const getMatch = (matchId: string) =>
+    active.get(matchId) ?? pending.get(matchId) ?? cached.get(matchId);
+
+  return {
+    getState: readState,
+    getMatch,
+    getActiveMatch: () => active.values().next().value,
+    setLocation(nextLocation, nextResolvedLocation) {
+      if (
+        location.pathname === nextLocation.pathname &&
+        location.search === nextLocation.search &&
+        location.hash === nextLocation.hash &&
+        resolvedLocation?.pathname === nextResolvedLocation?.pathname &&
+        resolvedLocation?.search === nextResolvedLocation?.search &&
+        resolvedLocation?.hash === nextResolvedLocation?.hash
+      ) {
+        return;
+      }
+      location = nextLocation;
+      resolvedLocation = nextResolvedLocation;
+      notify();
+    },
+    setStatus(nextStatus) {
+      if (status === nextStatus) {
+        return;
+      }
+      status = nextStatus;
+      notify();
+    },
+    setActive(matches) {
+      batch(() => setPool(active, matches));
+    },
+    setPending(matches) {
+      batch(() => setPool(pending, matches));
+    },
+    setCached(matches) {
+      batch(() => setPool(cached, matches));
+    },
+    updateMatch(matchId, update) {
+      const pool = [active, pending, cached].find((candidate) => candidate.has(matchId));
+      const current = pool?.get(matchId);
+      if (!pool || !current) {
+        return false;
+      }
+      const next = update(current);
+      if (next !== current) {
+        pool.set(matchId, next);
+        notify(matchId);
+      }
+      return true;
+    },
+    invalidate(routeId) {
+      batch(() => {
+        for (const pool of [active, pending, cached]) {
+          for (const [id, match] of pool) {
+            if (routeId === undefined || match.routeId === routeId) {
+              pool.set(id, { ...match, invalid: true });
+              notify(id);
+            }
+          }
+        }
+      });
+    },
+    clear() {
+      batch(() => {
+        for (const pool of [active, pending, cached]) {
+          for (const id of pool.keys()) {
+            changedMatchIds.add(id);
+          }
+          pool.clear();
+        }
+        location = locationForPath("/");
+        resolvedLocation = null;
+        status = "idle";
+        notify();
+      });
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeMatch(matchId, listener) {
+      const current = matchListeners.get(matchId) ?? new Set();
+      current.add(listener);
+      matchListeners.set(matchId, current);
+      return () => {
+        current.delete(listener);
+        if (current.size === 0) {
+          matchListeners.delete(matchId);
+        }
+        return true;
+      };
+    },
+  };
+}
 
 export function normalizeRouteBasePath(basePath: string): string {
   const value = basePath.trim();

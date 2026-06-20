@@ -10,7 +10,7 @@ function mountApp(pathname: string) {
 }
 
 async function waitForRoute(routeId: string) {
-  await vi.waitFor(() => expect(appRouter.getState().resolvedRouteId).toBe(routeId), {
+  await vi.waitFor(() => expect(appRouter.getState().matches[0]?.routeId).toBe(routeId), {
     timeout: 6000,
   });
 }
