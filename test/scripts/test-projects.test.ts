@@ -1064,6 +1064,20 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps build stamp script edits on the build stamp regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/build-stamp.mjs"])).toEqual({
+      mode: "targets",
+      targets: ["src/infra/build-stamp.test.ts"],
+    });
+  });
+
+  it("keeps bundled plugin metadata copier edits on runtime owner tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/copy-bundled-plugin-metadata.mjs"])).toEqual({
+      mode: "targets",
+      targets: ["src/plugins/copy-bundled-plugin-metadata.test.ts", "src/infra/run-node.test.ts"],
+    });
+  });
+
   it("keeps CI workflow edits on workflow guard tests", () => {
     expect(resolveChangedTestTargetPlan([".github/workflows/ci.yml"])).toEqual({
       mode: "targets",
@@ -1291,7 +1305,53 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/lib/managed-child-process.mjs", ["test/scripts/managed-child-process.test.ts"]],
       ["scripts/lib/source-file-scan-cache.mjs", ["test/scripts/source-file-scan-cache.test.ts"]],
       ["scripts/lib/dev-tooling-safety.ts", ["test/scripts/dev-tooling-safety.test.ts"]],
+      [
+        "scripts/lib/local-build-metadata.mjs",
+        [
+          "src/infra/build-stamp.test.ts",
+          "test/scripts/runtime-postbuild-stamp.test.ts",
+          "src/infra/run-node.test.ts",
+          "src/infra/package-dist-inventory.test.ts",
+          "test/release-check.test.ts",
+          "test/openclaw-npm-release-check.test.ts",
+          "test/scripts/check-gateway-watch-regression.test.ts",
+          "test/scripts/check-openclaw-package-tarball.test.ts",
+          "test/scripts/openclaw-cross-os-release-checks.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/local-build-metadata-paths.mjs",
+        [
+          "src/infra/build-stamp.test.ts",
+          "test/scripts/runtime-postbuild-stamp.test.ts",
+          "src/infra/run-node.test.ts",
+          "src/infra/package-dist-inventory.test.ts",
+          "test/release-check.test.ts",
+          "test/openclaw-npm-release-check.test.ts",
+          "test/scripts/check-gateway-watch-regression.test.ts",
+          "test/scripts/check-openclaw-package-tarball.test.ts",
+          "test/scripts/openclaw-cross-os-release-checks.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/deprecated-plugin-sdk-usage.mjs",
+        ["test/scripts/check-deprecated-api-usage.test.ts"],
+      ],
       ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
+      [
+        "scripts/lib/plugin-npm-runtime-build.mjs",
+        [
+          "test/scripts/plugin-npm-runtime-build-args.test.ts",
+          "test/plugin-npm-runtime-build.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/plugin-npm-package-manifest.mjs",
+        [
+          "test/scripts/plugin-npm-package-manifest-args.test.ts",
+          "test/plugin-npm-package-manifest.test.ts",
+        ],
+      ],
       ["scripts/lib/arg-utils.mjs", ["test/scripts/arg-utils.test.ts"]],
       ["scripts/docker/cleanup-smoke/run.sh", ["test/scripts/docker-build-helper.test.ts"]],
       [
@@ -1345,9 +1405,25 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-npm-release.ts",
         ["test/plugin-npm-release.test.ts", "test/plugin-clawhub-release.test.ts"],
       ],
+      [
+        "scripts/lib/plugin-npm-runtime-assets.mjs",
+        ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
+      ],
+      [
+        "scripts/lib/static-extension-assets.mjs",
+        [
+          "test/scripts/runtime-postbuild.test.ts",
+          "src/infra/run-node.test.ts",
+          "test/scripts/plugin-npm-runtime-build-args.test.ts",
+        ],
+      ],
       ["scripts/lib/test-group-report.mjs", ["test/scripts/test-group-report.test.ts"]],
       ["scripts/lib/stable-release-closeout.mjs", ["test/stable-release-closeout.test.ts"]],
       ["scripts/lib/ts-guard-utils.mjs", ["test/scripts/ts-guard-utils.test.ts"]],
+      [
+        "scripts/lib/tsgo-sparse-guard.mjs",
+        ["test/scripts/run-tsgo.test.ts", "test/scripts/changed-lanes.test.ts"],
+      ],
       ["scripts/write-package-dist-inventory.ts", ["test/scripts/test-install-sh-docker.test.ts"]],
       ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
       [
@@ -1358,6 +1434,46 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/bundled-plugin-build-entries.mjs",
         ["test/scripts/bundled-plugin-build-entries.test.ts"],
       ],
+    ]);
+
+    for (const [source, targets] of expectedTargets) {
+      expect(resolveChangedTestTargetPlan([source]), source).toEqual({
+        mode: "targets",
+        targets,
+      });
+    }
+  });
+
+  it("keeps plugin SDK boundary tooling edits on owner tests", () => {
+    const expectedTargets = new Map([
+      [
+        "scripts/check-extension-plugin-sdk-boundary.mjs",
+        ["test/extension-import-boundaries.test.ts"],
+      ],
+      [
+        "scripts/check-sdk-package-extension-import-boundary.mjs",
+        ["test/extension-import-boundaries.test.ts"],
+      ],
+      [
+        "scripts/check-plugin-extension-import-boundary.mjs",
+        ["test/plugin-extension-import-boundary.test.ts"],
+      ],
+      [
+        "scripts/check-src-extension-import-boundary.mjs",
+        ["test/extension-import-boundaries.test.ts"],
+      ],
+      [
+        "scripts/check-test-helper-extension-import-boundary.mjs",
+        ["test/test-helper-extension-import-boundary.test.ts"],
+      ],
+      [
+        "scripts/write-plugin-sdk-entry-dts.ts",
+        [
+          "test/scripts/build-all.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+        ],
+      ],
+      ["scripts/fixtures/packed-plugin-sdk-type-smoke.ts", ["test/release-check.test.ts"]],
     ]);
 
     for (const [source, targets] of expectedTargets) {
@@ -1624,6 +1740,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/mcp-channels-docker-client.ts",
       "scripts/e2e/mcp-channels-seed.ts",
       "scripts/e2e/docker-openai-seed.ts",
+      "scripts/e2e/mcp-client-temp-state.ts",
       "scripts/e2e/mcp-code-mode-gateway-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-seed.ts",
@@ -1644,6 +1761,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/docker-e2e-seeds.test.ts",
+        "test/scripts/mcp-channels-harness.test.ts",
         "test/scripts/mcp-code-mode-gateway-client.test.ts",
         "test/scripts/session-log-mentions.test.ts",
         "src/agents/agent-bundle-mcp-runtime.test.ts",
