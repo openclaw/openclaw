@@ -4,7 +4,11 @@
  * reconnect to prior long-running work.
  */
 import { listRunningSessions } from "./bash-process-registry.js";
-import { deriveSessionName } from "./bash-tools.shared.js";
+import {
+  deriveRedactedProcessSessionName,
+  redactProcessSessionText,
+} from "./bash-tools.process-redaction.js";
+import { truncateMiddle } from "./bash-tools.shared.js";
 
 const DEFAULT_ACTIVE_PROCESS_LIMIT = 8;
 const MAX_COMMAND_LABEL_CHARS = 140;
@@ -22,16 +26,6 @@ export type ActiveProcessSessionReference = {
   tail?: string;
   truncated: boolean;
 };
-
-function truncate(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  if (maxChars <= 1) {
-    return value.slice(0, maxChars);
-  }
-  return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
-}
 
 /** List active background process sessions for one scope key, newest first. */
 export function listActiveProcessSessionReferences(params: {
@@ -60,12 +54,13 @@ export function listActiveProcessSessionReferences(params: {
       startedAt: session.startedAt,
       runtimeMs: Math.max(0, now - session.startedAt),
       cwd: session.cwd,
-      command: session.command,
-      name: truncate(
-        deriveSessionName(session.command) || session.command,
+      command: redactProcessSessionText(session.command),
+      name: truncateMiddle(
+        deriveRedactedProcessSessionName(session.command) ??
+          redactProcessSessionText(session.command),
         MAX_COMMAND_LABEL_CHARS,
       ),
-      tail: session.tail,
+      tail: redactProcessSessionText(session.tail),
       truncated: session.truncated,
     }));
 }
