@@ -10,6 +10,11 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import {
+  acquireTaskRouteLease,
+  expireStaleTaskRouteLeases,
+  settleTaskRouteLease,
+} from "../../tasks/task-route-lease.js";
+import {
   clearCronJobActive,
   isCronActiveJobMarkerCurrent,
   markCronJobActive,
@@ -48,6 +53,7 @@ import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState, CronWakeMode } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
+import { resolveCronLeaseRequesterOrigin } from "./task-runs.js";
 import {
   applyJobResult,
   armTimer,
@@ -216,6 +222,11 @@ async function ensureLoadedForRead(state: CronServiceState) {
 /** Starts the cron service, recovers interrupted runs, catches up missed jobs, and arms the timer. */
 export async function start(state: CronServiceState) {
   state.stopped = false;
+  // #92460: arm the stale-lease GC timer regardless of cronEnabled. Subagent,
+  // codex, and ACP leases also live in the shared state DB; if cron is
+  // disabled the user is still running detached tasks elsewhere and leaked
+  // leases must still be GC'd. Best-effort: GC errors never throw.
+  startLeaseGcTimer(state);
   if (!state.deps.cronEnabled) {
     state.deps.log.info({ enabled: false }, "cron: disabled");
     return;
@@ -306,7 +317,48 @@ export async function start(state: CronServiceState) {
 export function stop(state: CronServiceState) {
   state.stopped = true;
   stopTimer(state);
+  if (state.leaseGcTimer) {
+    clearTimeout(state.leaseGcTimer);
+    state.leaseGcTimer = null;
+  }
 }
+
+/**
+ * #92460: low-frequency timer that GCs task-route leases whose TTL has
+ * elapsed but were never settled (process crash before settle, lost
+ * terminal delivery status, etc.). Default 1h cadence — leases default
+ * to 1h TTL, so this catches most leaked rows within one cycle without
+ * adding noticeable load. Best-effort: GC errors are logged and do not
+ * throw.
+ */
+function startLeaseGcTimer(state: CronServiceState): void {
+  if (state.leaseGcTimer) {
+    return;
+  }
+  const tick = (): void => {
+    if (state.stopped) {
+      return;
+    }
+    try {
+      const expired = expireStaleTaskRouteLeases();
+      if (expired > 0) {
+        state.deps.log.info({ expired }, "cron: task-route lease GC");
+      }
+    } catch (err: unknown) {
+      state.deps.log.warn({ err: String(err) }, "cron: task-route lease GC failed");
+    } finally {
+      if (!state.stopped) {
+        state.leaseGcTimer = setTimeout(tick, LEASE_GC_INTERVAL_MS);
+        state.leaseGcTimer.unref?.();
+      }
+    }
+  };
+  state.leaseGcTimer = setTimeout(tick, LEASE_GC_INTERVAL_MS);
+  state.leaseGcTimer.unref?.();
+}
+
+/** #92460: cadence for the stale task-route lease GC timer. */
+const LEASE_GC_INTERVAL_MS = 60 * 60 * 1000;
 
 /** Returns cron service status after a read-only maintenance pass. */
 export async function status(state: CronServiceState) {
@@ -690,8 +742,15 @@ function tryCreateManualTaskRun(params: {
   state: CronServiceState;
   job: CronJob;
   startedAt: number;
+  /** Optional pre-generated run id (`manual:` prefix from `enqueueRun`). When
+   *  provided, it is used as the task-route lease key so the resolver's runId
+   *  lookup hits the same lease row (#92460 manual path). The task ledger row
+   *  keeps the canonical `createCronExecutionId` run id so downstream log/run-
+   *  log readers do not see an `manual:`-prefixed row in the cron registry.
+   *  When omitted, falls back to a fresh `createCronExecutionId` for both. */
+  runId?: string;
 }): string | undefined {
-  const runId = createCronExecutionId(params.job.id, params.startedAt);
+  const taskRunId = createCronExecutionId(params.job.id, params.startedAt);
   try {
     const task = createRunningTaskRun({
       runtime: "cron",
@@ -700,7 +759,7 @@ function tryCreateManualTaskRun(params: {
       scopeKind: "system",
       childSessionKey: params.job.sessionKey,
       agentId: params.job.agentId,
-      runId,
+      runId: taskRunId,
       label: params.job.name,
       task: params.job.name || params.job.id,
       deliveryStatus: "not_applicable",
@@ -716,7 +775,20 @@ function tryCreateManualTaskRun(params: {
       );
       return undefined;
     }
-    return runId;
+    // #92460: manual cron runs need a task-route lease too — the reported
+    // run id in #92460 is `manual:...` and the resolver looks up the lease
+    // by the runId it receives from the caller, not by the task ledger row
+    // id. Use the caller-provided `manual:` run id when present so the lease
+    // hits when the resolver runs; fall back to the task ledger id otherwise.
+    // The auto-hook in `createRunningTaskRun` skips acquire when
+    // deliveryStatus is "not_applicable" (the cron job itself is not the
+    // delivery owner), so acquire explicitly here. Best-effort, never throws.
+    acquireTaskRouteLease({
+      runId: params.runId ?? taskRunId,
+      taskId: task.taskId,
+      requesterOrigin: resolveCronLeaseRequesterOrigin(params.job),
+    });
+    return taskRunId;
   } catch (error) {
     params.state.deps.log.warn(
       { jobId: params.job.id, error },
@@ -730,6 +802,11 @@ function tryFinishManualTaskRun(
   state: CronServiceState,
   params: {
     taskRunId?: string;
+    /** #92460: the lease key (typically `manual:`-prefixed from `enqueueRun`).
+     *  When provided, used for `settleTaskRouteLease` so the row acquired in
+     *  `tryCreateManualTaskRun` under this id gets retired. Falls back to
+     *  `taskRunId` when omitted (e.g. a caller that did not pass `runId`). */
+    leaseRunId?: string;
     coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
     endedAt: number;
   },
@@ -737,6 +814,7 @@ function tryFinishManualTaskRun(
   if (!params.taskRunId) {
     return;
   }
+  const leaseRunId = params.leaseRunId ?? params.taskRunId;
   try {
     if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
       completeTaskRunByRunId({
@@ -746,6 +824,12 @@ function tryFinishManualTaskRun(
         lastEventAt: params.endedAt,
         terminalSummary: params.coreResult.summary ?? undefined,
       });
+      // #92460: settle the task-route lease on terminal run status. The
+      // task ledger finalize path (completeTaskRunByRunId) does not call
+      // setDetachedTaskDeliveryStatusByRunId, so the auto-settle hook
+      // there does not fire. We settle explicitly here so the lease can
+      // be GC'd instead of waiting for TTL expiry. Idempotent.
+      settleTaskRouteLease(leaseRunId, "settled");
       return;
     }
     failTaskRunByRunId({
@@ -763,6 +847,9 @@ function tryFinishManualTaskRun(
           : undefined,
       terminalSummary: params.coreResult.summary ?? undefined,
     });
+    // #92460: failed manual runs retire the lease (the run did not
+    // successfully land delivery on the captured origin). Idempotent.
+    settleTaskRouteLease(leaseRunId, "retired");
   } catch (error) {
     state.deps.log.warn(
       { runId: params.taskRunId, jobStatus: params.coreResult.status, error },
@@ -825,7 +912,9 @@ async function inspectManualRunDisposition(
   return { ok: true, runnable: true } as const;
 }
 
-async function prepareManualRun(
+/** Visible for tests; #92460 manual-path lease tests exercise this directly
+ *  so they can assert the acquire side before settle races the lookup. */
+export async function prepareManualRun(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
@@ -871,6 +960,10 @@ async function prepareManualRun(
       state,
       job,
       startedAt: preflight.now,
+      // #92460: pass the caller-provided run id so the task-route lease uses
+      // the same `manual:...` runId the resolver will look up later. When
+      // opts.runId is undefined we fall back to a fresh createCronExecutionId.
+      runId: opts?.runId,
     });
     const activeJobMarker = markManualCronJobActive(state, job);
     // Execute against a snapshot so later reload/merge can preserve delivery
@@ -913,6 +1006,9 @@ async function finishPreparedManualRun(
     const endedAt = state.deps.nowMs();
     tryFinishManualTaskRun(state, {
       taskRunId,
+      // #92460: pass the lease key (typically `manual:`-prefixed) so the
+      // lease acquired in tryCreateManualTaskRun under that id gets settled.
+      leaseRunId: prepared.runId,
       coreResult,
       endedAt,
     });

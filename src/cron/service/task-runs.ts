@@ -179,8 +179,12 @@ export function tryFinishCronTaskRun(
  * The lease is still acquired in that case so the row exists; the
  * origin will be empty and the resolver will fall through to the
  * standard session-key lookup chain.
+ *
+ * Exported so `ops.ts` `tryCreateManualTaskRun` can apply the same
+ * origin derivation to manual cron runs (manual runs were the
+ * reported #92460 path — see ClawSweeper review on PR #95012).
  */
-function resolveCronLeaseRequesterOrigin(job: CronJob) {
+export function resolveCronLeaseRequesterOrigin(job: CronJob) {
   const delivery = job.delivery;
   if (!delivery) {
     return undefined;
