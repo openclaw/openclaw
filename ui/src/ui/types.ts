@@ -1,6 +1,13 @@
 // Control UI type declarations define types contracts.
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
-import type { SessionGoal } from "../../../src/config/sessions/types.js";
+import type {
+  SessionControlDirectorGuardAuditEntry,
+  SessionControlDirectorJudgeCompletionApproval,
+  SessionControlDirectorLivenessAuditEntry,
+  SessionControlDirectorMissionLedgerEntry,
+  SessionControlDirectorTruthAuditEntry,
+  SessionGoal,
+} from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {
@@ -32,6 +39,8 @@ export type ChannelUiMetaEntry = {
   detailLabel: string;
   systemImage?: string;
 };
+
+export const CRON_CHANNEL_LAST = "last";
 
 export type ChannelAccountSnapshot = {
   accountId: string;
@@ -262,6 +271,23 @@ export type NostrStatus = {
   profile?: NostrProfile | null;
 };
 
+export type MSTeamsProbe = {
+  ok: boolean;
+  error?: string | null;
+  appId?: string | null;
+};
+
+export type MSTeamsStatus = {
+  configured: boolean;
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  port?: number | null;
+  probe?: MSTeamsProbe | null;
+  lastProbeAt?: number | null;
+};
+
 export type ConfigSnapshotIssue = {
   path: string;
   message: string;
@@ -463,12 +489,33 @@ export type SessionCompactionCheckpointPreview = Pick<
   "checkpointId" | "createdAt" | "reason"
 >;
 
+export type SessionJudgeGuardAuditEntry = {
+  ts: number;
+  runId?: string;
+  action: "rewrote_final_success_claim";
+  verdictStatus: "parsed" | "invalid";
+  verdict?: string;
+  scope?: string;
+  risk?: string;
+  conditions?: string;
+  payloadsChecked: number;
+  payloadsRewritten: number;
+};
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
+  forkedFromParent?: boolean;
+  spawnDepth?: number;
+  subagentRole?: "orchestrator" | "leaf";
+  subagentControlScope?: "children" | "none";
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
   surface?: string;
   subject?: string;
   room?: string;
@@ -497,7 +544,14 @@ export type GatewaySessionRow = {
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
+  parentSessionKey?: string;
   childSessions?: string[];
+  controlDirectorGuardAudit?: SessionControlDirectorGuardAuditEntry[];
+  controlDirectorLivenessAudit?: SessionControlDirectorLivenessAuditEntry[];
+  controlDirectorMissionLedger?: SessionControlDirectorMissionLedgerEntry[];
+  controlDirectorJudgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval;
+  controlDirectorTruthAudit?: SessionControlDirectorTruthAuditEntry[];
+  projectId?: string;
   model?: string;
   modelProvider?: string;
   agentRuntime?: GatewayAgentRuntime;
@@ -505,9 +559,48 @@ export type GatewaySessionRow = {
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   goal?: SessionGoal;
+  judgeGuardAudit?: SessionJudgeGuardAuditEntry[];
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
+
+export type ProjectRecord = {
+  id: string;
+  name: string;
+  description?: string;
+  instructions?: string;
+  memoryMode?: string;
+  archived?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+  resources?: unknown[];
+};
+
+export type ProjectResourceRecord = {
+  id?: string;
+  path?: string;
+  name?: string;
+  note?: string;
+};
+
+export type ProjectContextPreview = {
+  entries?: unknown[];
+  summary?: string;
+};
+
+export type ProjectsListResult = {
+  ok: true;
+  ts: number;
+  count: number;
+  projects: ProjectRecord[];
+};
+
+export type ProjectsGetResult = {
+  ok: true;
+  project: ProjectRecord;
+  sessions?: SessionsListResult;
+  contextPreview?: ProjectContextPreview;
+};
 
 export type SessionsCompactionListResult = {
   ok: true;

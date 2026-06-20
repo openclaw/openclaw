@@ -1,6 +1,10 @@
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import {
+  CONTROL_DIRECTOR_DIAGNOSTICS_EMPTY,
+  summarizeControlDirectorDiagnostics,
+} from "../chat/control-director-diagnostics.ts";
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
@@ -412,6 +416,24 @@ function renderSessionGoalChip(goal: GatewaySessionRow["goal"]) {
   `;
 }
 
+function latestTruthAudit(row: GatewaySessionRow) {
+  return row.controlDirectorTruthAudit?.toSorted((a, b) => b.ts - a.ts)[0];
+}
+
+function formatTruthAuditStatus(
+  status: NonNullable<GatewaySessionRow["controlDirectorTruthAudit"]>[number]["status"],
+): string {
+  switch (status) {
+    case "passed":
+      return t("sessionsView.truthAuditPassed");
+    case "blocked":
+      return t("sessionsView.truthAuditBlocked");
+    case "not_required":
+      return t("sessionsView.truthAuditNotRequired");
+  }
+  return status;
+}
+
 function sessionDetailItems(params: {
   row: GatewaySessionRow;
   updated: string;
@@ -436,6 +458,13 @@ function sessionDetailItems(params: {
     details.push({ label: t("sessionsView.goal"), value: formatGoalDetail(row.goal) });
   }
   add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
+  const audit = latestTruthAudit(row);
+  if (audit) {
+    details.push({
+      label: t("sessionsView.truthAudit"),
+      value: formatTruthAuditStatus(audit.status),
+    });
+  }
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
   add(t("sessionsView.runtime"), formatRuntimeMs(row.runtimeMs));
@@ -457,6 +486,41 @@ function sessionDetailItems(params: {
     });
   }
   return details;
+}
+
+function renderControlDirectorSessionDiagnostics(row: GatewaySessionRow) {
+  const summary = summarizeControlDirectorDiagnostics(row);
+  return html`
+    <div
+      class="session-details-section session-control-director-diagnostics session-control-director-diagnostics--${summary.tone}"
+      data-session-control-director-diagnostics
+    >
+      <div class="session-details-section__header">
+        <div>
+          <div class="session-details-panel__eyebrow">Control Director</div>
+          <div class="session-details-section__title">Truth & Completion</div>
+        </div>
+        <span class="session-control-director-diagnostics__status">${summary.status}</span>
+      </div>
+      <div class="session-control-director-diagnostics__summary">
+        ${summary.hasDiagnostics ? summary.detail : CONTROL_DIRECTOR_DIAGNOSTICS_EMPTY}
+      </div>
+      ${summary.details.length > 0
+        ? html`
+            <dl class="session-control-director-diagnostics__grid">
+              ${summary.details.slice(0, 18).map(
+                (detail) => html`
+                  <div>
+                    <dt>${detail.label}</dt>
+                    <dd>${detail.value}</dd>
+                  </div>
+                `,
+              )}
+            </dl>
+          `
+        : nothing}
+    </div>
+  `;
 }
 
 function isRowControlTarget(target: EventTarget | null): boolean {
@@ -814,6 +878,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const checkpointCount = row.compactionCheckpointCount ?? 0;
   const visibleCheckpointCount = Math.max(checkpointCount, latestCheckpoint ? 1 : 0);
   const hasCheckpoints = checkpointCount > 0 || Boolean(latestCheckpoint);
+  const diagnosticsSummary = summarizeControlDirectorDiagnostics(row);
+  const hasDetails = hasCheckpoints || diagnosticsSummary.hasDiagnostics;
   const isExpanded = props.expandedCheckpointKey === row.key;
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
@@ -858,13 +924,13 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             : "data-table-badge--unknown";
   const rowClass = [
     "session-data-row",
-    hasCheckpoints ? "session-data-row--expandable" : "",
+    hasDetails ? "session-data-row--expandable" : "",
     isExpanded ? "session-data-row--expanded" : "",
   ]
     .filter(Boolean)
     .join(" ");
   const activateCheckpointDetails = () => {
-    if (hasCheckpoints) {
+    if (hasDetails) {
       props.onToggleCheckpointDetails(row.key);
     }
   };
@@ -872,17 +938,17 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   return [
     html`<tr
       class=${rowClass}
-      tabindex=${hasCheckpoints ? "0" : nothing}
-      aria-expanded=${hasCheckpoints ? String(isExpanded) : nothing}
-      aria-controls=${hasCheckpoints ? detailsId : nothing}
+      tabindex=${hasDetails ? "0" : nothing}
+      aria-expanded=${hasDetails ? String(isExpanded) : nothing}
+      aria-controls=${hasDetails ? detailsId : nothing}
       @click=${(e: MouseEvent) => {
-        if (!hasCheckpoints || isRowControlTarget(e.target)) {
+        if (!hasDetails || isRowControlTarget(e.target)) {
           return;
         }
         activateCheckpointDetails();
       }}
       @keydown=${(e: KeyboardEvent) => {
-        if (!hasCheckpoints || isRowControlTarget(e.target)) {
+        if (!hasDetails || isRowControlTarget(e.target)) {
           return;
         }
         if (e.key === "Enter" || e.key === " ") {
@@ -977,7 +1043,23 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                   <span class="session-compaction-count">${checkpointLabel}</span>
                 </button>
               `
-            : html`<span class="muted session-compaction-count">${t("common.none")}</span>`}
+            : diagnosticsSummary.hasDiagnostics
+              ? html`
+                  <button
+                    class="session-compaction-trigger"
+                    type="button"
+                    aria-expanded=${String(isExpanded)}
+                    aria-controls=${detailsId}
+                    aria-label="Show Control Director diagnostics"
+                    @click=${(e: MouseEvent) => {
+                      e.stopPropagation();
+                      activateCheckpointDetails();
+                    }}
+                  >
+                    <span class="session-compaction-count">Diagnostics</span>
+                  </button>
+                `
+              : html`<span class="muted session-compaction-count">${t("common.none")}</span>`}
         </div>
       </td>
       <td>
@@ -1070,7 +1152,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           : nothing}
       </td>
     </tr>`,
-    ...(isExpanded && hasCheckpoints
+    ...(isExpanded && hasDetails
       ? [
           html`<tr id=${detailsId} class="session-checkpoint-details-row">
             <td colspan="14">
@@ -1106,78 +1188,87 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                   )}
                 </div>
 
-                <div class="session-details-section">
-                  <div class="session-details-section__header">
-                    <div>
-                      <div class="session-details-panel__eyebrow">
-                        ${t("sessionsView.compactionHistory")}
-                      </div>
-                      <div class="session-details-section__title">${checkpointLabel}</div>
-                    </div>
-                  </div>
-                  ${props.checkpointLoadingKey === row.key
-                    ? html`<div class="muted session-details-empty">
-                        ${t("sessionsView.loadingCheckpoints")}
-                      </div>`
-                    : checkpointError
-                      ? html`<div class="callout danger">${checkpointError}</div>`
-                      : checkpointItems.length === 0
-                        ? html`<div class="muted session-details-empty">
-                            ${t("sessionsView.noCheckpoints")}
-                          </div>`
-                        : html`
-                            <div class="session-checkpoint-list">
-                              ${checkpointItems.map(
-                                (checkpoint) => html`
-                                  <div class="session-checkpoint-card">
-                                    <div class="session-checkpoint-card__header">
-                                      <strong>
-                                        ${formatCheckpointReason(checkpoint.reason)} ·
-                                        ${formatRelativeTimestamp(checkpoint.createdAt)}
-                                      </strong>
-                                      <span class="muted session-checkpoint-card__delta">
-                                        ${formatCheckpointDelta(checkpoint)}
-                                      </span>
-                                    </div>
-                                    ${checkpoint.summary
-                                      ? html`<div class="session-checkpoint-card__summary">
-                                          ${checkpoint.summary}
-                                        </div>`
-                                      : html`
-                                          <div class="muted">${t("sessionsView.noSummary")}</div>
-                                        `}
-                                    <div class="session-checkpoint-card__actions">
-                                      <button
-                                        class="btn btn--sm"
-                                        ?disabled=${props.checkpointBusyKey ===
-                                        checkpoint.checkpointId}
-                                        @click=${() =>
-                                          props.onBranchFromCheckpoint(
-                                            row.key,
-                                            checkpoint.checkpointId,
-                                          )}
-                                      >
-                                        ${t("sessionsView.branchFromCheckpoint")}
-                                      </button>
-                                      <button
-                                        class="btn btn--sm"
-                                        ?disabled=${props.checkpointBusyKey ===
-                                        checkpoint.checkpointId}
-                                        @click=${() =>
-                                          props.onRestoreCheckpoint(
-                                            row.key,
-                                            checkpoint.checkpointId,
-                                          )}
-                                      >
-                                        ${t("sessionsView.restoreCheckpoint")}
-                                      </button>
-                                    </div>
-                                  </div>
-                                `,
-                              )}
+                ${hasCheckpoints
+                  ? html`
+                      <div class="session-details-section">
+                        <div class="session-details-section__header">
+                          <div>
+                            <div class="session-details-panel__eyebrow">
+                              ${t("sessionsView.compactionHistory")}
                             </div>
-                          `}
-                </div>
+                            <div class="session-details-section__title">${checkpointLabel}</div>
+                          </div>
+                        </div>
+                        ${props.checkpointLoadingKey === row.key
+                          ? html`<div class="muted session-details-empty">
+                              ${t("sessionsView.loadingCheckpoints")}
+                            </div>`
+                          : checkpointError
+                            ? html`<div class="callout danger">${checkpointError}</div>`
+                            : checkpointItems.length === 0
+                              ? html`<div class="muted session-details-empty">
+                                  ${t("sessionsView.noCheckpoints")}
+                                </div>`
+                              : html`
+                                  <div class="session-checkpoint-list">
+                                    ${checkpointItems.map(
+                                      (checkpoint) => html`
+                                        <div class="session-checkpoint-card">
+                                          <div class="session-checkpoint-card__header">
+                                            <strong>
+                                              ${formatCheckpointReason(checkpoint.reason)} ·
+                                              ${formatRelativeTimestamp(checkpoint.createdAt)}
+                                            </strong>
+                                            <span class="muted session-checkpoint-card__delta">
+                                              ${formatCheckpointDelta(checkpoint)}
+                                            </span>
+                                          </div>
+                                          ${checkpoint.summary
+                                            ? html`<div class="session-checkpoint-card__summary">
+                                                ${checkpoint.summary}
+                                              </div>`
+                                            : html`
+                                                <div class="muted">
+                                                  ${t("sessionsView.noSummary")}
+                                                </div>
+                                              `}
+                                          <div class="session-checkpoint-card__actions">
+                                            <button
+                                              class="btn btn--sm"
+                                              ?disabled=${props.checkpointBusyKey ===
+                                              checkpoint.checkpointId}
+                                              @click=${() =>
+                                                props.onBranchFromCheckpoint(
+                                                  row.key,
+                                                  checkpoint.checkpointId,
+                                                )}
+                                            >
+                                              ${t("sessionsView.branchFromCheckpoint")}
+                                            </button>
+                                            <button
+                                              class="btn btn--sm"
+                                              ?disabled=${props.checkpointBusyKey ===
+                                              checkpoint.checkpointId}
+                                              @click=${() =>
+                                                props.onRestoreCheckpoint(
+                                                  row.key,
+                                                  checkpoint.checkpointId,
+                                                )}
+                                            >
+                                              ${t("sessionsView.restoreCheckpoint")}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      `,
+                                    )}
+                                  </div>
+                                `}
+                      </div>
+                    `
+                  : nothing}
+                ${diagnosticsSummary.hasDiagnostics
+                  ? renderControlDirectorSessionDiagnostics(row)
+                  : nothing}
               </div>
             </td>
           </tr>`,

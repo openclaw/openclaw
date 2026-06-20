@@ -150,6 +150,172 @@ export type SubagentRecoveryState = {
   wedgedReason?: string;
 };
 
+export type SessionJudgeGuardAuditEntry = {
+  ts: number;
+  runId?: string;
+  action: "rewrote_final_success_claim";
+  verdictStatus: "parsed" | "invalid";
+  verdict?: string;
+  scope?: string;
+  risk?: string;
+  conditions?: string;
+  payloadsChecked: number;
+  payloadsRewritten: number;
+};
+
+export type SessionControlDirectorGuardAuditEntry = {
+  ts: number;
+  runId?: string;
+  action:
+    | "rewrote_unsupported_complete"
+    | "repaired_missing_required_fields"
+    | "blocked_missing_judge_approval"
+    | "blocked_invalid_judge_approval";
+  originalStatus?: "complete" | "blocked" | "needs_user_input" | "continuing" | null;
+  nextStatus: "complete" | "blocked" | "needs_user_input" | "continuing";
+  missing: string[];
+  payloadsChecked: number;
+  payloadsRewritten: number;
+};
+
+export type SessionControlDirectorLivenessAuditEntry = {
+  ts: number;
+  runId?: string;
+  action:
+    | "synthesized_blocked_no_visible_output"
+    | "synthesized_blocked_incomplete_classification"
+    | "queued_safe_continuation"
+    | "blocked_continuation_queue_failed"
+    | "blocked_continuation_limit"
+    | "blocked_unsafe_continuation";
+  reason: string;
+  source?: "terminal_empty" | "webchat_timeout_inflight" | "terminal_reconstructed_from_session";
+  classification?: "empty" | "reasoning-only" | "planning-only";
+  nextStatus: "blocked" | "continuing";
+  continuationCount: number;
+  continuationQueued: boolean;
+  continuationQueueId?: string;
+  continuationQueueError?: string;
+  payloadsChecked: number;
+  payloadsSynthesized: number;
+};
+
+export type SessionControlDirectorJudgeCompletionApproval = {
+  judgeStatus: "pending" | "approved" | "rejected" | "invalid";
+  judgeVerdict?: string;
+  judgeRunId?: string;
+  missionId: string;
+  approvedClaimHash?: string;
+  evidenceSummary?: string;
+  scope?: string;
+  approvedAt?: number;
+  missingAcceptanceCriteria?: string[];
+};
+
+export type SessionControlDirectorJudgeCompletionGate = {
+  status: "approved" | "blocked" | "not_required";
+  reason: string;
+  expectedClaimHash?: string;
+  judgeRunId?: string;
+  missing?: string[];
+};
+
+export type SessionControlDirectorClaimEvidence = {
+  type:
+    | "judge_approval"
+    | "command"
+    | "github_run"
+    | "ui_smoke"
+    | "repo_change"
+    | "source_citation";
+  id: string;
+  source: string;
+  summary: string;
+  status: "passed" | "failed" | "unknown";
+  exitCode?: number;
+  sha?: string;
+};
+
+export type SessionControlDirectorTruthClaimAudit = {
+  claim: string;
+  claimHash: string;
+  claimType:
+    | "completion"
+    | "verification"
+    | "remote_proof"
+    | "dashboard"
+    | "implementation"
+    | "public_link"
+    | "external_fact";
+  requiredEvidenceType: SessionControlDirectorClaimEvidence["type"];
+  evidenceId?: string;
+  evidenceSource?: string;
+  matchStatus: "matched" | "missing";
+  missingCondition?: string;
+  rewriteAction?: "blocked_unsupported_truth_claim";
+};
+
+export type SessionControlDirectorTruthAuditEntry = {
+  ts: number;
+  runId?: string;
+  status: "passed" | "blocked" | "not_required";
+  claims: SessionControlDirectorTruthClaimAudit[];
+  missing: string[];
+  payloadsChecked: number;
+  payloadsRewritten: number;
+};
+
+export type SessionControlDirectorProviderRequestAuditEntry = {
+  ts: number;
+  runId?: string;
+  provider: string;
+  model: string;
+  status: "blocked_preflight" | "provider_rejected";
+  httpStatus?: number;
+  providerErrorHash?: string;
+  providerErrorPreview?: string;
+  diagnosticCount: number;
+  toolNames: string[];
+  diagnostics: Array<{
+    toolName: string;
+    toolIndex?: number;
+    source: "runtime" | "provider";
+    violations: string[];
+    violationCount: number;
+  }>;
+  missingCondition: string;
+  rewriteAction?: "blocked_provider_request";
+};
+
+export type SessionControlDirectorMissionLedgerEntry = {
+  missionId: string;
+  runId?: string;
+  requestSummary: string;
+  status:
+    | "running"
+    | "complete"
+    | "blocked"
+    | "needs_user_input"
+    | "continuing"
+    | "continuation_queued";
+  startedAt: number;
+  updatedAt: number;
+  continuationCount: number;
+  finalStatus?: "complete" | "blocked" | "needs_user_input" | "continuing" | null;
+  continuationQueued?: boolean;
+  continuationQueueId?: string;
+  continuationQueueError?: string;
+  verifiedEvidenceSummary?: string;
+  nextBuildGap?: string;
+  completionGrade?: number;
+  criticality?: number;
+  judgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval;
+  judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate;
+  truthAudit?: SessionControlDirectorTruthAuditEntry;
+  guardActions?: string[];
+  watchdogActions?: string[];
+};
+
 export type LaneExecutionState =
   | "active"
   | "draining"
@@ -339,6 +505,13 @@ export type SessionEntry = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  judgeGuardAudit?: SessionJudgeGuardAuditEntry[];
+  controlDirectorGuardAudit?: SessionControlDirectorGuardAuditEntry[];
+  controlDirectorLivenessAudit?: SessionControlDirectorLivenessAuditEntry[];
+  controlDirectorMissionLedger?: SessionControlDirectorMissionLedgerEntry[];
+  controlDirectorJudgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval;
+  controlDirectorTruthAudit?: SessionControlDirectorTruthAuditEntry[];
+  controlDirectorProviderRequestAudit?: SessionControlDirectorProviderRequestAuditEntry[];
   /** Durable marker that final user reply delivery still needs a retry/resume pass. */
   pendingFinalDelivery?: boolean;
   pendingFinalDeliveryCreatedAt?: number;
@@ -632,6 +805,12 @@ export function resolveFreshSessionTotalTokens(
   return total;
 }
 
+export function isSessionTotalTokensFresh(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): boolean {
+  return resolveFreshSessionTotalTokens(entry) !== undefined;
+}
+
 export type GroupKeyResolution = {
   key: string;
   channel?: string;
@@ -726,5 +905,6 @@ export type SessionSystemPromptReport = {
   };
 };
 
+export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
 export const DEFAULT_IDLE_MINUTES = 0;

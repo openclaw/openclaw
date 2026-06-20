@@ -291,6 +291,17 @@ import {
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import {
+  TaskFlowDetailSchema,
+  TaskFlowsCancelParamsSchema,
+  TaskFlowsCancelResultSchema,
+  TaskFlowsCreateParamsSchema,
+  TaskFlowsCreateResultSchema,
+  TaskFlowsGetParamsSchema,
+  TaskFlowsGetResultSchema,
+  TaskFlowsListParamsSchema,
+  TaskFlowsListResultSchema,
+  TaskFlowStatusSchema,
+  TaskFlowSummarySchema,
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
   TasksGetParamsSchema,
@@ -411,6 +422,17 @@ export const ProtocolSchemas = {
   SessionsUsageParams: SessionsUsageParamsSchema,
 
   // Task ledger and config/wizard setup payloads.
+  TaskFlowStatus: TaskFlowStatusSchema,
+  TaskFlowSummary: TaskFlowSummarySchema,
+  TaskFlowDetail: TaskFlowDetailSchema,
+  TaskFlowsListParams: TaskFlowsListParamsSchema,
+  TaskFlowsListResult: TaskFlowsListResultSchema,
+  TaskFlowsGetParams: TaskFlowsGetParamsSchema,
+  TaskFlowsGetResult: TaskFlowsGetResultSchema,
+  TaskFlowsCreateParams: TaskFlowsCreateParamsSchema,
+  TaskFlowsCreateResult: TaskFlowsCreateResultSchema,
+  TaskFlowsCancelParams: TaskFlowsCancelParamsSchema,
+  TaskFlowsCancelResult: TaskFlowsCancelResultSchema,
   TaskSummary: TaskSummarySchema,
   TasksListParams: TasksListParamsSchema,
   TasksListResult: TasksListResultSchema,

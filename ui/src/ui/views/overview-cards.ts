@@ -3,6 +3,11 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
+import {
+  countBlockedControlDirectorDiagnostics,
+  latestControlDirectorDiagnosticsRows,
+  summarizeControlDirectorDiagnostics,
+} from "../chat/control-director-diagnostics.ts";
 import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
@@ -14,6 +19,7 @@ import {
 } from "../provider-quota-summary.ts";
 import { resolveSessionDisplayName } from "../session-display.ts";
 import type {
+  GatewaySessionRow,
   SessionsUsageResult,
   SessionsListResult,
   SkillStatusReport,
@@ -113,6 +119,99 @@ function renderSkeletonCards() {
   `;
 }
 
+type TruthAuditDisplayEntry = {
+  session: GatewaySessionRow;
+  audit: NonNullable<GatewaySessionRow["controlDirectorTruthAudit"]>[number];
+};
+
+function resolveTruthAuditEntries(
+  sessionsResult: SessionsListResult | null,
+): TruthAuditDisplayEntry[] {
+  return (sessionsResult?.sessions ?? [])
+    .flatMap((session) =>
+      (session.controlDirectorTruthAudit ?? []).map((audit) => ({
+        session,
+        audit,
+      })),
+    )
+    .filter(
+      ({ audit }) =>
+        audit.status === "blocked" || audit.payloadsRewritten > 0 || audit.missing.length > 0,
+    )
+    .toSorted((a, b) => b.audit.ts - a.audit.ts)
+    .slice(0, 3);
+}
+
+function formatTruthAuditOverviewStatus(status: TruthAuditDisplayEntry["audit"]["status"]): string {
+  switch (status) {
+    case "passed":
+      return t("overview.cards.truthAuditPassed");
+    case "blocked":
+      return t("overview.cards.truthAuditBlocked");
+    case "not_required":
+      return t("overview.cards.truthAuditNotRequired");
+  }
+  return status;
+}
+
+function renderTruthAuditPanel(params: {
+  entries: TruthAuditDisplayEntry[];
+  onNavigate: (tab: string) => void;
+}) {
+  if (params.entries.length === 0) {
+    return nothing;
+  }
+
+  return html`
+    <section class="ov-truth-audit" aria-label=${t("overview.cards.truthAudit")}>
+      <div class="ov-truth-audit__header">
+        <div>
+          <h3 class="ov-truth-audit__title">${t("overview.cards.truthAudit")}</h3>
+          <div class="ov-truth-audit__subtitle">${t("overview.cards.truthAuditSubtitle")}</div>
+        </div>
+        <button class="btn btn--sm" type="button" @click=${() => params.onNavigate("sessions")}>
+          ${t("overview.cards.truthAuditOpenSessions")}
+        </button>
+      </div>
+      <div class="ov-truth-audit__list">
+        ${params.entries.map(({ session, audit }) => {
+          const sessionLabel = session.displayName || session.label || session.key;
+          const condition =
+            audit.missing[0] ??
+            audit.claims.find((claim) => claim.missingCondition)?.missingCondition ??
+            "";
+          return html`
+            <div class="ov-truth-audit__row">
+              <div class="ov-truth-audit__main">
+                <span class="ov-truth-audit__status">
+                  ${formatTruthAuditOverviewStatus(audit.status)}
+                </span>
+                <span class="ov-truth-audit__session">${blurDigits(sessionLabel)}</span>
+              </div>
+              <div class="ov-truth-audit__meta">
+                <span>${formatRelativeTimestamp(audit.ts)}</span>
+                <span>
+                  ${t("overview.cards.truthAuditClaims", {
+                    count: String(audit.claims.length),
+                  })}
+                </span>
+                <span>
+                  ${t("overview.cards.truthAuditRewrites", {
+                    count: String(audit.payloadsRewritten),
+                  })}
+                </span>
+              </div>
+              ${condition
+                ? html`<div class="ov-truth-audit__condition">${condition}</div>`
+                : nothing}
+            </div>
+          `;
+        })}
+      </div>
+    </section>
+  `;
+}
+
 export function renderOverviewCards(props: OverviewCardsProps) {
   const dataLoaded =
     props.usageResult != null || props.sessionsResult != null || props.skillsReport != null;
@@ -188,6 +287,22 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   ];
   if (quotaCard) {
     cards.splice(1, 0, quotaCard);
+  }
+
+  const diagnosticRows = latestControlDirectorDiagnosticsRows(props.sessionsResult?.sessions ?? []);
+  if (diagnosticRows.length > 0) {
+    const blockedDiagnostics = countBlockedControlDirectorDiagnostics(diagnosticRows);
+    const latestDiagnostic = summarizeControlDirectorDiagnostics(diagnosticRows[0]);
+    cards.push({
+      kind: "control-director-diagnostics",
+      tab: "sessions",
+      label: "Truth & Completion",
+      value:
+        blockedDiagnostics > 0
+          ? html`<span class="danger">${blockedDiagnostics} blocked</span>`
+          : "Truth OK",
+      hint: latestDiagnostic.detail,
+    });
   }
 
   // Model auth card — show providers whose auth needs monitoring.
@@ -277,10 +392,12 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   }
 
   const sessions = props.sessionsResult?.sessions.slice(0, 5) ?? [];
+  const truthAuditEntries = resolveTruthAuditEntries(props.sessionsResult);
 
   return html`
     <section class="ov-cards">${cards.map((c) => renderStatCard(c, props.onNavigate))}</section>
 
+    ${renderTruthAuditPanel({ entries: truthAuditEntries, onNavigate: props.onNavigate })}
     ${sessions.length > 0
       ? html`
           <section class="ov-recent">

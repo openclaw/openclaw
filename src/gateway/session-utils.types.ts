@@ -99,6 +99,12 @@ export type GatewaySessionRow = {
   lastThreadId?: SessionEntry["lastThreadId"];
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
+  judgeGuardAudit?: SessionEntry["judgeGuardAudit"];
+  controlDirectorGuardAudit?: SessionEntry["controlDirectorGuardAudit"];
+  controlDirectorLivenessAudit?: SessionEntry["controlDirectorLivenessAudit"];
+  controlDirectorMissionLedger?: SessionEntry["controlDirectorMissionLedger"];
+  controlDirectorJudgeCompletionApproval?: SessionEntry["controlDirectorJudgeCompletionApproval"];
+  controlDirectorTruthAudit?: SessionEntry["controlDirectorTruthAudit"];
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
 

@@ -9,6 +9,31 @@ on:
     paths-ignore:
       - "CHANGELOG.md"
   workflow_dispatch:
+    inputs:
+      control-director-proof:
+        description: "Run the scoped Control Director reliability proof instead of generated docs baselines"
+        required: false
+        default: "false"
+      chat-codex-stack-proof:
+        description: Run Chat Codex Stack V1 proof
+        required: false
+        default: "false"
+      chat-multi-agent-work-tree-proof:
+        description: Run Chat Multi-agent Work Tree V1 proof
+        required: false
+        default: "false"
+      chat-truth-diagnostics-proof:
+        description: Run Chat Truth Diagnostics V1 proof
+        required: false
+        default: "false"
+      chat-polish-a11y-proof:
+        description: Run Chat Polish Accessibility V1 proof
+        required: false
+        default: "false"
+      chat-network-remote-approval-cards-proof:
+        description: Run Chat Network Remote Approval Cards V1 proof
+        required: false
+        default: "false"
 
 permissions:
   contents: read
@@ -208,7 +233,7 @@ jobs:
         run: node scripts/check-no-conflict-markers.mjs
 
   generated-doc-baselines:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.control-director-proof != 'true' && inputs.chat-codex-stack-proof != 'true' && inputs.chat-multi-agent-work-tree-proof != 'true' && inputs.chat-truth-diagnostics-proof != 'true' && inputs.chat-polish-a11y-proof != 'true' && inputs.chat-network-remote-approval-cards-proof != 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -254,3 +279,385 @@ jobs:
 
       - name: Check plugin SDK surface budget
         run: pnpm plugin-sdk:surface:check
+
+  control-director-reliability-proof:
+    if: github.event_name == 'workflow_dispatch' && inputs.control-director-proof == 'true'
+    name: Control Director reliability proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        timeout-minutes: 10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node 24 and pnpm from packageManager
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          frozen-lockfile: "true"
+
+      - name: Print proof identity and command list
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "proof_sha=$(git rev-parse HEAD)"
+          echo "branch=${GITHUB_REF_NAME}"
+          echo "node=$(node -v)"
+          echo "pnpm=$(pnpm -v)"
+          cat <<'EOF'
+          commands:
+          - pnpm test test/scripts/runtime-postbuild.test.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts src/agents/provider-request-preflight.test.ts src/agents/embedded-agent-runner/tool-schema-runtime.test.ts src/agents/runtime-plan/tools.diagnostics.test.ts src/agents/runtime-plan/tools.test.ts src/agents/control-director-contract.test.ts src/agents/control-director-delivery-guards.test.ts src/agents/control-director-truth-evidence.test.ts src/agents/judge-gate.test.ts src/agents/agent-command.live-model-switch.test.ts src/gateway/session-utils.subagent.test.ts test/scripts/control-director-readiness.test.ts
+          - pnpm test src/gateway/server.chat.gateway-server-chat-b.test.ts -- -t "chat.history synthesizes Control Director guarded status|chat.send watchdog surfaces Control Director no-response runs|chat.send watchdog remains armed when dispatch returns before visible final"
+          - pnpm ui:smoke:control-director-no-response
+          - pnpm check:changed scripts/run-oxlint-shards.mjs test/scripts/run-oxlint.test.ts scripts/e2e/agent-bundle-mcp-tools-docker.sh scripts/lib/docker-e2e-scenarios.mjs scripts/dev/control-ui-control-director-no-response-smoke.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts src/agents/agent-command.ts src/agents/control-director-contract.ts src/agents/control-director-delivery-guards.ts src/agents/control-director-delivery-guards.test.ts src/agents/control-director-truth-evidence.ts src/agents/control-director-truth-evidence.test.ts src/agents/provider-request-preflight.ts src/agents/provider-request-preflight.test.ts src/agents/embedded-agent-runner/run/attempt.ts src/agents/embedded-agent-runner/tool-schema-runtime.ts src/agents/embedded-agent-runner/tool-schema-runtime.test.ts src/agents/runtime-plan/tools.ts src/agents/runtime-plan/tools.diagnostics.test.ts src/agents/runtime-plan/tools.test.ts src/auto-reply/reply-payload.ts src/auto-reply/reply/agent-runner.ts src/commands/doctor-session-state-providers.ts src/commands/sessions-display-model.ts src/commands/sessions.ts ui/src/ui/chat-model-select-state.ts ui/src/ui/control-director-model.ts src/cli/self-improvement-cli.ts src/gateway/server-methods/kalshi-dashboard.ts src/self-improvement/auditor.ts src/self-improvement/llm-reviewer.ts src/self-improvement/operational-health.ts src/self-improvement/auditor.test.ts src/self-improvement/llm-reviewer.test.ts src/self-improvement/operational-health.test.ts src/self-improvement/production-readiness.ts src/self-improvement/proposals.ts src/self-improvement/reviewer-evals.ts src/self-improvement/routing.ts src/self-improvement/safety.ts src/self-improvement/summary.ts ui/src/ui/views/agents-room.ts src/agents/agent-command.live-model-switch.test.ts src/agents/control-director-contract.test.ts src/agents/judge-gate.test.ts src/config/sessions/types.ts src/gateway/server-methods/chat.ts src/gateway/server.chat.gateway-server-chat-b.test.ts src/gateway/session-utils.ts src/gateway/session-utils.types.ts src/gateway/session-utils.subagent.test.ts src/gateway/session-utils.test.ts src/plugins/session-entry-slot-keys.ts scripts/control-director-readiness.mjs test/scripts/control-director-readiness.test.ts
+          EOF
+
+      - name: Run targeted Control Director tests
+        run: pnpm test test/scripts/runtime-postbuild.test.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts src/agents/provider-request-preflight.test.ts src/agents/embedded-agent-runner/tool-schema-runtime.test.ts src/agents/runtime-plan/tools.diagnostics.test.ts src/agents/runtime-plan/tools.test.ts src/agents/control-director-contract.test.ts src/agents/control-director-delivery-guards.test.ts src/agents/control-director-truth-evidence.test.ts src/agents/judge-gate.test.ts src/agents/agent-command.live-model-switch.test.ts src/gateway/session-utils.subagent.test.ts test/scripts/control-director-readiness.test.ts
+
+      - name: Run targeted chat.history Control Director proof
+        run: pnpm test src/gateway/server.chat.gateway-server-chat-b.test.ts -- -t "chat.history synthesizes Control Director guarded status|chat.send watchdog surfaces Control Director no-response runs|chat.send watchdog remains armed when dispatch returns before visible final"
+
+      - name: Run Control UI no-response proof
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: pnpm ui:smoke:control-director-no-response
+
+      - name: Run explicit changed gate
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "6"
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
+        run: pnpm check:changed scripts/run-oxlint-shards.mjs test/scripts/run-oxlint.test.ts scripts/e2e/agent-bundle-mcp-tools-docker.sh scripts/lib/docker-e2e-scenarios.mjs scripts/dev/control-ui-control-director-no-response-smoke.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts src/agents/agent-command.ts src/agents/control-director-contract.ts src/agents/control-director-delivery-guards.ts src/agents/control-director-delivery-guards.test.ts src/agents/control-director-truth-evidence.ts src/agents/control-director-truth-evidence.test.ts src/agents/provider-request-preflight.ts src/agents/provider-request-preflight.test.ts src/agents/embedded-agent-runner/run/attempt.ts src/agents/embedded-agent-runner/tool-schema-runtime.ts src/agents/embedded-agent-runner/tool-schema-runtime.test.ts src/agents/runtime-plan/tools.ts src/agents/runtime-plan/tools.diagnostics.test.ts src/agents/runtime-plan/tools.test.ts src/auto-reply/reply-payload.ts src/auto-reply/reply/agent-runner.ts src/commands/doctor-session-state-providers.ts src/commands/sessions-display-model.ts src/commands/sessions.ts ui/src/ui/chat-model-select-state.ts ui/src/ui/control-director-model.ts src/cli/self-improvement-cli.ts src/gateway/server-methods/kalshi-dashboard.ts src/self-improvement/auditor.ts src/self-improvement/llm-reviewer.ts src/self-improvement/operational-health.ts src/self-improvement/auditor.test.ts src/self-improvement/llm-reviewer.test.ts src/self-improvement/operational-health.test.ts src/self-improvement/production-readiness.ts src/self-improvement/proposals.ts src/self-improvement/reviewer-evals.ts src/self-improvement/routing.ts src/self-improvement/safety.ts src/self-improvement/summary.ts ui/src/ui/views/agents-room.ts src/agents/agent-command.live-model-switch.test.ts src/agents/control-director-contract.test.ts src/agents/judge-gate.test.ts src/config/sessions/types.ts src/gateway/server-methods/chat.ts src/gateway/server.chat.gateway-server-chat-b.test.ts src/gateway/session-utils.ts src/gateway/session-utils.types.ts src/gateway/session-utils.subagent.test.ts src/gateway/session-utils.test.ts src/plugins/session-entry-slot-keys.ts scripts/control-director-readiness.mjs test/scripts/control-director-readiness.test.ts
+
+  chat-codex-stack-proof:
+    if: github.event_name == 'workflow_dispatch' && inputs.chat-codex-stack-proof == 'true'
+    name: Chat Codex Stack V1 proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        timeout-minutes: 10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 24 and pnpm 11.2.2
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          frozen-lockfile: "true"
+
+      - name: Print proof identity and command list
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "proof_sha=$(git rev-parse HEAD)"
+          echo "branch=${GITHUB_REF_NAME}"
+          echo "node=$(node -v)"
+          echo "pnpm=$(pnpm -v)"
+          cat <<'EOF'
+          commands:
+          - pnpm test ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/chat-responsive.browser.test.ts ui/src/ui/chat/proposed-plan.test.ts ui/src/ui/chat/grouped-render.test.ts src/gateway/server-methods/tasks.test.ts src/gateway/server.chat.gateway-server-chat.test.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/chat/tool-cards.test.ts
+          - pnpm tsgo:test:ui
+          - node --import tsx scripts/dev/control-ui-chat-work-surface-smoke.ts
+          - node --import tsx scripts/dev/control-ui-chat-projects-smoke.ts
+          - node --import tsx scripts/dev/control-ui-chat-plan-mode-smoke.ts
+          - node --import tsx scripts/dev/control-ui-chat-pursue-goal-smoke.ts
+          - node --import tsx scripts/dev/control-ui-chat-approval-cards-smoke.ts
+          - node --import tsx scripts/dev/control-ui-chat-tool-proof-artifact-cards-smoke.ts
+          - pnpm check:changed
+          EOF
+
+      - name: Run targeted Chat Codex Stack tests
+        run: pnpm test ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/chat-responsive.browser.test.ts ui/src/ui/chat/proposed-plan.test.ts ui/src/ui/chat/grouped-render.test.ts src/gateway/server-methods/tasks.test.ts src/gateway/server.chat.gateway-server-chat.test.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/chat/tool-cards.test.ts
+
+      - name: Run UI typecheck
+        run: pnpm tsgo:test:ui
+
+      - name: Run Chat Work Surface smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-work-surface-smoke.ts
+
+      - name: Run Chat Projects smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-projects-smoke.ts
+
+      - name: Run Chat Plan Mode smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-plan-mode-smoke.ts
+
+      - name: Run Chat Pursue Goal smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-pursue-goal-smoke.ts
+
+      - name: Run Chat Approval Cards smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-approval-cards-smoke.ts
+
+      - name: Run Chat Tool Proof Artifact Cards smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-tool-proof-artifact-cards-smoke.ts
+
+      - name: Run changed gate
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "6"
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
+        run: pnpm check:changed
+
+  chat-multi-agent-work-tree-proof:
+    if: github.event_name == 'workflow_dispatch' && inputs.chat-multi-agent-work-tree-proof == 'true'
+    name: Chat Multi-agent Work Tree V1 proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        timeout-minutes: 10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 24 and pnpm 11.2.2
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          frozen-lockfile: "true"
+
+      - name: Print proof identity and command list
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "proof_sha=$(git rev-parse HEAD)"
+          echo "branch=${GITHUB_REF_NAME}"
+          echo "node=$(node -v)"
+          echo "pnpm=$(pnpm -v)"
+          cat <<'EOF'
+          commands:
+          - pnpm test ui/src/ui/chat/work-tree.test.ts ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts
+          - pnpm tsgo:test:ui
+          - node --import tsx scripts/dev/control-ui-chat-multi-agent-work-tree-smoke.ts
+          - pnpm check:changed scripts/dev/control-ui-chat-multi-agent-work-tree-smoke.ts ui/src/ui/chat/work-tree.ts ui/src/ui/chat/work-tree.test.ts ui/src/ui/chat/work-snapshot.ts ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/types.ts ui/src/styles/chat.css .github/workflows/workflow-sanity.yml
+          EOF
+
+      - name: Run targeted Chat Multi-agent Work Tree tests
+        run: pnpm test ui/src/ui/chat/work-tree.test.ts ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts
+
+      - name: Run UI typecheck
+        run: pnpm tsgo:test:ui
+
+      - name: Run Chat Multi-agent Work Tree smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-multi-agent-work-tree-smoke.ts
+
+      - name: Run changed gate
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "6"
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
+        run: pnpm check:changed scripts/dev/control-ui-chat-multi-agent-work-tree-smoke.ts ui/src/ui/chat/work-tree.ts ui/src/ui/chat/work-tree.test.ts ui/src/ui/chat/work-snapshot.ts ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/types.ts ui/src/styles/chat.css .github/workflows/workflow-sanity.yml
+
+  chat-truth-diagnostics-proof:
+    if: github.event_name == 'workflow_dispatch' && inputs.chat-truth-diagnostics-proof == 'true'
+    name: Chat Truth Diagnostics V1 proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        timeout-minutes: 10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 24 and pnpm 11.2.2
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          frozen-lockfile: "true"
+
+      - name: Print proof identity and command list
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "proof_sha=$(git rev-parse HEAD)"
+          echo "branch=${GITHUB_REF_NAME}"
+          echo "node=$(node -v)"
+          echo "pnpm=$(pnpm -v)"
+          cat <<'EOF'
+          commands:
+          - pnpm test src/gateway/session-utils.subagent.test.ts ui/src/ui/chat/control-director-diagnostics.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/views/sessions.test.ts ui/src/ui/views/overview.render.test.ts
+          - pnpm tsgo:test:ui
+          - node --import tsx scripts/dev/control-ui-chat-truth-diagnostics-smoke.ts
+          - pnpm check:changed src/config/sessions/types.ts src/gateway/session-utils.ts src/gateway/session-utils.types.ts src/gateway/session-utils.subagent.test.ts src/plugins/session-entry-slot-keys.ts ui/src/ui/types.ts ui/src/ui/chat/control-director-diagnostics.ts ui/src/ui/chat/control-director-diagnostics.test.ts ui/src/ui/views/chat.ts ui/src/ui/views/chat.test.ts ui/src/ui/views/sessions.ts ui/src/ui/views/sessions.test.ts ui/src/ui/views/overview-cards.ts ui/src/ui/views/overview.render.test.ts ui/src/styles/chat.css scripts/dev/control-ui-chat-truth-diagnostics-smoke.ts .github/workflows/workflow-sanity.yml
+          EOF
+
+      - name: Run targeted Chat Truth Diagnostics tests
+        run: pnpm test src/gateway/session-utils.subagent.test.ts ui/src/ui/chat/control-director-diagnostics.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/views/sessions.test.ts ui/src/ui/views/overview.render.test.ts
+
+      - name: Run UI typecheck
+        run: pnpm tsgo:test:ui
+
+      - name: Run Chat Truth Diagnostics smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-truth-diagnostics-smoke.ts
+
+      - name: Run changed gate
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "6"
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
+        run: pnpm check:changed src/config/sessions/types.ts src/gateway/session-utils.ts src/gateway/session-utils.types.ts src/gateway/session-utils.subagent.test.ts src/plugins/session-entry-slot-keys.ts ui/src/ui/types.ts ui/src/ui/chat/control-director-diagnostics.ts ui/src/ui/chat/control-director-diagnostics.test.ts ui/src/ui/views/chat.ts ui/src/ui/views/chat.test.ts ui/src/ui/views/sessions.ts ui/src/ui/views/sessions.test.ts ui/src/ui/views/overview-cards.ts ui/src/ui/views/overview.render.test.ts ui/src/styles/chat.css scripts/dev/control-ui-chat-truth-diagnostics-smoke.ts .github/workflows/workflow-sanity.yml
+
+  chat-polish-a11y-proof:
+    if: github.event_name == 'workflow_dispatch' && inputs.chat-polish-a11y-proof == 'true'
+    name: Chat Polish Accessibility V1 proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        timeout-minutes: 10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 24 and pnpm 11.2.2
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          frozen-lockfile: "true"
+
+      - name: Print proof identity and command list
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "proof_sha=$(git rev-parse HEAD)"
+          echo "branch=${GITHUB_REF_NAME}"
+          echo "node=$(node -v)"
+          echo "pnpm=$(pnpm -v)"
+          cat <<'EOF'
+          commands:
+          - pnpm test ui/src/ui/views/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/grouped-render.test.ts ui/src/ui/chat/tool-cards.test.ts ui/src/ui/chat/control-director-diagnostics.test.ts
+          - pnpm tsgo:test:ui
+          - node --import tsx scripts/dev/control-ui-chat-polish-a11y-smoke.ts
+          - pnpm check:changed scripts/dev/control-ui-chat-polish-a11y-smoke.ts ui/src/ui/views/chat.ts ui/src/ui/views/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/grouped-render.ts ui/src/ui/chat/grouped-render.test.ts ui/src/ui/chat/tool-cards.ts ui/src/ui/chat/tool-cards.test.ts ui/src/ui/chat/control-director-diagnostics.ts ui/src/ui/chat/control-director-diagnostics.test.ts ui/src/styles/chat.css ui/src/styles/chat/grouped.css ui/src/styles/chat/tool-cards.css .github/workflows/workflow-sanity.yml
+          EOF
+
+      - name: Run targeted Chat Polish Accessibility tests
+        run: pnpm test ui/src/ui/views/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/grouped-render.test.ts ui/src/ui/chat/tool-cards.test.ts ui/src/ui/chat/control-director-diagnostics.test.ts
+
+      - name: Run UI typecheck
+        run: pnpm tsgo:test:ui
+
+      - name: Run Chat Polish Accessibility smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-polish-a11y-smoke.ts
+
+      - name: Run changed gate
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "6"
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
+        run: pnpm check:changed scripts/dev/control-ui-chat-polish-a11y-smoke.ts ui/src/ui/views/chat.ts ui/src/ui/views/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/grouped-render.ts ui/src/ui/chat/grouped-render.test.ts ui/src/ui/chat/tool-cards.ts ui/src/ui/chat/tool-cards.test.ts ui/src/ui/chat/control-director-diagnostics.ts ui/src/ui/chat/control-director-diagnostics.test.ts ui/src/styles/chat.css ui/src/styles/chat/grouped.css ui/src/styles/chat/tool-cards.css .github/workflows/workflow-sanity.yml
+
+  chat-network-remote-approval-cards-proof:
+    if: github.event_name == 'workflow_dispatch' && inputs.chat-network-remote-approval-cards-proof == 'true'
+    name: Chat Network Remote Approval Cards V1 proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        timeout-minutes: 10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 24 and pnpm 11.2.2
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          frozen-lockfile: "true"
+
+      - name: Print proof identity and command list
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "proof_sha=$(git rev-parse HEAD)"
+          echo "branch=${GITHUB_REF_NAME}"
+          echo "node=$(node -v)"
+          echo "pnpm=$(pnpm -v)"
+          cat <<'EOF_COMMANDS'
+          commands:
+          - pnpm test ui/src/ui/controllers/exec-approval.test.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/app.exec-approval.test.ts
+          - pnpm tsgo:test:ui
+          - node --import tsx scripts/dev/control-ui-chat-network-remote-approval-cards-smoke.ts
+          - pnpm check:changed src/infra/plugin-approvals.ts ui/src/ui/controllers/exec-approval.ts ui/src/ui/controllers/exec-approval.test.ts ui/src/ui/app.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/views/chat.ts ui/src/ui/views/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/app.exec-approval.test.ts ui/src/styles/chat.css scripts/dev/control-ui-chat-network-remote-approval-cards-smoke.ts .github/workflows/workflow-sanity.yml
+          EOF_COMMANDS
+
+      - name: Run targeted Chat Network Remote Approval Cards tests
+        run: pnpm test ui/src/ui/controllers/exec-approval.test.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/app.exec-approval.test.ts
+
+      - name: Run UI typecheck
+        run: pnpm tsgo:test:ui
+
+      - name: Run Chat Network Remote Approval Cards smoke
+        timeout-minutes: 20
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node --import tsx scripts/dev/control-ui-chat-network-remote-approval-cards-smoke.ts
+
+      - name: Run changed gate
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "6"
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
+        run: pnpm check:changed src/infra/plugin-approvals.ts ui/src/ui/controllers/exec-approval.ts ui/src/ui/controllers/exec-approval.test.ts ui/src/ui/app.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/views/chat.ts ui/src/ui/views/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/app.exec-approval.test.ts ui/src/styles/chat.css scripts/dev/control-ui-chat-network-remote-approval-cards-smoke.ts .github/workflows/workflow-sanity.yml

@@ -283,7 +283,9 @@ img.chat-avatar {
   pointer-events: auto;
 }
 
-@media (hover: none), (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+@media (hover: none),
+  (max-width: 768px),
+  (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-bubble-actions {
     opacity: 1;
     pointer-events: auto;
@@ -668,5 +670,180 @@ details.msg-meta:not([open]) .msg-meta__details {
   .chat-avatar,
   img.chat-avatar {
     display: none;
+  }
+}
+
+/* ── Plan Mode proposal cards ── */
+.chat-proposed-plan {
+  display: grid;
+  gap: 12px;
+  margin: 6px 0;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: calc(var(--radius-lg) + 2px);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--accent) 10%, transparent),
+      color-mix(in srgb, var(--card) 92%, transparent)
+    ),
+    var(--card);
+}
+
+.chat-proposed-plan--blocked {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--danger) 10%, transparent),
+      color-mix(in srgb, var(--card) 94%, transparent)
+    ),
+    var(--card);
+}
+
+.chat-proposed-plan--ready {
+  border-color: color-mix(in srgb, var(--ok) 42%, var(--border));
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--ok) 10%, transparent),
+      color-mix(in srgb, var(--card) 94%, transparent)
+    ),
+    var(--card);
+}
+
+.chat-proposed-plan__header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.chat-proposed-plan__eyebrow {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-proposed-plan__title {
+  margin: 2px 0 0;
+  color: var(--foreground);
+  font-size: 16px;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
+.chat-proposed-plan__status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: color-mix(in srgb, var(--foreground) 88%, var(--accent));
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.chat-proposed-plan--blocked .chat-proposed-plan__status {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.chat-proposed-plan--ready .chat-proposed-plan__status {
+  border-color: color-mix(in srgb, var(--ok) 42%, var(--border));
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: var(--ok);
+}
+
+.chat-proposed-plan__detail {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chat-proposed-plan__body {
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 54%, transparent);
+}
+
+.chat-proposed-plan__body > :first-child {
+  margin-top: 0;
+}
+
+.chat-proposed-plan__body > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-proposed-plan__body--empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chat-proposed-plan__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chat-proposed-plan__actions .btn {
+  min-height: 34px;
+}
+
+.chat-proposed-plan .btn:focus-visible,
+.chat-proposed-plan__body:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 58%, white);
+  outline-offset: 3px;
+}
+
+.chat-proposed-plan__body {
+  scrollbar-gutter: stable;
+}
+
+.chat-proposed-plan__use:disabled,
+.chat-proposed-plan__copy:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+@media (max-width: 768px) {
+  .chat-proposed-plan {
+    margin: 4px -2px;
+    padding: 12px;
+  }
+
+  .chat-proposed-plan__header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .chat-proposed-plan__status {
+    align-self: flex-start;
+  }
+
+  .chat-proposed-plan__actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .chat-proposed-plan__actions .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-delete-confirm {
+    animation: none;
   }
 }

@@ -57,6 +57,17 @@ public enum SessionFileRelevance: String, Codable, Sendable {
     case mixed = "mixed"
 }
 
+public enum TaskFlowStatus: String, Codable, Sendable {
+    case queued = "queued"
+    case running = "running"
+    case waiting = "waiting"
+    case blocked = "blocked"
+    case succeeded = "succeeded"
+    case failed = "failed"
+    case cancelled = "cancelled"
+    case lost = "lost"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
@@ -2716,6 +2727,236 @@ public struct SessionsUsageParams: Codable, Sendable {
         case utcoffset = "utcOffset"
         case limit
         case includecontextweight = "includeContextWeight"
+    }
+}
+
+public struct TaskFlowSummary: Codable, Sendable {
+    public let id: String
+    public let flowid: String
+    public let ownerkey: String
+    public let requesterorigin: AnyCodable?
+    public let status: TaskFlowStatus
+    public let notifypolicy: AnyCodable
+    public let goal: String
+    public let currentstep: String?
+    public let blockedtaskid: String?
+    public let blockedsummary: String?
+    public let cancelrequestedat: AnyCodable?
+    public let createdat: AnyCodable
+    public let updatedat: AnyCodable
+    public let endedat: AnyCodable?
+
+    public init(
+        id: String,
+        flowid: String,
+        ownerkey: String,
+        requesterorigin: AnyCodable?,
+        status: TaskFlowStatus,
+        notifypolicy: AnyCodable,
+        goal: String,
+        currentstep: String?,
+        blockedtaskid: String?,
+        blockedsummary: String?,
+        cancelrequestedat: AnyCodable?,
+        createdat: AnyCodable,
+        updatedat: AnyCodable,
+        endedat: AnyCodable?)
+    {
+        self.id = id
+        self.flowid = flowid
+        self.ownerkey = ownerkey
+        self.requesterorigin = requesterorigin
+        self.status = status
+        self.notifypolicy = notifypolicy
+        self.goal = goal
+        self.currentstep = currentstep
+        self.blockedtaskid = blockedtaskid
+        self.blockedsummary = blockedsummary
+        self.cancelrequestedat = cancelrequestedat
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.endedat = endedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case flowid = "flowId"
+        case ownerkey = "ownerKey"
+        case requesterorigin = "requesterOrigin"
+        case status
+        case notifypolicy = "notifyPolicy"
+        case goal
+        case currentstep = "currentStep"
+        case blockedtaskid = "blockedTaskId"
+        case blockedsummary = "blockedSummary"
+        case cancelrequestedat = "cancelRequestedAt"
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case endedat = "endedAt"
+    }
+}
+
+public struct TaskFlowsListParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let ownerkey: String?
+    public let status: AnyCodable?
+    public let limit: Int?
+    public let cursor: String?
+
+    public init(
+        sessionkey: String?,
+        ownerkey: String?,
+        status: AnyCodable?,
+        limit: Int?,
+        cursor: String?)
+    {
+        self.sessionkey = sessionkey
+        self.ownerkey = ownerkey
+        self.status = status
+        self.limit = limit
+        self.cursor = cursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case ownerkey = "ownerKey"
+        case status
+        case limit
+        case cursor
+    }
+}
+
+public struct TaskFlowsListResult: Codable, Sendable {
+    public let flows: [TaskFlowSummary]
+    public let nextcursor: String?
+
+    public init(
+        flows: [TaskFlowSummary],
+        nextcursor: String?)
+    {
+        self.flows = flows
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flows
+        case nextcursor = "nextCursor"
+    }
+}
+
+public struct TaskFlowsGetParams: Codable, Sendable {
+    public let flowid: String
+    public let sessionkey: String?
+
+    public init(
+        flowid: String,
+        sessionkey: String?)
+    {
+        self.flowid = flowid
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct TaskFlowsGetResult: Codable, Sendable {
+    public let flow: TaskFlowDetail
+
+    public init(
+        flow: TaskFlowDetail)
+    {
+        self.flow = flow
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flow
+    }
+}
+
+public struct TaskFlowsCreateParams: Codable, Sendable {
+    public let sessionkey: String
+    public let goal: String
+    public let currentstep: String?
+
+    public init(
+        sessionkey: String,
+        goal: String,
+        currentstep: String?)
+    {
+        self.sessionkey = sessionkey
+        self.goal = goal
+        self.currentstep = currentstep
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case goal
+        case currentstep = "currentStep"
+    }
+}
+
+public struct TaskFlowsCreateResult: Codable, Sendable {
+    public let flow: TaskFlowDetail
+
+    public init(
+        flow: TaskFlowDetail)
+    {
+        self.flow = flow
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flow
+    }
+}
+
+public struct TaskFlowsCancelParams: Codable, Sendable {
+    public let flowid: String
+    public let sessionkey: String?
+    public let reason: String?
+
+    public init(
+        flowid: String,
+        sessionkey: String?,
+        reason: String?)
+    {
+        self.flowid = flowid
+        self.sessionkey = sessionkey
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+        case sessionkey = "sessionKey"
+        case reason
+    }
+}
+
+public struct TaskFlowsCancelResult: Codable, Sendable {
+    public let found: Bool
+    public let cancelled: Bool
+    public let reason: String?
+    public let flow: TaskFlowDetail?
+
+    public init(
+        found: Bool,
+        cancelled: Bool,
+        reason: String?,
+        flow: TaskFlowDetail?)
+    {
+        self.found = found
+        self.cancelled = cancelled
+        self.reason = reason
+        self.flow = flow
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case found
+        case cancelled
+        case reason
+        case flow
     }
 }
 
@@ -7280,6 +7521,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let originatingaccountid: String?
     public let originatingthreadid: String?
     public let attachments: [AnyCodable]?
+    public let flowid: String?
     public let timeoutms: Int?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
@@ -7299,6 +7541,7 @@ public struct ChatSendParams: Codable, Sendable {
         originatingaccountid: String?,
         originatingthreadid: String?,
         attachments: [AnyCodable]?,
+        flowid: String?,
         timeoutms: Int?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
@@ -7317,6 +7560,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.originatingaccountid = originatingaccountid
         self.originatingthreadid = originatingthreadid
         self.attachments = attachments
+        self.flowid = flowid
         self.timeoutms = timeoutms
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
@@ -7337,6 +7581,7 @@ public struct ChatSendParams: Codable, Sendable {
         case originatingaccountid = "originatingAccountId"
         case originatingthreadid = "originatingThreadId"
         case attachments
+        case flowid = "flowId"
         case timeoutms = "timeoutMs"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"

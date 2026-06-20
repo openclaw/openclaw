@@ -24,6 +24,13 @@ import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
+import {
+  hasProposedPlanSegment,
+  parseProposedPlanSegments,
+  stripProposedPlanTagsForMarkdown,
+  type ProposedPlanCardSegment,
+  type ProposedPlanSegment,
+} from "./proposed-plan.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import {
   extractToolCardsCached,
@@ -408,63 +415,36 @@ export function renderStreamingGroup(
   `;
 }
 
-type RenderMessageGroupOptions = {
-  onOpenSidebar?: (content: SidebarContent) => void;
-  sessionKey?: string;
-  agentId?: string;
-  showReasoning: boolean;
-  showToolCalls?: boolean;
-  autoExpandToolCalls?: boolean;
-  isToolMessageExpanded?: (messageId: string) => boolean | undefined;
-  onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
-  isToolExpanded?: (toolCardId: string) => boolean;
-  onToggleToolExpanded?: (toolCardId: string) => void;
-  onRequestUpdate?: () => void;
-  assistantName?: string;
-  assistantAvatar?: string | null;
-  userName?: string | null;
-  userAvatar?: string | null;
-  basePath?: string;
-  localMediaPreviewRoots?: readonly string[];
-  assistantAttachmentAuthToken?: string | null;
-  canvasPluginSurfaceUrl?: string | null;
-  embedSandboxMode?: EmbedSandboxMode;
-  allowExternalEmbedUrls?: boolean;
-  contextWindow?: number | null;
-  onDelete?: () => void;
-};
-
-type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
-
-function buildGroupedMessageRenderOptions(
+export function renderMessageGroup(
   group: MessageGroup,
-  item: MessageGroup["messages"][number],
-  index: number,
-  opts: RenderMessageGroupOptions,
-): GroupedMessageRenderOptions {
-  return {
-    isStreaming: group.isStreaming && index === group.messages.length - 1,
-    sessionKey: opts.sessionKey,
-    agentId: opts.agentId,
-    duplicateCount: item.duplicateCount ?? 1,
-    showReasoning: opts.showReasoning,
-    showToolCalls: opts.showToolCalls ?? true,
-    autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
-    isToolMessageExpanded: opts.isToolMessageExpanded,
-    onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
-    isToolExpanded: opts.isToolExpanded,
-    onToggleToolExpanded: opts.onToggleToolExpanded,
-    onRequestUpdate: opts.onRequestUpdate,
-    canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-    basePath: opts.basePath,
-    localMediaPreviewRoots: opts.localMediaPreviewRoots,
-    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-    embedSandboxMode: opts.embedSandboxMode,
-    allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
-  };
-}
-
-export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+  opts: {
+    onOpenSidebar?: (content: SidebarContent) => void;
+    sessionKey?: string;
+    agentId?: string;
+    showReasoning: boolean;
+    showToolCalls?: boolean;
+    autoExpandToolCalls?: boolean;
+    isToolMessageExpanded?: (messageId: string) => boolean | undefined;
+    onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
+    isToolExpanded?: (toolCardId: string) => boolean;
+    onToggleToolExpanded?: (toolCardId: string) => void;
+    onRequestUpdate?: () => void;
+    assistantName?: string;
+    assistantAvatar?: string | null;
+    userName?: string | null;
+    userAvatar?: string | null;
+    basePath?: string;
+    localMediaPreviewRoots?: readonly string[];
+    assistantAttachmentAuthToken?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
+    embedSandboxMode?: EmbedSandboxMode;
+    allowExternalEmbedUrls?: boolean;
+    contextWindow?: number | null;
+    proposedPlanDraft?: string | null;
+    onUseProposedPlan?: (prompt: string) => void;
+    onDelete?: () => void;
+  },
+) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
@@ -568,7 +548,28 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                       renderGroupedMessage(
                         item.message,
                         item.key,
-                        buildGroupedMessageRenderOptions(group, item, index, opts),
+                        {
+                          isStreaming: group.isStreaming && index === group.messages.length - 1,
+                          sessionKey: opts.sessionKey,
+                          agentId: opts.agentId,
+                          duplicateCount: item.duplicateCount ?? 1,
+                          showReasoning: opts.showReasoning,
+                          showToolCalls: opts.showToolCalls ?? true,
+                          autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
+                          isToolMessageExpanded: opts.isToolMessageExpanded,
+                          onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
+                          isToolExpanded: opts.isToolExpanded,
+                          onToggleToolExpanded: opts.onToggleToolExpanded,
+                          onRequestUpdate: opts.onRequestUpdate,
+                          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+                          basePath: opts.basePath,
+                          localMediaPreviewRoots: opts.localMediaPreviewRoots,
+                          assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+                          embedSandboxMode: opts.embedSandboxMode,
+                          allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+                          proposedPlanDraft: opts.proposedPlanDraft,
+                          onUseProposedPlan: opts.onUseProposedPlan,
+                        },
                         opts.onOpenSidebar,
                       ),
                     )}
@@ -606,7 +607,28 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           renderGroupedMessage(
             item.message,
             item.key,
-            buildGroupedMessageRenderOptions(group, item, index, opts),
+            {
+              isStreaming: group.isStreaming && index === group.messages.length - 1,
+              sessionKey: opts.sessionKey,
+              agentId: opts.agentId,
+              duplicateCount: item.duplicateCount ?? 1,
+              showReasoning: opts.showReasoning,
+              showToolCalls: opts.showToolCalls ?? true,
+              autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
+              isToolMessageExpanded: opts.isToolMessageExpanded,
+              onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
+              isToolExpanded: opts.isToolExpanded,
+              onToggleToolExpanded: opts.onToggleToolExpanded,
+              onRequestUpdate: opts.onRequestUpdate,
+              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+              basePath: opts.basePath,
+              localMediaPreviewRoots: opts.localMediaPreviewRoots,
+              assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+              embedSandboxMode: opts.embedSandboxMode,
+              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+              proposedPlanDraft: opts.proposedPlanDraft,
+              onUseProposedPlan: opts.onUseProposedPlan,
+            },
             opts.onOpenSidebar,
           ),
         )}
@@ -1599,6 +1621,124 @@ function renderExpandButton(
   `;
 }
 
+function proposedPlanStatusLabel(status: ProposedPlanCardSegment["status"]): string {
+  switch (status) {
+    case "drafting":
+      return "Drafting";
+    case "awaiting_approval":
+      return "Awaiting approval";
+    case "ready":
+      return "Ready to send";
+    case "blocked":
+      return "Blocked";
+  }
+  return "Awaiting approval";
+}
+
+function proposedPlanStatusDetail(segment: ProposedPlanCardSegment): string {
+  if (segment.status === "drafting") {
+    return "OpenClaw is still writing this plan.";
+  }
+  if (segment.status === "ready") {
+    return "The implementation prompt is loaded in the composer.";
+  }
+  if (segment.status === "blocked") {
+    if (segment.missingCloseTag) {
+      return "This plan block is missing its closing tag.";
+    }
+    if (segment.unmatchedCloseTag) {
+      return "This plan block has a closing tag before an opening tag.";
+    }
+    return "This plan block is malformed.";
+  }
+  return "Review the plan, then choose Use plan to load it into the composer.";
+}
+
+function copyProposedPlanMarkdown(markdown: string): void {
+  void navigator.clipboard?.writeText(markdown).catch(() => undefined);
+}
+
+function renderProposedPlanCard(
+  segment: ProposedPlanCardSegment,
+  opts: {
+    onUseProposedPlan?: (prompt: string) => void;
+  },
+) {
+  const canUsePlan = segment.status === "awaiting_approval";
+  const canCopyPlan = segment.status !== "drafting" && segment.markdown.trim().length > 0;
+  return html`
+    <article
+      class="chat-proposed-plan chat-proposed-plan--${segment.status}"
+      data-proposed-plan-card=${segment.id}
+    >
+      <div class="chat-proposed-plan__header">
+        <div>
+          <div class="chat-proposed-plan__eyebrow">Plan Mode</div>
+          <h3 class="chat-proposed-plan__title">Proposed Plan</h3>
+        </div>
+        <span class="chat-proposed-plan__status">${proposedPlanStatusLabel(segment.status)}</span>
+      </div>
+      <p class="chat-proposed-plan__detail">${proposedPlanStatusDetail(segment)}</p>
+      ${segment.markdown.trim()
+        ? html`<div class="chat-proposed-plan__body" dir=${detectTextDirection(segment.markdown)}>
+            ${unsafeHTML(toSanitizedMarkdownHtml(segment.markdown))}
+          </div>`
+        : html`<div class="chat-proposed-plan__body chat-proposed-plan__body--empty">
+            No plan content is available yet.
+          </div>`}
+      <div class="chat-proposed-plan__actions">
+        <button
+          class="btn btn--sm chat-proposed-plan__use"
+          type="button"
+          ?disabled=${!canUsePlan}
+          @click=${() => {
+            if (canUsePlan) {
+              opts.onUseProposedPlan?.(segment.implementationPrompt);
+            }
+          }}
+        >
+          ${segment.status === "ready" ? "Plan loaded" : "Use plan"}
+        </button>
+        <button
+          class="btn btn--subtle btn--sm chat-proposed-plan__copy"
+          type="button"
+          ?disabled=${!canCopyPlan}
+          @click=${() => {
+            if (canCopyPlan) {
+              copyProposedPlanMarkdown(segment.markdown);
+            }
+          }}
+        >
+          Copy plan
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderMarkdownOrProposedPlanSegments(
+  markdown: string,
+  segments: readonly ProposedPlanSegment[],
+  opts: {
+    onUseProposedPlan?: (prompt: string) => void;
+  },
+) {
+  if (!hasProposedPlanSegment(segments)) {
+    return html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+      ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+    </div>`;
+  }
+  return html`${segments.map((segment) =>
+    segment.kind === "markdown"
+      ? segment.markdown.trim()
+        ? html`<div class="chat-text" dir="${detectTextDirection(segment.markdown)}">
+            ${unsafeHTML(toSanitizedMarkdownHtml(segment.markdown))}
+          </div>`
+        : nothing
+      : renderProposedPlanCard(segment, opts),
+  )}`;
+}
+
 function renderGroupedMessage(
   message: unknown,
   messageKey: string,
@@ -1621,6 +1761,8 @@ function renderGroupedMessage(
     assistantAttachmentAuthToken?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    proposedPlanDraft?: string | null;
+    onUseProposedPlan?: (prompt: string) => void;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -1668,8 +1810,18 @@ function renderGroupedMessage(
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const markdownRenderOptions = role === "user" ? { codeBlockChrome: "none" as const } : undefined;
-  const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
-  const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
+  const proposedPlanSegments =
+    role === "assistant" && markdown
+      ? parseProposedPlanSegments(markdown, {
+          isStreaming: opts.isStreaming,
+          composerDraft: opts.proposedPlanDraft,
+        })
+      : [];
+  const hasProposedPlan = hasProposedPlanSegment(proposedPlanSegments);
+  const displayMarkdown =
+    markdown && hasProposedPlan ? stripProposedPlanTagsForMarkdown(markdown) : markdown;
+  const canCopyMarkdown = role === "assistant" && Boolean(displayMarkdown?.trim());
+  const canExpand = role === "assistant" && Boolean(onOpenSidebar && displayMarkdown?.trim());
   const hasActions = canCopyMarkdown || canExpand;
   const transcriptMeta =
     m["__openclaw"] && typeof m["__openclaw"] === "object" && !Array.isArray(m["__openclaw"])
@@ -1684,11 +1836,12 @@ function renderGroupedMessage(
   const shouldFetchFullMessage = Boolean(
     sidebarMessageId &&
     !m.openclawMessageToolMirror &&
-    (transcriptMeta?.truncated === true || markdown?.includes("\n...(truncated)...")),
+    (transcriptMeta?.truncated === true || displayMarkdown?.includes("\n...(truncated)...")),
   );
 
   // Detect pure-JSON messages and render as collapsible block
-  const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
+  const jsonResult =
+    markdown && !opts.isStreaming && !hasProposedPlan ? detectJson(markdown) : null;
 
   const isToolMessage = normalizedRole === "tool" || isToolResult;
   const reserveActionSpace = hasActions && !isToolMessage;
@@ -1767,13 +1920,13 @@ function renderGroupedMessage(
       ${hasActions
         ? html`<div class="chat-bubble-actions">
             ${canExpand
-              ? renderExpandButton(markdown!, onOpenSidebar!, {
+              ? renderExpandButton(displayMarkdown!, onOpenSidebar!, {
                   sessionKey: opts.sessionKey,
                   agentId: opts.agentId,
                   messageId: shouldFetchFullMessage ? sidebarMessageId : undefined,
                 })
               : nothing}
-            ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
+            ${canCopyMarkdown ? renderCopyAsMarkdownButton(displayMarkdown!) : nothing}
           </div>`
         : nothing}
       ${isToolMessage
@@ -1836,7 +1989,11 @@ function renderGroupedMessage(
                             <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                           </details>`
                         : markdown
-                          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                          ? hasProposedPlan
+                            ? renderMarkdownOrProposedPlanSegments(markdown, proposedPlanSegments, {
+                                onUseProposedPlan: opts.onUseProposedPlan,
+                              })
+                            : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                           : nothing}
                       ${hasToolCards
                         ? singleToolCard && !markdown && !hasImages
@@ -1899,7 +2056,11 @@ function renderGroupedMessage(
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
               : markdown
-                ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                ? hasProposedPlan
+                  ? renderMarkdownOrProposedPlanSegments(markdown, proposedPlanSegments, {
+                      onUseProposedPlan: opts.onUseProposedPlan,
+                    })
+                  : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                 : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {

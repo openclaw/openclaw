@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
@@ -134,6 +134,55 @@ describe("overview view rendering", () => {
     ]);
   });
 
+  it("renders recent Control Director truth-audit blocks", async () => {
+    const container = document.createElement("div");
+    const onNavigate = vi.fn();
+    const props = createOverviewProps({
+      onNavigate,
+      sessionsResult: {
+        ts: Date.now(),
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            controlDirectorTruthAudit: [
+              {
+                ts: Date.now(),
+                runId: "run-truth",
+                status: "blocked",
+                claims: [
+                  {
+                    claim: "remote proof passed",
+                    claimHash: "claim-123",
+                    claimType: "remote_proof",
+                    requiredEvidenceType: "github_run",
+                    matchStatus: "missing",
+                    missingCondition: "matching successful GitHub run",
+                    rewriteAction: "blocked_unsupported_truth_claim",
+                  },
+                ],
+                missing: ["matching successful GitHub run"],
+                payloadsChecked: 1,
+                payloadsRewritten: 1,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Control Director truth audit");
+    expect(container.textContent).toContain("Blocked");
+    expect(container.textContent).toContain("matching successful GitHub run");
+  });
+
   it("renders recent session names through the shared display resolver", async () => {
     const container = document.createElement("div");
     const props = createOverviewProps({
@@ -178,6 +227,54 @@ describe("overview view rendering", () => {
     );
     expect(recentNames).toEqual(["Ops Room", "Telegram Session", "Main Project"]);
     expect(recentNames).not.toContain("telegram:123:456");
+  });
+
+  it("renders recent Control Director truth diagnostics in overview cards", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 10,
+            controlDirectorTruthAudit: [
+              {
+                ts: 1,
+                runId: "run-1",
+                status: "blocked",
+                missing: ["command exit code 0"],
+                payloadsChecked: 1,
+                payloadsRewritten: 1,
+                claims: [
+                  {
+                    claim: "tests passed",
+                    claimHash: "hash-1",
+                    claimType: "verification",
+                    requiredEvidenceType: "command",
+                    matchStatus: "missing",
+                    missingCondition: "missing command evidence with exit code 0",
+                    rewriteAction: "blocked_unsupported_truth_claim",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    const card = container.querySelector('[data-kind="control-director-diagnostics"]');
+    expect(card?.textContent).toContain("Truth & Completion");
+    expect(card?.textContent).toContain("1 blocked");
+    expect(card?.textContent).toContain("missing command evidence with exit code 0");
   });
 
   it("promotes provider quota into a dedicated overview card", async () => {

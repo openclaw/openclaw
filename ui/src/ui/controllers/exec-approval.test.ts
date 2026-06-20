@@ -154,6 +154,28 @@ describe("parsePluginApprovalRequested", () => {
     expect(result?.request.agentId).toBeNull();
     expect(result?.request.sessionKey).toBeNull();
   });
+
+  it("parses network and remote-proof categories as plugin-backed approvals", () => {
+    const network = parsePluginApprovalRequested({
+      ...validPayload,
+      id: "network-approval",
+      request: { ...validPayload.request, category: "network" },
+    });
+    const remoteProof = parsePluginApprovalRequested({
+      ...validPayload,
+      id: "remote-proof-approval",
+      request: { ...validPayload.request, category: "remote_proof" },
+    });
+    const fallback = parsePluginApprovalRequested({
+      ...validPayload,
+      id: "unknown-category-approval",
+      request: { ...validPayload.request, category: "unknown" },
+    });
+
+    expect(network?.kind).toBe("network");
+    expect(remoteProof?.kind).toBe("remote_proof");
+    expect(fallback?.kind).toBe("plugin");
+  });
 });
 
 describe("parseExecApprovalRequested command spans", () => {
@@ -454,5 +476,35 @@ describe("refreshPendingApprovalQueue", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps plugin-backed network and remote-proof approvals when plugin refresh fails", async () => {
+    const network = createExecApproval({
+      id: "approval-network",
+      kind: "network",
+      request: { command: "Allow web search" },
+    });
+    const remoteProof = createExecApproval({
+      id: "approval-remote-proof",
+      kind: "remote_proof",
+      request: { command: "Run remote proof" },
+    });
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.list") {
+        return [];
+      }
+      if (method === "plugin.approval.list") {
+        throw new Error("offline");
+      }
+      return {};
+    });
+    const state = createPromptState(request, [network, remoteProof]);
+
+    await refreshPendingApprovalQueue(state);
+
+    expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual([
+      "approval-network",
+      "approval-remote-proof",
+    ]);
   });
 });

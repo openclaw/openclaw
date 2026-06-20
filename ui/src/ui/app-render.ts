@@ -56,7 +56,19 @@ import {
 } from "./controllers/agents.ts";
 import { setAssistantAvatarOverride } from "./controllers/assistant-identity.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
+import {
+  attachChatSessionToProject,
+  buildCurrentChatGoalContinuationPrompt,
+  cancelChatGoal,
+  cancelChatWorkTask,
+  createAndAttachChatProject,
+  createChatGoal,
+  createChatSessionInProject,
+  detachChatSessionFromProject,
+  loadChatGoals,
+  loadChatHistory,
+  loadChatProjects,
+} from "./controllers/chat.ts";
 import {
   applyConfig,
   ensureAgentConfigEntry,
@@ -3771,6 +3783,27 @@ export function renderApp(state: AppViewState) {
                   streamSegments: state.chatStreamSegments,
                   stream: state.chatStream,
                   streamStartedAt: state.chatStreamStartedAt,
+                  currentRunId: state.chatRunId,
+                  workTasks: state.chatWorkTasks,
+                  workTasksLoading: state.chatWorkLoading,
+                  workTasksError: state.chatWorkError,
+                  goalFlows: state.chatGoalFlows,
+                  goalLoading: state.chatGoalLoading,
+                  goalBusy: state.chatGoalBusy,
+                  goalError: state.chatGoalError,
+                  goalDraft: state.chatGoalDraft,
+                  goalPanelOpen: state.chatGoalPanelOpen,
+                  projectsList: state.projectsList,
+                  projectsLoading: state.projectsLoading,
+                  projectPickerOpen: state.chatProjectPickerOpen,
+                  projectBusy: state.chatProjectBusy,
+                  projectError: state.chatProjectError,
+                  projectCreateName: state.chatProjectCreateName,
+                  projectCreateDescription: state.chatProjectCreateDescription,
+                  projectCreateInstructions: state.chatProjectCreateInstructions,
+                  execApprovalQueue: state.execApprovalQueue,
+                  execApprovalBusy: state.execApprovalBusy,
+                  execApprovalError: state.execApprovalError,
                   draft: state.chatMessage,
                   queue: state.chatQueue,
                   realtimeTalkActive: state.realtimeTalkActive,
@@ -3845,6 +3878,97 @@ export function renderApp(state: AppViewState) {
                   onQueueRemove: (id) => state.removeQueuedMessage(id),
                   onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
                   onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
+                  onWorkTaskCancel: (taskId) => void cancelChatWorkTask(state, taskId),
+                  onGoalPanelToggle: (open) => {
+                    state.chatGoalPanelOpen = open;
+                    if (open) {
+                      void loadChatGoals(state);
+                    }
+                  },
+                  onGoalDraftChange: (value) => {
+                    state.chatGoalDraft = value;
+                  },
+                  onGoalStart: async () => {
+                    const goalText = (state.chatGoalDraft ?? "").trim() || state.chatMessage.trim();
+                    const flow = await createChatGoal(state, goalText);
+                    if (!flow) {
+                      return;
+                    }
+                    state.chatMessage = goalText;
+                    await state.handleSendChat(undefined, { flowId: flow.id });
+                    await loadChatGoals(state);
+                  },
+                  onGoalContinue: async (flowId) => {
+                    const prompt = buildCurrentChatGoalContinuationPrompt(state, flowId);
+                    if (!prompt) {
+                      state.chatGoalError = "Goal is unavailable.";
+                      return;
+                    }
+                    await state.handleSendChat(prompt, { flowId });
+                    await loadChatGoals(state);
+                  },
+                  onGoalCancel: async (flowId) => {
+                    await cancelChatGoal(state, flowId);
+                  },
+                  onGoalRefresh: () => loadChatGoals(state),
+                  onProjectPickerToggle: (open) => {
+                    state.chatProjectPickerOpen = open;
+                    if (open) {
+                      void loadChatProjects(state);
+                    }
+                  },
+                  onProjectCreateFieldChange: (field, value) => {
+                    if (field === "name") {
+                      state.chatProjectCreateName = value;
+                    } else if (field === "description") {
+                      state.chatProjectCreateDescription = value;
+                    } else {
+                      state.chatProjectCreateInstructions = value;
+                    }
+                  },
+                  onProjectCreateAndAttach: async () => {
+                    const projectId = await createAndAttachChatProject(state);
+                    if (!projectId) {
+                      return;
+                    }
+                    await loadSessions(state, {
+                      ...createChatSessionsLoadOverrides(state),
+                      ...scopedAgentListParamsForSession(state, state.sessionKey),
+                    });
+                  },
+                  onProjectAttach: async (projectId) => {
+                    const attached = await attachChatSessionToProject(state, projectId);
+                    if (!attached) {
+                      return;
+                    }
+                    await loadSessions(state, {
+                      ...createChatSessionsLoadOverrides(state),
+                      ...scopedAgentListParamsForSession(state, state.sessionKey),
+                    });
+                  },
+                  onProjectDetach: async () => {
+                    const detached = await detachChatSessionFromProject(state);
+                    if (!detached) {
+                      return;
+                    }
+                    await loadSessions(state, {
+                      ...createChatSessionsLoadOverrides(state),
+                      ...scopedAgentListParamsForSession(state, state.sessionKey),
+                    });
+                  },
+                  onNewProjectChat: async (projectId) => {
+                    const nextKey = await createChatSessionInProject(state, projectId);
+                    if (!nextKey) {
+                      return;
+                    }
+                    await loadSessions(state, {
+                      ...createChatSessionsLoadOverrides(state),
+                      ...scopedAgentListParamsForSession(state, nextKey),
+                    });
+                    switchChatSession(state, nextKey);
+                  },
+                  onProjectRefresh: () => loadChatProjects(state),
+                  onExecApprovalDecision: (decision) => state.handleExecApprovalDecision(decision),
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
                   },

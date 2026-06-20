@@ -1,6 +1,3 @@
-/**
- * Tests subagent session utility behavior and persisted session lookups.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +12,7 @@ import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/a
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
+  buildGatewaySessionRow,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   resolveGatewayModelSupportsImages,
@@ -34,6 +32,215 @@ describe("listSessionsFromStore subagent metadata", () => {
     session: { mainKey: "main" },
     agents: { list: [{ id: "main", default: true }] },
   } as OpenClawConfig;
+
+  test("projects Judge guard audit entries into dashboard session rows", () => {
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 10,
+        judgeGuardAudit: [
+          {
+            ts: 9,
+            runId: "run-judge-guard",
+            action: "rewrote_final_success_claim",
+            verdictStatus: "parsed",
+            verdict: "REJECT",
+            scope: "build completion",
+            risk: "medium",
+            conditions: "rerun build",
+            payloadsChecked: 1,
+            payloadsRewritten: 1,
+          },
+        ],
+      } as SessionEntry,
+    });
+
+    expect(row.judgeGuardAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-judge-guard",
+        verdict: "REJECT",
+        scope: "build completion",
+        payloadsRewritten: 1,
+      }),
+    ]);
+  });
+
+  test("projects Control Director guard audit entries into dashboard session rows", () => {
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 10,
+        controlDirectorGuardAudit: [
+          {
+            ts: 9,
+            runId: "run-control-director-guard",
+            action: "rewrote_unsupported_complete",
+            originalStatus: "complete",
+            nextStatus: "blocked",
+            missing: ["evidence"],
+            payloadsChecked: 1,
+            payloadsRewritten: 1,
+          },
+        ],
+      } as SessionEntry,
+    });
+
+    expect(row.controlDirectorGuardAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-director-guard",
+        action: "rewrote_unsupported_complete",
+        nextStatus: "blocked",
+        payloadsRewritten: 1,
+      }),
+    ]);
+  });
+
+  test("projects Control Director liveness audit and mission ledger into dashboard session rows", () => {
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 10,
+        controlDirectorLivenessAudit: [
+          {
+            ts: 9,
+            runId: "run-control-director-liveness",
+            action: "queued_safe_continuation",
+            reason: "empty final response",
+            classification: "empty",
+            nextStatus: "blocked",
+            continuationCount: 0,
+            continuationQueued: true,
+            payloadsChecked: 0,
+            payloadsSynthesized: 1,
+          },
+        ],
+        controlDirectorMissionLedger: [
+          {
+            missionId: "control-director:run-control-director-liveness",
+            runId: "run-control-director-liveness",
+            requestSummary: "continue until done",
+            status: "continuation_queued",
+            startedAt: 8,
+            updatedAt: 9,
+            continuationCount: 1,
+            finalStatus: "blocked",
+            verifiedEvidenceSummary: "liveness watchdog synthesized a blocked report",
+            nextBuildGap: "queued continuation must verify evidence",
+            completionGrade: 7,
+            criticality: 10,
+            judgeCompletionGate: {
+              status: "blocked",
+              reason:
+                "Judge approval is missing or invalid for this exact mission completion claim.",
+              expectedClaimHash: "claim-hash-1",
+              missing: ["Judge approval metadata"],
+            },
+            truthAudit: {
+              ts: 9,
+              runId: "run-control-director-liveness",
+              status: "blocked",
+              claims: [
+                {
+                  claim: "Remote proof passed on GitHub Actions.",
+                  claimHash: "truth-claim-hash-1",
+                  claimType: "remote_proof",
+                  requiredEvidenceType: "github_run",
+                  matchStatus: "missing",
+                  missingCondition: "successful GitHub run evidence for the implementation SHA",
+                  rewriteAction: "blocked_unsupported_truth_claim",
+                },
+              ],
+              missing: ["successful GitHub run evidence for the implementation SHA"],
+              payloadsChecked: 1,
+              payloadsRewritten: 1,
+            },
+            watchdogActions: ["queued_safe_continuation:queued"],
+          },
+        ],
+        controlDirectorJudgeCompletionApproval: {
+          judgeStatus: "approved",
+          judgeVerdict: "APPROVE",
+          judgeRunId: "judge-run-1",
+          missionId: "control-director:run-control-director-liveness",
+          approvedClaimHash: "claim-hash-1",
+          evidenceSummary: "verified remote proof",
+          scope: "Control Director completion",
+          approvedAt: 123,
+        },
+        controlDirectorTruthAudit: [
+          {
+            ts: 9,
+            runId: "run-control-director-liveness",
+            status: "blocked",
+            claims: [
+              {
+                claim: "Remote proof passed on GitHub Actions.",
+                claimHash: "truth-claim-hash-1",
+                claimType: "remote_proof",
+                requiredEvidenceType: "github_run",
+                matchStatus: "missing",
+                missingCondition: "successful GitHub run evidence for the implementation SHA",
+                rewriteAction: "blocked_unsupported_truth_claim",
+              },
+            ],
+            missing: ["successful GitHub run evidence for the implementation SHA"],
+            payloadsChecked: 1,
+            payloadsRewritten: 1,
+          },
+        ],
+      } as SessionEntry,
+    });
+
+    expect(row.controlDirectorLivenessAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-director-liveness",
+        action: "queued_safe_continuation",
+        continuationQueued: true,
+      }),
+    ]);
+    expect(row.controlDirectorMissionLedger).toEqual([
+      expect.objectContaining({
+        missionId: "control-director:run-control-director-liveness",
+        status: "continuation_queued",
+        continuationCount: 1,
+        judgeCompletionGate: expect.objectContaining({
+          status: "blocked",
+          expectedClaimHash: "claim-hash-1",
+        }),
+        truthAudit: expect.objectContaining({
+          status: "blocked",
+          payloadsRewritten: 1,
+        }),
+      }),
+    ]);
+    expect(row.controlDirectorJudgeCompletionApproval).toEqual(
+      expect.objectContaining({
+        judgeStatus: "approved",
+        judgeVerdict: "APPROVE",
+        judgeRunId: "judge-run-1",
+        approvedClaimHash: "claim-hash-1",
+      }),
+    );
+    expect(row.controlDirectorTruthAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-director-liveness",
+        status: "blocked",
+        payloadsRewritten: 1,
+      }),
+    ]);
+  });
 
   test("searches channel-derived display names before row enrichment", () => {
     const result = listSessionsFromStore({
@@ -97,6 +304,99 @@ describe("listSessionsFromStore subagent metadata", () => {
     }
   });
 
+  test("projects Control Director diagnostic fields onto session rows", () => {
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-control-director",
+          updatedAt: 123,
+          controlDirectorGuardAudit: [
+            {
+              ts: 10,
+              runId: "run-1",
+              action: "blocked_missing_judge_approval",
+              originalStatus: "complete",
+              nextStatus: "blocked",
+              missing: ["judge approval"],
+              payloadsChecked: 1,
+              payloadsRewritten: 1,
+            },
+          ],
+          controlDirectorLivenessAudit: [
+            {
+              ts: 11,
+              runId: "run-1",
+              action: "synthesized_blocked_no_visible_output",
+              reason: "empty final output",
+              source: "terminal_empty",
+              classification: "empty",
+              nextStatus: "blocked",
+              continuationCount: 0,
+              continuationQueued: false,
+              payloadsChecked: 1,
+              payloadsSynthesized: 1,
+            },
+          ],
+          controlDirectorMissionLedger: [
+            {
+              missionId: "mission-1",
+              runId: "run-1",
+              requestSummary: "verify completion",
+              status: "blocked",
+              startedAt: 1,
+              updatedAt: 12,
+              continuationCount: 0,
+              finalStatus: "blocked",
+              nextBuildGap: "obtain Judge approval",
+              completionGrade: 8,
+              criticality: 10,
+            },
+          ],
+          controlDirectorJudgeCompletionApproval: {
+            judgeStatus: "rejected",
+            judgeVerdict: "REQUEST_MORE_EVIDENCE",
+            judgeRunId: "judge-1",
+            missionId: "mission-1",
+            evidenceSummary: "missing command proof",
+          },
+          controlDirectorTruthAudit: [
+            {
+              ts: 12,
+              runId: "run-1",
+              status: "blocked",
+              missing: ["command exit code 0"],
+              payloadsChecked: 1,
+              payloadsRewritten: 1,
+              claims: [
+                {
+                  claim: "tests passed",
+                  claimHash: "hash-1",
+                  claimType: "verification",
+                  requiredEvidenceType: "command",
+                  matchStatus: "missing",
+                  missingCondition: "missing command evidence with exit code 0",
+                  rewriteAction: "blocked_unsupported_truth_claim",
+                },
+              ],
+            },
+          ],
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    const row = result.sessions[0];
+    expect(row?.controlDirectorGuardAudit?.[0]?.action).toBe("blocked_missing_judge_approval");
+    expect(row?.controlDirectorLivenessAudit?.[0]?.source).toBe("terminal_empty");
+    expect(row?.controlDirectorMissionLedger?.[0]?.nextBuildGap).toBe("obtain Judge approval");
+    expect(row?.controlDirectorJudgeCompletionApproval?.judgeVerdict).toBe("REQUEST_MORE_EVIDENCE");
+    expect(row?.controlDirectorTruthAudit?.[0]?.claims[0]?.missingCondition).toBe(
+      "missing command evidence with exit code 0",
+    );
+  });
+
   test("includes subagent status timing and direct child session keys", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -114,7 +414,6 @@ describe("listSessionsFromStore subagent metadata", () => {
         updatedAt: now - 1_000,
         spawnedBy: "agent:main:subagent:parent",
         spawnedWorkspaceDir: "/tmp/child-workspace",
-        spawnedCwd: "/tmp/task-repo",
         forkedFromParent: true,
         spawnDepth: 2,
         subagentRole: "orchestrator",
@@ -198,7 +497,6 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(child?.endedAt).toBe(now - 2_500);
     expect(child?.runtimeMs).toBe(5_000);
     expect(child?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
-    expect(child?.spawnedCwd).toBe("/tmp/task-repo");
     expect(child?.forkedFromParent).toBe(true);
     expect(child?.spawnDepth).toBe(2);
     expect(child?.subagentRole).toBe("orchestrator");
@@ -558,8 +856,10 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
 
     expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]?.key).toBe(childSessionKey);
-    expect(result.sessions[0]?.spawnedBy).toBe("agent:main:subagent:new-parent-owner");
+    expect(result.sessions[0]).toMatchObject({
+      key: childSessionKey,
+      spawnedBy: "agent:main:subagent:new-parent-owner",
+    });
   });
 
   test("reports the newest parentSessionKey for moved child session rows", () => {
@@ -606,8 +906,10 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
 
     expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]?.key).toBe(childSessionKey);
-    expect(result.sessions[0]?.parentSessionKey).toBe("agent:main:subagent:new-parent-parent");
+    expect(result.sessions[0]).toMatchObject({
+      key: childSessionKey,
+      parentSessionKey: "agent:main:subagent:new-parent-parent",
+    });
   });
 
   test("preserves original session timing across follow-up replacement runs", () => {
@@ -699,10 +1001,12 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
 
     expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]?.key).toBe(childSessionKey);
-    expect(result.sessions[0]?.status).toBe("done");
-    expect(result.sessions[0]?.startedAt).toBe(now - 900);
-    expect(result.sessions[0]?.endedAt).toBe(now - 200);
+    expect(result.sessions[0]).toMatchObject({
+      key: childSessionKey,
+      status: "done",
+      startedAt: now - 900,
+      endedAt: now - 200,
+    });
   });
 
   test("prefers persisted terminal session state when only stale active subagent snapshots remain", () => {
@@ -1278,8 +1582,8 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       } as OpenClawConfig;
 
       const { store } = loadCombinedSessionStoreForGateway(cfg);
-      expect(store["agent:main:main"]?.sessionId).toBe("s-main");
-      expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
+      expect(store["agent:main:main"]).toMatchObject({ sessionId: "s-main" });
+      expect(store["agent:codex:acp-task"]).toMatchObject({ sessionId: "s-codex" });
     });
   });
 
@@ -1324,7 +1628,7 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       const { store, storePath } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
 
       expect(storePath).toBe(fs.realpathSync.native(codexStorePath));
-      expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
+      expect(store["agent:codex:acp-task"]).toMatchObject({ sessionId: "s-codex" });
       expect(store["agent:main:main"]).toBeUndefined();
       const readPaths = readSpy.mock.calls
         .map((call) => call[0])

@@ -99,6 +99,7 @@ import {
 import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
+import { applyControlDirectorDeliveryGuards } from "./control-director-delivery-guards.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
@@ -1149,7 +1150,23 @@ async function agentCommandInternal(
         }),
         opts.abortSignal,
       );
-      const payloads = result.payloads;
+      const controlDirectorGuardResult = await applyControlDirectorDeliveryGuards({
+        agentId: sessionAgentId,
+        payloads: result.payloads,
+        finalAssistantVisibleText: finalText,
+        classification: finalText.trim() ? undefined : "empty",
+        canQueueContinuation: Boolean(sessionKey),
+        externalAbort: opts.abortSignal?.aborted === true,
+        runId,
+        sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+        storePath: suppressVisibleSessionEffects ? undefined : storePath,
+        requestBody: body,
+      });
+      const payloads = controlDirectorGuardResult.payloads;
+      sessionEntry = controlDirectorGuardResult.sessionEntry ?? sessionEntry;
       const { deliverAgentCommandResult } = await loadDeliveryRuntime();
 
       return await deliverAgentCommandResult({
@@ -2237,7 +2254,27 @@ async function agentCommandInternal(
         }
       }
 
-      const payloads = result.payloads ?? [];
+      let payloads = result.payloads ?? [];
+      const controlDirectorGuardResult = await applyControlDirectorDeliveryGuards({
+        agentId: sessionAgentId,
+        provider: result.meta.agentMeta?.provider ?? provider,
+        model: result.meta.agentMeta?.model ?? model,
+        payloads,
+        finalAssistantVisibleText: result.meta.finalAssistantVisibleText,
+        classification: result.meta.agentHarnessResultClassification,
+        canQueueContinuation: Boolean(sessionKey),
+        externalAbort: result.meta.aborted === true || opts.abortSignal?.aborted === true,
+        approvalPending: Boolean(result.meta.pendingToolCalls?.length),
+        runId,
+        sessionId: effectiveSessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+        storePath: suppressVisibleSessionEffects ? undefined : storePath,
+        requestBody: body,
+      });
+      payloads = controlDirectorGuardResult.payloads;
+      sessionEntry = controlDirectorGuardResult.sessionEntry ?? sessionEntry;
       let pendingFinalDeliveryTextForThisRun: string | undefined;
 
       // Phase 2: Persist pending final delivery for main sessions before attempting delivery.

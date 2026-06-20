@@ -1531,6 +1531,7 @@
     "config:docs:gen": "node --import tsx scripts/generate-config-doc-baseline.ts --write",
     "config:schema:check": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "config:schema:gen": "node --import tsx scripts/generate-base-config-schema.ts --write",
+    "control-director:readiness": "node scripts/control-director-readiness.mjs",
     "crabbox:hydrate": "node scripts/crabbox-wrapper.mjs actions hydrate",
     "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
     "crabbox:stop": "node scripts/crabbox-wrapper.mjs stop",
@@ -1922,6 +1923,7 @@
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:install": "node scripts/ui.js install",
+    "ui:smoke:control-director-no-response": "node --import tsx scripts/dev/control-ui-control-director-no-response-smoke.ts",
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {

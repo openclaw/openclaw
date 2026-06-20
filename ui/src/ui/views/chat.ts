@@ -4,6 +4,7 @@ import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { formatApprovalDisplayPath } from "../../../../src/infra/approval-display-paths.ts";
 import { t } from "../../i18n/index.ts";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
@@ -19,8 +20,8 @@ import { buildChatItems, type BuildChatItemsProps } from "../chat/build-chat-ite
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
-import { copyToClipboard } from "../chat/clipboard.ts";
 import { renderContextNotice } from "../chat/context-notice.ts";
+import { summarizeControlDirectorDiagnostics } from "../chat/control-director-diagnostics.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
@@ -33,13 +34,19 @@ import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
-import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
+import {
+  chatGoalStatusLabel,
+  isActiveChatGoal,
+  resolveCurrentChatGoal,
+  type ChatGoalFlowSummary,
+} from "../chat/pursue-goal.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
   resolveControlUiRealtimeTalkProviderTransports,
   type RealtimeTalkCatalogProvider,
 } from "../chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -60,12 +67,34 @@ import {
   renderFallbackIndicator,
 } from "../chat/status-indicators.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
+import {
+  buildWorkSurfaceSnapshot,
+  hasActiveWork,
+  type WorkSurfaceItem,
+  type WorkSurfaceTaskSummary,
+} from "../chat/work-snapshot.ts";
+import {
+  buildAgentWorkTreeSnapshot,
+  type AgentWorkTreeNode,
+  type AgentWorkTreeSnapshot,
+} from "../chat/work-tree.ts";
+import type {
+  ExecApprovalRequest,
+  ExecApprovalRequestPayload,
+} from "../controllers/exec-approval.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { SessionWorkspaceListResult, SessionGoal, SessionsListResult } from "../types.ts";
+import type {
+  ProjectRecord,
+  ProjectsListResult,
+  SessionGoal,
+  SessionsListResult,
+  GatewaySessionRow,
+  SessionWorkspaceListResult,
+} from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -119,6 +148,27 @@ export type ChatProps = {
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
+  currentRunId?: string | null;
+  workTasks?: WorkSurfaceTaskSummary[];
+  workTasksLoading?: boolean;
+  workTasksError?: string | null;
+  goalFlows?: ChatGoalFlowSummary[];
+  goalLoading?: boolean;
+  goalBusy?: boolean;
+  goalError?: string | null;
+  goalDraft?: string;
+  goalPanelOpen?: boolean;
+  projectsList?: ProjectsListResult | null;
+  projectsLoading?: boolean;
+  projectPickerOpen?: boolean;
+  projectBusy?: boolean;
+  projectError?: string | null;
+  projectCreateName?: string;
+  projectCreateDescription?: string;
+  projectCreateInstructions?: string;
+  execApprovalQueue?: ExecApprovalRequest[];
+  execApprovalBusy?: boolean;
+  execApprovalError?: string | null;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -184,6 +234,26 @@ export type ChatProps = {
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
+  onWorkTaskCancel?: (taskId: string) => void;
+  onGoalPanelToggle?: (open: boolean) => void;
+  onGoalDraftChange?: (value: string) => void;
+  onGoalStart?: () => void | Promise<void>;
+  onGoalContinue?: (flowId: string) => void | Promise<void>;
+  onGoalCancel?: (flowId: string) => void | Promise<void>;
+  onGoalRefresh?: () => void | Promise<void>;
+  onProjectPickerToggle?: (open: boolean) => void;
+  onProjectCreateFieldChange?: (
+    field: "name" | "description" | "instructions",
+    value: string,
+  ) => void;
+  onProjectCreateAndAttach?: () => void | Promise<void>;
+  onProjectAttach?: (projectId: string) => void | Promise<void>;
+  onProjectDetach?: () => void | Promise<void>;
+  onNewProjectChat?: (projectId: string) => void | Promise<void>;
+  onProjectRefresh?: () => void | Promise<void>;
+  onExecApprovalDecision?: (
+    decision: "allow-once" | "allow-always" | "deny",
+  ) => void | Promise<void>;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -668,6 +738,8 @@ export function resetChatViewState() {
   chatItemsBySession.clear();
   composerDraftMirrors.clear();
 }
+
+export const cleanupChatModuleState = resetChatViewState;
 
 function resolveChatHistoryRenderCap(messageCount: number): number {
   return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
@@ -1748,6 +1820,897 @@ function exportMarkdown(props: ChatProps): void {
   exportChatMarkdown(props.messages, props.assistantName);
 }
 
+function workItemKindLabel(kind: WorkSurfaceItem["kind"]): string {
+  switch (kind) {
+    case "chat_run":
+      return "Chat";
+    case "queued_message":
+      return "Queue";
+    case "task":
+      return "Task";
+    case "active_session":
+      return "Session";
+    default:
+      return "Work";
+  }
+}
+
+function closeDetailsOnEscape(event: KeyboardEvent, onClose?: () => void) {
+  if (event.key !== "Escape") {
+    return;
+  }
+  const details = event.currentTarget;
+  if (!(details instanceof HTMLDetailsElement) || !details.open) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  details.open = false;
+  onClose?.();
+}
+
+function renderWorkItemActions(props: ChatProps, item: WorkSurfaceItem) {
+  return html`
+    ${item.actions.includes("stop_run") && props.onAbort
+      ? html`<button
+          class="btn btn--sm"
+          type="button"
+          aria-label=${`Stop ${item.title}`}
+          @click=${props.onAbort}
+        >
+          Stop
+        </button>`
+      : nothing}
+    ${item.actions.includes("remove_queue")
+      ? html`
+          <button
+            class="btn btn--sm"
+            type="button"
+            aria-label=${`Remove queued message ${item.title}`}
+            @click=${() => props.onQueueRemove(item.id.replace(/^queued:/, ""))}
+          >
+            Remove
+          </button>
+        `
+      : nothing}
+    ${item.actions.includes("open_session") && item.sessionKey && props.onSessionSelect
+      ? html`
+          <button
+            class="btn btn--sm"
+            type="button"
+            aria-label=${`Open session ${item.title}`}
+            @click=${() => props.onSessionSelect?.(item.sessionKey!)}
+          >
+            Open
+          </button>
+        `
+      : nothing}
+    ${item.actions.includes("cancel_task") && item.taskId && props.onWorkTaskCancel
+      ? html`
+          <button
+            class="btn btn--sm"
+            type="button"
+            aria-label=${`Cancel task ${item.title}`}
+            @click=${() => props.onWorkTaskCancel?.(item.taskId!)}
+          >
+            Cancel
+          </button>
+        `
+      : nothing}
+  `;
+}
+
+function renderAgentWorkTreeActions(props: ChatProps, node: AgentWorkTreeNode) {
+  return html`
+    ${node.actions.includes("open_session") && props.onSessionSelect
+      ? html`
+          <button
+            class="btn btn--sm"
+            type="button"
+            aria-label=${`Open child session ${node.title}`}
+            @click=${() => props.onSessionSelect?.(node.sessionKey)}
+          >
+            Open
+          </button>
+        `
+      : nothing}
+    ${node.actions.includes("cancel_task") && node.taskId && props.onWorkTaskCancel
+      ? html`
+          <button
+            class="btn btn--sm"
+            type="button"
+            aria-label=${`Cancel child task ${node.title}`}
+            @click=${() => props.onWorkTaskCancel?.(node.taskId!)}
+          >
+            Cancel
+          </button>
+        `
+      : nothing}
+  `;
+}
+
+function renderAgentWorkTree(props: ChatProps, tree: AgentWorkTreeSnapshot) {
+  const nodes = tree.flat;
+  if (nodes.length === 0) {
+    return html`
+      <section class="chat-agent-work-tree" aria-label="Agent Work Tree">
+        <div class="chat-agent-work-tree__header">
+          <div>
+            <h4>Agent Work Tree</h4>
+            <p>No child agents running.</p>
+          </div>
+        </div>
+        <div class="chat-agent-work-tree__empty">No child agents running.</div>
+      </section>
+    `;
+  }
+
+  return html`
+    <section class="chat-agent-work-tree" aria-label="Agent Work Tree">
+      <div class="chat-agent-work-tree__header">
+        <div>
+          <h4>Agent Work Tree</h4>
+          <p>
+            ${tree.activeChildCount > 0
+              ? `${tree.activeChildCount} active child ${tree.activeChildCount === 1 ? "agent" : "agents"}.`
+              : "Child agents are idle."}
+          </p>
+        </div>
+      </div>
+      <div class="chat-agent-work-tree__list" role="list">
+        ${nodes.map(
+          (node) => html`
+            <article
+              class="chat-agent-work-tree__node ${node.isActive
+                ? "chat-agent-work-tree__node--active"
+                : ""}"
+              data-agent-work-tree-node=${node.sessionKey}
+              role="listitem"
+              style=${`--agent-work-depth: ${node.depth};`}
+            >
+              <div class="chat-agent-work-tree__rail" aria-hidden="true"></div>
+              <div class="chat-agent-work-tree__main">
+                <div class="chat-agent-work-tree__topline">
+                  <span>${node.depth === 0 ? "Parent" : "Child agent"}</span>
+                  <strong>${node.status}</strong>
+                  ${node.activeDescendants > 0
+                    ? html`<em>${node.activeDescendants} active below</em>`
+                    : nothing}
+                </div>
+                <div class="chat-agent-work-tree__title">${node.title}</div>
+                ${node.detail
+                  ? html`<div class="chat-agent-work-tree__detail">${node.detail}</div>`
+                  : nothing}
+                <div class="chat-agent-work-tree__meta">
+                  <span>${node.sessionKey}</span>
+                </div>
+              </div>
+              <div class="chat-agent-work-tree__actions">
+                ${renderAgentWorkTreeActions(props, node)}
+              </div>
+            </article>
+          `,
+        )}
+      </div>
+    </section>
+  `;
+}
+
+function renderWorkingNow(props: ChatProps, items: WorkSurfaceItem[], tree: AgentWorkTreeSnapshot) {
+  const hasItems = hasActiveWork(items);
+  const hasTree = tree.flat.length > 0;
+  const visibleCount = items.length + tree.childCount;
+  const hasActiveWorkVisible = hasItems || tree.activeChildCount > 0;
+  const hasError = Boolean(props.workTasksError);
+  const summaryLabel = hasActiveWorkVisible
+    ? "Working"
+    : hasError
+      ? "Work status unavailable"
+      : props.workTasksLoading
+        ? "Checking work…"
+        : "Nothing running";
+  return html`
+    <details class="chat-work-surface" data-chat-work-surface @keydown=${closeDetailsOnEscape}>
+      <summary
+        class="chat-work-surface__summary"
+        role="button"
+        aria-label=${`Working Now: ${summaryLabel}`}
+      >
+        <span
+          class="chat-work-surface__dot ${hasItems ? "chat-work-surface__dot--active" : ""}"
+          aria-hidden="true"
+        ></span>
+        <span>${summaryLabel}</span>
+        ${visibleCount > 0 ? html`<strong>${visibleCount}</strong>` : nothing}
+      </summary>
+      <div class="chat-work-surface__panel" role="region" aria-label="Working Now">
+        <div class="chat-work-surface__header">
+          <div>
+            <h3>Working Now</h3>
+            <p>
+              ${hasItems || hasTree
+                ? "Current OpenClaw work and child agents."
+                : "Nothing is running."}
+            </p>
+          </div>
+        </div>
+        ${hasError
+          ? html`<div class="chat-work-surface__error">Work status unavailable</div>`
+          : nothing}
+        ${hasItems
+          ? html`
+              <div class="chat-work-surface__list" role="list">
+                ${items.map(
+                  (item) => html`
+                    <article
+                      class="chat-work-surface__item"
+                      data-work-kind=${item.kind}
+                      role="listitem"
+                    >
+                      <div class="chat-work-surface__item-main">
+                        <div class="chat-work-surface__item-topline">
+                          <span>${workItemKindLabel(item.kind)}</span>
+                          <strong>${item.status}</strong>
+                        </div>
+                        <div class="chat-work-surface__item-title">${item.title}</div>
+                        ${item.detail
+                          ? html`<div class="chat-work-surface__item-detail">${item.detail}</div>`
+                          : nothing}
+                        ${item.projectId || item.sessionKey
+                          ? html`
+                              <div class="chat-work-surface__item-meta">
+                                ${item.projectId
+                                  ? html`<span>Project ${item.projectId}</span>`
+                                  : nothing}
+                                ${item.sessionKey ? html`<span>${item.sessionKey}</span>` : nothing}
+                              </div>
+                            `
+                          : nothing}
+                      </div>
+                      <div class="chat-work-surface__actions">
+                        ${renderWorkItemActions(props, item)}
+                      </div>
+                    </article>
+                  `,
+                )}
+              </div>
+            `
+          : html`<div class="chat-work-surface__empty">Nothing is running.</div>`}
+        ${renderAgentWorkTree(props, tree)}
+      </div>
+    </details>
+  `;
+}
+
+function renderControlDirectorDiagnosticsCard(session: GatewaySessionRow | undefined) {
+  const summary = summarizeControlDirectorDiagnostics(session);
+  if (!summary.hasDiagnostics) {
+    return nothing;
+  }
+  return html`
+    <section
+      class="chat-control-director-diagnostics chat-control-director-diagnostics--${summary.tone}"
+      data-control-director-diagnostics
+      aria-label="Truth and completion diagnostics"
+    >
+      <div class="chat-control-director-diagnostics__header">
+        <div>
+          <div class="chat-control-director-diagnostics__eyebrow">Control Director</div>
+          <h3>${summary.title}</h3>
+        </div>
+        <span class="chat-control-director-diagnostics__status">${summary.status}</span>
+      </div>
+      <p class="chat-control-director-diagnostics__summary">${summary.detail}</p>
+      ${summary.details.length > 0
+        ? html`
+            <dl class="chat-control-director-diagnostics__grid">
+              ${summary.details.slice(0, 16).map(
+                (detail) => html`
+                  <div>
+                    <dt>${detail.label}</dt>
+                    <dd>${detail.value}</dd>
+                  </div>
+                `,
+              )}
+            </dl>
+          `
+        : nothing}
+    </section>
+  `;
+}
+
+function formatChatApprovalRemaining(ms: number): string {
+  const remaining = Math.max(0, ms);
+  const totalSeconds = Math.floor(remaining / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h`;
+}
+
+function renderChatApprovalMetaRow(
+  label: string,
+  value?: string | null,
+  opts?: { path?: boolean },
+) {
+  if (!value) {
+    return nothing;
+  }
+  const displayValue = opts?.path ? formatApprovalDisplayPath(value) : value;
+  return html`<div class="chat-approval-card__meta-row">
+    <span>${label}</span><span>${displayValue}</span>
+  </div>`;
+}
+
+function renderChatApprovalCommandWithSpans(request: ExecApprovalRequestPayload) {
+  const commandSpans = [...(request.commandSpans ?? [])]
+    .filter(
+      (span) =>
+        Number.isSafeInteger(span.startIndex) &&
+        Number.isSafeInteger(span.endIndex) &&
+        span.startIndex >= 0 &&
+        span.endIndex > span.startIndex &&
+        span.endIndex <= request.command.length,
+    )
+    .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
+  const accepted: typeof commandSpans = [];
+  let cursor = 0;
+  for (const span of commandSpans) {
+    if (span.startIndex < cursor) {
+      continue;
+    }
+    accepted.push(span);
+    cursor = span.endIndex;
+  }
+  if (accepted.length === 0) {
+    return html`<div class="chat-approval-card__command mono">${request.command}</div>`;
+  }
+  const parts: Array<string | TemplateResult> = [];
+  cursor = 0;
+  for (const span of accepted) {
+    if (span.startIndex > cursor) {
+      parts.push(request.command.slice(cursor, span.startIndex));
+    }
+    parts.push(
+      html`<mark class="chat-approval-card__command-span"
+        >${request.command.slice(span.startIndex, span.endIndex)}</mark
+      >`,
+    );
+    cursor = span.endIndex;
+  }
+  if (cursor < request.command.length) {
+    parts.push(request.command.slice(cursor));
+  }
+  return html`<div class="chat-approval-card__command mono">${parts}</div>`;
+}
+
+function renderChatExecApprovalBody(request: ExecApprovalRequestPayload) {
+  return html`
+    ${renderChatApprovalCommandWithSpans(request)}
+    <div class="chat-approval-card__meta">
+      ${renderChatApprovalMetaRow("Host", request.host)}
+      ${renderChatApprovalMetaRow("Agent", request.agentId)}
+      ${renderChatApprovalMetaRow("Session", request.sessionKey)}
+      ${renderChatApprovalMetaRow("Working folder", request.cwd, { path: true })}
+      ${renderChatApprovalMetaRow("Resolved path", request.resolvedPath, { path: true })}
+      ${renderChatApprovalMetaRow("Security", request.security)}
+      ${renderChatApprovalMetaRow("Ask mode", request.ask)}
+    </div>
+  `;
+}
+
+function resolveChatApprovalTitle(active: ExecApprovalRequest): string {
+  if (active.kind === "exec") {
+    return "Exec approval needed";
+  }
+  if (active.kind === "network") {
+    return "Network approval needed";
+  }
+  if (active.kind === "remote_proof") {
+    return "Remote proof approval needed";
+  }
+  return active.pluginTitle ?? "Plugin approval needed";
+}
+
+function resolveChatApprovalKindLabel(active: ExecApprovalRequest): string {
+  if (active.kind === "network") {
+    return "Network";
+  }
+  if (active.kind === "remote_proof") {
+    return "Remote proof";
+  }
+  return active.kind === "plugin" ? "Plugin" : "Exec";
+}
+
+function resolveChatApprovalSourceLabel(active: ExecApprovalRequest): string {
+  if (active.kind === "network") {
+    return "Network source";
+  }
+  if (active.kind === "remote_proof") {
+    return "Proof source";
+  }
+  return "Plugin";
+}
+
+function renderChatPluginBackedApprovalBody(active: ExecApprovalRequest) {
+  return html`
+    ${active.pluginDescription
+      ? html`<pre class="chat-approval-card__command mono">${active.pluginDescription}</pre>`
+      : nothing}
+    <div class="chat-approval-card__meta">
+      ${renderChatApprovalMetaRow("Severity", active.pluginSeverity)}
+      ${renderChatApprovalMetaRow(resolveChatApprovalSourceLabel(active), active.pluginId)}
+      ${renderChatApprovalMetaRow("Agent", active.request.agentId)}
+      ${renderChatApprovalMetaRow("Session", active.request.sessionKey)}
+    </div>
+  `;
+}
+
+function renderChatApprovalCard(props: ChatProps) {
+  const active = props.execApprovalQueue?.[0];
+  if (!active) {
+    return nothing;
+  }
+  const isExec = active.kind === "exec";
+  const queueCount = props.execApprovalQueue?.length ?? 1;
+  const remainingMs = active.expiresAtMs - Date.now();
+  const remaining =
+    remainingMs > 0 ? `Expires in ${formatChatApprovalRemaining(remainingMs)}` : "Approval expired";
+  const title = resolveChatApprovalTitle(active);
+  const summaryDetail = isExec
+    ? active.request.command
+    : (active.pluginTitle ?? active.request.command);
+  const busy = Boolean(props.execApprovalBusy);
+  const decide = (decision: "allow-once" | "allow-always" | "deny") => {
+    if (!busy) {
+      void props.onExecApprovalDecision?.(decision);
+    }
+  };
+  return html`
+    <details
+      class="chat-approval-card"
+      data-chat-approval-card
+      data-approval-kind=${active.kind}
+      open
+      @keydown=${closeDetailsOnEscape}
+    >
+      <summary
+        class="chat-approval-card__summary"
+        role="button"
+        aria-label=${`${title}: ${summaryDetail}`}
+      >
+        <span class="chat-approval-card__dot" aria-hidden="true"></span>
+        <span class="chat-approval-card__kicker">Approval needed</span>
+        <strong>${summaryDetail}</strong>
+        ${queueCount > 1
+          ? html`<span class="chat-approval-card__count">${queueCount} pending</span>`
+          : nothing}
+      </summary>
+      <div class="chat-approval-card__panel" role="region" aria-label="Approval needed">
+        <div class="chat-approval-card__header">
+          <div>
+            <h3>${title}</h3>
+            <p>${remaining}</p>
+          </div>
+          <span class="chat-approval-card__kind">${resolveChatApprovalKindLabel(active)}</span>
+        </div>
+        ${isExec
+          ? renderChatExecApprovalBody(active.request)
+          : renderChatPluginBackedApprovalBody(active)}
+        ${props.execApprovalError
+          ? html`<div class="chat-approval-card__error" role="alert">
+              ${props.execApprovalError}
+            </div>`
+          : nothing}
+        <div class="chat-approval-card__actions">
+          <button
+            class="btn btn--sm primary"
+            type="button"
+            aria-label="Allow approval once"
+            ?disabled=${busy}
+            @click=${() => decide("allow-once")}
+          >
+            Allow once
+          </button>
+          <button
+            class="btn btn--sm"
+            type="button"
+            aria-label="Always allow this approval"
+            ?disabled=${busy}
+            @click=${() => decide("allow-always")}
+          >
+            Always allow
+          </button>
+          <button
+            class="btn btn--sm danger"
+            type="button"
+            aria-label="Deny approval"
+            ?disabled=${busy}
+            @click=${() => decide("deny")}
+          >
+            Deny
+          </button>
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function activeChatProjects(projectsList: ProjectsListResult | null | undefined): ProjectRecord[] {
+  return (projectsList?.projects ?? []).filter((project) => project.archived !== true);
+}
+
+function resolveCurrentChatProject(props: ChatProps): {
+  projectId: string | null;
+  project: ProjectRecord | null;
+} {
+  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  const projectId =
+    typeof activeSession?.projectId === "string" && activeSession.projectId.trim()
+      ? activeSession.projectId.trim()
+      : null;
+  if (!projectId) {
+    return { projectId: null, project: null };
+  }
+  const project =
+    activeChatProjects(props.projectsList).find((entry) => entry.id === projectId) ?? null;
+  return { projectId, project };
+}
+
+function renderProjectSummaryLabel(props: ChatProps): string {
+  const { project, projectId } = resolveCurrentChatProject(props);
+  if (project?.name?.trim()) {
+    return project.name.trim();
+  }
+  if (projectId) {
+    return "Project attached";
+  }
+  return "No Project";
+}
+
+function renderProjectPickerActions(
+  props: ChatProps,
+  project: ProjectRecord,
+  currentId: string | null,
+) {
+  const isCurrent = project.id === currentId;
+  return html`
+    <div class="chat-project-picker__actions">
+      ${isCurrent
+        ? html`<span class="chat-project-picker__badge">Attached</span>`
+        : html`
+            <button
+              class="btn btn--sm"
+              type="button"
+              data-chat-project-action="attach"
+              aria-label=${`Attach ${project.name} to this chat`}
+              ?disabled=${props.projectBusy}
+              @click=${() => props.onProjectAttach?.(project.id)}
+            >
+              Attach
+            </button>
+          `}
+      <button
+        class="btn btn--sm btn--subtle"
+        type="button"
+        data-chat-project-action="new-chat"
+        aria-label=${`Start a new chat in ${project.name}`}
+        ?disabled=${props.projectBusy}
+        @click=${() => props.onNewProjectChat?.(project.id)}
+      >
+        New chat
+      </button>
+    </div>
+  `;
+}
+
+function renderChatProjectPicker(props: ChatProps) {
+  const activeProjects = activeChatProjects(props.projectsList);
+  const { projectId } = resolveCurrentChatProject(props);
+  const summaryLabel = renderProjectSummaryLabel(props);
+  const hasError = Boolean(props.projectError);
+  const createDisabled = Boolean(props.projectBusy) || !(props.projectCreateName ?? "").trim();
+  return html`
+    <details
+      class="chat-project-picker"
+      data-chat-project-picker
+      ?open=${Boolean(props.projectPickerOpen)}
+      @keydown=${(event: KeyboardEvent) =>
+        closeDetailsOnEscape(event, () => props.onProjectPickerToggle?.(false))}
+      @toggle=${(event: Event) => {
+        const target = event.currentTarget as HTMLDetailsElement;
+        props.onProjectPickerToggle?.(target.open);
+      }}
+    >
+      <summary
+        class="chat-project-picker__summary"
+        role="button"
+        aria-label=${`Project: ${summaryLabel}`}
+      >
+        <span
+          class="chat-project-picker__dot ${projectId ? "chat-project-picker__dot--active" : ""}"
+          aria-hidden="true"
+        ></span>
+        <span class="chat-project-picker__kicker">Project</span>
+        <strong>${summaryLabel}</strong>
+      </summary>
+      <div class="chat-project-picker__panel" role="region" aria-label="Chat project">
+        <div class="chat-project-picker__header">
+          <div>
+            <h3>Project</h3>
+            <p>Attach this chat to shared project memory.</p>
+          </div>
+          <button
+            class="btn btn--sm btn--subtle"
+            type="button"
+            aria-label="Refresh projects"
+            ?disabled=${props.projectBusy || props.projectsLoading}
+            @click=${() => props.onProjectRefresh?.()}
+          >
+            Refresh
+          </button>
+        </div>
+        ${hasError
+          ? html`<div class="chat-project-picker__error" role="alert">
+              <strong>Project status unavailable</strong>
+              <span>${props.projectError}</span>
+            </div>`
+          : nothing}
+        ${projectId && props.onProjectDetach
+          ? html`
+              <button
+                class="btn btn--sm chat-project-picker__detach"
+                type="button"
+                data-chat-project-action="detach"
+                aria-label="Detach this chat from its project"
+                ?disabled=${props.projectBusy}
+                @click=${() => props.onProjectDetach?.()}
+              >
+                Detach from project
+              </button>
+            `
+          : nothing}
+        <div class="chat-project-picker__section">
+          <h4>Choose a project</h4>
+          ${props.projectsLoading
+            ? html`<div class="chat-project-picker__empty">Loading projects…</div>`
+            : activeProjects.length > 0
+              ? html`
+                  <div class="chat-project-picker__list" role="list">
+                    ${activeProjects.map(
+                      (project) => html`
+                        <article class="chat-project-picker__item" role="listitem">
+                          <div class="chat-project-picker__item-main">
+                            <strong>${project.name}</strong>
+                            ${project.description
+                              ? html`<p>${project.description}</p>`
+                              : html`<p>Use this project for the current chat.</p>`}
+                          </div>
+                          ${renderProjectPickerActions(props, project, projectId)}
+                        </article>
+                      `,
+                    )}
+                  </div>
+                `
+              : html`<div class="chat-project-picker__empty">No projects yet.</div>`}
+        </div>
+        <div class="chat-project-picker__section chat-project-picker__create">
+          <h4>Create a project</h4>
+          <label>
+            <span>Name</span>
+            <input
+              type="text"
+              placeholder="Project name"
+              .value=${props.projectCreateName ?? ""}
+              @input=${(event: Event) =>
+                props.onProjectCreateFieldChange?.(
+                  "name",
+                  (event.currentTarget as HTMLInputElement).value,
+                )}
+            />
+          </label>
+          <label>
+            <span>Description</span>
+            <input
+              type="text"
+              placeholder="Optional description"
+              .value=${props.projectCreateDescription ?? ""}
+              @input=${(event: Event) =>
+                props.onProjectCreateFieldChange?.(
+                  "description",
+                  (event.currentTarget as HTMLInputElement).value,
+                )}
+            />
+          </label>
+          <label>
+            <span>Instructions</span>
+            <input
+              type="text"
+              placeholder="Optional project instructions"
+              .value=${props.projectCreateInstructions ?? ""}
+              @input=${(event: Event) =>
+                props.onProjectCreateFieldChange?.(
+                  "instructions",
+                  (event.currentTarget as HTMLInputElement).value,
+                )}
+            />
+          </label>
+          <button
+            class="btn"
+            type="button"
+            data-chat-project-action="create-and-attach"
+            aria-label="Create project and attach this chat"
+            ?disabled=${createDisabled}
+            @click=${() => props.onProjectCreateAndAttach?.()}
+          >
+            Create and attach
+          </button>
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function renderPursueGoal(props: ChatProps) {
+  const goal = resolveCurrentChatGoal(props.goalFlows);
+  const statusLabel = chatGoalStatusLabel(goal);
+  const flowId = goal?.flowId ?? goal?.id ?? "";
+  const activeTask =
+    goal?.tasks?.find((task) => task.status === "running" || task.status === "queued") ??
+    goal?.tasks?.[0];
+  const detail =
+    goal?.blockedSummary ??
+    activeTask?.progressSummary ??
+    activeTask?.terminalSummary ??
+    goal?.currentStep ??
+    (goal ? "Goal is saved in this chat." : "Turn a request into durable work.");
+  const startText = (props.goalDraft?.trim() || props.draft.trim()).trim();
+  const startDisabled =
+    !props.connected ||
+    props.sending ||
+    Boolean(props.goalBusy) ||
+    Boolean(props.canAbort) ||
+    !startText;
+  const continueDisabled =
+    !props.connected ||
+    props.sending ||
+    Boolean(props.goalBusy) ||
+    Boolean(props.canAbort) ||
+    !goal ||
+    !flowId ||
+    !isActiveChatGoal(goal.status) ||
+    Boolean(goal.cancelRequestedAt);
+  const cancelDisabled =
+    !props.connected ||
+    Boolean(props.goalBusy) ||
+    !goal ||
+    !flowId ||
+    !isActiveChatGoal(goal.status) ||
+    Boolean(goal.cancelRequestedAt);
+  return html`
+    <details
+      class="chat-goal"
+      data-chat-goal
+      ?open=${props.goalPanelOpen}
+      @keydown=${(event: KeyboardEvent) =>
+        closeDetailsOnEscape(event, () => props.onGoalPanelToggle?.(false))}
+      @toggle=${(event: Event) => {
+        const target = event.currentTarget as HTMLDetailsElement;
+        props.onGoalPanelToggle?.(target.open);
+      }}
+    >
+      <summary class="chat-goal__summary" aria-label=${`Pursue Goal: ${statusLabel}`}>
+        <span class="chat-goal__kicker">Pursue Goal</span>
+        <span class="chat-goal__title">${goal?.goal ?? "No goal"}</span>
+        <span class="chat-goal__status ${goal ? `chat-goal__status--${goal.status}` : ""}">
+          ${statusLabel}
+        </span>
+      </summary>
+      ${props.goalPanelOpen
+        ? html`<div class="chat-goal__panel">
+            <div class="chat-goal__header">
+              <div>
+                <h3>Pursue Goal</h3>
+                <p>
+                  ${goal
+                    ? detail
+                    : "Create durable work from the current request, then continue it with evidence."}
+                </p>
+              </div>
+              <button
+                class="btn btn--subtle btn--sm"
+                type="button"
+                aria-label="Refresh goal status"
+                @click=${() => props.onGoalRefresh?.()}
+              >
+                Refresh
+              </button>
+            </div>
+            ${props.goalError
+              ? html`
+                  <div class="callout danger" role="alert">
+                    <strong>Goal status unavailable</strong>
+                    <span>${props.goalError}</span>
+                  </div>
+                `
+              : nothing}
+            ${goal
+              ? html`
+                  <div class="chat-goal__card">
+                    <div>
+                      <span class="chat-goal__eyebrow">Current goal</span>
+                      <strong>${goal.goal}</strong>
+                      <p>${detail}</p>
+                    </div>
+                    ${activeTask
+                      ? html`
+                          <div class="chat-goal__meta">
+                            <span>Task ${activeTask.status ?? "unknown"}</span>
+                            ${activeTask.judgeStatus
+                              ? html`<span>Judge ${activeTask.judgeStatus}</span>`
+                              : nothing}
+                          </div>
+                        `
+                      : nothing}
+                  </div>
+                `
+              : nothing}
+            <label class="chat-goal__field">
+              <span>Goal</span>
+              <textarea
+                rows="2"
+                placeholder="Describe what OpenClaw should pursue until verified."
+                .value=${props.goalDraft ?? ""}
+                @input=${(event: Event) =>
+                  props.onGoalDraftChange?.((event.currentTarget as HTMLTextAreaElement).value)}
+              ></textarea>
+            </label>
+            <div class="chat-goal__actions">
+              <button
+                class="btn primary"
+                type="button"
+                data-chat-goal-action="start"
+                aria-label="Start pursue goal"
+                ?disabled=${startDisabled}
+                @click=${() => props.onGoalStart?.()}
+              >
+                Start goal
+              </button>
+              <button
+                class="btn"
+                type="button"
+                data-chat-goal-action="continue"
+                aria-label="Continue pursue goal"
+                ?disabled=${continueDisabled}
+                @click=${() => props.onGoalContinue?.(flowId)}
+              >
+                Continue
+              </button>
+              <button
+                class="btn btn--subtle"
+                type="button"
+                data-chat-goal-action="cancel"
+                aria-label="Cancel pursue goal"
+                ?disabled=${cancelDisabled}
+                @click=${() => props.onGoalCancel?.(flowId)}
+              >
+                Cancel
+              </button>
+            </div>
+            ${props.goalLoading
+              ? html`<div class="chat-goal__loading">Loading goal status...</div>`
+              : nothing}
+          </div>`
+        : nothing}
+    </details>
+  `;
+}
+
 function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof nothing {
   if (!vs.searchOpen) {
     return nothing;
@@ -2022,6 +2985,20 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const workItems = buildWorkSurfaceSnapshot({
+    assistantName: props.assistantName,
+    chatRunId: props.canAbort ? (props.currentRunId ?? null) : null,
+    chatRunStatus: props.runStatus,
+    chatQueue: props.queue,
+    currentSessionKey: props.sessionKey,
+    sessionsResult: props.sessions,
+    tasks: props.workTasks ?? [],
+  });
+  const workTree = buildAgentWorkTreeSnapshot({
+    currentSessionKey: props.sessionKey,
+    sessionsResult: props.sessions,
+    tasks: props.workTasks ?? [],
+  });
   const displayStream = props.stream ?? null;
   const historyRenderLimit = resolveChatHistoryRenderWindow(props);
 
@@ -2031,13 +3008,13 @@ export function renderChat(props: ChatProps) {
       return;
     }
     const code = (btn as HTMLElement).dataset.code ?? "";
-    void copyToClipboard(code).then((copied) => {
-      if (!copied) {
-        return;
-      }
-      btn.classList.add("copied");
-      setTimeout(() => btn.classList.remove("copied"), 1500);
-    });
+    navigator.clipboard.writeText(code).then(
+      () => {
+        btn.classList.add("copied");
+        setTimeout(() => btn.classList.remove("copied"), 1500);
+      },
+      () => {},
+    );
   };
   const handleChatThreadScroll = (event: Event) => {
     maybeExpandChatHistoryRenderWindow(event, requestUpdate);
@@ -2242,6 +3219,18 @@ export function renderChat(props: ChatProps) {
                     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                     embedSandboxMode: props.embedSandboxMode ?? "scripts",
                     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                    proposedPlanDraft: props.draft,
+                    onUseProposedPlan: (prompt: string) => {
+                      props.onDraftChange(prompt);
+                      requestUpdate();
+                      requestAnimationFrame(() => {
+                        document
+                          .querySelector<HTMLTextAreaElement>(
+                            ".agent-chat__composer-combobox textarea",
+                          )
+                          ?.focus();
+                      });
+                    },
                     contextWindow: threadContextWindow,
                     onDelete: () => {
                       deleted.delete(item.key);
@@ -2274,8 +3263,6 @@ export function renderChat(props: ChatProps) {
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    // IME navigation keys belong to the browser; downstream handlers can
-    // prevent them or commit the in-progress composition as a host draft.
     if (vs.composerComposing || e.isComposing || e.keyCode === 229) {
       return;
     }
@@ -2387,6 +3374,9 @@ export function renderChat(props: ChatProps) {
 
     // Send on Enter (without shift)
     if (e.key === "Enter" && !e.shiftKey) {
+      if (e.isComposing || e.keyCode === 229) {
+        return;
+      }
       if (!props.connected) {
         return;
       }
@@ -2420,10 +3410,6 @@ export function renderChat(props: ChatProps) {
   const handleInput = (e: InputEvent) => {
     const target = e.target as HTMLTextAreaElement;
     if (vs.composerComposing || e.isComposing) {
-      // Skip adjustTextareaHeight during IME composition — each pinyin
-      // keystroke fires `input` and the height read/write forces a
-      // synchronous reflow that blocks the composition thread.
-      // Resize runs once in handleCompositionEnd → syncComposerValue.
       draftMirror.value = target.value;
       return;
     }
@@ -2445,198 +3431,6 @@ export function renderChat(props: ChatProps) {
   const slashMenuVisible = isSlashMenuVisible();
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel();
-  const chatColumnFooter = html`
-    ${renderChatQueue({
-      queue: props.queue,
-      canAbort: showAbortableUi,
-      onQueueRetry: props.onQueueRetry,
-      onQueueSteer: props.onQueueSteer,
-      onQueueRemove: props.onQueueRemove,
-    })}
-    ${renderSideResult(props.sideResult, props.onDismissSideResult)}
-    ${props.showNewMessages
-      ? html`
-          <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
-            ${icons.arrowDown} New messages
-          </button>
-        `
-      : nothing}
-
-    <!-- Input bar -->
-    <div
-      class="agent-chat__input"
-      @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
-    >
-      ${renderSlashMenu(requestUpdate, props, visibleDraft)} ${renderAttachmentPreview(props)}
-      <div class="agent-chat__composer-status-stack">
-        ${renderFallbackIndicator(props.fallbackStatus)}
-        ${renderCompactionIndicator(props.compactionStatus)}
-        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
-          compactBusy,
-          compactDisabled: !props.connected || isBusy || showAbortableUi,
-          onCompact: props.onCompact,
-        })}
-        ${renderChatGoal(activeSession?.goal)}
-      </div>
-
-      <input
-        type="file"
-        accept=${CHAT_ATTACHMENT_ACCEPT}
-        multiple
-        class="agent-chat__file-input"
-        @change=${(e: Event) => handleFileSelect(e, props)}
-      />
-
-      ${renderRealtimeTalkOptions(props)}
-      ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
-        ? html`
-            <div
-              class="agent-chat__stt-interim agent-chat__talk-status"
-              role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
-            >
-              <span class="agent-chat__talk-status-text">
-                ${props.realtimeTalkDetail ??
-                ((props.realtimeTalkConversation?.length ?? 0) === 0
-                  ? props.realtimeTalkTranscript
-                  : null) ??
-                (props.realtimeTalkStatus === "thinking"
-                  ? "Asking OpenClaw..."
-                  : props.realtimeTalkStatus === "connecting"
-                    ? "Connecting Talk..."
-                    : "Talk live")}
-              </span>
-              ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
-                ? html`
-                    <button
-                      class="callout__dismiss"
-                      type="button"
-                      @click=${props.onDismissRealtimeTalkError}
-                      aria-label=${t("chat.composer.dismissTalkError")}
-                      title=${t("chat.composer.dismissTalkError")}
-                    >
-                      ${icons.x}
-                    </button>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
-
-      <div class="agent-chat__composer-combobox">
-        <textarea
-          ${ref((el) => {
-            composerTextarea = el instanceof HTMLTextAreaElement ? el : null;
-            if (composerTextarea) {
-              adjustTextareaHeight(composerTextarea);
-            }
-          })}
-          .value=${visibleDraft}
-          dir=${detectTextDirection(visibleDraft)}
-          ?disabled=${!props.connected}
-          aria-autocomplete="list"
-          aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
-          aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
-          aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
-          @keydown=${handleKeyDown}
-          @input=${handleInput}
-          @compositionstart=${() => {
-            vs.composerComposing = true;
-          }}
-          @compositionend=${handleCompositionEnd}
-          @blur=${handleBlur}
-          @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${placeholder}
-          rows="1"
-        ></textarea>
-        <span
-          id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
-          class="agent-chat__sr-only"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          >${activeSlashMenuOptionLabel}</span
-        >
-      </div>
-
-      <div class="agent-chat__toolbar">
-        <div class="agent-chat__toolbar-left">
-          <button
-            type="button"
-            class="agent-chat__input-btn"
-            @click=${clickComposerFileInput}
-            title=${t("chat.composer.attachFile")}
-            aria-label=${t("chat.composer.attachFile")}
-            ?disabled=${!props.connected}
-          >
-            ${icons.paperclip}
-            <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
-          </button>
-
-          ${props.onToggleRealtimeTalk
-            ? html`
-                <button
-                  class="agent-chat__input-btn ${props.realtimeTalkActive
-                    ? "agent-chat__input-btn--talk"
-                    : ""}"
-                  @click=${props.onToggleRealtimeTalk}
-                  title=${props.realtimeTalkActive
-                    ? t("chat.composer.stopTalk")
-                    : t("chat.composer.startTalk")}
-                  aria-label=${props.realtimeTalkActive
-                    ? t("chat.composer.stopTalk")
-                    : t("chat.composer.startTalk")}
-                  ?disabled=${!props.connected}
-                >
-                  ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
-                  <span class="agent-chat__control-label"
-                    >${props.realtimeTalkActive
-                      ? t("chat.composer.stopTalk")
-                      : t("chat.composer.startTalk")}</span
-                  >
-                </button>
-              `
-            : nothing}
-          ${props.onToggleRealtimeTalkOptions
-            ? html`
-                <button
-                  class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
-                    ? "agent-chat__input-btn--talk"
-                    : ""}"
-                  @click=${props.onToggleRealtimeTalkOptions}
-                  title="Talk settings"
-                  aria-label="Talk settings"
-                  aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
-                  ?disabled=${!props.connected || props.realtimeTalkActive}
-                >
-                  ${icons.settings}
-                  <span class="agent-chat__control-label">Talk settings</span>
-                </button>
-              `
-            : nothing}
-          ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
-          ${renderChatRunStatusIndicator(composerRunStatus)}
-        </div>
-
-        ${composerControls && composerControls !== nothing
-          ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
-          : nothing}
-        ${renderChatRunControls({
-          canAbort: showAbortableUi,
-          connected: props.connected,
-          draft: visibleDraft,
-          hasMessages: props.messages.length > 0,
-          isBusy,
-          sending: props.sending,
-          onAbort: props.onAbort,
-          onExport: () => exportMarkdown(props),
-          onNewSession: props.onNewSession,
-          onSend: handleSend,
-          onStoreDraft: () => {},
-          showSecondary: false,
-        })}
-      </div>
-    </div>
-  `;
 
   return html`
     <section
@@ -2645,49 +3439,45 @@ export function renderChat(props: ChatProps) {
       @dragover=${(e: DragEvent) => e.preventDefault()}
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
-      ${
-        props.error
-          ? html`
-              <div class="callout danger callout--dismissible" role="alert">
-                <span class="callout__content">${props.error}</span>
-                ${props.onDismissError
-                  ? html`
-                      <button
-                        class="callout__dismiss"
-                        type="button"
-                        @click=${props.onDismissError}
-                        aria-label="Dismiss error"
-                        title="Dismiss error"
-                      >
-                        ${icons.x}
-                      </button>
-                    `
-                  : nothing}
-              </div>
-            `
-          : nothing
-      }
-      ${
-        props.focusMode && props.onToggleFocusMode
-          ? html`
-              <button
-                class="chat-focus-exit"
-                type="button"
-                @click=${props.onToggleFocusMode}
-                aria-label="Exit focus mode"
-                title="Exit focus mode"
-              >
-                ${icons.x}
-              </button>
-            `
-          : nothing
-      }
+      ${props.error
+        ? html`
+            <div class="callout danger callout--dismissible" role="alert">
+              <span class="callout__content">${props.error}</span>
+              ${props.onDismissError
+                ? html`
+                    <button
+                      class="callout__dismiss"
+                      type="button"
+                      @click=${props.onDismissError}
+                      aria-label="Dismiss error"
+                      title="Dismiss error"
+                    >
+                      ${icons.x}
+                    </button>
+                  `
+                : nothing}
+            </div>
+          `
+        : nothing}
+      ${props.focusMode && props.onToggleFocusMode
+        ? html`
+            <button
+              class="chat-focus-exit"
+              type="button"
+              @click=${props.onToggleFocusMode}
+              aria-label="Exit focus mode"
+              title="Exit focus mode"
+            >
+              ${icons.x}
+            </button>
+          `
+        : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
       <div
-        class="chat-workbench ${
-          props.sessionWorkspace?.collapsed ? "chat-workbench--workspace-collapsed" : ""
-        }"
+        class="chat-workbench ${props.sessionWorkspace?.collapsed
+          ? "chat-workbench--workspace-collapsed"
+          : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
         <div class="chat-workbench__main">
@@ -2696,41 +3486,233 @@ export function renderChat(props: ChatProps) {
               class="chat-main"
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
             >
-              ${thread} ${chatColumnFooter}
+              ${thread}
             </div>
 
-            ${
-              sidebarOpen
-                ? html`
-                    <resizable-divider
-                      .splitRatio=${splitRatio}
-                      .label=${t("nav.resize")}
-                      @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
-                    ></resizable-divider>
-                    <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
-                      ${renderMarkdownSidebar({
-                        content: props.sidebarContent ?? null,
-                        error: props.sidebarError ?? null,
-                        canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                        embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                        allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                        onClose: props.onCloseSidebar!,
-                        onViewRawText: () => {
-                          if (!props.onOpenSidebar) {
-                            return;
-                          }
-                          const rawContent = buildRawSidebarContent(props.sidebarContent);
-                          if (rawContent) {
-                            props.onOpenSidebar(rawContent);
-                          }
-                        },
-                      })}
-                    </div>
-                  `
-                : nothing
-            }
+            ${sidebarOpen
+              ? html`
+                  <resizable-divider
+                    .splitRatio=${splitRatio}
+                    .label=${t("nav.resize")}
+                    @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
+                  ></resizable-divider>
+                  <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
+                    ${renderMarkdownSidebar({
+                      content: props.sidebarContent ?? null,
+                      error: props.sidebarError ?? null,
+                      canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+                      embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                      allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                      onClose: props.onCloseSidebar!,
+                      onViewRawText: () => {
+                        if (!props.onOpenSidebar) {
+                          return;
+                        }
+                        const rawContent = buildRawSidebarContent(props.sidebarContent);
+                        if (rawContent) {
+                          props.onOpenSidebar(rawContent);
+                        }
+                      },
+                    })}
+                  </div>
+                `
+              : nothing}
+          </div>
+        </div>
+      </div>
+
+      ${renderChatProjectPicker(props)} ${renderChatApprovalCard(props)} ${renderPursueGoal(props)}
+      ${renderControlDirectorDiagnosticsCard(activeSession)}
+      ${renderWorkingNow(props, workItems, workTree)}
+      ${renderChatQueue({
+        queue: props.queue,
+        canAbort: showAbortableUi,
+        onQueueRetry: props.onQueueRetry,
+        onQueueSteer: props.onQueueSteer,
+        onQueueRemove: props.onQueueRemove,
+      })}
+      ${renderSideResult(props.sideResult, props.onDismissSideResult)}
+      ${props.showNewMessages
+        ? html`
+            <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
+              ${icons.arrowDown} New messages
+            </button>
+          `
+        : nothing}
+
+      <!-- Input bar -->
+      <div
+        class="agent-chat__input"
+        @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
+      >
+        ${renderSlashMenu(requestUpdate, props, visibleDraft)} ${renderAttachmentPreview(props)}
+        <div class="agent-chat__composer-status-stack">
+          ${renderFallbackIndicator(props.fallbackStatus)}
+          ${renderCompactionIndicator(props.compactionStatus)}
+          ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+            compactBusy,
+            compactDisabled: !props.connected || isBusy || showAbortableUi,
+            onCompact: props.onCompact,
+          })}
+          ${renderChatGoal(activeSession?.goal)}
+        </div>
+
+        <input
+          type="file"
+          accept=${CHAT_ATTACHMENT_ACCEPT}
+          multiple
+          class="agent-chat__file-input"
+          @change=${(e: Event) => handleFileSelect(e, props)}
+        />
+
+        ${renderRealtimeTalkOptions(props)}
+        ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+          ? html`
+              <div
+                class="agent-chat__stt-interim agent-chat__talk-status"
+                role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
+              >
+                <span class="agent-chat__talk-status-text">
+                  ${props.realtimeTalkDetail ??
+                  ((props.realtimeTalkConversation?.length ?? 0) === 0
+                    ? props.realtimeTalkTranscript
+                    : null) ??
+                  (props.realtimeTalkStatus === "thinking"
+                    ? "Asking OpenClaw..."
+                    : props.realtimeTalkStatus === "connecting"
+                      ? "Connecting Talk..."
+                      : "Talk live")}
+                </span>
+                ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
+                  ? html`
+                      <button
+                        class="callout__dismiss"
+                        type="button"
+                        @click=${props.onDismissRealtimeTalkError}
+                        aria-label=${t("chat.composer.dismissTalkError")}
+                        title=${t("chat.composer.dismissTalkError")}
+                      >
+                        ${icons.x}
+                      </button>
+                    `
+                  : nothing}
+              </div>
+            `
+          : nothing}
+
+        <div class="agent-chat__composer-combobox">
+          <textarea
+            ${ref((el) => {
+              composerTextarea = el instanceof HTMLTextAreaElement ? el : null;
+              if (composerTextarea) {
+                adjustTextareaHeight(composerTextarea);
+              }
+            })}
+            .value=${visibleDraft}
+            dir=${detectTextDirection(visibleDraft)}
+            ?disabled=${!props.connected}
+            aria-autocomplete="list"
+            aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
+            aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
+            aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+            @keydown=${handleKeyDown}
+            @input=${handleInput}
+            @compositionstart=${() => {
+              vs.composerComposing = true;
+            }}
+            @compositionend=${handleCompositionEnd}
+            @blur=${handleBlur}
+            @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+            placeholder=${placeholder}
+            rows="1"
+          ></textarea>
+          <span
+            id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+            class="agent-chat__sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            >${activeSlashMenuOptionLabel}</span
+          >
+        </div>
+
+        <div class="agent-chat__toolbar">
+          <div class="agent-chat__toolbar-left">
+            <button
+              type="button"
+              class="agent-chat__input-btn"
+              @click=${clickComposerFileInput}
+              title=${t("chat.composer.attachFile")}
+              aria-label=${t("chat.composer.attachFile")}
+              ?disabled=${!props.connected}
+            >
+              ${icons.paperclip}
+              <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
+            </button>
+
+            ${props.onToggleRealtimeTalk
+              ? html`
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkActive
+                      ? "agent-chat__input-btn--talk"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalk}
+                    title=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
+                    aria-label=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
+                    ?disabled=${!props.connected}
+                  >
+                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
+                    <span class="agent-chat__control-label"
+                      >${props.realtimeTalkActive
+                        ? t("chat.composer.stopTalk")
+                        : t("chat.composer.startTalk")}</span
+                    >
+                  </button>
+                `
+              : nothing}
+            ${props.onToggleRealtimeTalkOptions
+              ? html`
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
+                      ? "agent-chat__input-btn--talk"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalkOptions}
+                    title="Talk settings"
+                    aria-label="Talk settings"
+                    aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
+                    ?disabled=${!props.connected || props.realtimeTalkActive}
+                  >
+                    ${icons.settings}
+                    <span class="agent-chat__control-label">Talk settings</span>
+                  </button>
+                `
+              : nothing}
+            ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+            ${renderChatRunStatusIndicator(composerRunStatus)}
           </div>
 
+          ${composerControls && composerControls !== nothing
+            ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
+            : nothing}
+          ${renderChatRunControls({
+            canAbort: showAbortableUi,
+            connected: props.connected,
+            draft: visibleDraft,
+            hasMessages: props.messages.length > 0,
+            isBusy,
+            sending: props.sending,
+            onAbort: props.onAbort,
+            onExport: () => exportMarkdown(props),
+            onNewSession: props.onNewSession,
+            onSend: handleSend,
+            onStoreDraft: () => {},
+            showSecondary: false,
+          })}
+        </div>
       </div>
     </section>
   `;

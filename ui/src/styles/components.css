@@ -3239,6 +3239,42 @@
   font-size: 12px;
 }
 
+.session-truth-audit__meta,
+.session-truth-audit__claim-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.session-truth-audit__missing {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  font-size: 12px;
+}
+
+.session-truth-audit__claims {
+  display: grid;
+  gap: 8px;
+}
+
+.session-truth-audit__claim {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+}
+
+.session-truth-audit__claim-text {
+  font-weight: 600;
+  line-height: 1.35;
+}
+
 .session-checkpoint-list {
   display: grid;
   gap: 10px;
@@ -6336,6 +6372,62 @@ td.data-table-key-col {
 }
 
 /* Recent sessions widget */
+.ov-truth-audit {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger) 7%, var(--card));
+}
+
+.ov-truth-audit__header,
+.ov-truth-audit__main,
+.ov-truth-audit__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ov-truth-audit__header {
+  justify-content: space-between;
+}
+
+.ov-truth-audit__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ov-truth-audit__subtitle,
+.ov-truth-audit__meta,
+.ov-truth-audit__condition {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ov-truth-audit__list {
+  display: grid;
+  gap: 8px;
+}
+
+.ov-truth-audit__row {
+  display: grid;
+  gap: 4px;
+}
+
+.ov-truth-audit__status {
+  font-weight: 700;
+}
+
+.ov-truth-audit__session {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ov-recent {
   margin-top: 18px;
 }

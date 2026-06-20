@@ -2250,6 +2250,12 @@ export function buildGatewaySessionRow(params: {
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount,
     latestCompactionCheckpoint,
+    judgeGuardAudit: entry?.judgeGuardAudit,
+    controlDirectorGuardAudit: entry?.controlDirectorGuardAudit,
+    controlDirectorLivenessAudit: entry?.controlDirectorLivenessAudit,
+    controlDirectorMissionLedger: entry?.controlDirectorMissionLedger,
+    controlDirectorJudgeCompletionApproval: entry?.controlDirectorJudgeCompletionApproval,
+    controlDirectorTruthAudit: entry?.controlDirectorTruthAudit,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
 }

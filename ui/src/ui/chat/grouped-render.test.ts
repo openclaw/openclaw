@@ -517,6 +517,136 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("renders valid proposed plan blocks as plan cards and hides raw tags", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content:
+        "Before text.\n<proposed_plan>\n# Plan\n- Verify the UI.\n</proposed_plan>\nAfter text.",
+      timestamp: 1,
+    });
+
+    const card = expectElement(container, "[data-proposed-plan-card]", HTMLElement);
+    expect(card.textContent).toContain("Proposed Plan");
+    expect(card.textContent).toContain("Awaiting approval");
+    expect(card.textContent).toContain("# Plan");
+    expect(card.textContent).toContain("Verify the UI.");
+    expect(container.textContent).toContain("Before text.");
+    expect(container.textContent).toContain("After text.");
+    expect(container.textContent).not.toContain("<proposed_plan>");
+    expect(container.textContent).not.toContain("</proposed_plan>");
+  });
+
+  it("loads the implementation prompt into the composer without sending", () => {
+    const container = document.createElement("div");
+    const onUseProposedPlan = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "<proposed_plan>\n# Plan\n- Do the work.\n</proposed_plan>",
+        timestamp: 1,
+      },
+      { onUseProposedPlan },
+    );
+
+    const useButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Use plan"),
+    );
+    expect(useButton).toBeInstanceOf(HTMLButtonElement);
+    useButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onUseProposedPlan).toHaveBeenCalledWith(
+      "PLEASE IMPLEMENT THIS PLAN:\n# Plan\n- Do the work.",
+    );
+  });
+
+  it("copies only the proposed plan markdown", () => {
+    const container = document.createElement("div");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "Intro\n<proposed_plan>\n# Plan\n- Copy this.\n</proposed_plan>",
+      timestamp: 1,
+    });
+
+    const copyButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Copy plan"),
+    );
+    expect(copyButton).toBeInstanceOf(HTMLButtonElement);
+    copyButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(writeText).toHaveBeenCalledWith("# Plan\n- Copy this.");
+  });
+
+  it("shows drafting for streaming incomplete proposed plans", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-streaming-plan",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant-streaming-plan-message",
+          message: {
+            role: "assistant",
+            content: "<proposed_plan>\n# Still drafting",
+            timestamp: 1,
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: true,
+    };
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+      }),
+      container,
+    );
+
+    const card = expectElement(container, "[data-proposed-plan-card]", HTMLElement);
+    expect(card.textContent).toContain("Drafting");
+    const useButton = [...card.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Use plan"),
+    );
+    expect(useButton?.disabled).toBe(true);
+  });
+
+  it("shows blocked for malformed final proposed plans", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "Before\n<proposed_plan>\n# Missing close",
+      timestamp: 1,
+    });
+
+    const card = expectElement(container, "[data-proposed-plan-card]", HTMLElement);
+    expect(card.textContent).toContain("Blocked");
+    expect(card.textContent).toContain("missing its closing tag");
+  });
+
+  it("shows ready when the implementation prompt is already loaded", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "<proposed_plan>\n# Plan\n- Ready.\n</proposed_plan>",
+        timestamp: 1,
+      },
+      { proposedPlanDraft: "PLEASE IMPLEMENT THIS PLAN:\n# Plan\n- Ready." },
+    );
+
+    const card = expectElement(container, "[data-proposed-plan-card]", HTMLElement);
+    expect(card.textContent).toContain("Ready to send");
+    expect(card.textContent).toContain("Plan loaded");
+  });
+
   it("renders a compact count for collapsed duplicate messages", () => {
     const container = document.createElement("div");
     renderAssistantMessageEntries(container, [
@@ -1372,6 +1502,69 @@ describe("grouped chat rendering", () => {
     expect(
       JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
     ).toEqual({ status: "error" });
+  });
+
+  it("renders command, proof, and artifact cards through grouped chat bubbles", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-tool-proof-artifact",
+        role: "assistant",
+        content: [
+          {
+            type: "toolcall",
+            id: "cmd-1",
+            name: "system.run",
+            arguments: {
+              command: "echo grouped-command-ok",
+              cwd: "/repo",
+            },
+          },
+          {
+            type: "toolresult",
+            id: "cmd-1",
+            name: "system.run",
+            text: JSON.stringify({
+              exitCode: 0,
+              durationMs: 2200,
+              stdout: "grouped-command-ok",
+            }),
+          },
+          {
+            type: "toolresult",
+            id: "proof-1",
+            name: "github.run",
+            text: JSON.stringify({
+              workflow: "Workflow Sanity",
+              runId: "27818122460",
+              runUrl: "https://github.com/SnowBelt/openclaw/actions/runs/27818122460",
+              conclusion: "success",
+            }),
+          },
+          {
+            type: "toolresult",
+            id: "artifact-1",
+            name: "artifacts.write",
+            text: JSON.stringify({
+              title: "Desktop screenshot",
+              artifactPath: ".artifacts/chat-tool-proof/desktop.png",
+              ok: true,
+            }),
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { isToolExpanded: () => true },
+    );
+
+    expect(container.textContent).toContain("Command");
+    expect(container.textContent).toContain("Passed");
+    expect(container.textContent).toContain("echo grouped-command-ok");
+    expect(container.textContent).toContain("Proof result");
+    expect(container.textContent).toContain("Workflow Sanity");
+    expect(container.textContent).toContain("Artifact");
+    expect(container.textContent).toContain(".artifacts/chat-tool-proof/desktop.png");
   });
 
   it("collapses an inline tool call while keeping matching tool output visible", () => {

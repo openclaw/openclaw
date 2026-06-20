@@ -11,6 +11,7 @@ import {
   recordTaskProgressByRunId,
   resetTaskRegistryForTests,
 } from "../../tasks/runtime-internal.js";
+import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-runtime-internal.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
@@ -36,11 +37,13 @@ function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]):
 beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));
   process.env.OPENCLAW_STATE_DIR = stateDir;
+  resetTaskFlowRegistryForTests();
   resetTaskRegistryForTests();
 });
 
 afterEach(async () => {
   resetTaskRegistryForTests();
+  resetTaskFlowRegistryForTests();
   if (ORIGINAL_STATE_DIR === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -90,6 +93,114 @@ async function getTaskPayload(taskId: string) {
 }
 
 describe("tasks gateway handlers", () => {
+  it("creates, lists, gets, and cancels chat task flows", async () => {
+    const create = captureRespond();
+    await tasksHandlers["taskFlows.create"]({
+      req: { type: "req", id: "req-flow-create", method: "taskFlows.create" },
+      params: { sessionKey: "main", goal: "Build a proof", currentStep: "Start" },
+      respond: create.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(create.calls[0]?.[0]).toBe(true);
+    const createPayload = create.calls[0]?.[1] as
+      | { flow?: { id?: string; status?: string } }
+      | undefined;
+    const flow = createPayload?.flow;
+    expect(flow).toMatchObject({
+      id: expect.any(String),
+      status: "running",
+    });
+    const flowId = flow?.id;
+    expect(flowId).toEqual(expect.any(String));
+    if (!flowId) {
+      throw new Error("Expected taskFlows.create to return a flow id");
+    }
+
+    const list = captureRespond();
+    await tasksHandlers["taskFlows.list"]({
+      req: { type: "req", id: "req-flow-list", method: "taskFlows.list" },
+      params: { sessionKey: "main" },
+      respond: list.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(list.calls[0]?.[0]).toBe(true);
+    expect(list.calls[0]?.[1]).toMatchObject({
+      flows: [{ id: flowId, goal: "Build a proof", status: "running" }],
+    });
+
+    const get = captureRespond();
+    await tasksHandlers["taskFlows.get"]({
+      req: { type: "req", id: "req-flow-get", method: "taskFlows.get" },
+      params: { flowId, sessionKey: "main" },
+      respond: get.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(get.calls[0]?.[0]).toBe(true);
+    expect(get.calls[0]?.[1]).toMatchObject({
+      flow: {
+        id: flowId,
+        taskSummary: { total: 0, active: 0, terminal: 0, failures: 0 },
+        tasks: [],
+      },
+    });
+
+    const cancel = captureRespond();
+    await tasksHandlers["taskFlows.cancel"]({
+      req: { type: "req", id: "req-flow-cancel", method: "taskFlows.cancel" },
+      params: { flowId, sessionKey: "main" },
+      respond: cancel.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(cancel.calls[0]?.[0]).toBe(true);
+    expect(cancel.calls[0]?.[1]).toMatchObject({
+      found: true,
+      cancelled: true,
+      flow: { id: flowId, status: "cancelled" },
+    });
+  });
+
+  it("keeps task flow lookups scoped to the requested chat session", async () => {
+    const create = captureRespond();
+    await tasksHandlers["taskFlows.create"]({
+      req: { type: "req", id: "req-flow-create-other", method: "taskFlows.create" },
+      params: { sessionKey: "main", goal: "Private goal" },
+      respond: create.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    const createPayload = create.calls[0]?.[1] as { flow?: { id?: string } } | undefined;
+    const flowId = createPayload?.flow?.id;
+    expect(flowId).toEqual(expect.any(String));
+    if (!flowId) {
+      throw new Error("Expected taskFlows.create to return a flow id");
+    }
+
+    const get = captureRespond();
+    await tasksHandlers["taskFlows.get"]({
+      req: { type: "req", id: "req-flow-get-other", method: "taskFlows.get" },
+      params: { flowId, sessionKey: "other" },
+      respond: get.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(get.calls[0]?.[0]).toBe(false);
+  });
+
   it("lists task summaries with SDK-facing statuses and filters", async () => {
     const running = createTaskRecord({
       runtime: "subagent",
