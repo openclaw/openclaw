@@ -239,8 +239,10 @@ describe("memory_search unavailable payloads", () => {
 
     const tool = createMemorySearchToolOrThrow({
       config: {
-        agents: { list: [{ id: "main", default: true }] },
         memory: { citations: "off" },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
       },
     });
     const result = await tool.execute("closed-db", { query: "hidden thread codename" });
@@ -286,8 +288,10 @@ describe("memory_search unavailable payloads", () => {
 
     const tool = createMemorySearchToolOrThrow({
       config: {
-        agents: { list: [{ id: "main", default: true }] },
         memory: { citations: "off" },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
       },
       oneShotCliRun: true,
     });
@@ -334,8 +338,10 @@ describe("memory_search unavailable payloads", () => {
 
     const tool = createMemorySearchToolOrThrow({
       config: {
-        agents: { list: [{ id: "main", default: true }] },
         memory: { citations: "off" },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
       },
     });
     const result = await tool.execute("zero-hit-retry", { query: "hidden thread codename" });
@@ -362,8 +368,10 @@ describe("memory_search unavailable payloads", () => {
 
     const tool = createMemorySearchToolOrThrow({
       config: {
-        agents: { list: [{ id: "main", default: true }] },
         memory: { citations: "off" },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
       },
     });
     const result = await tool.execute("paused-index", { query: "hidden thread codename" });
@@ -457,8 +465,8 @@ describe("memory_search corpus labels", () => {
       config: asOpenClawConfig({
         agents: {
           list: [
-            { id: "main", default: true, memorySearch: { enabled: false } },
-            { id: "recall", memorySearch: { enabled: true } },
+            { id: "main", default: true, memory: { search: { enabled: false } } },
+            { id: "recall", memory: { search: { enabled: true } } },
           ],
         },
       }),
@@ -473,31 +481,27 @@ describe("memory_search corpus labels", () => {
 
   it("re-resolves config when executing a previously created tool", async () => {
     const startupConfig = asOpenClawConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama",
-            model: "nomic-embed-text",
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
       memory: {
         backend: "builtin",
+        search: {
+          provider: "ollama",
+          model: "nomic-embed-text",
+        },
+      },
+      agents: {
+        list: [{ id: "main", default: true }],
       },
     });
     const patchedConfig = asOpenClawConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
       memory: {
         backend: "builtin",
+        search: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+        },
+      },
+      agents: {
+        list: [{ id: "main", default: true }],
       },
     });
     let liveConfig = startupConfig;
@@ -537,8 +541,10 @@ describe("memory_search corpus labels", () => {
 
     const tool = createMemorySearchToolOrThrow({
       config: {
-        agents: { list: [{ id: "main", default: true }] },
         memory: { citations: "off" },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
         tools: { sessions: { visibility: "all" } },
       },
       agentSessionKey: "agent:main:main",

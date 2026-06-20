@@ -22,10 +22,12 @@ function shouldKeepQmdStartupManagerAlive(qmd: ResolvedQmdConfig): boolean {
   return qmd.update.intervalMs > 0 || qmd.update.embedIntervalMs > 0;
 }
 
-/** Check whether an agent overrides memory search instead of inheriting defaults. */
-function hasExplicitAgentMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
+/** Check whether an agent explicitly configures memory instead of inheriting defaults. */
+function hasExplicitAgentMemoryConfig(cfg: OpenClawConfig, agentId: string): boolean {
   return listAgentEntries(cfg).some(
-    (entry) => normalizeAgentId(entry.id) === agentId && entry.memorySearch != null,
+    (entry) =>
+      normalizeAgentId(entry.id) === agentId &&
+      (entry.memory?.search != null || entry.memory?.backend != null || entry.memory?.qmd != null),
   );
 }
 
@@ -41,10 +43,10 @@ function shouldEagerlyStartAgentMemory(params: {
   if (params.agentId === resolveDefaultAgentId(params.cfg)) {
     return true;
   }
-  if (params.cfg.agents?.defaults?.memorySearch?.enabled === true) {
+  if (params.cfg.memory?.search?.enabled === true) {
     return true;
   }
-  return hasExplicitAgentMemorySearchConfig(params.cfg, params.agentId);
+  return hasExplicitAgentMemoryConfig(params.cfg, params.agentId);
 }
 
 /** Start qmd memory boot sync for eligible agents without eagerly loading every agent. */

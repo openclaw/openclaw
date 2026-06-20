@@ -1197,11 +1197,12 @@ describe("registerPluginCommand", () => {
   it("passes host session identity through to the plugin command context", async () => {
     let receivedCtx:
       | {
+          agentId?: string;
           sessionKey?: string;
           sessionId?: string;
         }
       | undefined;
-    const handler = async (ctx: { sessionKey?: string; sessionId?: string }) => {
+    const handler = async (ctx: { agentId?: string; sessionKey?: string; sessionId?: string }) => {
       receivedCtx = ctx;
       return { text: "ok" };
     };
@@ -1217,6 +1218,7 @@ describe("registerPluginCommand", () => {
       channel: "whatsapp",
       senderId: "U123",
       isAuthorizedSender: true,
+      agentId: "research",
       sessionKey: "agent:main:whatsapp:direct:123",
       sessionId: "session-123",
       commandBody: "/sessioncheck",
@@ -1224,6 +1226,7 @@ describe("registerPluginCommand", () => {
     });
 
     expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx?.agentId).toBe("research");
     expect(receivedCtx?.sessionKey).toBe("agent:main:whatsapp:direct:123");
     expect(receivedCtx?.sessionId).toBe("session-123");
   });

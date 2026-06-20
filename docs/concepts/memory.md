@@ -145,7 +145,7 @@ an API key for any supported provider.
 
 <Info>
 OpenClaw uses OpenAI embeddings by default. Set
-`agents.defaults.memorySearch.provider` explicitly to use Gemini, Voyage,
+`memory.search.provider` explicitly to use Gemini, Voyage,
 Mistral, local, Ollama, Bedrock, GitHub Copilot, or OpenAI-compatible
 embeddings.
 </Info>
@@ -238,9 +238,9 @@ For phase behavior, scoring signals, and Dream Diary details, see
 
 The dreaming system now has two closely related review lanes:
 
-- **Live dreaming** works from the short-term dreaming store under
-  `memory/.dreams/` and is what the normal deep phase uses when deciding what
-  can graduate into `MEMORY.md`.
+- **Live dreaming** works from an agent-scoped short-term dreaming store under
+  `memory/.dreams/agents/<agent-id>/` and is what the normal deep phase uses
+  when deciding what can graduate into shared `MEMORY.md`.
 - **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
   standalone day files and writes structured review output into `DREAMS.md`.
 

@@ -130,35 +130,37 @@ This lets **multiple people** share one Gateway server while keeping their AI "b
 
 ## Cross-agent QMD memory search
 
-If one agent should search another agent's QMD session transcripts, add extra collections under `agents.list[].memorySearch.qmd.extraCollections`. Use `agents.defaults.memorySearch.qmd.extraCollections` only when every agent should inherit the same shared transcript collections.
+If one agent should search another agent's QMD session transcripts, add extra collections under `agents.list[].memory.search.qmd.extraCollections`. Use `memory.search.qmd.extraCollections` only when every agent should inherit the same shared transcript collections.
 
 ```json5
 {
+  memory: {
+    backend: "qmd",
+    qmd: { includeDefaultMemory: false },
+    search: {
+      qmd: {
+        extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
+      },
+    },
+  },
   agents: {
     defaults: {
       workspace: "~/workspaces/main",
-      memorySearch: {
-        qmd: {
-          extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
-        },
-      },
     },
     list: [
       {
         id: "main",
         workspace: "~/workspaces/main",
-        memorySearch: {
-          qmd: {
-            extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "notes-main"
+        memory: {
+          search: {
+            qmd: {
+              extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "notes-main"
+            },
           },
         },
       },
       { id: "family", workspace: "~/workspaces/family" },
     ],
-  },
-  memory: {
-    backend: "qmd",
-    qmd: { includeDefaultMemory: false },
   },
 }
 ```

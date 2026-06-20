@@ -74,17 +74,17 @@ describe("memory manager FTS-only reindex", () => {
     const cfg = {
       memory: {
         backend: "builtin",
+        search: {
+          provider: params.provider ?? "auto",
+          model: "",
+          store,
+          cache: { enabled: false },
+          sync: { watch: false, onSessionStart: false, onSearch: false },
+        },
       },
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: params.provider ?? "auto",
-            model: "",
-            store,
-            cache: { enabled: false },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
         },
         list: [{ id: "main", default: true }],
       },

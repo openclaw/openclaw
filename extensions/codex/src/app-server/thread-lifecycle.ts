@@ -8,6 +8,10 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
+import {
+  resolveAgentMemoryConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
@@ -337,7 +341,9 @@ export async function startOrResumeThread(params: {
   const webSearchThreadConfigFingerprint = fingerprintJsonObject(webSearchPlan.threadConfig);
   const networkProxyConfigFingerprint = params.appServer.networkProxy?.configFingerprint;
   const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
-    buildContextEngineBinding(params.params, params.contextEngineProjection),
+    buildContextEngineBinding(params.params, params.contextEngineProjection, {
+      agentId: params.agentId,
+    }),
   );
   const userMcpServersConfigPatch =
     params.userMcpServersEnabled === false
@@ -960,6 +966,7 @@ function isTransientWebSearchRestriction(
 export function buildContextEngineBinding(
   params: EmbeddedRunAttemptParams,
   projection?: CodexContextEngineThreadBootstrapProjection,
+  options?: { agentId?: string },
 ): CodexAppServerContextEngineBinding | undefined {
   const contextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
@@ -977,7 +984,10 @@ export function buildContextEngineBinding(
       engineVersion: contextEngine.info.version,
       ownsCompaction: contextEngine.info.ownsCompaction === true,
       turnMaintenanceMode: contextEngine.info.turnMaintenanceMode,
-      citationsMode: resolveContextEngineCitationsMode(params.config),
+      citationsMode: resolveContextEngineCitationsMode(
+        params.config,
+        options?.agentId ?? params.agentId,
+      ),
       contextTokenBudget: params.contextTokenBudget,
       projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
         contextTokenBudget: params.contextTokenBudget,
@@ -1028,10 +1038,14 @@ function areContextEngineProjectionBindingsCompatible(
   );
 }
 
-function resolveContextEngineCitationsMode(config: unknown): JsonValue | undefined {
+function resolveContextEngineCitationsMode(
+  config: unknown,
+  agentId?: string,
+): JsonValue | undefined {
   const rootConfig = isUnknownRecord(config) ? config : undefined;
-  const memoryConfig = isUnknownRecord(rootConfig?.memory) ? rootConfig.memory : undefined;
-  const citations = memoryConfig?.citations;
+  const citations = rootConfig
+    ? resolveAgentMemoryConfig(rootConfig as OpenClawConfig, agentId ?? "main")?.citations
+    : undefined;
   return isJsonConfigValue(citations) ? citations : undefined;
 }
 

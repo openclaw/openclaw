@@ -32,6 +32,7 @@ Use `openclaw wiki` when you want a compiled knowledge vault with:
 
 ```bash
 openclaw wiki status
+openclaw wiki --agent research status
 openclaw wiki doctor
 openclaw wiki init
 openclaw wiki ingest ./notes/alpha.md
@@ -266,15 +267,16 @@ These require the official `obsidian` CLI on `PATH` when
 
 ## Configuration tie-ins
 
-`openclaw wiki` behavior is shaped by:
+`openclaw wiki` resolves config for the selected `--agent` (or the configured
+default agent) from:
 
-- `plugins.entries.memory-wiki.config.vaultMode`
-- `plugins.entries.memory-wiki.config.search.backend`
-- `plugins.entries.memory-wiki.config.search.corpus`
-- `plugins.entries.memory-wiki.config.bridge.*`
-- `plugins.entries.memory-wiki.config.obsidian.*`
-- `plugins.entries.memory-wiki.config.render.*`
-- `plugins.entries.memory-wiki.config.context.includeCompiledDigestPrompt`
+- `memory.extensions.memory-wiki.vaultMode`
+- `memory.extensions.memory-wiki.search.backend`
+- `memory.extensions.memory-wiki.search.corpus`
+- `memory.extensions.memory-wiki.bridge.*`
+- `memory.extensions.memory-wiki.obsidian.*`
+- `memory.extensions.memory-wiki.render.*`
+- `memory.extensions.memory-wiki.context.includeCompiledDigestPrompt`
 
 See [Memory Wiki plugin](/plugins/memory-wiki) for the full config model.
 

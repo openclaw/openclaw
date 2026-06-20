@@ -2,7 +2,13 @@
 import os from "node:os";
 import path from "node:path";
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
+import {
+  resolveAgentMemoryExtensionConfig,
+  resolveDefaultAgentId,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { buildPluginConfigSchema, z, type OpenClawPluginConfigSchema } from "../api.js";
+import type { OpenClawConfig } from "../api.js";
 
 export const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
 export const WIKI_RENDER_MODES = ["native", "obsidian"] as const;
@@ -58,6 +64,7 @@ export type MemoryWikiPluginConfig = {
 };
 
 export type ResolvedMemoryWikiConfig = {
+  agentId?: string;
   vaultMode: WikiVaultMode;
   vault: {
     path: string;
@@ -194,23 +201,43 @@ function expandHomePath(inputPath: string, homedir: string): string {
   return inputPath;
 }
 
-export function resolveDefaultMemoryWikiVaultPath(homedir = os.homedir()): string {
-  return path.join(homedir, ".openclaw", "wiki", "main");
+export function resolveDefaultMemoryWikiVaultPath(
+  homedir = os.homedir(),
+  agentId = "main",
+): string {
+  return path.join(homedir, ".openclaw", "wiki", agentId);
+}
+
+function parseMemoryWikiConfig(
+  config: MemoryWikiPluginConfig | undefined,
+): z.infer<typeof MemoryWikiConfigSource> {
+  if (config === undefined) {
+    return {};
+  }
+  const parsed = MemoryWikiConfigSource.safeParse(config);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  const issues = mapPluginConfigIssues(parsed.error.issues)
+    .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+    .join("; ");
+  throw new Error(`Invalid memory-wiki config: ${issues}`);
 }
 
 export function resolveMemoryWikiConfig(
   config: MemoryWikiPluginConfig | undefined,
-  options?: { homedir?: string },
+  options?: { homedir?: string; agentId?: string },
 ): ResolvedMemoryWikiConfig {
   const homedir = options?.homedir ?? os.homedir();
-  const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
-  const safeConfig = parsed?.success ? parsed.data : (config ?? {});
+  const agentId = options?.agentId ? normalizeAgentId(options.agentId) : undefined;
+  const safeConfig = parseMemoryWikiConfig(config);
 
   return {
+    ...(agentId ? { agentId } : {}),
     vaultMode: safeConfig.vaultMode ?? DEFAULT_WIKI_VAULT_MODE,
     vault: {
       path: expandHomePath(
-        safeConfig.vault?.path ?? resolveDefaultMemoryWikiVaultPath(homedir),
+        safeConfig.vault?.path ?? resolveDefaultMemoryWikiVaultPath(homedir, agentId),
         homedir,
       ),
       renderMode: safeConfig.vault?.renderMode ?? DEFAULT_WIKI_RENDER_MODE,
@@ -251,4 +278,17 @@ export function resolveMemoryWikiConfig(
       createDashboards: safeConfig.render?.createDashboards ?? true,
     },
   };
+}
+
+/** Resolves canonical memory-wiki config for one agent. */
+export function resolveMemoryWikiConfigForAgent(
+  appConfig: OpenClawConfig,
+  agentId?: string,
+  options?: { homedir?: string },
+): ResolvedMemoryWikiConfig {
+  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(appConfig));
+  const config = resolveAgentMemoryExtensionConfig(appConfig, resolvedAgentId, "memory-wiki") as
+    | MemoryWikiPluginConfig
+    | undefined;
+  return resolveMemoryWikiConfig(config, { ...options, agentId: resolvedAgentId });
 }

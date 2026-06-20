@@ -7,6 +7,7 @@ import type {
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { AgentMemoryConfig, MemoryExtensionConfig } from "../config/types.memory.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
@@ -30,7 +31,7 @@ export type ResolvedAgentConfig = {
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
   experimental?: AgentDefaultsConfig["experimental"];
   skills?: AgentEntry["skills"];
-  memorySearch?: AgentEntry["memorySearch"];
+  memory?: AgentEntry["memory"];
   humanDelay?: AgentEntry["humanDelay"];
   tts?: AgentEntry["tts"];
   contextLimits?: AgentContextLimitsConfig;
@@ -141,7 +142,7 @@ export function resolveAgentConfig(
         ? { ...agentDefaults?.experimental, ...entry.experimental }
         : agentDefaults?.experimental,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
-    memorySearch: entry.memorySearch,
+    memory: entry.memory,
     humanDelay: entry.humanDelay,
     tts: entry.tts,
     contextLimits:
@@ -163,6 +164,87 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const ADDITIVE_MEMORY_ARRAY_PATHS = new Set([
+  "qmd.paths",
+  "search.extraPaths",
+  "search.qmd.extraCollections",
+]);
+
+function memoryArrayEntryKey(value: unknown): string {
+  if (typeof value === "string") {
+    return `string:${value}`;
+  }
+  if (isPlainRecord(value) && typeof value.path === "string") {
+    return `path:${value.path}\0${String(value.name ?? "")}\0${String(value.pattern ?? "")}`;
+  }
+  return `json:${JSON.stringify(value)}`;
+}
+
+function mergeAdditiveMemoryArrays(base: unknown[], override: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  const result: unknown[] = [];
+  for (const value of [...base, ...override]) {
+    const key = memoryArrayEntryKey(value);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+function mergeMemoryConfig(
+  global: AgentMemoryConfig | undefined,
+  overrides: AgentMemoryConfig | undefined,
+): AgentMemoryConfig | undefined {
+  if (!global) {
+    return overrides;
+  }
+  if (!overrides) {
+    return global;
+  }
+
+  const merge = (base: unknown, override: unknown, path: string[]): unknown => {
+    if (Array.isArray(base) && Array.isArray(override)) {
+      return ADDITIVE_MEMORY_ARRAY_PATHS.has(path.join("."))
+        ? mergeAdditiveMemoryArrays(base, override)
+        : override;
+    }
+    if (!isPlainRecord(base) || !isPlainRecord(override)) {
+      return override ?? base;
+    }
+    const result: Record<string, unknown> = { ...base };
+    for (const [key, value] of Object.entries(override)) {
+      result[key] = key in result ? merge(result[key], value, [...path, key]) : value;
+    }
+    return result;
+  };
+
+  return merge(global, overrides, []) as AgentMemoryConfig;
+}
+
+/** Resolves the canonical memory configuration for one agent. */
+export function resolveAgentMemoryConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): AgentMemoryConfig | undefined {
+  return mergeMemoryConfig(cfg.memory, resolveAgentEntry(cfg, agentId)?.memory);
+}
+
+/** Resolves one memory extension's merged agent-scoped config. */
+export function resolveAgentMemoryExtensionConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+  extensionId: string,
+): MemoryExtensionConfig | undefined {
+  return resolveAgentMemoryConfig(cfg, agentId)?.extensions?.[extensionId];
 }
 
 export function resolveAgentContextLimits(

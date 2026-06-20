@@ -1,6 +1,7 @@
 // Control UI controller manages dreaming gateway state.
 import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
 import { isPluginEnabledInConfigSnapshot } from "../plugin-activation.ts";
+import { normalizeAgentId } from "../session-key.ts";
 import type { ConfigSnapshot } from "../types.ts";
 
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
@@ -234,9 +235,17 @@ export type DreamingState = {
   wikiImportInsightsLoading: boolean;
   wikiImportInsightsError: string | null;
   wikiImportInsights: WikiImportInsights | null;
+  wikiImportInsightsAgentId?: string | null;
+  wikiImportInsightsRequestGeneration?: number;
+  wikiImportInsightsActiveRequestGeneration?: number | null;
+  wikiImportInsightsRequestAgentId?: string | null;
   wikiMemoryPalaceLoading: boolean;
   wikiMemoryPalaceError: string | null;
   wikiMemoryPalace: WikiMemoryPalace | null;
+  wikiMemoryPalaceAgentId?: string | null;
+  wikiMemoryPalaceRequestGeneration?: number;
+  wikiMemoryPalaceActiveRequestGeneration?: number | null;
+  wikiMemoryPalaceRequestAgentId?: string | null;
   lastError: string | null;
 };
 
@@ -339,6 +348,21 @@ function resolveSelectedAgentId(state: DreamingState): string | null {
   return normalizeTrimmedString(state.selectedAgentId) ?? null;
 }
 
+function resolveConfiguredAgentId(
+  configValue: Record<string, unknown> | null,
+  selectedAgentId: string,
+): string | null {
+  const agents = asRecord(configValue?.agents);
+  const entries = Array.isArray(agents?.list) ? agents.list : [];
+  for (const entry of entries) {
+    const configuredId = normalizeTrimmedString(asRecord(entry)?.id);
+    if (configuredId && normalizeAgentId(configuredId) === selectedAgentId) {
+      return configuredId;
+    }
+  }
+  return null;
+}
+
 function buildSelectedAgentPayloadForAgentId(
   agentId: string | null,
 ): { agentId: string } | Record<string, never> {
@@ -392,28 +416,16 @@ function normalizePhaseStatusBase(record: Record<string, unknown> | null): Dream
   };
 }
 
-function resolveDreamingPluginId(configValue: Record<string, unknown> | null): string {
-  const plugins = asRecord(configValue?.plugins);
-  const slots = asRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
-    return configuredSlot;
-  }
-  return DEFAULT_DREAMING_PLUGIN_ID;
-}
-
 export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
   pluginId: string;
   enabled: boolean;
 } {
-  const pluginId = resolveDreamingPluginId(configValue);
-  const plugins = asRecord(configValue?.plugins);
-  const entries = asRecord(plugins?.entries);
-  const pluginEntry = asRecord(entries?.[pluginId]);
-  const config = asRecord(pluginEntry?.config);
-  const dreaming = asRecord(config?.dreaming);
+  const memory = asRecord(configValue?.memory);
+  const extensions = asRecord(memory?.extensions);
+  const memoryCore = asRecord(extensions?.[DEFAULT_DREAMING_PLUGIN_ID]);
+  const dreaming = asRecord(memoryCore?.dreaming);
   return {
-    pluginId,
+    pluginId: DEFAULT_DREAMING_PLUGIN_ID,
     enabled: normalizeBoolean(dreaming?.enabled, false),
   };
 }
@@ -905,47 +917,110 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
 }
 
 export async function loadWikiImportInsights(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.wikiImportInsightsLoading) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.wikiImportInsightsLoading && state.wikiImportInsightsRequestAgentId === agentId) {
     return;
   }
   if (!canCallMemoryWikiMethod(state, "wiki.importInsights")) {
     state.wikiImportInsights = null;
     state.wikiImportInsightsError = null;
+    state.wikiImportInsightsAgentId = null;
     return;
   }
+  if (state.wikiImportInsightsAgentId !== agentId) {
+    state.wikiImportInsights = null;
+  }
+  const requestGeneration = (state.wikiImportInsightsRequestGeneration ?? 0) + 1;
+  state.wikiImportInsightsRequestGeneration = requestGeneration;
+  state.wikiImportInsightsActiveRequestGeneration = requestGeneration;
+  state.wikiImportInsightsRequestAgentId = agentId;
   state.wikiImportInsightsLoading = true;
   state.wikiImportInsightsError = null;
   try {
     const payload = await state.client.request<WikiImportInsightsPayload>(
       "wiki.importInsights",
-      {},
+      buildSelectedAgentPayloadForAgentId(agentId),
     );
+    if (
+      state.wikiImportInsightsActiveRequestGeneration !== requestGeneration ||
+      state.wikiImportInsightsRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     state.wikiImportInsights = normalizeWikiImportInsights(payload);
+    state.wikiImportInsightsAgentId = agentId;
   } catch (err) {
-    state.wikiImportInsightsError = String(err);
+    if (
+      state.wikiImportInsightsActiveRequestGeneration === requestGeneration &&
+      state.wikiImportInsightsRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.wikiImportInsightsError = String(err);
+    }
   } finally {
-    state.wikiImportInsightsLoading = false;
+    if (state.wikiImportInsightsActiveRequestGeneration === requestGeneration) {
+      state.wikiImportInsightsLoading = false;
+      state.wikiImportInsightsRequestAgentId = null;
+      state.wikiImportInsightsActiveRequestGeneration = null;
+    }
   }
 }
 
 export async function loadWikiMemoryPalace(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.wikiMemoryPalaceLoading) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.wikiMemoryPalaceLoading && state.wikiMemoryPalaceRequestAgentId === agentId) {
     return;
   }
   if (!canCallMemoryWikiMethod(state, "wiki.palace")) {
     state.wikiMemoryPalace = null;
     state.wikiMemoryPalaceError = null;
+    state.wikiMemoryPalaceAgentId = null;
     return;
   }
+  if (state.wikiMemoryPalaceAgentId !== agentId) {
+    state.wikiMemoryPalace = null;
+  }
+  const requestGeneration = (state.wikiMemoryPalaceRequestGeneration ?? 0) + 1;
+  state.wikiMemoryPalaceRequestGeneration = requestGeneration;
+  state.wikiMemoryPalaceActiveRequestGeneration = requestGeneration;
+  state.wikiMemoryPalaceRequestAgentId = agentId;
   state.wikiMemoryPalaceLoading = true;
   state.wikiMemoryPalaceError = null;
   try {
-    const payload = await state.client.request<WikiMemoryPalacePayload>("wiki.palace", {});
+    const payload = await state.client.request<WikiMemoryPalacePayload>(
+      "wiki.palace",
+      buildSelectedAgentPayloadForAgentId(agentId),
+    );
+    if (
+      state.wikiMemoryPalaceActiveRequestGeneration !== requestGeneration ||
+      state.wikiMemoryPalaceRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     state.wikiMemoryPalace = normalizeWikiMemoryPalace(payload);
+    state.wikiMemoryPalaceAgentId = agentId;
   } catch (err) {
-    state.wikiMemoryPalaceError = String(err);
+    if (
+      state.wikiMemoryPalaceActiveRequestGeneration === requestGeneration &&
+      state.wikiMemoryPalaceRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.wikiMemoryPalaceError = String(err);
+    }
   } finally {
-    state.wikiMemoryPalaceLoading = false;
+    if (state.wikiMemoryPalaceActiveRequestGeneration === requestGeneration) {
+      state.wikiMemoryPalaceLoading = false;
+      state.wikiMemoryPalaceRequestAgentId = null;
+      state.wikiMemoryPalaceActiveRequestGeneration = null;
+    }
   }
 }
 
@@ -1103,50 +1178,6 @@ async function writeDreamingPatch(
   }
 }
 
-function lookupIncludesDreamingProperty(value: unknown): boolean {
-  const lookup = asRecord(value);
-  const children = Array.isArray(lookup?.children) ? lookup.children : [];
-  for (const child of children) {
-    const childRecord = asRecord(child);
-    if (normalizeTrimmedString(childRecord?.key) === "dreaming") {
-      return true;
-    }
-  }
-  return false;
-}
-
-function lookupDisallowsUnknownProperties(value: unknown): boolean {
-  const lookup = asRecord(value);
-  const schema = asRecord(lookup?.schema);
-  return schema?.additionalProperties === false;
-}
-
-async function ensureDreamingPathSupported(
-  state: DreamingState,
-  pluginId: string,
-): Promise<boolean> {
-  if (!state.client || !state.connected) {
-    return true;
-  }
-  try {
-    const lookup = await state.client.request("config.schema.lookup", {
-      path: `plugins.entries.${pluginId}.config`,
-    });
-    if (lookupIncludesDreamingProperty(lookup)) {
-      return true;
-    }
-    if (lookupDisallowsUnknownProperties(lookup)) {
-      const message = `Selected memory plugin "${pluginId}" does not support dreaming settings.`;
-      state.dreamingStatusError = message;
-      state.lastError = message;
-      return false;
-    }
-  } catch {
-    return true;
-  }
-  return true;
-}
-
 export async function updateDreamingEnabled(
   state: DreamingState,
   enabled: boolean,
@@ -1158,23 +1189,36 @@ export async function updateDreamingEnabled(
     state.dreamingStatusError = "Config hash missing; refresh and retry.";
     return false;
   }
-  const { pluginId } = resolveConfiguredDreaming(asRecord(state.configSnapshot?.config) ?? null);
-  if (!(await ensureDreamingPathSupported(state, pluginId))) {
-    return false;
-  }
-  const ok = await writeDreamingPatch(state, {
-    plugins: {
-      entries: {
-        [pluginId]: {
-          config: {
-            dreaming: {
-              enabled,
-            },
-          },
+  const agentId = resolveSelectedAgentId(state);
+  const configAgentId = agentId
+    ? resolveConfiguredAgentId(asRecord(state.configSnapshot.config) ?? null, agentId)
+    : null;
+  const dreamingPatch = {
+    extensions: {
+      [DEFAULT_DREAMING_PLUGIN_ID]: {
+        dreaming: {
+          enabled,
         },
       },
     },
-  });
+  };
+  const ok = await writeDreamingPatch(
+    state,
+    configAgentId
+      ? {
+          agents: {
+            list: [
+              {
+                id: configAgentId,
+                memory: dreamingPatch,
+              },
+            ],
+          },
+        }
+      : {
+          memory: dreamingPatch,
+        },
+  );
   if (ok && state.dreamingStatus) {
     state.dreamingStatus = {
       ...state.dreamingStatus,

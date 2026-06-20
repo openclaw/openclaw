@@ -55,7 +55,7 @@
     },
     "dreaming": {
       "label": "Dreaming",
-      "help": "Optional dreaming config consumed when this plugin owns the memory slot"
+      "help": "Deprecated legacy dreaming config. Run openclaw doctor --fix to move it to memory.extensions.memory-core.dreaming."
     },
     "captureMaxChars": {
       "label": "Capture Max Chars",

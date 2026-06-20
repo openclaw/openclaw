@@ -151,6 +151,13 @@ describe("memory dreaming host helpers", () => {
 
   it("dedupes shared workspaces across all configured agents", () => {
     const cfg = {
+      memory: {
+        extensions: {
+          "memory-core": {
+            dreaming: { enabled: true },
+          },
+        },
+      },
       agents: {
         list: [
           { id: "alpha", workspace: "/workspace/shared" },
@@ -164,19 +171,86 @@ describe("memory dreaming host helpers", () => {
       {
         workspaceDir: "/workspace/shared",
         agentIds: ["alpha", "gamma"],
+        configAgentId: "alpha",
       },
       {
         workspaceDir: "/workspace/beta",
         agentIds: ["beta"],
+        configAgentId: "beta",
+      },
+    ]);
+  });
+
+  it("filters out agents with memory-core dreaming disabled", () => {
+    const cfg = {
+      memory: {
+        extensions: {
+          "memory-core": {
+            dreaming: { enabled: true },
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "alpha", workspace: "/workspace/alpha" },
+          {
+            id: "beta",
+            workspace: "/workspace/beta",
+            memory: {
+              extensions: {
+                "memory-core": {
+                  dreaming: { enabled: false },
+                },
+              },
+            },
+          },
+          {
+            id: "gamma",
+            workspace: "/workspace/gamma",
+            memory: {
+              extensions: {
+                "memory-core": {
+                  dreaming: { enabled: true },
+                },
+              },
+            },
+          },
+          { id: "delta", workspace: "/workspace/delta" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
+      {
+        workspaceDir: "/workspace/alpha",
+        agentIds: ["alpha"],
+        configAgentId: "alpha",
+      },
+      {
+        workspaceDir: "/workspace/gamma",
+        agentIds: ["gamma"],
+        configAgentId: "gamma",
+      },
+      {
+        workspaceDir: "/workspace/delta",
+        agentIds: ["delta"],
+        configAgentId: "delta",
       },
     ]);
   });
 
   it("includes the runtime primary workspace alongside configured subagent workspaces", () => {
     const cfg = {
+      memory: {
+        extensions: {
+          "memory-core": {
+            dreaming: { enabled: true },
+          },
+        },
+      },
       agents: {
         list: [
-          { id: "agi-ceo", workspace: "/workspace/agi-ceo" },
+          { id: "main", workspace: "/workspace/main-agent" },
           { id: "agi-cdo", workspace: "/workspace/agi-cdo" },
         ],
       },
@@ -189,25 +263,67 @@ describe("memory dreaming host helpers", () => {
       }),
     ).toEqual([
       {
-        workspaceDir: "/workspace/agi-ceo",
-        agentIds: ["agi-ceo"],
+        workspaceDir: "/workspace/main-agent",
+        agentIds: ["main"],
+        configAgentId: "main",
       },
       {
         workspaceDir: "/workspace/agi-cdo",
         agentIds: ["agi-cdo"],
+        configAgentId: "agi-cdo",
       },
       {
         workspaceDir: "/workspace/main",
         agentIds: ["main"],
+        configAgentId: "main",
       },
     ]);
   });
 
+  it("preserves an all-agent dreaming opt-out", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "alpha",
+            memory: {
+              extensions: {
+                "memory-core": {
+                  dreaming: { enabled: false },
+                },
+              },
+            },
+          },
+          {
+            id: "beta",
+            memory: {
+              extensions: {
+                "memory-core": {
+                  dreaming: { enabled: false },
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([]);
+  });
+
   it("uses default agent fallback and timezone-aware day helpers", () => {
     const cfg = {
+      memory: {
+        extensions: {
+          "memory-core": {
+            dreaming: { enabled: true },
+          },
+        },
+      },
       agents: {
         defaults: {
           workspace: "/workspace",
+
         },
       },
     } as OpenClawConfig;
@@ -216,6 +332,7 @@ describe("memory dreaming host helpers", () => {
       {
         workspaceDir: "/workspace",
         agentIds: ["main"],
+        configAgentId: "main",
       },
     ]);
 
@@ -243,50 +360,38 @@ describe("memory dreaming host helpers", () => {
     ).toBe("memos-local-openclaw-plugin");
   });
 
-  it("reads dreaming config from the configured memory-slot owner", () => {
+  it("reads dreaming config from the canonical memory-core extension", () => {
     expect(
-      resolveMemoryDreamingPluginConfig({
-        plugins: {
-          slots: {
-            memory: "memos-local-openclaw-plugin",
-          },
-          entries: {
-            "memos-local-openclaw-plugin": {
-              config: {
+      resolveMemoryDreamingPluginConfig(
+        {
+          memory: {
+            extensions: {
+              "memory-core": {
                 dreaming: {
                   enabled: true,
                 },
               },
             },
           },
-        },
-      } as OpenClawConfig),
-    ).toEqual({
-      dreaming: {
-        enabled: true,
-      },
-    });
-  });
-
-  it("reads dreaming config from memory-lancedb when it owns the memory slot", () => {
-    expect(
-      resolveMemoryDreamingPluginConfig({
-        plugins: {
-          slots: {
-            memory: "memory-lancedb",
-          },
-          entries: {
-            "memory-lancedb": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  frequency: "0 */6 * * *",
+          agents: {
+            list: [
+              {
+                id: "research",
+                memory: {
+                  extensions: {
+                    "memory-core": {
+                      dreaming: {
+                        frequency: "0 */6 * * *",
+                      },
+                    },
+                  },
                 },
               },
-            },
+            ],
           },
-        },
-      } as OpenClawConfig),
+        } as OpenClawConfig,
+        "research",
+      ),
     ).toEqual({
       dreaming: {
         enabled: true,
@@ -295,7 +400,7 @@ describe("memory dreaming host helpers", () => {
     });
   });
 
-  it("falls back to memory-core when no memory slot override is configured", () => {
+  it("does not use legacy global plugin config at runtime", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
@@ -310,14 +415,10 @@ describe("memory dreaming host helpers", () => {
           },
         },
       } as OpenClawConfig),
-    ).toEqual({
-      dreaming: {
-        enabled: true,
-      },
-    });
+    ).toBeUndefined();
   });
 
-  it('falls back to memory-core when memory slot is "none" or blank', () => {
+  it('still normalizes the memory slot id when it is "none" or blank', () => {
     expect(
       resolveMemoryDreamingPluginId({
         plugins: {
@@ -329,26 +430,7 @@ describe("memory dreaming host helpers", () => {
     ).toBe("memory-core");
 
     expect(
-      resolveMemoryDreamingPluginConfig({
-        plugins: {
-          slots: {
-            memory: "   ",
-          },
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig),
-    ).toEqual({
-      dreaming: {
-        enabled: true,
-      },
-    });
+      resolveMemoryDreamingPluginId({ plugins: { slots: { memory: "   " } } } as OpenClawConfig),
+    ).toBe("memory-core");
   });
 });

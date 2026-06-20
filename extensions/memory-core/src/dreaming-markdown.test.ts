@@ -273,4 +273,51 @@ describe("dreaming markdown storage", () => {
     ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
     await expect(fs.readFile(targetPath, "utf-8")).resolves.toBe("outside\n");
   });
+
+  it("refuses a symlinked parent for agent dreams files", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const outsideDir = path.join(workspaceDir, "outside");
+    await fs.mkdir(outsideDir);
+    await fs.mkdir(path.join(workspaceDir, "memory"));
+    await fs.symlink(outsideDir, path.join(workspaceDir, "memory", ".dreams"));
+
+    await expect(
+      writeDeepDreamingReport({
+        workspaceDir,
+        agentId: "writer",
+        bodyLines: ["- Do not escape workspace."],
+        storage: {
+          mode: "inline",
+          separateReports: false,
+        },
+        nowMs,
+        timezone,
+      }),
+    ).rejects.toThrow("must not traverse symlinked directory");
+    await expect(fs.access(path.join(outsideDir, "agents"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a symlinked parent for agent dreaming reports", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const outsideDir = path.join(workspaceDir, "outside");
+    await fs.mkdir(outsideDir);
+    await fs.mkdir(path.join(workspaceDir, "memory"));
+    await fs.symlink(outsideDir, path.join(workspaceDir, "memory", ".dreams"));
+
+    await expect(
+      writeDailyDreamingPhaseBlock({
+        workspaceDir,
+        agentId: "writer",
+        phase: "light",
+        bodyLines: ["- Do not escape workspace."],
+        storage: {
+          mode: "separate",
+          separateReports: false,
+        },
+        nowMs,
+        timezone,
+      }),
+    ).rejects.toThrow("must not traverse symlinked directory");
+    await expect(fs.access(path.join(outsideDir, "agents"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });

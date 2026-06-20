@@ -6,6 +6,7 @@ import {
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../api.js";
 import {
   DEFAULT_WIKI_RENDER_MODE,
   DEFAULT_WIKI_SEARCH_BACKEND,
@@ -13,6 +14,7 @@ import {
   DEFAULT_WIKI_VAULT_MODE,
   resolveDefaultMemoryWikiVaultPath,
   resolveMemoryWikiConfig,
+  resolveMemoryWikiConfigForAgent,
 } from "./config.js";
 
 function compileManifestConfigSchema() {
@@ -26,6 +28,18 @@ function compileManifestConfigSchema() {
       value,
       applyDefaults: true,
     }).ok;
+}
+
+function readManifest(): {
+  configContracts?: { compatibilityMigrationPaths?: string[] };
+  configSchema: JsonSchemaObject;
+} {
+  return JSON.parse(
+    fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as {
+    configContracts?: { compatibilityMigrationPaths?: string[] };
+    configSchema: JsonSchemaObject;
+  };
 }
 
 describe("resolveMemoryWikiConfig", () => {
@@ -57,6 +71,86 @@ describe("resolveMemoryWikiConfig", () => {
     expect(config.vault.renderMode).toBe("obsidian");
   });
 
+  it("resolves each agent into an isolated default vault while inheriting extension defaults", () => {
+    const appConfig: OpenClawConfig = {
+      memory: {
+        extensions: {
+          "memory-wiki": {
+            search: {
+              corpus: "memory",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "research" },
+          {
+            id: "writer",
+            memory: {
+              extensions: {
+                "memory-wiki": {
+                  vault: {
+                    path: "~/shared-writing-wiki",
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const research = resolveMemoryWikiConfigForAgent(appConfig, "research", {
+      homedir: "/Users/tester",
+    });
+    const writer = resolveMemoryWikiConfigForAgent(appConfig, "writer", {
+      homedir: "/Users/tester",
+    });
+
+    expect(research.vault.path).toBe("/Users/tester/.openclaw/wiki/research");
+    expect(research.search.corpus).toBe("memory");
+    expect(writer.vault.path).toBe("/Users/tester/shared-writing-wiki");
+    expect(writer.search.corpus).toBe("memory");
+  });
+
+  it("normalizes agent ids before deriving the default vault path", () => {
+    const config = resolveMemoryWikiConfigForAgent(
+      {
+        memory: {
+          extensions: {
+            "memory-wiki": {},
+          },
+        },
+      },
+      "../Research",
+      { homedir: "/Users/tester" },
+    );
+
+    expect(config.vault.path).toBe("/Users/tester/.openclaw/wiki/research");
+  });
+
+  it("rejects invalid agent-scoped config instead of falling back to defaults", () => {
+    expect(() =>
+      resolveMemoryWikiConfigForAgent(
+        {
+          memory: {
+            extensions: {
+              "memory-wiki": {
+                vault: {
+                  path: "~/vaults/wiki",
+                  unexpected: true,
+                },
+              },
+            },
+          },
+        },
+        "main",
+        { homedir: "/Users/tester" },
+      ),
+    ).toThrow("Invalid memory-wiki config: vault: unknown config key: unexpected");
+  });
+
   it("normalizes the bridge artifact toggle", () => {
     const canonical = resolveMemoryWikiConfig({
       bridge: {
@@ -69,6 +163,10 @@ describe("resolveMemoryWikiConfig", () => {
 });
 
 describe("memory-wiki manifest config schema", () => {
+  it("runs compatibility migration for configured agent lists", () => {
+    expect(readManifest().configContracts?.compatibilityMigrationPaths).toContain("agents.list");
+  });
+
   it("accepts the documented config shape", () => {
     const validate = compileManifestConfigSchema();
     const config = {

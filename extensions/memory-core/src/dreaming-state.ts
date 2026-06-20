@@ -5,6 +5,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 
 export const MEMORY_CORE_PLUGIN_ID = "memory-core";
 export const DREAMING_DAILY_INGESTION_NAMESPACE = "dreaming-daily-ingestion";
@@ -14,6 +15,7 @@ export const SHORT_TERM_RECALL_NAMESPACE = "short-term-recall";
 export const SHORT_TERM_PHASE_SIGNAL_NAMESPACE = "short-term-phase-signals";
 export const SHORT_TERM_META_NAMESPACE = "short-term-meta";
 export const SHORT_TERM_LOCK_NAMESPACE = "short-term-locks";
+export const SHORT_TERM_MEMORY_FILE_LOCK_NAMESPACE = "short-term-memory-file-locks";
 
 export const DREAMING_WORKSPACE_STATE_MAX_ENTRIES = 50_000;
 export const SHORT_TERM_LOCK_MAX_ENTRIES = 4_096;
@@ -27,6 +29,7 @@ type WorkspaceValue<T> = {
   version: 1;
   workspaceKey: string;
   workspaceDir: string;
+  agentId?: string;
   key: string;
   value: T;
 };
@@ -36,6 +39,7 @@ export type MemoryCoreWorkspaceEntry<T> = { key: string; value: T };
 type MemoryCoreWorkspaceParams = {
   namespace: string;
   workspaceDir: string;
+  agentId?: string;
 };
 
 type WriteMemoryCoreWorkspaceEntriesParams<T> = MemoryCoreWorkspaceParams & {
@@ -80,18 +84,34 @@ export function normalizeMemoryCoreWorkspaceKey(workspaceDir: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-export function memoryCoreWorkspaceStateKey(workspaceDir: string): string {
-  return createHash("sha256").update(normalizeMemoryCoreWorkspaceKey(workspaceDir)).digest("hex");
+function normalizeMemoryCoreAgentId(agentId: string | undefined): string | undefined {
+  return agentId?.trim() ? normalizeAgentId(agentId) : undefined;
 }
 
-export function memoryCoreWorkspaceEntryKey(workspaceDir: string, logicalKey: string): string {
-  const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
+export function memoryCoreWorkspaceStateKey(workspaceDir: string, agentId?: string): string {
+  const normalizedAgentId = normalizeMemoryCoreAgentId(agentId);
+  const scope = normalizedAgentId
+    ? `${normalizeMemoryCoreWorkspaceKey(workspaceDir)}\0${normalizedAgentId}`
+    : normalizeMemoryCoreWorkspaceKey(workspaceDir);
+  return createHash("sha256").update(scope).digest("hex");
+}
+
+export function memoryCoreWorkspaceEntryKey(
+  workspaceDir: string,
+  logicalKey: string,
+  agentId?: string,
+): string {
+  const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir, agentId);
   const itemKey = createHash("sha256").update(logicalKey).digest("hex");
   return `${workspaceKey}:${itemKey}`;
 }
 
-export function memoryCoreStateReference(namespace: string, workspaceDir: string): string {
-  return `plugin-state:${MEMORY_CORE_PLUGIN_ID}/${namespace}/${memoryCoreWorkspaceStateKey(workspaceDir)}`;
+export function memoryCoreStateReference(
+  namespace: string,
+  workspaceDir: string,
+  agentId?: string,
+): string {
+  return `plugin-state:${MEMORY_CORE_PLUGIN_ID}/${namespace}/${memoryCoreWorkspaceStateKey(workspaceDir, agentId)}`;
 }
 
 function openWorkspaceStore<T>(namespace: string): PluginStateKeyedStore<WorkspaceValue<T>> {
@@ -108,7 +128,7 @@ export function readMemoryCoreWorkspaceEntries<T>(
 export async function readMemoryCoreWorkspaceEntries(
   params: MemoryCoreWorkspaceParams,
 ): Promise<Array<MemoryCoreWorkspaceEntry<unknown>>> {
-  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
+  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir, params.agentId);
   const prefix = `${workspaceKey}:`;
   const entries = await openWorkspaceStore<unknown>(params.namespace).entries();
   return entries
@@ -124,16 +144,18 @@ export async function writeMemoryCoreWorkspaceEntries(
   params: WriteMemoryCoreWorkspaceEntriesParams<unknown>,
 ): Promise<void> {
   const store = openWorkspaceStore<unknown>(params.namespace);
-  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
+  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir, params.agentId);
+  const agentId = normalizeMemoryCoreAgentId(params.agentId);
   const prefix = `${workspaceKey}:`;
   const replacementKeys = new Set<string>();
   for (const entry of params.entries) {
-    const stateKey = memoryCoreWorkspaceEntryKey(params.workspaceDir, entry.key);
+    const stateKey = memoryCoreWorkspaceEntryKey(params.workspaceDir, entry.key, params.agentId);
     replacementKeys.add(stateKey);
     await store.register(stateKey, {
       version: 1,
       workspaceKey,
       workspaceDir: path.resolve(params.workspaceDir),
+      ...(agentId ? { agentId } : {}),
       key: entry.key,
       value: entry.value,
     });
@@ -152,13 +174,15 @@ export function writeMemoryCoreWorkspaceEntry<T>(
 export async function writeMemoryCoreWorkspaceEntry(
   params: WriteMemoryCoreWorkspaceEntryParams<unknown>,
 ): Promise<void> {
-  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
+  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir, params.agentId);
+  const agentId = normalizeMemoryCoreAgentId(params.agentId);
   await openWorkspaceStore<unknown>(params.namespace).register(
-    memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
+    memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key, params.agentId),
     {
       version: 1,
       workspaceKey,
       workspaceDir: path.resolve(params.workspaceDir),
+      ...(agentId ? { agentId } : {}),
       key: params.key,
       value: params.value,
     },
@@ -168,13 +192,56 @@ export async function writeMemoryCoreWorkspaceEntry(
 export async function clearMemoryCoreWorkspaceNamespace(params: {
   namespace: string;
   workspaceDir: string;
+  agentId?: string;
 }): Promise<void> {
   const store = openWorkspaceStore(params.namespace);
-  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
+  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir, params.agentId);
   const prefix = `${workspaceKey}:`;
   for (const entry of await store.entries()) {
     if (entry.key.startsWith(prefix)) {
       await store.delete(entry.key);
     }
   }
+}
+
+export async function migrateMemoryCoreWorkspaceNamespaceToAgent(params: {
+  namespace: string;
+  workspaceDir: string;
+  sourceWorkspaceDir?: string;
+  agentId: string;
+}): Promise<{ sourceEntries: number; migratedEntries: number; retainedAgentEntries: number }> {
+  const agentId = normalizeAgentId(params.agentId);
+  const sourceWorkspaceDir = params.sourceWorkspaceDir ?? params.workspaceDir;
+  const sourceWorkspaceKey = memoryCoreWorkspaceStateKey(sourceWorkspaceDir);
+  const targetWorkspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir, agentId);
+  if (sourceWorkspaceKey === targetWorkspaceKey) {
+    return { sourceEntries: 0, migratedEntries: 0, retainedAgentEntries: 0 };
+  }
+
+  const store = openWorkspaceStore<unknown>(params.namespace);
+  const sourcePrefix = `${sourceWorkspaceKey}:`;
+  const sourceEntries = (await store.entries()).filter(
+    (entry) =>
+      entry.key.startsWith(sourcePrefix) &&
+      entry.value.workspaceKey === sourceWorkspaceKey &&
+      !entry.value.agentId,
+  );
+  let migratedEntries = 0;
+  let retainedAgentEntries = 0;
+  for (const entry of sourceEntries) {
+    const targetKey = memoryCoreWorkspaceEntryKey(params.workspaceDir, entry.value.key, agentId);
+    const migrated = await store.registerIfAbsent(targetKey, {
+      ...entry.value,
+      workspaceKey: targetWorkspaceKey,
+      workspaceDir: path.resolve(params.workspaceDir),
+      agentId,
+    });
+    if (migrated) {
+      migratedEntries += 1;
+    } else {
+      retainedAgentEntries += 1;
+    }
+    await store.delete(entry.key);
+  }
+  return { sourceEntries: sourceEntries.length, migratedEntries, retainedAgentEntries };
 }

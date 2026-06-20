@@ -2,10 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile } from "../infra/fs-safe.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { MemoryDreamingPhaseName } from "./dreaming.js";
 
-/** Workspace-relative JSONL audit log for memory recall, promotion, and dream events. */
+/** Legacy workspace-relative JSONL audit log for unscoped memory events. */
 export const MEMORY_HOST_EVENT_LOG_RELATIVE_PATH = path.join("memory", ".dreams", "events.jsonl");
+const MEMORY_HOST_AGENT_EVENT_LOG_RELATIVE_DIR = path.join("memory", ".dreams", "agents");
 
 /** Event emitted when a recall query records the selected memory snippets. */
 export type MemoryHostRecallRecordedEvent = {
@@ -74,17 +76,26 @@ export type MemoryHostEvent =
 /** Full event-log record schema, including opt-in diagnostic variants. */
 export type MemoryHostEventRecord = MemoryHostEvent | MemoryHostRecallSkippedEvent;
 
-/** Resolve the event log path inside a workspace without touching the filesystem. */
-export function resolveMemoryHostEventLogPath(workspaceDir: string): string {
+/** Resolve an agent-scoped event journal, or the legacy unscoped journal when no agent is supplied. */
+export function resolveMemoryHostEventLogPath(workspaceDir: string, agentId?: string): string {
+  if (agentId?.trim()) {
+    return path.join(
+      workspaceDir,
+      MEMORY_HOST_AGENT_EVENT_LOG_RELATIVE_DIR,
+      normalizeAgentId(agentId),
+      "events.jsonl",
+    );
+  }
   return path.join(workspaceDir, MEMORY_HOST_EVENT_LOG_RELATIVE_PATH);
 }
 
-/** Append one memory host event, creating the dreams directory with symlink-safe writes. */
+/** Append one memory host event, creating its journal directory with symlink-safe writes. */
 export async function appendMemoryHostEvent(
   workspaceDir: string,
   event: MemoryHostEventRecord,
+  agentId?: string,
 ): Promise<void> {
-  const eventLogPath = resolveMemoryHostEventLogPath(workspaceDir);
+  const eventLogPath = resolveMemoryHostEventLogPath(workspaceDir, agentId);
   await fs.mkdir(path.dirname(eventLogPath), { recursive: true });
   await appendRegularFile({
     filePath: eventLogPath,
@@ -113,9 +124,10 @@ function parseMemoryHostEventRecord(line: string): MemoryHostEventRecord | null 
 
 async function readMemoryHostEventRecordsRaw(params: {
   workspaceDir: string;
+  agentId?: string;
   limit?: number;
 }): Promise<MemoryHostEventRecord[]> {
-  const eventLogPath = resolveMemoryHostEventLogPath(params.workspaceDir);
+  const eventLogPath = resolveMemoryHostEventLogPath(params.workspaceDir, params.agentId);
   const raw = await fs.readFile(eventLogPath, "utf8").catch((err: unknown) => {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
       return "";
@@ -151,9 +163,13 @@ function applyMemoryHostEventLimit<T>(events: T[], limit: number | undefined): T
 /** Read recent memory host events, ignoring corrupt JSONL lines left by partial writes. */
 export async function readMemoryHostEvents(params: {
   workspaceDir: string;
+  agentId?: string;
   limit?: number;
 }): Promise<MemoryHostEvent[]> {
-  const events = await readMemoryHostEventRecordsRaw({ workspaceDir: params.workspaceDir });
+  const events = await readMemoryHostEventRecordsRaw({
+    workspaceDir: params.workspaceDir,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
   const legacyEvents = events.filter(
     (event): event is MemoryHostEvent => event.type !== "memory.recall.skipped",
   );
@@ -163,6 +179,7 @@ export async function readMemoryHostEvents(params: {
 /** Read recent memory host event records, including opt-in diagnostic variants. */
 export async function readMemoryHostEventRecords(params: {
   workspaceDir: string;
+  agentId?: string;
   limit?: number;
 }): Promise<MemoryHostEventRecord[]> {
   return await readMemoryHostEventRecordsRaw(params);

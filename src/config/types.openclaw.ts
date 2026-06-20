@@ -228,7 +228,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
-  /** Memory indexing/search configuration. */
+  /** Global memory configuration; agents.list[].memory can override it per agent. */
   memory?: MemoryConfig;
   /** MCP client/server and Codex MCP approval configuration. */
   mcp?: McpConfig;

@@ -1,7 +1,8 @@
 // Memory Wiki plugin module implements gateway behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig, OpenClawPluginApi } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -72,18 +73,37 @@ function readEnumParam<T extends string>(
   throw new Error(`${key} must be one of: ${allowed.join(", ")}.`);
 }
 
+class InvalidGatewayRequestError extends Error {}
+
 function respondError(respond: GatewayRespond, error: unknown) {
   const message = formatErrorMessage(error);
-  respond(false, undefined, { code: "internal_error", message });
+  respond(false, undefined, {
+    code: error instanceof InvalidGatewayRequestError ? "INVALID_REQUEST" : "internal_error",
+    message,
+  });
 }
 
 function resolveGatewayAgentId(
   requestParams: Record<string, unknown>,
   appConfig: OpenClawConfig | undefined,
 ): string | undefined {
-  return (
-    readStringParam(requestParams, "agentId") ??
-    (appConfig ? resolveDefaultAgentId(appConfig) : undefined)
+  const requestedAgentId = readStringParam(requestParams, "agentId");
+  if (!requestedAgentId) {
+    return appConfig ? resolveDefaultAgentId(appConfig) : undefined;
+  }
+  if (!appConfig) {
+    throw new InvalidGatewayRequestError("agentId requires an available agent registry.");
+  }
+
+  const agentId = normalizeAgentId(requestedAgentId);
+  const knownAgentIds = new Set(listAgentIds(appConfig));
+  if (knownAgentIds.has(agentId)) {
+    return agentId;
+  }
+
+  const known = [...knownAgentIds].toSorted().join(", ");
+  throw new InvalidGatewayRequestError(
+    `Unknown agent id "${requestedAgentId}". Known agents: ${known || "none configured"}.`,
   );
 }
 
@@ -97,14 +117,29 @@ async function syncImportedSourcesIfNeeded(
 export function registerMemoryWikiGatewayMethods(params: {
   api: OpenClawPluginApi;
   config: ResolvedMemoryWikiConfig;
+  resolveConfig?: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
+  resolveAppConfig?: () => OpenClawConfig | undefined;
 }) {
-  const { api, config, appConfig } = params;
+  const { api, config: defaultConfig, appConfig: initialAppConfig } = params;
+  const resolveConfig = params.resolveConfig ?? (() => defaultConfig);
+  const resolveAppConfig = params.resolveAppConfig ?? (() => initialAppConfig);
+  const resolveRequestContext = (requestParams: Record<string, unknown> = {}) => {
+    const appConfig = resolveAppConfig();
+    const agentId = resolveGatewayAgentId(requestParams, appConfig);
+    const config = resolveConfig(agentId, appConfig);
+    return {
+      config,
+      appConfig,
+      agentId: config.agentId ?? (agentId ? normalizeAgentId(agentId) : undefined),
+    };
+  };
 
   api.registerGatewayMethod(
     "wiki.status",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         respond(
           true,
@@ -123,6 +158,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.importRuns",
     async ({ params: requestParams, respond }) => {
       try {
+        const { config } = resolveRequestContext(requestParams);
         const limit = readPositiveIntegerParam(requestParams, "limit");
         respond(true, await listMemoryWikiImportRuns(config, limit !== undefined ? { limit } : {}));
       } catch (error) {
@@ -134,8 +170,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.importInsights",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         respond(true, await listMemoryWikiImportInsights(config));
       } catch (error) {
@@ -147,8 +184,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.palace",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         respond(true, await listMemoryWikiPalace(config));
       } catch (error) {
@@ -160,8 +198,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.init",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config } = resolveRequestContext(requestParams);
         respond(true, await initializeMemoryWikiVault(config));
       } catch (error) {
         respondError(respond, error);
@@ -172,8 +211,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.doctor",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         const status = await resolveMemoryWikiStatus(config, {
           appConfig,
@@ -188,8 +228,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.compile",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         respond(true, await compileMemoryWikiVault(config));
       } catch (error) {
@@ -203,6 +244,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.ingest",
     async ({ params: requestParams, respond }) => {
       try {
+        const { config } = resolveRequestContext(requestParams);
         const inputPath = readStringParam(requestParams, "inputPath", { required: true });
         const title = readStringParam(requestParams, "title");
         respond(
@@ -222,8 +264,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.lint",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         respond(true, await lintMemoryWikiVault(config));
       } catch (error) {
@@ -235,8 +278,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.bridge.import",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig } = resolveRequestContext(requestParams);
         respond(
           true,
           await syncMemoryWikiImportedSources({
@@ -253,8 +297,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.unsafeLocal.import",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig } = resolveRequestContext(requestParams);
         respond(
           true,
           await syncMemoryWikiImportedSources({
@@ -273,13 +318,13 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.search",
     async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig, agentId } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         const query = readStringParam(requestParams, "query", { required: true });
         const maxResults = readPositiveIntegerParam(requestParams, "maxResults");
         const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
         const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
         const mode = readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES);
-        const agentId = resolveGatewayAgentId(requestParams, appConfig);
         respond(
           true,
           await searchMemoryWiki({
@@ -304,6 +349,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.apply",
     async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         respond(
           true,
@@ -323,13 +369,13 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.get",
     async ({ params: requestParams, respond }) => {
       try {
+        const { config, appConfig, agentId } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         const lookup = readStringParam(requestParams, "lookup", { required: true });
         const fromLine = readPositiveIntegerParam(requestParams, "fromLine");
         const lineCount = readPositiveIntegerParam(requestParams, "lineCount");
         const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
         const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
-        const agentId = resolveGatewayAgentId(requestParams, appConfig);
         respond(
           true,
           await getMemoryWikiPage({
@@ -366,6 +412,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.obsidian.search",
     async ({ params: requestParams, respond }) => {
       try {
+        const { config } = resolveRequestContext(requestParams);
         const query = readStringParam(requestParams, "query", { required: true });
         respond(true, await runObsidianSearch({ config, query }));
       } catch (error) {
@@ -379,6 +426,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.obsidian.open",
     async ({ params: requestParams, respond }) => {
       try {
+        const { config } = resolveRequestContext(requestParams);
         const vaultPath = readStringParam(requestParams, "path", { required: true });
         respond(true, await runObsidianOpen({ config, vaultPath }));
       } catch (error) {
@@ -392,6 +440,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.obsidian.command",
     async ({ params: requestParams, respond }) => {
       try {
+        const { config } = resolveRequestContext(requestParams);
         const id = readStringParam(requestParams, "id", { required: true });
         respond(true, await runObsidianCommand({ config, id }));
       } catch (error) {
@@ -403,8 +452,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.obsidian.daily",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
+        const { config } = resolveRequestContext(requestParams);
         respond(true, await runObsidianDaily({ config }));
       } catch (error) {
         respondError(respond, error);

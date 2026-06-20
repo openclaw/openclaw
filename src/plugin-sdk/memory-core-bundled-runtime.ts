@@ -34,14 +34,17 @@ type RuntimeFacadeModule = {
   }) => void;
   removeGroundedShortTermCandidates: (params: {
     workspaceDir: string;
+    agentId?: string;
   }) => Promise<{ removed: number; storePath: string }>;
   loadShortTermPromotionDreamingStats: (params: {
     workspaceDir: string;
+    agentId?: string;
     nowMs: number;
     timezone?: string;
   }) => Promise<ShortTermDreamingStats>;
   repairDreamingArtifacts: (params: {
     workspaceDir: string;
+    agentId?: string;
     archiveDiary?: boolean;
     now?: Date;
   }) => Promise<RepairDreamingArtifactsResult>;
@@ -175,9 +178,11 @@ type ApiFacadeModule = {
   }) => Promise<GroundedRemPreviewResult>;
   dedupeDreamDiaryEntries: (params: {
     workspaceDir: string;
+    agentId?: string;
   }) => Promise<{ dreamsPath: string; removed: number; kept: number }>;
   writeBackfillDiaryEntries: (params: {
     workspaceDir: string;
+    agentId?: string;
     entries: Array<{
       isoDay: string;
       bodyLines: string[];
@@ -187,6 +192,7 @@ type ApiFacadeModule = {
   }) => Promise<{ dreamsPath: string; written: number; replaced: number }>;
   removeBackfillDiaryEntries: (params: {
     workspaceDir: string;
+    agentId?: string;
   }) => Promise<{ dreamsPath: string; removed: number }>;
   filterRecallEntriesWithinLookback: (params: {
     entries: readonly unknown[];
@@ -196,6 +202,7 @@ type ApiFacadeModule = {
   previewRemHarness: (params: {
     workspaceDir: string;
     cfg?: unknown;
+    agentId?: string;
     pluginConfig?: Record<string, unknown>;
     grounded?: boolean;
     groundedInputPaths?: string[];

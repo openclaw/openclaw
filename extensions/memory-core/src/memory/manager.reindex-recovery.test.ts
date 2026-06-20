@@ -62,21 +62,23 @@ describe("memory manager reindex recovery", () => {
     sources?: Array<"memory" | "sessions">;
   }): OpenClawConfig {
     return {
-      memory: { backend: "builtin" },
+      memory: {
+        backend: "builtin",
+        search: {
+          provider: params.provider ?? "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          chunking: { tokens: 4000, overlap: 0 },
+          sync: { watch: false, onSessionStart: false, onSearch: false },
+          remote: { nonBatchConcurrency: 1 },
+          cache: { enabled: false },
+          sources: params.sources,
+          experimental: { sessionMemory: params.sources?.includes("sessions") ?? false },
+        },
+      },
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: params.provider ?? "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            chunking: { tokens: 4000, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            remote: { nonBatchConcurrency: 1 },
-            cache: { enabled: false },
-            sources: params.sources,
-            experimental: { sessionMemory: params.sources?.includes("sessions") ?? false },
-          },
         },
         list: [{ id: "main", default: true }],
       },
@@ -198,21 +200,6 @@ describe("memory manager reindex recovery", () => {
     ).toEqual(publishedRows);
   });
 
-  it("rejects a full reindex while another process owns the build lock", async () => {
-    const memoryManager = await openManager(createCfg({ provider: "none", sources: ["memory"] }));
-    const harness = memoryManager as unknown as ReindexHarness;
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const lock = acquireMemoryReindexLock(databasePath);
-
-    try {
-      await expect(harness.runInPlaceReindex({ reason: "test", force: true })).rejects.toThrow(
-        /another reindex is active/,
-      );
-    } finally {
-      lock.release();
-    }
-  });
-
   it("forces source-wide session sync when retrying a failed full reindex", async () => {
     const memoryManager = await openManager(
       createCfg({
@@ -241,6 +228,26 @@ describe("memory manager reindex recovery", () => {
     expect(sessionSyncCalls[0]?.targetSessionFiles).toBeUndefined();
     expect(harness.sessionsDirty).toBe(false);
     expect(harness.sessionsFullRetryDirty).toBe(false);
+  });
+
+  it("rejects a full reindex while another process owns the build lock", async () => {
+    const memoryManager = await openManager(
+      createCfg({
+        provider: "none",
+        sources: ["memory"],
+      }),
+    );
+    const harness = memoryManager as unknown as ReindexHarness;
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const lock = acquireMemoryReindexLock(databasePath);
+
+    try {
+      await expect(harness.runInPlaceReindex({ reason: "test", force: true })).rejects.toThrow(
+        /another reindex is active/,
+      );
+    } finally {
+      lock.release();
+    }
   });
 
   it("closes the database after constructor schema failure", async () => {
@@ -340,4 +347,5 @@ describe("memory manager reindex recovery", () => {
     expect(harness.dirty).toBe(false);
     expect(harness.memoryFullRetryDirty).toBe(false);
   });
+
 });

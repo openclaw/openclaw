@@ -939,9 +939,11 @@ describe("secrets apply", () => {
             list: [
               {
                 id: "main",
-                memorySearch: {
-                  remote: {
-                    apiKey: "sk-memory-plaintext", // pragma: allowlist secret
+                memory: {
+                  search: {
+                    remote: {
+                      apiKey: "sk-memory-plaintext", // pragma: allowlist secret
+                    },
                   },
                 },
               },
@@ -961,9 +963,9 @@ describe("secrets apply", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "agents.list[].memorySearch.remote.apiKey",
-          path: "agents.list.0.memorySearch.remote.apiKey",
-          pathSegments: ["agents", "list", "0", "memorySearch", "remote", "apiKey"],
+          type: "agents.list[].memory.search.remote.apiKey",
+          path: "agents.list.0.memory.search.remote.apiKey",
+          pathSegments: ["agents", "list", "0", "memory", "search", "remote", "apiKey"],
           ref: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
         },
       ],
@@ -981,15 +983,17 @@ describe("secrets apply", () => {
     })) as {
       agents?: {
         list?: Array<{
-          memorySearch?: {
-            remote?: {
-              apiKey?: unknown;
+          memory?: {
+            search?: {
+              remote?: {
+                apiKey?: unknown;
+              };
             };
           };
         }>;
       };
     };
-    expect(nextConfig.agents?.list?.[0]?.memorySearch?.remote?.apiKey).toEqual({
+    expect(nextConfig.agents?.list?.[0]?.memory?.search?.remote?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MEMORY_REMOTE_API_KEY",

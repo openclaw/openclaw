@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds } from "../agents/agent-scope.js";
 import {
   clearAgentHarnesses,
   listRegisteredAgentHarnesses,
@@ -19,7 +20,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
-  resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
@@ -261,11 +261,11 @@ function resolveDreamingSidecarEngineId(params: {
   ) {
     return null;
   }
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
-    cfg: params.cfg,
-  });
-  return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
+  return listAgentIds(params.cfg).some(
+    (agentId) => resolveMemoryDreamingConfig({ cfg: params.cfg, agentId }).enabled,
+  )
+    ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+    : null;
 }
 
 type AuthorizedDreamingSidecar = {

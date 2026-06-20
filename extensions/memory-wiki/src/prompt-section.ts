@@ -215,10 +215,11 @@ function buildWikiToolGuidance(availableTools: Set<string>): string[] {
 }
 
 export function createWikiPromptSectionBuilder(
-  config: ResolvedMemoryWikiConfig,
+  config: ResolvedMemoryWikiConfig | ((agentId?: string) => ResolvedMemoryWikiConfig),
 ): MemoryPromptSectionBuilder {
-  return ({ availableTools }) => {
-    const digestLines = buildDigestPromptSection(config);
+  const resolveConfig = typeof config === "function" ? config : () => config;
+  return ({ availableTools, agentId }) => {
+    const digestLines = buildDigestPromptSection(resolveConfig(agentId));
     const toolGuidance = buildWikiToolGuidance(availableTools);
     if (digestLines.length === 0 && toolGuidance.length === 0) {
       return [];

@@ -162,6 +162,7 @@ function buildRequestScopedFallbackNarrative(_data: NarrativePhaseData): string 
 
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
+  agentId?: string;
   data: NarrativePhaseData;
   nowMs: number;
   timezone?: string;
@@ -171,6 +172,7 @@ export async function appendFallbackNarrativeEntry(params: {
   try {
     await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
       narrative: buildRequestScopedFallbackNarrative(params.data),
       nowMs: params.nowMs,
       timezone: params.timezone,
@@ -241,6 +243,7 @@ async function startNarrativeRunOrFallback(params: {
   message: string;
   data: NarrativePhaseData;
   workspaceDir: string;
+  agentId?: string;
   nowMs: number;
   timezone?: string;
   model?: string;
@@ -264,6 +267,7 @@ async function startNarrativeRunOrFallback(params: {
     }
     await appendFallbackNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
       data: params.data,
       nowMs: params.nowMs,
       timezone: params.timezone,
@@ -279,9 +283,13 @@ async function startNarrativeRunOrFallback(params: {
  */
 function buildNarrativeSessionKey(params: {
   workspaceDir: string;
+  agentId?: string;
   phase: NarrativePhaseData["phase"];
 }): string {
-  const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
+  const scope = params.agentId?.trim()
+    ? `${params.workspaceDir}\0${params.agentId.trim()}`
+    : params.workspaceDir;
+  const workspaceHash = createHash("sha1").update(scope).digest("hex").slice(0, 12);
   return `dreaming-narrative-${params.phase}-${workspaceHash}`;
 }
 
@@ -503,6 +511,7 @@ function isOptionalDiaryContextReadError(err: unknown): boolean {
 
 export async function readRecentDreamDiaryEntries(params: {
   workspaceDir: string;
+  agentId?: string;
   limit?: number;
 }): Promise<string[]> {
   const limit = Math.max(0, Math.floor(params.limit ?? RECENT_DIARY_CONTEXT_LIMIT));
@@ -511,7 +520,7 @@ export async function readRecentDreamDiaryEntries(params: {
   }
   let existing: string;
   try {
-    const dreamsPath = await resolveDreamsPath(params.workspaceDir);
+    const dreamsPath = await resolveDreamsPath(params.workspaceDir, params.agentId);
     existing = await readDreamsFile(dreamsPath);
   } catch (err) {
     if (isOptionalDiaryContextReadError(err)) {
@@ -638,6 +647,7 @@ export function buildBackfillDiaryEntry(params: {
 
 export async function writeBackfillDiaryEntries(params: {
   workspaceDir: string;
+  agentId?: string;
   entries: Array<{
     isoDay: string;
     bodyLines: string[];
@@ -647,6 +657,7 @@ export async function writeBackfillDiaryEntries(params: {
 }): Promise<{ dreamsPath: string; written: number; replaced: number }> {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     updater: (existing, dreamsPath) => {
       const stripped = stripBackfillDiaryBlocks(existing);
       const startIdx = stripped.updated.indexOf(DIARY_START_MARKER);
@@ -681,9 +692,11 @@ export async function writeBackfillDiaryEntries(params: {
 
 export async function removeBackfillDiaryEntries(params: {
   workspaceDir: string;
+  agentId?: string;
 }): Promise<{ dreamsPath: string; removed: number }> {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     updater: (existing, dreamsPath) => {
       const stripped = stripBackfillDiaryBlocks(existing);
       return {
@@ -700,9 +713,11 @@ export async function removeBackfillDiaryEntries(params: {
 
 export async function dedupeDreamDiaryEntries(params: {
   workspaceDir: string;
+  agentId?: string;
 }): Promise<{ dreamsPath: string; removed: number; kept: number }> {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     updater: (existing, dreamsPath) => {
       const ensured = ensureDiarySection(existing);
       const startIdx = ensured.indexOf(DIARY_START_MARKER);
@@ -747,6 +762,7 @@ export function buildDiaryEntry(narrative: string, dateStr: string): string {
 
 export async function appendNarrativeEntry(params: {
   workspaceDir: string;
+  agentId?: string;
   narrative: string;
   nowMs: number;
   timezone?: string;
@@ -755,6 +771,7 @@ export async function appendNarrativeEntry(params: {
   const entry = buildDiaryEntry(params.narrative, dateStr);
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     updater: (existing, dreamsPath) => {
       let updated: string;
       if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
@@ -990,6 +1007,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
 export async function generateAndAppendDreamNarrative(params: {
   subagent: SubagentSurface;
   workspaceDir: string;
+  agentId?: string;
   data: NarrativePhaseData;
   nowMs?: number;
   timezone?: string;
@@ -1004,6 +1022,7 @@ export async function generateAndAppendDreamNarrative(params: {
 
   const sessionKey = buildNarrativeSessionKey({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     phase: params.data.phase,
   });
   const message = buildNarrativePrompt(params.data);
@@ -1036,6 +1055,7 @@ export async function generateAndAppendDreamNarrative(params: {
             message,
             data: params.data,
             workspaceDir: params.workspaceDir,
+            agentId: params.agentId,
             nowMs,
             timezone: params.timezone,
             model: attemptModel,
@@ -1078,6 +1098,7 @@ export async function generateAndAppendDreamNarrative(params: {
           );
           await appendFallbackNarrativeEntry({
             workspaceDir: params.workspaceDir,
+            agentId: params.agentId,
             data: params.data,
             nowMs,
             timezone: params.timezone,
@@ -1113,6 +1134,7 @@ export async function generateAndAppendDreamNarrative(params: {
         );
         await appendFallbackNarrativeEntry({
           workspaceDir: params.workspaceDir,
+          agentId: params.agentId,
           data: params.data,
           nowMs,
           timezone: params.timezone,
@@ -1124,6 +1146,7 @@ export async function generateAndAppendDreamNarrative(params: {
 
       await appendNarrativeEntry({
         workspaceDir: params.workspaceDir,
+        agentId: params.agentId,
         narrative,
         nowMs,
         timezone: params.timezone,

@@ -147,16 +147,62 @@ async function collectMemoryFilesFromDir(
   files.push(...scan.entries.map((entry) => entry.path));
 }
 
+function canonicalizePathForContainment(rawPath: string): string {
+  const resolved = path.resolve(rawPath);
+  let current = resolved;
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      const canonical = path.normalize(fsSync.realpathSync.native(current));
+      return path.normalize(path.join(canonical, ...suffix));
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return path.normalize(resolved);
+      }
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
   multimodal?: MemoryMultimodalSettings,
+  options?: { excludedRoots?: string[] },
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryDir = path.join(workspaceDir, "memory");
+  const canonicalPaths = new Map<string, string>();
+  const canonicalize = (entry: string): string => {
+    const resolved = path.resolve(entry);
+    const cached = canonicalPaths.get(resolved);
+    if (cached) {
+      return cached;
+    }
+    const canonical = canonicalizePathForContainment(resolved);
+    canonicalPaths.set(resolved, canonical);
+    return canonical;
+  };
+  const canonicalWorkspaceDir = canonicalize(workspaceDir);
+  const excludedRoots = (options?.excludedRoots ?? []).map(canonicalize);
 
-  const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean =>
-    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
+  const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean => {
+    const canonicalPath = canonicalize(absPath);
+    if (
+      shouldSkipRootMemoryAuxiliaryPath({
+        workspaceDir: canonicalWorkspaceDir,
+        absPath: canonicalPath,
+      })
+    ) {
+      return true;
+    }
+    return excludedRoots.some((root) => {
+      const relative = path.relative(root, canonicalPath);
+      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    });
+  };
 
   const addMarkdownFile = async (absPath: string) => {
     try {

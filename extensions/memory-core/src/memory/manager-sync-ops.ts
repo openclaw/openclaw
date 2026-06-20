@@ -11,6 +11,7 @@ import {
   createSubsystemLogger,
   onSessionTranscriptUpdate,
   resolveAgentDir,
+  resolveAgentWorkspaceDir,
   resolveSessionTranscriptsDirForAgent,
   resolveUserPath,
   type OpenClawConfig,
@@ -155,6 +156,7 @@ const SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES = 128;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS = 10_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
+  ".dreams",
   ".git",
   "node_modules",
   ".pnpm-store",
@@ -932,7 +934,7 @@ export abstract class MemoryManagerSyncOps {
       count,
       unit,
       "Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files.",
-      "Remove large extraPaths, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      "Remove large extraPaths, or set memory.search.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
       (message) => log.warn(message),
     );
   }
@@ -1786,11 +1788,18 @@ export abstract class MemoryManagerSyncOps {
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
-    const files = await listMemoryFiles(
-      this.workspaceDir,
-      this.settings.extraPaths,
-      this.settings.multimodal,
+    const agentIds = new Set([
+      this.agentId,
+      ...(this.cfg.agents?.list ?? [])
+        .map((entry) => entry.id?.trim())
+        .filter((agentId): agentId is string => Boolean(agentId)),
+    ]);
+    const excludedRoots = Array.from(agentIds, (agentId) =>
+      path.join(resolveAgentWorkspaceDir(this.cfg, agentId), "memory", ".dreams"),
     );
+    const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths, this.settings.multimodal, {
+      excludedRoots,
+    });
     const fileEntries = (
       await runWithConcurrency(
         files.map(

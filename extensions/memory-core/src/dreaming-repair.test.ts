@@ -216,6 +216,102 @@ describe("dreaming artifact repair", () => {
     ).resolves.toEqual([]);
   });
 
+  it("preserves unscoped legacy ingestion state during an agent-scoped repair", async () => {
+    const workspaceDir = await createWorkspace();
+    const agentId = "Team Ops";
+    const sessionCorpusDir = path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "agents",
+      "team-ops",
+      "session-corpus",
+    );
+    const legacyIngestionPath = path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "session-ingestion.json",
+    );
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
+    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await fs.writeFile(
+      legacyIngestionPath,
+      JSON.stringify({ version: 3, files: {}, seenMessages: {} }, null, 2),
+      "utf-8",
+    );
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+      agentId,
+      entries: [
+        {
+          key: "team-ops/session.jsonl",
+          value: { lastSize: 120, lastMtimeMs: 1_000, lastContentHash: "hash", cursorLine: 42 },
+        },
+      ],
+    });
+
+    const repair = await repairDreamingArtifacts({ workspaceDir, agentId });
+
+    expect(repair.archivedSessionCorpus).toBe(true);
+    expect(repair.archivedSessionIngestion).toBe(false);
+    await expect(fs.readFile(legacyIngestionPath, "utf-8")).resolves.toContain('"version": 3');
+    await expect(
+      readMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+        workspaceDir,
+        agentId,
+      }),
+    ).resolves.toEqual([]);
+    await expect(auditDreamingArtifacts({ workspaceDir })).resolves.toMatchObject({
+      sessionIngestionExists: true,
+    });
+  });
+
+  it("refuses to archive agent artifacts through a symlinked parent", async () => {
+    const workspaceDir = await createWorkspace();
+    const dreamsDir = path.join(workspaceDir, "memory", ".dreams");
+    const outsideDir = path.join(workspaceDir, "outside");
+    const sessionCorpusDir = path.join(outsideDir, "agents", "writer", "session-corpus");
+    await fs.rm(dreamsDir, { recursive: true, force: true });
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
+    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await fs.symlink(outsideDir, dreamsDir);
+
+    const repair = await repairDreamingArtifacts({ workspaceDir, agentId: "writer" });
+
+    expect(repair.changed).toBe(false);
+    expect(repair.archivedSessionCorpus).toBe(false);
+    expect(repair.warnings).toContainEqual(
+      expect.stringContaining("must not traverse symlinked directory"),
+    );
+    await expect(fs.readFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "utf-8")).resolves.toBe(
+      "corpus\n",
+    );
+  });
+
+  it("refuses to archive dreaming artifacts through a symlinked archive parent", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    const outsideDir = path.join(workspaceDir, "outside");
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
+    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await fs.mkdir(outsideDir);
+    await fs.symlink(outsideDir, path.join(workspaceDir, ".openclaw-repair"));
+
+    const repair = await repairDreamingArtifacts({ workspaceDir });
+
+    expect(repair.changed).toBe(false);
+    expect(repair.archivedSessionCorpus).toBe(false);
+    expect(repair.warnings).toContainEqual(
+      expect.stringContaining("must not traverse symlinked directory"),
+    );
+    await expect(fs.readFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "utf-8")).resolves.toBe(
+      "corpus\n",
+    );
+  });
+
   it("reports ingestion state present from SQLite when legacy JSON is absent", async () => {
     const workspaceDir = await createWorkspace();
     // Write SQLite ingestion entries but NO legacy session-ingestion.json

@@ -97,6 +97,7 @@ const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const QMD_UPDATE_QUEUE_KEY = Symbol.for("openclaw.qmdUpdateQueueState");
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
+  ".dreams",
   ".git",
   ".cache",
   "node_modules",
@@ -495,6 +496,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     // default models directory into our custom cache so the index stays
     // isolated while models are shared.
     await this.symlinkSharedModels();
+    await this.refreshManagedCollectionIndexConfig();
 
     await this.ensureCollections();
     if (mode === "cli") {
@@ -630,6 +632,10 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+
+    // QMD collection add and rebind rewrite collection entries, dropping managed
+    // fields such as private artifact ignore patterns.
+    await this.refreshManagedCollectionIndexConfig();
   }
 
   private async tryRebindSameNameCollection(params: {
@@ -1162,6 +1168,12 @@ export class QmdMemoryManager implements MemorySearchManager {
         `    path: ${this.quoteYamlString(collection.path)}`,
         `    pattern: ${this.quoteYamlString(collection.pattern)}`,
       );
+      if (collection.ignore?.length) {
+        lines.push("    ignore:");
+        for (const pattern of collection.ignore) {
+          lines.push(`      - ${this.quoteYamlString(pattern)}`);
+        }
+      }
     }
     return `${lines.join("\n")}\n`;
   }
@@ -1217,6 +1229,14 @@ export class QmdMemoryManager implements MemorySearchManager {
           log.warn(`qmd collection add failed for ${collection.name}: ${addMessage}`);
         }
       }
+    }
+    try {
+      // QMD collection add rewrites entries and drops managed fields such as ignore.
+      await this.refreshManagedCollectionIndexConfig();
+    } catch (configErr) {
+      log.warn(
+        `qmd managed collection index refresh failed after update repair (${reason}): ${formatErrorMessage(configErr)}`,
+      );
     }
     log.warn(`qmd managed collections rebuilt for update repair (${reason})`);
   }
@@ -1763,7 +1783,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       count,
       "paths",
       "Large QMD collections can make OpenClaw run out of file watchers or open files.",
-      "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      "Remove large collections, or set memory.search.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
       (message) => log.warn(message),
     );
   }

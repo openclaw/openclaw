@@ -117,7 +117,7 @@ afterAll(async () => {
 });
 
 describe("memory cli", () => {
-  const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
+  const inactiveMemorySecretDiagnostic = "memory.search.remote.apiKey inactive"; // pragma: allowlist secret
 
   function firstMockCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
     const call = mock.mock.calls[0];
@@ -426,6 +426,52 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("reports dreaming status for each agent", async () => {
+    getRuntimeConfig.mockReturnValue({
+      memory: {
+        extensions: {
+          "memory-core": {
+            dreaming: { enabled: true, frequency: "0 9 * * *" },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          workspace: "/tmp/main",
+
+        },
+        list: [
+          { id: "main", default: true, workspace: "/tmp/main" },
+          {
+            id: "writer",
+            workspace: "/tmp/writer",
+            memory: {
+              extensions: {
+                "memory-core": {
+                  dreaming: { enabled: false },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const close = vi.fn(async () => {});
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => makeMemoryStatus({ workspaceDir: undefined }),
+        close,
+      },
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Dreaming: 0 9 * * *");
+    expectLogged(log, "Dreaming: off");
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
   it("prints index identity mismatch reasons", async () => {
     const close = vi.fn(async () => {});
     mockManager({
@@ -488,12 +534,10 @@ describe("memory cli", () => {
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
-            },
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
           },
         },
       },
@@ -516,8 +560,8 @@ describe("memory cli", () => {
     expect(secretRefsCall.commandName).toBe("memory status");
     expect(secretRefsCall.targetIds).toStrictEqual(
       new Set([
-        "agents.defaults.memorySearch.remote.apiKey",
-        "agents.list[].memorySearch.remote.apiKey",
+        "memory.search.remote.apiKey",
+        "agents.list[].memory.search.remote.apiKey",
       ]),
     );
   });
@@ -717,6 +761,7 @@ describe("memory cli", () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
         workspaceDir,
+        agentId: "main",
         query: "router vlan",
         results: [
           {
@@ -748,33 +793,41 @@ describe("memory cli", () => {
 
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      await shortTermTesting.writeRawRecallStore(workspaceDir, {
-        version: 1,
-        updatedAt: "2026-04-04T00:00:00.000Z",
-        entries: {
-          good: {
-            key: "good",
-            path: "memory/2026-04-03.md",
-            startLine: 1,
-            endLine: 2,
-            source: "memory",
-            snippet: "QMD router cache note",
-            recallCount: 1,
-            totalScore: 0.8,
-            maxScore: 0.8,
-            firstRecalledAt: "2026-04-04T00:00:00.000Z",
-            lastRecalledAt: "2026-04-04T00:00:00.000Z",
-            queryHashes: ["a"],
-          },
-          bad: {
-            path: "",
+      await shortTermTesting.writeRawRecallStore(
+        workspaceDir,
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            good: {
+              key: "good",
+              path: "memory/2026-04-03.md",
+              startLine: 1,
+              endLine: 2,
+              source: "memory",
+              snippet: "QMD router cache note",
+              recallCount: 1,
+              totalScore: 0.8,
+              maxScore: 0.8,
+              firstRecalledAt: "2026-04-04T00:00:00.000Z",
+              lastRecalledAt: "2026-04-04T00:00:00.000Z",
+              queryHashes: ["a"],
+            },
+            bad: {
+              path: "",
+            },
           },
         },
-      });
-      await shortTermTesting.writeShortTermLock(workspaceDir, {
-        owner: "999999:0",
-        acquiredAt: Date.now() - 120_000,
-      });
+        "main",
+      );
+      await shortTermTesting.writeShortTermLock(
+        workspaceDir,
+        {
+          owner: "999999:0",
+          acquiredAt: Date.now() - 120_000,
+        },
+        "main",
+      );
 
       const close = vi.fn(async () => {});
       mockManager({
@@ -787,7 +840,11 @@ describe("memory cli", () => {
       await runMemoryCli(["status", "--fix"]);
 
       expectLogged(log, "Repair: rewrote store");
-      const audit = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
+      const audit = await shortTermTesting.readRecallStore(
+        workspaceDir,
+        new Date().toISOString(),
+        "main",
+      );
       const repaired = audit as {
         entries: Record<string, { conceptTags?: string[] }>;
       };
@@ -798,15 +855,19 @@ describe("memory cli", () => {
 
   it("shows the fix hint only before --fix has been run", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      await shortTermTesting.writeRawRecallStore(workspaceDir, {
-        version: 1,
-        updatedAt: "2026-04-04T00:00:00.000Z",
-        entries: {
-          bad: {
-            path: "",
+      await shortTermTesting.writeRawRecallStore(
+        workspaceDir,
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            bad: {
+              path: "",
+            },
           },
         },
-      });
+        "main",
+      );
 
       const close = vi.fn(async () => {});
       mockManager({
@@ -832,7 +893,14 @@ describe("memory cli", () => {
 
   it("repairs contaminated dreaming artifacts during status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      const sessionCorpusDir = path.join(
+        workspaceDir,
+        "memory",
+        ".dreams",
+        "agents",
+        "main",
+        "session-corpus",
+      );
       await fs.mkdir(sessionCorpusDir, { recursive: true });
       await fs.writeFile(
         path.join(sessionCorpusDir, "2026-04-11.txt"),
@@ -842,12 +910,16 @@ describe("memory cli", () => {
         ].join("\n"),
         "utf-8",
       );
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        JSON.stringify({ version: 3, files: {}, seenMessages: {} }, null, 2),
-        "utf-8",
+      const dreamsPath = path.join(
+        workspaceDir,
+        "memory",
+        ".dreams",
+        "agents",
+        "main",
+        "DREAMS.md",
       );
-      await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
+      await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+      await fs.writeFile(dreamsPath, "# Dream Diary\n", "utf-8");
 
       const close = vi.fn(async () => {});
       mockManager({
@@ -862,12 +934,7 @@ describe("memory cli", () => {
       expectLogged(log, "Dream repair: archived session corpus");
       expectLogged(log, "Dream archive:");
       await expectPathMissing(sessionCorpusDir);
-      await expectPathMissing(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-      );
-      await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
-        "# Dream Diary",
-      );
+      await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toContain("# Dream Diary");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -1287,6 +1354,7 @@ describe("memory cli", () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
         workspaceDir,
+        agentId: "main",
         query: "router notes",
         results: [
           {
@@ -1331,6 +1399,7 @@ describe("memory cli", () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
         workspaceDir,
+        agentId: "main",
         query: "router notes",
         results: [
           {
@@ -1371,6 +1440,7 @@ describe("memory cli", () => {
       );
       await recordShortTermRecalls({
         workspaceDir,
+        agentId: "main",
         query: "weather plans",
         nowMs,
         results: [
@@ -1558,7 +1628,10 @@ describe("memory cli", () => {
 
       await runMemoryCli(["rem-backfill", "--path", historyPath]);
 
-      const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      const dreams = await fs.readFile(
+        path.join(workspaceDir, "memory", ".dreams", "agents", "main", "DREAMS.md"),
+        "utf-8",
+      );
       expect(dreams).toContain("openclaw:dreaming:backfill-entry");
       expect(dreams).toContain(`source=${historyPath}`);
       expect(dreams).toContain("January 1, 2025");
@@ -1602,7 +1675,10 @@ describe("memory cli", () => {
       expect(
         errors.mock.calls.some((call) => String(call[0]).includes("found no YYYY-MM-DD.md files")),
       ).toBe(false);
-      const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      const dreams = await fs.readFile(
+        path.join(workspaceDir, "memory", ".dreams", "agents", "main", "DREAMS.md"),
+        "utf-8",
+      );
       expect(dreams).toContain(`source=${sluggedPath}`);
       expect(dreams).toContain(`source=${secondSluggedPath}`);
       expect(dreams).toContain("Happy Together");
@@ -1651,7 +1727,7 @@ describe("memory cli", () => {
 
       await runMemoryCli(["rem-backfill", "--path", historyPath, "--stage-short-term"]);
 
-      const entries = await readShortTermRecallEntries({ workspaceDir });
+      const entries = await readShortTermRecallEntries({ workspaceDir, agentId: "main" });
       expect(entries).toHaveLength(1);
       expect(entries[0]?.snippet).toContain("Happy Together");
       expect(entries[0]?.groundedCount).toBe(3);
@@ -1688,7 +1764,7 @@ describe("memory cli", () => {
       });
       await runMemoryCli(["rem-backfill", "--rollback-short-term"]);
 
-      const entries = await readShortTermRecallEntries({ workspaceDir });
+      const entries = await readShortTermRecallEntries({ workspaceDir, agentId: "main" });
       expect(entries).toHaveLength(0);
       expect(close).toHaveBeenCalled();
     });
@@ -1896,7 +1972,15 @@ describe("memory cli", () => {
 
   it("rolls back grounded rem backfill entries from DREAMS.md", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+      const dreamsPath = path.join(
+        workspaceDir,
+        "memory",
+        ".dreams",
+        "agents",
+        "main",
+        "DREAMS.md",
+      );
+      await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
       await fs.writeFile(
         dreamsPath,
         [
@@ -1959,6 +2043,7 @@ describe("memory cli", () => {
       ]);
       await recordShortTermRecalls({
         workspaceDir,
+        agentId: "main",
         query: "network setup",
         results: [
           {
@@ -2007,6 +2092,7 @@ describe("memory cli", () => {
       const nowMs = Date.now();
       await recordShortTermRecalls({
         workspaceDir,
+        agentId: "main",
         query: "router vlan",
         nowMs: nowMs - 2 * dayMs,
         results: [
@@ -2022,6 +2108,7 @@ describe("memory cli", () => {
       });
       await recordShortTermRecalls({
         workspaceDir,
+        agentId: "main",
         query: "glacier backup",
         nowMs: nowMs - dayMs,
         results: [
@@ -2084,13 +2171,11 @@ describe("memory cli", () => {
         },
       ]);
       getRuntimeConfig.mockReturnValue({
-        plugins: {
-          entries: {
+        memory: {
+          extensions: {
             "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
+              dreaming: {
+                enabled: true,
               },
             },
           },
@@ -2105,7 +2190,7 @@ describe("memory cli", () => {
       await runMemoryCli(["search", "glacier", "--json"]);
 
       const entries = await waitFor(async () => {
-        const recalled = await readShortTermRecallEntries({ workspaceDir });
+        const recalled = await readShortTermRecallEntries({ workspaceDir, agentId: "main" });
         expect(recalled).toHaveLength(1);
         return recalled;
       });
@@ -2189,7 +2274,7 @@ describe("memory cli", () => {
       }
       expect(payload.results).toHaveLength(1);
       expect(payload.results[0]?.path).toBe("memory/2026-04-03.md");
-      expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(0);
+      expect(await readShortTermRecallEntries({ workspaceDir, agentId: "main" })).toHaveLength(0);
       expect(close).toHaveBeenCalled();
     });
   });

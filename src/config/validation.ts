@@ -4,7 +4,11 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentMemoryExtensionConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   type ChannelDmAllowFromMode,
   resolveChannelDmAllowFrom,
@@ -1649,6 +1653,128 @@ function validateConfigObjectWithPluginsBase(
     }
   };
 
+  const validateResolvedAgentMemoryExtensions = () => {
+    const globalExtensions = config.memory?.extensions;
+    const configuredAgents = config.agents?.list ?? [];
+    const hasConfiguredExtensions =
+      Object.keys(globalExtensions ?? {}).length > 0 ||
+      configuredAgents.some((agent) => Object.keys(agent.memory?.extensions ?? {}).length > 0);
+    if (!hasConfiguredExtensions) {
+      return;
+    }
+    const { registry } = ensureRegistry();
+    const recordsById = new Map(registry.plugins.map((record) => [record.id, record] as const));
+    const targets =
+      configuredAgents.length > 0
+        ? configuredAgents.flatMap((agent, index) =>
+            agent?.id
+              ? [
+                  {
+                    agentId: agent.id,
+                    extensions: agent.memory?.extensions,
+                    path: `agents.list.${index}.memory.extensions`,
+                  },
+                ]
+              : [],
+          )
+        : [
+            {
+              agentId: resolveDefaultAgentId(config),
+              extensions: undefined,
+              path: "memory.extensions",
+            },
+          ];
+    const reportedIssues = new Set<string>();
+
+    const hasConfiguredPath = (value: unknown, errorPath: string): boolean => {
+      if (!errorPath || errorPath === "<root>") {
+        return false;
+      }
+      let current = value;
+      for (const segment of errorPath.split(".")) {
+        if (!isRecord(current) || !Object.hasOwn(current, segment)) {
+          return false;
+        }
+        current = current[segment];
+      }
+      return true;
+    };
+
+    for (const target of targets) {
+      const extensionIds = new Set([
+        ...Object.keys(globalExtensions ?? {}),
+        ...Object.keys(target.extensions ?? {}),
+      ]);
+      for (const extensionId of extensionIds) {
+        const record = recordsById.get(extensionId);
+        const effectiveConfig = resolveAgentMemoryExtensionConfig(
+          config,
+          target.agentId,
+          extensionId,
+        );
+        if (!effectiveConfig) {
+          continue;
+        }
+        const configuredValue = target.extensions?.[extensionId];
+        const globalValue = globalExtensions?.[extensionId];
+        const issueBase =
+          configuredValue !== undefined
+            ? target.path
+            : globalValue !== undefined
+              ? "memory.extensions"
+              : target.path;
+
+        if (!record) {
+          warnings.push({
+            path: `${issueBase}.${extensionId}`,
+            message: `memory extension plugin not found: ${extensionId} (config ignored until the plugin is installed)`,
+          });
+          continue;
+        }
+        if (!record.configSchema) {
+          if (record.format !== "bundle") {
+            issues.push({
+              path: `${issueBase}.${extensionId}`,
+              message: `memory extension schema missing for ${extensionId}`,
+            });
+          }
+          continue;
+        }
+
+        const result = validateJsonSchemaValue({
+          schema: record.configSchema,
+          cacheKey: `${record.schemaCacheKey ?? record.manifestPath ?? record.id}:memory-extension`,
+          value: effectiveConfig,
+          applyDefaults: true,
+        });
+        if (result.ok) {
+          continue;
+        }
+        for (const error of result.errors) {
+          const errorBelongsToAgent =
+            configuredValue !== undefined && hasConfiguredPath(configuredValue, error.path);
+          const extensionIssueBase =
+            errorBelongsToAgent || globalValue === undefined
+              ? `${target.path}.${extensionId}`
+              : `memory.extensions.${extensionId}`;
+          const issuePath =
+            error.path === "<root>" ? extensionIssueBase : `${extensionIssueBase}.${error.path}`;
+          const issueKey = `${record.id}\0${issuePath}\0${error.message}`;
+          if (reportedIssues.has(issueKey)) {
+            continue;
+          }
+          reportedIssues.add(issueKey);
+          issues.push({
+            path: issuePath,
+            message: `invalid memory extension config: ${error.message}`,
+            allowedValues: error.allowedValues,
+            allowedValuesHiddenCount: error.allowedValuesHiddenCount,
+          });
+        }
+      }
+    }
+  };
+
   const replaceChannelConfig = (channelId: string, nextValue: unknown) => {
     if (!channelsCloned) {
       mutatedConfig = {
@@ -1798,6 +1924,7 @@ function validateConfigObjectWithPluginsBase(
 
   validateWebSearchProvider();
   validateConfiguredModelRefs();
+  validateResolvedAgentMemoryExtensions();
 
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {

@@ -7,6 +7,7 @@ import {
   resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { migrateMemoryCoreLegacyConfig } from "./config-compat.js";
 import {
   testing,
   reconcileShortTermDreamingCronJob,
@@ -89,6 +90,7 @@ function createCronHarness(
       addCalls.push(input);
       jobs.push({
         id: `job-${jobs.length + 1}`,
+        ...(input.agentId ? { agentId: input.agentId } : {}),
         name: input.name,
         description: input.description,
         enabled: input.enabled,
@@ -110,6 +112,7 @@ function createCronHarness(
       const current = jobs[index];
       jobs[index] = {
         ...current,
+        ...(patch.agentId ? { agentId: patch.agentId } : {}),
         ...(patch.name ? { name: patch.name } : {}),
         ...(patch.description ? { description: patch.description } : {}),
         ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}),
@@ -267,7 +270,14 @@ async function triggerGatewayStart(
   onMock: ReturnType<typeof vi.fn>,
   ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
 ): Promise<void> {
-  await getGatewayStartHandler(onMock)({ port: 18789 }, ctx);
+  const migrated = ctx.config ? migrateMemoryCoreLegacyConfig(ctx.config)?.config : undefined;
+  await getGatewayStartHandler(onMock)(
+    { port: 18789 },
+    {
+      ...ctx,
+      ...(migrated ? { config: migrated } : {}),
+    },
+  );
 }
 
 async function triggerGatewayStop(
@@ -278,6 +288,25 @@ async function triggerGatewayStop(
 }
 
 function registerShortTermPromotionDreamingForTest(api: DreamingPluginApiTestDouble): void {
+  const normalizeConfig = (config: OpenClawConfig): OpenClawConfig =>
+    migrateMemoryCoreLegacyConfig(config)?.config ?? config;
+  let rawConfig = api.config;
+  Object.defineProperty(api, "config", {
+    configurable: true,
+    get: () => normalizeConfig(rawConfig),
+    set: (config: OpenClawConfig) => {
+      rawConfig = config;
+    },
+  });
+
+  const runtime = api.runtime as {
+    config?: { current?: () => OpenClawConfig };
+  };
+  if (runtime.config?.current) {
+    const current = runtime.config.current;
+    runtime.config.current = () => normalizeConfig(current());
+  }
+
   registerShortTermPromotionDreaming(api as unknown as DreamingPluginApi);
 }
 
@@ -547,7 +576,8 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(result.status).toBe("added");
     expect(harness.addCalls).toHaveLength(1);
     const addCall = requireAddCall(harness, 0);
-    expect(addCall.name).toBe(constants.MANAGED_DREAMING_CRON_NAME);
+    expect(addCall.agentId).toBe("main");
+    expect(addCall.name).toBe(`${constants.MANAGED_DREAMING_CRON_NAME} (main)`);
     expect(addCall.sessionTarget).toBe("isolated");
     expect(addCall.wakeMode).toBe("now");
     expect(addCall.delivery?.mode).toBe("none");
@@ -555,6 +585,41 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(payload.message).toBe(constants.DREAMING_SYSTEM_EVENT_TEXT);
     expect(payload.lightContext).toBe(true);
     expectCronSchedule(addCall.schedule, "0 1 * * *", "UTC");
+  });
+
+  it("creates distinct agent-owned managed cron jobs", async () => {
+    const harness = createCronHarness();
+    const logger = createLogger();
+    const config = {
+      enabled: true,
+      cron: "0 1 * * *",
+      limit: 8,
+      minScore: 0.5,
+      minRecallCount: 4,
+      minUniqueQueries: 5,
+      recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+      verboseLogging: false,
+    } as const;
+
+    await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config,
+      logger,
+      agentId: "research",
+    });
+    await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config,
+      logger,
+      agentId: "writer",
+    });
+
+    expect(harness.addCalls).toHaveLength(2);
+    expect(harness.addCalls.map((job) => job.agentId)).toEqual(["research", "writer"]);
+    expect(harness.addCalls.map((job) => job.name)).toEqual([
+      `${constants.MANAGED_DREAMING_CRON_NAME} (research)`,
+      `${constants.MANAGED_DREAMING_CRON_NAME} (writer)`,
+    ]);
   });
 
   it("updates drifted managed jobs and prunes duplicates", async () => {
@@ -1279,7 +1344,7 @@ describe("gateway startup reconciliation", () => {
         getCron: () => harness.cron,
       });
 
-      expect(harness.listCalls).toBe(1);
+      expect(harness.listCalls).toBe(2);
 
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
       await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
@@ -1288,7 +1353,7 @@ describe("gateway startup reconciliation", () => {
         { trigger: "user", workspaceDir: "." },
       );
 
-      expect(harness.listCalls).toBe(1);
+      expect(harness.listCalls).toBe(2);
     } finally {
       clearInternalHooks();
     }
@@ -1330,7 +1395,7 @@ describe("gateway startup reconciliation", () => {
         getCron: () => harness.cron,
       });
 
-      expect(harness.listCalls).toBe(1);
+      expect(harness.listCalls).toBe(2);
 
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
       await beforeAgentReply(
@@ -1342,7 +1407,7 @@ describe("gateway startup reconciliation", () => {
         { trigger: "heartbeat", workspaceDir: "." },
       );
 
-      expect(harness.listCalls).toBe(2);
+      expect(harness.listCalls).toBe(4);
     } finally {
       nowSpy.mockRestore();
       clearInternalHooks();
@@ -1691,7 +1756,7 @@ describe("gateway startup reconciliation", () => {
 
       expect(harness.addCalls).toHaveLength(1);
       const addCall = requireAddCall(harness, 0);
-      expect(addCall.name).toBe("Memory Dreaming Promotion");
+      expect(addCall.name).toBe("Memory Dreaming Promotion (main)");
       expectCronSchedule(addCall.schedule, "15 4 * * *", "UTC");
       expect(addCall.sessionTarget).toBe("isolated");
       const payload = requireAgentTurnPayload(addCall.payload);
@@ -2775,12 +2840,19 @@ describe("short-term dreaming trigger", () => {
       trigger: "heartbeat",
       workspaceDir: mainWorkspace,
       cfg: {
-        agents: {
-          defaults: {
-            memorySearch: {
-              enabled: true,
+        memory: {
+          search: {
+            enabled: true,
+          },
+          extensions: {
+            "memory-core": {
+              dreaming: {
+                enabled: true,
+              },
             },
           },
+        },
+        agents: {
           list: [
             {
               id: "alpha",

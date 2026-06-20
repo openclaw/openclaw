@@ -156,6 +156,17 @@ export function buildQaGatewayConfig(params: {
         ...transportPluginEntries,
       },
     },
+    memory: {
+      backend: "builtin",
+      search: {
+        sync: {
+          watch: true,
+          watchDebounceMs: 25,
+          onSessionStart: true,
+          onSearch: true,
+        },
+      },
+    },
     agents: {
       defaults: {
         workspace: params.workspaceDir,
@@ -168,14 +179,6 @@ export function buildQaGatewayConfig(params: {
             }
           : {}),
         ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
-        memorySearch: {
-          sync: {
-            watch: true,
-            watchDebounceMs: 25,
-            onSessionStart: true,
-            onSearch: true,
-          },
-        },
         models: {
           [primaryModel]: {
             params: resolveModelParams(primaryModel),
@@ -208,9 +211,6 @@ export function buildQaGatewayConfig(params: {
           },
         },
       ],
-    },
-    memory: {
-      backend: "builtin",
     },
     tools: {
       // The parity scenarios are code-agent contracts: they must always expose

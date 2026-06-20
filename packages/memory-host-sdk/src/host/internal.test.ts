@@ -120,6 +120,9 @@ describe("memory host SDK package internals", () => {
     const tmpDir = getTmpDir();
     fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     fsSync.writeFileSync(path.join(tmpDir, "memory.md"), "# Legacy memory");
+    const privateDreamDir = path.join(tmpDir, "memory", ".dreams", "agents", "writer");
+    fsSync.mkdirSync(privateDreamDir, { recursive: true });
+    fsSync.writeFileSync(path.join(privateDreamDir, "DREAMS.md"), "# Private dream");
     const extraDir = path.join(tmpDir, "extra");
     fsSync.mkdirSync(extraDir, { recursive: true });
     fsSync.writeFileSync(path.join(extraDir, "note.md"), "# Note");
@@ -138,6 +141,50 @@ describe("memory host SDK package internals", () => {
       path.join("extra", "note.md"),
     ]);
   });
+
+  it("excludes configured agents' private dreams from cross-workspace extra paths", async () => {
+    const tmpDir = getTmpDir();
+    const workspaceDir = path.join(tmpDir, "workspace");
+    const peerWorkspaceDir = path.join(tmpDir, "peer-workspace");
+    const peerDreamDir = path.join(peerWorkspaceDir, "memory", ".dreams", "agents", "peer");
+    fsSync.mkdirSync(workspaceDir, { recursive: true });
+    fsSync.mkdirSync(peerDreamDir, { recursive: true });
+    fsSync.writeFileSync(path.join(peerWorkspaceDir, "note.md"), "# Shared note");
+    fsSync.writeFileSync(path.join(peerDreamDir, "DREAMS.md"), "# Private dream");
+
+    const files = await listMemoryFiles(workspaceDir, [peerWorkspaceDir], undefined, {
+      excludedRoots: [path.join(peerWorkspaceDir, "memory", ".dreams")],
+    });
+
+    expect(files).toEqual([path.join(peerWorkspaceDir, "note.md")]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "excludes private dreams when an extra path resolves through a parent symlink",
+    async () => {
+      const tmpDir = getTmpDir();
+      const workspaceDir = path.join(tmpDir, "workspace");
+      const peerWorkspaceDir = path.join(tmpDir, "peer-workspace");
+      const peerDreamDir = path.join(peerWorkspaceDir, "memory", ".dreams", "agents", "peer");
+      const aliasRoot = path.join(tmpDir, "workspace-alias");
+      fsSync.mkdirSync(workspaceDir, { recursive: true });
+      fsSync.mkdirSync(peerDreamDir, { recursive: true });
+      fsSync.writeFileSync(path.join(peerWorkspaceDir, "note.md"), "# Shared note");
+      fsSync.writeFileSync(path.join(peerDreamDir, "DREAMS.md"), "# Private dream");
+      fsSync.symlinkSync(tmpDir, aliasRoot);
+
+      const files = await listMemoryFiles(
+        workspaceDir,
+        [path.join(aliasRoot, "peer-workspace")],
+        undefined,
+        {
+          excludedRoots: [path.join(peerWorkspaceDir, "memory", ".dreams")],
+        },
+      );
+
+      expect(files).toEqual([path.join(aliasRoot, "peer-workspace", "note.md")]);
+    },
+  );
 
   it("allows top-level dreams path casing variants", () => {
     expect(isMemoryPath("dreams.md")).toBe(true);

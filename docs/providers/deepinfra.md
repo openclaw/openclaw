@@ -65,7 +65,7 @@ static defaults below.
 | Speech-to-text           | `openai/whisper-large-v3-turbo`                                                                       | inbound audio transcription                              |
 | Text-to-speech           | `hexgrad/Kokoro-82M`                                                                                  | `messages.tts.provider: "deepinfra"`                     |
 | Video generation         | first `video-gen`-tagged entry from live catalog (static fallback `Pixverse/Pixverse-T2V`)            | `video_generate`, `agents.defaults.videoGenerationModel` |
-| Memory embeddings        | `BAAI/bge-m3`                                                                                         | `agents.defaults.memorySearch.provider: "deepinfra"`     |
+| Memory embeddings        | `BAAI/bge-m3`                                                                                         | `memory.search.provider: "deepinfra"`    |
 
 DeepInfra also exposes reranking, classification, object-detection, and other
 native model types. OpenClaw does not currently have first-class provider

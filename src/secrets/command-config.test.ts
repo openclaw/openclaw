@@ -53,23 +53,19 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
 
   it("skips unresolved refs that are marked inactive by runtime warnings", () => {
     const sourceConfig = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" },
-            },
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" },
           },
         },
       },
     } as unknown as OpenClawConfig;
     const resolvedConfig = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" },
-            },
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" },
           },
         },
       },
@@ -79,13 +75,13 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
       sourceConfig,
       resolvedConfig,
       commandName: "memory search",
-      targetIds: new Set(["agents.defaults.memorySearch.remote.apiKey"]),
-      inactiveRefPaths: new Set(["agents.defaults.memorySearch.remote.apiKey"]),
+      targetIds: new Set(["memory.search.remote.apiKey"]),
+      inactiveRefPaths: new Set(["memory.search.remote.apiKey"]),
     });
 
     expect(result.assignments).toStrictEqual([]);
     expect(result.diagnostics).toEqual([
-      "agents.defaults.memorySearch.remote.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
+      "memory.search.remote.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
     ]);
   });
 });

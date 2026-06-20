@@ -67,22 +67,20 @@ describe("memory_search recall tracking", () => {
 
     const tool = createSearchTool(
       asOpenClawConfig({
-        agents: { list: [{ id: "main", default: true }] },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
         memory: {
           backend: "qmd",
           citations: "on",
           qmd: { limits: { maxInjectedChars: 100 } },
+          extensions: {
+            "memory-core": {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
         },
       }),
     );
@@ -114,17 +112,17 @@ describe("memory_search recall tracking", () => {
 
     const tool = createSearchTool(
       asOpenClawConfig({
-        agents: { list: [{ id: "main", default: true }] },
-        plugins: {
-          entries: {
+        memory: {
+          extensions: {
             "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
+              dreaming: {
+                enabled: true,
               },
             },
           },
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
         },
       }),
     );
@@ -176,23 +174,22 @@ describe("memory_search recall tracking", () => {
 
     const tool = createSearchTool(
       asOpenClawConfig({
-        agents: {
-          defaults: {
-            userTimezone: "America/Los_Angeles",
-          },
-          list: [{ id: "main", default: true }],
-        },
-        plugins: {
-          entries: {
+        memory: {
+          extensions: {
             "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  timezone: "Europe/London",
-                },
+              dreaming: {
+                enabled: true,
+                timezone: "Europe/London",
               },
             },
           },
+        },
+        agents: {
+          defaults: {
+            userTimezone: "America/Los_Angeles",
+
+          },
+          list: [{ id: "main", default: true }],
         },
       }),
     );
@@ -218,17 +215,17 @@ describe("memory_search recall tracking", () => {
 
     const tool = createSearchTool(
       asOpenClawConfig({
-        agents: { list: [{ id: "main", default: true }] },
-        plugins: {
-          entries: {
+        memory: {
+          extensions: {
             "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: false,
-                },
+              dreaming: {
+                enabled: false,
               },
             },
           },
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
         },
       }),
     );

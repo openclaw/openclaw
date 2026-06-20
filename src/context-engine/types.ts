@@ -381,6 +381,8 @@ export interface ContextEngine {
     availableTools?: Set<string>;
     /** Active memory citation mode when engines want to mirror memory prompt guidance. */
     citationsMode?: MemoryCitationsMode;
+    /** Resolved agent identity for agent-scoped memory and prompt supplements. */
+    agentId?: string;
     /** Current model identifier (e.g. "claude-opus-4", "gpt-4o", "qwen2.5-7b").
      *  Allows context engine plugins to adapt formatting per model. */
     model?: string;

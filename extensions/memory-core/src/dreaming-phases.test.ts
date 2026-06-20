@@ -20,6 +20,7 @@ import {
 } from "./dreaming-phases.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
+  readShortTermRecallEntries,
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
   testing as shortTermTesting,
@@ -117,6 +118,33 @@ function requireFirstIngestionEntry(sessionIngestion: {
   return firstEntry;
 }
 
+function normalizeDreamingTestConfig(config: OpenClawConfig): OpenClawConfig {
+  const canonical = resolveMemoryCorePluginConfig(config);
+  if (canonical) {
+    return config;
+  }
+  const legacy = config.plugins?.entries?.["memory-core"]?.config;
+  if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) {
+    return config;
+  }
+  return {
+    ...config,
+    memory: {
+      ...config.memory,
+      extensions: {
+        ...config.memory?.extensions,
+        "memory-core": legacy,
+      },
+    },
+    agents: {
+      ...config.agents,
+      defaults: {
+        ...config.agents?.defaults,
+      },
+    },
+  };
+}
+
 function createHarness(
   config: OpenClawConfig,
   workspaceDir?: string,
@@ -127,35 +155,39 @@ function createHarness(
     warn: vi.fn(),
     error: vi.fn(),
   };
+  const canonicalConfig = normalizeDreamingTestConfig(config);
 
   const resolvedConfig = workspaceDir
     ? {
-        ...config,
+        ...canonicalConfig,
         agents: {
-          ...config.agents,
+          ...canonicalConfig.agents,
           defaults: {
-            ...config.agents?.defaults,
+            ...canonicalConfig.agents?.defaults,
             workspace: workspaceDir,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
+            userTimezone: canonicalConfig.agents?.defaults?.userTimezone ?? "UTC",
           },
         },
       }
     : {
-        ...config,
+        ...canonicalConfig,
         agents: {
-          ...config.agents,
+          ...canonicalConfig.agents,
           defaults: {
-            ...config.agents?.defaults,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
+            ...canonicalConfig.agents?.defaults,
+            userTimezone: canonicalConfig.agents?.defaults?.userTimezone ?? "UTC",
           },
         },
       };
-  const pluginConfig = resolveMemoryCorePluginConfig(resolvedConfig) ?? {};
+  const resolvedPluginConfig = resolveMemoryCorePluginConfig(resolvedConfig) ?? {};
   const beforeAgentReply = async (
     event: { cleanedBody: string },
     ctx: { trigger?: string; workspaceDir?: string },
   ) => {
-    const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: resolvedConfig });
+    const light = resolveMemoryLightDreamingConfig({
+      pluginConfig: resolvedPluginConfig,
+      cfg: resolvedConfig,
+    });
     const lightResult = await testing.runPhaseIfTriggered({
       cleanedBody: event.cleanedBody,
       trigger: ctx.trigger,
@@ -170,7 +202,10 @@ function createHarness(
     if (lightResult) {
       return lightResult;
     }
-    const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: resolvedConfig });
+    const rem = resolveMemoryRemDreamingConfig({
+      pluginConfig: resolvedPluginConfig,
+      cfg: resolvedConfig,
+    });
     return await testing.runPhaseIfTriggered({
       cleanedBody: event.cleanedBody,
       trigger: ctx.trigger,
@@ -323,11 +358,12 @@ describe("memory-core dreaming phases", () => {
     const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
     const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
+    const canonicalTestConfig = normalizeDreamingTestConfig(testConfig);
 
     await runDreamingSweepPhases({
       workspaceDir,
-      cfg: testConfig,
-      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      cfg: canonicalTestConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(canonicalTestConfig),
       logger,
       subagent,
       nowMs,
@@ -389,12 +425,13 @@ describe("memory-core dreaming phases", () => {
       warn: vi.fn(),
       error: vi.fn(),
     };
+    const canonicalTestConfig = normalizeDreamingTestConfig(testConfig);
 
     await expect(
       runDreamingSweepPhases({
         workspaceDir,
-        cfg: testConfig,
-        pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+        cfg: canonicalTestConfig,
+        pluginConfig: resolveMemoryCorePluginConfig(canonicalTestConfig),
         logger,
         subagent,
         nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
@@ -559,11 +596,12 @@ describe("memory-core dreaming phases", () => {
       warn: vi.fn(),
       error: vi.fn(),
     };
+    const canonicalTestConfig = normalizeDreamingTestConfig(testConfig);
 
     await runDreamingSweepPhases({
       workspaceDir,
-      cfg: testConfig,
-      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      cfg: canonicalTestConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(canonicalTestConfig),
       logger,
       subagent,
       nowMs,
@@ -1048,6 +1086,168 @@ describe("memory-core dreaming phases", () => {
     expectIncludesSubstring(snippets, "Set retention to 365 days.");
   });
 
+  it("limits an agent-scoped sweep to that agent's sessions in a shared workspace", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    const researchSessionsDir = resolveSessionTranscriptsDirForAgent("research");
+    const writerSessionsDir = resolveSessionTranscriptsDirForAgent("writer");
+    await fs.mkdir(researchSessionsDir, { recursive: true });
+    await fs.mkdir(writerSessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(researchSessionsDir, "research-session.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:01:00.000Z",
+            content: [{ type: "text", text: "Research session stays scoped to research." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(writerSessionsDir, "writer-session.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:02:00.000Z",
+            content: [{ type: "text", text: "Writer session must not enter research dreams." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    const config: OpenClawConfig = {
+      memory: {
+        extensions: {
+          "memory-core": {
+            dreaming: {
+              enabled: true,
+              timezone: "UTC",
+              phases: {
+                light: {
+                  enabled: true,
+                  limit: 20,
+                  lookbackDays: 7,
+                },
+                rem: {
+                  enabled: false,
+                  limit: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+        list: [
+          { id: "research", workspace: workspaceDir },
+          { id: "writer", workspace: workspaceDir },
+        ],
+      },
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    try {
+      await runDreamingSweepPhases({
+        workspaceDir,
+        cfg: config,
+        agentId: "research",
+        pluginConfig: resolveMemoryCorePluginConfig(config, "research"),
+        logger,
+        nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
+      });
+      await runDreamingSweepPhases({
+        workspaceDir,
+        cfg: config,
+        agentId: "writer",
+        pluginConfig: resolveMemoryCorePluginConfig(config, "writer"),
+        logger,
+        nowMs: Date.parse("2026-04-05T19:01:00.000Z"),
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const researchCorpus = await fs.readFile(
+      path.join(
+        workspaceDir,
+        "memory",
+        ".dreams",
+        "agents",
+        "research",
+        "session-corpus",
+        "2026-04-05.txt",
+      ),
+      "utf-8",
+    );
+    const writerCorpus = await fs.readFile(
+      path.join(
+        workspaceDir,
+        "memory",
+        ".dreams",
+        "agents",
+        "writer",
+        "session-corpus",
+        "2026-04-05.txt",
+      ),
+      "utf-8",
+    );
+    expect(researchCorpus).toContain("Research session stays scoped to research.");
+    expect(researchCorpus).not.toContain("Writer session must not enter research dreams.");
+    expect(writerCorpus).toContain("Writer session must not enter research dreams.");
+    expect(writerCorpus).not.toContain("Research session stays scoped to research.");
+    const researchIngestion = await testing.readSessionIngestionState(workspaceDir, "research");
+    expect(Object.keys(researchIngestion.files)).toEqual([
+      "research:sessions/research/research-session.jsonl",
+    ]);
+    const writerIngestion = await testing.readSessionIngestionState(workspaceDir, "writer");
+    expect(Object.keys(writerIngestion.files)).toEqual([
+      "writer:sessions/writer/writer-session.jsonl",
+    ]);
+    const [researchRecalls, writerRecalls] = await Promise.all([
+      readShortTermRecallEntries({
+        workspaceDir,
+        agentId: "research",
+        nowMs: Date.parse("2026-04-05T19:01:00.000Z"),
+      }),
+      readShortTermRecallEntries({
+        workspaceDir,
+        agentId: "writer",
+        nowMs: Date.parse("2026-04-05T19:01:00.000Z"),
+      }),
+    ]);
+    expectIncludesSubstring(
+      researchRecalls.map((entry) => entry.snippet),
+      "Research session stays scoped to research.",
+    );
+    expectNotIncludesSubstring(
+      researchRecalls.map((entry) => entry.snippet),
+      "Writer session must not enter research dreams.",
+    );
+    expectIncludesSubstring(
+      writerRecalls.map((entry) => entry.snippet),
+      "Writer session must not enter research dreams.",
+    );
+    expectNotIncludesSubstring(
+      writerRecalls.map((entry) => entry.snippet),
+      "Research session stays scoped to research.",
+    );
+  });
+
   it("keeps primary session transcripts out of configured subagent workspaces", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagentWorkspaceDir = await createDreamingWorkspace();
@@ -1093,7 +1293,10 @@ describe("memory-core dreaming phases", () => {
           defaults: {
             workspace: workspaceDir,
           },
-          list: [{ id: "agi-ceo", workspace: subagentWorkspaceDir }],
+          list: [
+            { id: "main", workspace: workspaceDir },
+            { id: "agi-ceo", workspace: subagentWorkspaceDir },
+          ],
         },
         plugins: {
           entries: {
@@ -2269,12 +2472,14 @@ describe("memory-core dreaming phases", () => {
 
     const { beforeAgentReply } = createHarness(
       {
+        memory: {
+          search: {
+            enabled: false,
+          },
+        },
         agents: {
           defaults: {
             workspace: workspaceDir,
-            memorySearch: {
-              enabled: false,
-            },
           },
         },
         plugins: {

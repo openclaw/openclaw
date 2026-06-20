@@ -89,7 +89,7 @@ This migration has one canonical runtime shape:
   indexing helpers live on `memory-core-host-engine-session-transcripts`; any
   QMD re-export is compatibility only and must not be used by runtime code.
 - Built-in memory indexes live in the owning agent database. Runtime config and
-  resolved runtime contracts must not expose `memorySearch.store.path`; doctor
+  resolved runtime contracts must not expose `memory.search.store.path`; doctor
   deletes that legacy config key and current code passes the agent
   `databasePath` internally.
 
@@ -1557,7 +1557,7 @@ Move these into the global database:
   `plugin-state/state.sqlite` sidecar importer is deleted.
 - Builtin memory search no longer defaults to `memory/<agentId>.sqlite`; its
   index tables live in the owning agent database, and the explicit
-  `memorySearch.store.path` sidecar opt-in has been retired to doctor config
+  `memory.search.store.path` sidecar opt-in has been retired to doctor config
   migration.
 - Builtin memory reindex resets only memory-owned tables in the agent database.
   It must not replace the whole SQLite file, because the same database owns
@@ -1890,7 +1890,7 @@ verified extracted payload.
    - Move Task Flow tables into the global database. Done for runtime writes;
      the unshipped legacy sidecar importer is deleted.
    - Move builtin memory-search tables into each agent database. Done; explicit
-     custom `memorySearch.store.path` is now removed by doctor config migration.
+     custom `memory.search.store.path` is now removed by doctor config migration.
      Full reindex runs in place against memory tables only; the old whole-file
      swap path and sidecar index swap helper are deleted.
    - Delete duplicate database openers, WAL setup, permission helpers, and

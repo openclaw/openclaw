@@ -15,7 +15,6 @@ import type {
   MemorySearchRuntimeDebug,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
-  resolveMemoryCorePluginConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -239,6 +238,7 @@ function resolveRecallTrackingResults(
 
 function queueShortTermRecallTracking(params: {
   workspaceDir?: string;
+  agentId?: string;
   query: string;
   rawResults: MemorySearchResult[];
   surfacedResults: MemorySearchResult[];
@@ -247,6 +247,7 @@ function queueShortTermRecallTracking(params: {
   const trackingResults = resolveRecallTrackingResults(params.rawResults, params.surfacedResults);
   void recordShortTermRecalls({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     query: params.query,
     results: trackingResults,
     timezone: params.timezone,
@@ -293,6 +294,7 @@ async function getSupplementMemoryReadResult(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  agentId?: string;
   agentSessionKey?: string;
   corpus?: "memory" | "wiki" | "all";
 }) {
@@ -300,6 +302,7 @@ async function getSupplementMemoryReadResult(params: {
     lookup: params.relPath,
     fromLine: params.from,
     lineCount: params.lines,
+    agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     corpus: params.corpus,
   });
@@ -319,6 +322,7 @@ async function resolveMemoryReadFailureResult(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  agentId?: string;
   agentSessionKey?: string;
 }) {
   if (params.requestedCorpus === "all") {
@@ -326,6 +330,7 @@ async function resolveMemoryReadFailureResult(params: {
       relPath: params.relPath,
       from: params.from,
       lines: params.lines,
+      agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
       corpus: params.requestedCorpus,
     });
@@ -343,6 +348,7 @@ async function executeMemoryReadResult<T>(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  agentId?: string;
   agentSessionKey?: string;
 }) {
   try {
@@ -354,6 +360,7 @@ async function executeMemoryReadResult<T>(params: {
       relPath: params.relPath,
       from: params.from,
       lines: params.lines,
+      agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
     });
   }
@@ -449,19 +456,18 @@ export function createMemorySearchTool(options: {
                 return jsonResult(buildMemorySearchUnavailableResult(memory.error));
               }
 
-              const citationsMode = resolveMemoryCitationsMode(cfg);
+              const citationsMode = resolveMemoryCitationsMode(cfg, agentId);
               const includeCitations = shouldIncludeCitations({
                 mode: citationsMode,
                 sessionKey: options.agentSessionKey,
               });
-              const pluginConfig = resolveMemoryCorePluginConfig(cfg);
               const dreamingEnabled = resolveMemoryDreamingConfig({
-                pluginConfig,
                 cfg,
+                agentId,
               }).enabled;
               const dreaming = resolveMemoryDeepDreamingConfig({
-                pluginConfig,
                 cfg,
+                agentId,
               });
               const searchStartedAt = Date.now();
               let rawResults: MemorySearchResult[] = [];
@@ -570,6 +576,7 @@ export function createMemorySearchTool(options: {
                   if (dreamingEnabled) {
                     queueShortTermRecallTracking({
                       workspaceDir: status.workspaceDir,
+                      agentId,
                       query,
                       rawResults,
                       surfacedResults: memoryResults,
@@ -606,6 +613,7 @@ export function createMemorySearchTool(options: {
                       await searchMemoryCorpusSupplements({
                         query,
                         maxResults,
+                        agentId,
                         agentSessionKey: options.agentSessionKey,
                         corpus: requestedCorpus,
                       }),
@@ -680,6 +688,7 @@ export function createMemoryGetTool(options: {
             relPath,
             from: from ?? undefined,
             lines: lines ?? undefined,
+            agentId,
             agentSessionKey: options.agentSessionKey,
             corpus: requestedCorpus,
           });
@@ -707,6 +716,7 @@ export function createMemoryGetTool(options: {
             relPath,
             from: from ?? undefined,
             lines: lines ?? undefined,
+            agentId,
             agentSessionKey: options.agentSessionKey,
           });
         }
@@ -729,6 +739,7 @@ export function createMemoryGetTool(options: {
           relPath,
           from: from ?? undefined,
           lines: lines ?? undefined,
+          agentId,
           agentSessionKey: options.agentSessionKey,
         });
       },

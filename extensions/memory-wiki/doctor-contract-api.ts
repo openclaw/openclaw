@@ -1,9 +1,10 @@
 // Memory Wiki doctor contract migrates shipped source-sync state.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { listAgentIds } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
-import { resolveMemoryWikiConfig, type MemoryWikiPluginConfig } from "./src/config.js";
+import { resolveMemoryWikiConfigForAgent, type ResolvedMemoryWikiConfig } from "./src/config.js";
 export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
 import {
   countMemoryWikiImportRunStateRows,
@@ -32,24 +33,21 @@ function resolveHomeDir(env: NodeJS.ProcessEnv): string | undefined {
   return env.HOME?.trim() || env.USERPROFILE?.trim() || undefined;
 }
 
-function readConfiguredPluginConfig(config: OpenClawConfig): MemoryWikiPluginConfig | undefined {
-  const entries = config.plugins?.entries;
-  const pluginEntry = isRecord(entries) ? entries["memory-wiki"] : undefined;
-  if (!isRecord(pluginEntry) || !isRecord(pluginEntry.config)) {
-    return undefined;
-  }
-  return pluginEntry.config as MemoryWikiPluginConfig;
-}
-
 function resolveConfiguredVaultRoots(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): string[] {
   const homeDir = resolveHomeDir(params.env);
-  const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
-    homedir: homeDir,
-  });
-  return [resolved.vault.path];
+  const roots = new Set<string>();
+  for (const agentId of listAgentIds(params.config)) {
+    const resolved: ResolvedMemoryWikiConfig = resolveMemoryWikiConfigForAgent(
+      params.config,
+      agentId,
+      { homedir: homeDir },
+    );
+    roots.add(resolved.vault.path);
+  }
+  return [...roots];
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

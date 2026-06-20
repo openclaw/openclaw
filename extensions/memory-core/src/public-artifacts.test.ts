@@ -38,13 +38,17 @@ describe("listMemoryCorePublicArtifacts", () => {
       "# Dream Report\n",
       "utf8",
     );
-    await appendMemoryHostEvent(workspaceDir, {
-      type: "memory.recall.recorded",
-      timestamp: "2026-04-06T12:00:00.000Z",
-      query: "alpha",
-      resultCount: 0,
-      results: [],
-    });
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-06T12:00:00.000Z",
+        query: "alpha",
+        resultCount: 0,
+        results: [],
+      },
+      "main",
+    );
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -80,8 +84,8 @@ describe("listMemoryCorePublicArtifacts", () => {
       {
         kind: "event-log",
         workspaceDir,
-        relativePath: "memory/.dreams/events.jsonl",
-        absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
+        relativePath: "memory/.dreams/agents/main/events.jsonl",
+        absolutePath: resolveMemoryHostEventLogPath(workspaceDir, "main"),
         agentIds: ["main"],
         contentType: "json",
       },

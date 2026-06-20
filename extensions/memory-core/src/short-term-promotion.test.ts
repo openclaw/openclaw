@@ -1425,6 +1425,101 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("serializes shared MEMORY.md writes across symlinked agent workspaces", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Research promotion.",
+        "Writer promotion.",
+      ]);
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const aliasWorkspaceDir = path.join(fixtureRoot, `case-${caseId++}-alias`);
+      const aliasMemoryPath = path.join(aliasWorkspaceDir, "MEMORY.md");
+      await fs.symlink(workspaceDir, aliasWorkspaceDir);
+      const originalReadFile = fs.readFile.bind(fs);
+      let memoryReadCount = 0;
+      let releaseFirstMemoryRead!: () => void;
+      const firstMemoryRead = new Promise<void>((resolve) => {
+        releaseFirstMemoryRead = resolve;
+      });
+      vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+        if (filePath === memoryPath || filePath === aliasMemoryPath) {
+          memoryReadCount += 1;
+          if (memoryReadCount === 1) {
+            await firstMemoryRead;
+          }
+        }
+        return await originalReadFile(filePath, options);
+      });
+
+      const candidate = (params: { key: string; line: number; snippet: string }) => ({
+        key: params.key,
+        path: "memory/2026-04-03.md",
+        startLine: params.line,
+        endLine: params.line,
+        source: "memory" as const,
+        snippet: params.snippet,
+        recallCount: 1,
+        avgScore: 1,
+        maxScore: 1,
+        uniqueQueries: 1,
+        firstRecalledAt: "2026-04-03T10:00:00.000Z",
+        lastRecalledAt: "2026-04-03T10:00:00.000Z",
+        ageDays: 0,
+        score: 1,
+        recallDays: ["2026-04-03"],
+        conceptTags: [],
+        components: {
+          frequency: 1,
+          relevance: 1,
+          diversity: 1,
+          recency: 1,
+          consolidation: 1,
+          conceptual: 1,
+        },
+      });
+
+      const research = applyShortTermPromotions({
+        workspaceDir,
+        agentId: "research",
+        candidates: [
+          candidate({
+            key: "memory:memory/2026-04-03.md:1:1",
+            line: 1,
+            snippet: "Research promotion.",
+          }),
+        ],
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      await vi.waitFor(() => expect(memoryReadCount).toBe(1));
+      const writer = applyShortTermPromotions({
+        workspaceDir: aliasWorkspaceDir,
+        agentId: "writer",
+        candidates: [
+          candidate({
+            key: "memory:memory/2026-04-03.md:2:2",
+            line: 2,
+            snippet: "Writer promotion.",
+          }),
+        ],
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
+      expect(memoryReadCount).toBe(1);
+      releaseFirstMemoryRead();
+      await Promise.all([research, writer]);
+
+      await expect(fs.readFile(memoryPath, "utf8")).resolves.toContain("Research promotion.");
+      await expect(fs.readFile(memoryPath, "utf8")).resolves.toContain("Writer promotion.");
+    });
+  });
+
   it("does not rank contaminated dreaming snippets from an existing short-term store", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await testing.writeRawRecallStore(workspaceDir, {

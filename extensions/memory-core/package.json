@@ -24,6 +24,7 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "setupEntry": "./setup-api.ts"
   }
 }

@@ -91,7 +91,9 @@ describe("memory search citations", () => {
     setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
       memory: { citations: "on" },
-      agents: { list: [{ id: "main", default: true }] },
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
     });
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_on", { query: "notes" });
@@ -105,7 +107,9 @@ describe("memory search citations", () => {
     setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
       memory: { citations: "off" },
-      agents: { list: [{ id: "main", default: true }] },
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
     });
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_off", { query: "notes" });
@@ -119,7 +123,9 @@ describe("memory search citations", () => {
     setMemoryBackend("qmd");
     const cfg = asOpenClawConfig({
       memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 20 } } },
-      agents: { list: [{ id: "main", default: true }] },
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
     });
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_qmd", { query: "notes" });
@@ -169,7 +175,9 @@ describe("memory tools", () => {
     const tool = createMemorySearchToolOrThrow({
       config: asOpenClawConfig({
         memory: { backend: "qmd", qmd: { command: "qmd" } },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
       }),
     });
 
@@ -189,7 +197,9 @@ describe("memory tools", () => {
     const tool = createMemorySearchToolOrThrow({
       config: asOpenClawConfig({
         memory: { backend: "qmd", qmd: { command: "qmd" } },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
       }),
       oneShotCliRun: true,
     });
@@ -310,17 +320,17 @@ describe("memory tools", () => {
 
       const tool = createMemorySearchToolOrThrow({
         config: asOpenClawConfig({
-          agents: { list: [{ id: "main", default: true }] },
-          plugins: {
-            entries: {
+          memory: {
+            extensions: {
               "memory-core": {
-                config: {
-                  dreaming: {
-                    enabled: true,
-                  },
+                dreaming: {
+                  enabled: true,
                 },
               },
             },
+          },
+          agents: {
+            list: [{ id: "main", default: true }],
           },
         }),
       });
@@ -330,6 +340,7 @@ describe("memory tools", () => {
         const store = await shortTermPromotionTesting.readRecallStore(
           workspaceDir,
           new Date().toISOString(),
+          "main",
         );
         const values = Object.values(store.entries);
         expect(values).toHaveLength(1);
@@ -339,7 +350,7 @@ describe("memory tools", () => {
       expect(entry?.path).toBe("memory/2026-04-03.md");
       expect(entry?.recallCount).toBe(1);
       const events = await waitFor(async () => {
-        const memoryEvents = await readMemoryHostEvents({ workspaceDir });
+        const memoryEvents = await readMemoryHostEvents({ workspaceDir, agentId: "main" });
         expect(memoryEvents).toHaveLength(1);
         return memoryEvents;
       });

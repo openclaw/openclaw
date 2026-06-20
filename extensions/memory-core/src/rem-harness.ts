@@ -27,6 +27,7 @@ type MemoryRemHarnessDeepConfig = ReturnType<typeof resolveMemoryDeepDreamingCon
 export type PreviewRemHarnessOptions = {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   pluginConfig?: Record<string, unknown>;
   grounded?: boolean;
   groundedInputPaths?: string[];
@@ -123,13 +124,16 @@ export async function previewRemHarness(
   const remConfig = resolveMemoryRemDreamingConfig({
     pluginConfig: params.pluginConfig,
     cfg: params.cfg,
+    agentId: params.agentId,
   });
   const deepConfig = resolveMemoryDeepDreamingConfig({
     pluginConfig: params.pluginConfig,
     cfg: params.cfg,
+    agentId: params.agentId,
   });
   const allRecallEntries = await readShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     nowMs,
   });
   const recallEntries = await filterLiveShortTermRecallEntries({
@@ -171,6 +175,7 @@ export async function previewRemHarness(
   const candidateLimit = normalizeOptionalPositiveLimit(params.candidateLimit);
   const rankedCandidates = await rankShortTermPromotionCandidates({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     minScore: 0,
     minRecallCount: 0,
     minUniqueQueries: 0,

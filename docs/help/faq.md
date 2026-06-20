@@ -549,14 +549,14 @@ lives on the [First-run FAQ](/help/faq-first-run).
     still need a real API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`).
 
     If you don't set a provider explicitly, OpenClaw uses OpenAI embeddings. Legacy
-    configs that still say `memorySearch.provider = "auto"` resolve to OpenAI too.
+    configs that still say `memory.search.provider = "auto"` resolve to OpenAI too.
     If no OpenAI API key is available, semantic memory search stays unavailable
     until you configure a key or choose another provider explicitly.
 
-    If you'd rather stay local, set `memorySearch.provider = "local"` (and optionally
-    `memorySearch.fallback = "none"`). If you want Gemini embeddings, set
-    `memorySearch.provider = "gemini"` and provide `GEMINI_API_KEY` (or
-    `memorySearch.remote.apiKey`). We support **OpenAI, OpenAI-compatible, Gemini,
+    If you'd rather stay local, set `memory.search.provider = "local"` (and optionally
+    `memory.search.fallback = "none"`). If you want Gemini embeddings, set
+    `memory.search.provider = "gemini"` and provide `GEMINI_API_KEY` (or
+    `memory.search.remote.apiKey`). We support **OpenAI, OpenAI-compatible, Gemini,
     Voyage, Mistral, Bedrock, Ollama, LM Studio, GitHub Copilot, DeepInfra, or local**
     embedding models - see [Memory](/concepts/memory) for the setup details.
 

@@ -369,15 +369,17 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
   it("routes explicit OpenAI-compatible embeddings through generic providers", async () => {
     testState.agentConfig = {
-      memorySearch: {
-        provider: "openai-compatible",
-        model: "nomic-embed-text",
-        inputType: "default",
-        queryInputType: "query",
-        documentInputType: "document",
-        outputDimensionality: 768,
-        remote: {
-          baseUrl: genericEmbeddingBaseUrl,
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          model: "nomic-embed-text",
+          inputType: "default",
+          queryInputType: "query",
+          documentInputType: "document",
+          outputDimensionality: 768,
+          remote: {
+            baseUrl: genericEmbeddingBaseUrl,
+          },
         },
       },
     };
@@ -413,13 +415,15 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       "utf-8",
     );
     testState.agentConfig = {
-      memorySearch: {
-        provider: "tenant-embeddings",
-        model: "tenant-embeddings/nomic-embed-text",
-        inputType: "default",
-        queryInputType: "query",
-        documentInputType: "document",
-        outputDimensionality: 768,
+      memory: {
+        search: {
+          provider: "tenant-embeddings",
+          model: "tenant-embeddings/nomic-embed-text",
+          inputType: "default",
+          queryInputType: "query",
+          documentInputType: "document",
+          outputDimensionality: 768,
+        },
       },
     };
     resetConfigRuntimeState();

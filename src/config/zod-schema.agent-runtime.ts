@@ -13,6 +13,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
+import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
   GroupChatSchema,
   HumanDelaySchema,
@@ -986,6 +987,77 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
+
+const MemoryQmdPathSchema = z
+  .object({
+    path: z.string(),
+    name: z.string().optional(),
+    pattern: z.string().optional(),
+  })
+  .strict();
+
+const MemoryQmdSchema = z
+  .object({
+    command: z.string().optional(),
+    mcporter: z
+      .object({
+        enabled: z.boolean().optional(),
+        serverName: z.string().optional(),
+        startDaemon: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    rerank: z.boolean().optional(),
+    searchTool: z.string().trim().min(1).optional(),
+    includeDefaultMemory: z.boolean().optional(),
+    paths: z.array(MemoryQmdPathSchema).optional(),
+    sessions: z
+      .object({
+        enabled: z.boolean().optional(),
+        exportDir: z.string().optional(),
+        retentionDays: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
+    update: z
+      .object({
+        interval: z.string().optional(),
+        debounceMs: z.number().int().nonnegative().optional(),
+        onBoot: z.boolean().optional(),
+        startup: z.enum(["off", "idle", "immediate"]).optional(),
+        startupDelayMs: z.number().int().nonnegative().optional(),
+        waitForBootSync: z.boolean().optional(),
+        embedInterval: z.string().optional(),
+        commandTimeoutMs: z.number().int().nonnegative().optional(),
+        updateTimeoutMs: z.number().int().nonnegative().optional(),
+        embedTimeoutMs: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
+    limits: z
+      .object({
+        maxResults: z.number().int().positive().optional(),
+        maxSnippetChars: z.number().int().positive().optional(),
+        maxInjectedChars: z.number().int().positive().optional(),
+        timeoutMs: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
+    scope: createAllowDenyChannelRulesSchema(),
+  })
+  .strict();
+
+export const AgentMemorySchema = z
+  .object({
+    search: MemorySearchSchema,
+    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    qmd: MemoryQmdSchema.optional(),
+    extensions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+  })
+  .strict()
+  .optional();
 export { AgentModelSchema, AgentToolModelSchema };
 
 const AgentRuntimeAcpSchema = z
@@ -1059,7 +1131,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     skills: z.array(z.string()).optional(),
-    memorySearch: MemorySearchSchema,
+    memory: AgentMemorySchema,
     humanDelay: HumanDelaySchema.optional(),
     tts: TtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,

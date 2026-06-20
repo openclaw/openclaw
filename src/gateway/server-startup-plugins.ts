@@ -188,9 +188,10 @@ export async function prepareGatewayPluginBootstrap(params: {
 }
 
 /**
- * Warn when `agents.*.memorySearch.provider` selects a memory embedding provider
- * that no loaded plugin registered. Without the owning plugin, `active-memory`
- * cannot embed and silently falls back to keyword/FTS-only recall.
+ * Warn when `memory.search.provider` or an agent-specific override selects a
+ * memory embedding provider that no loaded plugin registered. Without the
+ * owning plugin, `active-memory` cannot embed and silently falls back to
+ * keyword/FTS-only recall.
  */
 export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   config: OpenClawConfig;
@@ -209,7 +210,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
     registeredProviderIds,
   });
   for (const provider of unregistered) {
-    const path = `memorySearch.${provider.source}`;
+    const path = `${provider.scope === "global" ? "memory.search" : "agents.*.memory.search"}.${provider.source}`;
     params.log.warn(
       `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${provider.configuredId}" is installed and enabled.`,
     );

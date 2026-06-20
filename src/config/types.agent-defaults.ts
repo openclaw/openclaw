@@ -347,7 +347,10 @@ export type AgentDefaultsConfig = {
      */
     executionContract?: EmbeddedAgentExecutionContract;
   };
-  /** Vector memory search configuration (per-agent overrides supported). */
+  /**
+   * @deprecated Legacy raw config accepted only by doctor/migration repair.
+   * Normal schema parsing rejects this key; use `memory.search`.
+   */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";

@@ -9,6 +9,7 @@ import type {
 } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
+import type { AgentMemoryConfig } from "./types.memory.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
@@ -115,6 +116,12 @@ export type AgentConfig = {
   experimental?: AgentDefaultsConfig["experimental"];
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
+  /** Per-agent memory backend, search, and extension settings. */
+  memory?: AgentMemoryConfig;
+  /**
+   * @deprecated Legacy raw config accepted only by doctor/migration repair.
+   * Normal schema parsing rejects this key; use `memory.search`.
+   */
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
@@ -155,6 +162,14 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /**
+   * @deprecated Legacy raw config accepted only by doctor/migration repair.
+   * Normal schema parsing rejects this key; use `memory.extensions.memory-core.dreaming`.
+   */
+  dreaming?: {
+    /** Set to false to disable dreaming for this agent. */
+    enabled?: boolean;
+  };
 };
 
 export type AgentsConfig = {

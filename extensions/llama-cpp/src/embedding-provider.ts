@@ -147,7 +147,7 @@ export function formatLlamaCppSetupError(err: unknown): string {
     "1) Install the official provider plugin: openclaw plugins install @openclaw/llama-cpp-provider",
     "2) Use Node 24 for native installs/updates.",
     "3) If you use pnpm from source: pnpm approve-builds, then pnpm rebuild node-llama-cpp.",
-    'Or set agents.defaults.memorySearch.provider to a remote embedding provider such as "openai", "ollama", "lmstudio", or "voyage".',
+    'Or set memory.search.provider to a remote embedding provider such as "openai", "ollama", "lmstudio", or "voyage".',
   ]
     .filter(Boolean)
     .join("\n");

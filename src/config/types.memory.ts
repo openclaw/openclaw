@@ -3,6 +3,7 @@
  * Builtin memory stays core-owned; qmd settings describe the external QMD integration.
  */
 import type { SessionSendPolicyConfig } from "./types.base.js";
+import type { MemorySearchConfig } from "./types.tools.js";
 
 /** Memory backend family selected for retrieval and session memory features. */
 export type MemoryBackend = "builtin" | "qmd";
@@ -13,12 +14,25 @@ export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 /** QMD startup/update scheduling mode. */
 export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
 
-/** Top-level memory config block. */
-export type MemoryConfig = {
+/**
+ * Config owned by one memory extension.
+ *
+ * Core deliberately treats this as opaque at runtime. Config validation applies
+ * the owning plugin's manifest schema after global and agent overrides merge.
+ */
+export type MemoryExtensionConfig = Record<string, unknown>;
+
+/** All memory settings that can be configured globally or overridden per agent. */
+export type AgentMemoryConfig = {
+  search?: MemorySearchConfig;
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  extensions?: Record<string, MemoryExtensionConfig>;
 };
+
+/** Global memory settings applied to every agent before agent-specific overrides. */
+export type MemoryConfig = AgentMemoryConfig;
 
 /** QMD-specific memory backend config. */
 export type MemoryQmdConfig = {

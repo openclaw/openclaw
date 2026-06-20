@@ -43,8 +43,28 @@ type LegacyAgentRuntimeIntent = {
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
   message:
-    'top-level memorySearch was moved; use agents.defaults.memorySearch instead. Run "openclaw doctor --fix".',
+    'top-level memorySearch was moved; use memory.search instead. Run "openclaw doctor --fix".',
 };
+
+const AGENT_MEMORY_SCOPE_RULES: LegacyConfigRule[] = [
+  MEMORY_SEARCH_RULE,
+  {
+    path: ["agents", "defaults", "memory"],
+    message:
+      'agents.defaults.memory is legacy; use the root memory baseline instead. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["agents", "defaults", "memorySearch"],
+    message:
+      'agents.defaults.memorySearch is legacy; use memory.search instead. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch and agents.list[].dreaming are legacy; use agents.list[].memory instead. Run "openclaw doctor --fix".',
+    match: hasLegacyAgentMemoryScope,
+  },
+];
 
 const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
   {
@@ -54,15 +74,15 @@ const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
     match: isLegacyMemorySearchAutoProvider,
   },
   {
-    path: ["agents", "defaults", "memorySearch", "provider"],
+    path: ["memory", "search", "provider"],
     message:
-      'agents.defaults.memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+      'memory.search.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
     match: isLegacyMemorySearchAutoProvider,
   },
   {
     path: ["agents", "list"],
     message:
-      'agents.list[].memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+      'agents.list[].memory.search.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
     match: hasAgentListLegacyMemorySearchAutoProvider,
   },
 ];
@@ -74,14 +94,14 @@ const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
       'memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
   },
   {
-    path: ["agents", "defaults", "memorySearch", "store", "path"],
+    path: ["memory", "search", "store", "path"],
     message:
-      'agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+      'memory.search.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
   },
   {
     path: ["agents", "list"],
     message:
-      'agents.list[].memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+      'agents.list[].memory.search.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
     match: hasAgentListMemorySearchStorePath,
   },
 ];
@@ -315,6 +335,46 @@ function mergeLegacyIntoDefaults(params: {
   params.raw[params.rootKey] = root;
 }
 
+function mergeLegacyIntoMemory(params: {
+  memory: Record<string, unknown>;
+  section: "search" | "extensions";
+  key?: string;
+  legacyValue: Record<string, unknown>;
+}): boolean {
+  if (params.section === "search") {
+    const existing = getRecord(params.memory.search);
+    if (!existing) {
+      params.memory.search = params.legacyValue;
+      return false;
+    }
+    mergeMissing(existing, params.legacyValue);
+    params.memory.search = existing;
+    return true;
+  }
+
+  const extensions = ensureRecord(params.memory, "extensions");
+  const existing = getRecord(extensions[params.key ?? ""]);
+  if (!existing) {
+    extensions[params.key ?? ""] = params.legacyValue;
+    return false;
+  }
+  mergeMissing(existing, params.legacyValue);
+  extensions[params.key ?? ""] = existing;
+  return true;
+}
+
+function mergeLegacyIntoAgentMemory(params: {
+  agent: Record<string, unknown>;
+  section: "search" | "extensions";
+  key?: string;
+  legacyValue: Record<string, unknown>;
+}): boolean {
+  return mergeLegacyIntoMemory({
+    ...params,
+    memory: ensureRecord(params.agent, "memory"),
+  });
+}
+
 function hasLegacySandboxPerSession(value: unknown): boolean {
   const sandbox = getRecord(value);
   return Boolean(sandbox && Object.hasOwn(sandbox, "perSession"));
@@ -325,6 +385,16 @@ function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
     return false;
   }
   return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
+}
+
+function hasLegacyAgentMemoryScope(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((entry) => {
+      const agent = getRecord(entry);
+      return Boolean(agent && (getRecord(agent.memorySearch) || getRecord(agent.dreaming)));
+    })
+  );
 }
 
 function hasLegacyAgentListEmbeddedHarness(value: unknown): boolean {
@@ -406,7 +476,9 @@ function hasAgentListLegacyMemorySearchAutoProvider(value: unknown): boolean {
     return false;
   }
   return value.some((agent) =>
-    isLegacyMemorySearchAutoProvider(getRecord(getRecord(agent)?.memorySearch)?.provider),
+    isLegacyMemorySearchAutoProvider(
+      getRecord(getRecord(getRecord(agent)?.memory)?.search)?.provider,
+    ),
   );
 }
 
@@ -417,7 +489,7 @@ function hasMemorySearchStorePath(value: unknown): boolean {
 function hasAgentListMemorySearchStorePath(value: unknown): boolean {
   return (
     Array.isArray(value) &&
-    value.some((agent) => hasMemorySearchStorePath(getRecord(agent)?.memorySearch))
+    value.some((agent) => hasMemorySearchStorePath(getRecord(getRecord(agent)?.memory)?.search))
   );
 }
 
@@ -1359,26 +1431,98 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
   defineLegacyConfigMigration({
-    id: "memorySearch->agents.defaults.memorySearch",
-    describe: "Move top-level memorySearch to agents.defaults.memorySearch",
-    legacyRules: [MEMORY_SEARCH_RULE],
+    id: "memorySearch->memory.search",
+    describe: "Move legacy memory search configuration to the global memory block",
+    legacyRules: AGENT_MEMORY_SCOPE_RULES,
     apply: (raw, changes) => {
       const legacyMemorySearch = getRecord(raw.memorySearch);
-      if (!legacyMemorySearch) {
-        return;
+
+      if (legacyMemorySearch) {
+        const merged = mergeLegacyIntoMemory({
+          memory: ensureRecord(raw, "memory"),
+          section: "search",
+          legacyValue: legacyMemorySearch,
+        });
+        changes.push(
+          merged
+            ? "Merged memorySearch → memory.search (filled missing fields from legacy; kept explicit memory settings)."
+            : "Moved memorySearch → memory.search.",
+        );
+        delete raw.memorySearch;
       }
 
-      mergeLegacyIntoDefaults({
-        raw,
-        rootKey: "agents",
-        fieldKey: "memorySearch",
-        legacyValue: legacyMemorySearch,
-        changes,
-        movedMessage: "Moved memorySearch → agents.defaults.memorySearch.",
-        mergedMessage:
-          "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-      });
-      delete raw.memorySearch;
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      const legacyDefaultMemory = getRecord(defaults?.memory);
+      if (legacyDefaultMemory) {
+        const memory = ensureRecord(raw, "memory");
+        const merged = Object.keys(memory).length > 0;
+        mergeMissing(memory, legacyDefaultMemory);
+        if (defaults) {
+          delete defaults.memory;
+        }
+        changes.push(
+          merged
+            ? "Merged agents.defaults.memory → memory (filled missing fields from legacy; kept explicit root memory settings)."
+            : "Moved agents.defaults.memory → memory.",
+        );
+      }
+
+      const legacyDefaultSearch = getRecord(defaults?.memorySearch);
+      if (legacyDefaultSearch) {
+        const merged = mergeLegacyIntoMemory({
+          memory: ensureRecord(raw, "memory"),
+          section: "search",
+          legacyValue: legacyDefaultSearch,
+        });
+        changes.push(
+          merged
+            ? "Merged agents.defaults.memorySearch → memory.search (kept explicit memory.search settings)."
+            : "Moved agents.defaults.memorySearch → memory.search.",
+        );
+        if (defaults) {
+          delete defaults.memorySearch;
+        }
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, rawAgent] of agents.list.entries()) {
+        const agent = getRecord(rawAgent);
+        if (!agent) {
+          continue;
+        }
+        const legacySearch = getRecord(agent.memorySearch);
+        if (legacySearch) {
+          const merged = mergeLegacyIntoAgentMemory({
+            agent,
+            section: "search",
+            legacyValue: legacySearch,
+          });
+          changes.push(
+            merged
+              ? `Merged agents.list.${index}.memorySearch → agents.list.${index}.memory.search (kept explicit memory.search settings).`
+              : `Moved agents.list.${index}.memorySearch → agents.list.${index}.memory.search.`,
+          );
+          delete agent.memorySearch;
+        }
+        const legacyDreaming = getRecord(agent.dreaming);
+        if (legacyDreaming) {
+          const merged = mergeLegacyIntoAgentMemory({
+            agent,
+            section: "extensions",
+            key: "memory-core",
+            legacyValue: { dreaming: legacyDreaming },
+          });
+          changes.push(
+            merged
+              ? `Merged agents.list.${index}.dreaming → agents.list.${index}.memory.extensions.memory-core.dreaming.`
+              : `Moved agents.list.${index}.dreaming → agents.list.${index}.memory.extensions.memory-core.dreaming.`,
+          );
+          delete agent.dreaming;
+        }
+      }
     },
   }),
   defineLegacyConfigMigration({
@@ -1386,20 +1530,20 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     describe: 'Rewrite legacy memorySearch provider "auto" to "openai"',
     legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
     apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
       rewriteLegacyMemorySearchAutoProvider(
-        getRecord(getRecord(agents?.defaults)?.memorySearch),
-        "agents.defaults.memorySearch",
+        getRecord(getRecord(raw.memory)?.search),
+        "memory.search",
         changes,
       );
 
+      const agents = getRecord(raw.agents);
       if (!Array.isArray(agents?.list)) {
         return;
       }
       for (const [index, agent] of agents.list.entries()) {
         rewriteLegacyMemorySearchAutoProvider(
-          getRecord(getRecord(agent)?.memorySearch),
-          `agents.list.${index}.memorySearch`,
+          getRecord(getRecord(getRecord(agent)?.memory)?.search),
+          `agents.list.${index}.memory.search`,
           changes,
         );
       }
@@ -1410,22 +1554,20 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     describe: "Remove legacy memory search sidecar index paths",
     legacyRules: LEGACY_MEMORY_SEARCH_STORE_PATH_RULES,
     apply: (raw, changes) => {
-      removeLegacyMemorySearchStorePath(getRecord(raw.memorySearch), "memorySearch", changes);
-
-      const agents = getRecord(raw.agents);
       removeLegacyMemorySearchStorePath(
-        getRecord(getRecord(agents?.defaults)?.memorySearch),
-        "agents.defaults.memorySearch",
+        getRecord(getRecord(raw.memory)?.search),
+        "memory.search",
         changes,
       );
 
+      const agents = getRecord(raw.agents);
       if (!Array.isArray(agents?.list)) {
         return;
       }
       for (const [index, agent] of agents.list.entries()) {
         removeLegacyMemorySearchStorePath(
-          getRecord(getRecord(agent)?.memorySearch),
-          `agents.list[${index}].memorySearch`,
+          getRecord(getRecord(getRecord(agent)?.memory)?.search),
+          `agents.list[${index}].memory.search`,
           changes,
         );
       }

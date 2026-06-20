@@ -138,6 +138,7 @@ export async function assembleHarnessContextEngine(params: {
   tokenBudget?: number;
   availableTools?: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
   modelId: string;
   prompt?: string;
   runtimeSettings?: ContextEngineRuntimeSettings;
@@ -163,6 +164,7 @@ export async function assembleHarnessContextEngine(params: {
     tokenBudget: params.tokenBudget,
     ...(params.availableTools ? { availableTools: params.availableTools } : {}),
     ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     model: params.modelId,
     runtimeSettings,
     ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),

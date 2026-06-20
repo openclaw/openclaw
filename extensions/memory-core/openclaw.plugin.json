@@ -201,5 +201,11 @@
         }
       }
     }
+  },
+  "configContracts": {
+    "compatibilityMigrationPaths": [
+      "plugins.entries.memory-core.config",
+      "plugins.slots.memory"
+    ]
   }
 }

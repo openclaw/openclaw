@@ -288,6 +288,7 @@ function buildMemorySection(params: {
   includeMemorySection?: boolean;
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
 }) {
   if (params.isMinimal || params.includeMemorySection === false) {
     return [];
@@ -295,6 +296,7 @@ function buildMemorySection(params: {
   return buildMemoryPromptSection({
     availableTools: params.availableTools,
     citationsMode: params.citationsMode,
+    agentId: params.agentId,
   });
 }
 
@@ -976,6 +978,7 @@ export function buildAgentSystemPrompt(params: {
     includeMemorySection: params.includeMemorySection,
     availableTools,
     citationsMode: params.memoryCitationsMode,
+    agentId: params.runtimeInfo?.agentId,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,

@@ -5,7 +5,12 @@ import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
-import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  assertNoSymlinkParents,
+  readRegularFile,
+  replaceFileAtomic,
+} from "openclaw/plugin-sdk/security-runtime";
 
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
@@ -19,7 +24,17 @@ type DreamsFileLockEntry = {
 
 const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
 
-export async function resolveDreamsPath(workspaceDir: string): Promise<string> {
+export async function resolveDreamsPath(workspaceDir: string, agentId?: string): Promise<string> {
+  if (agentId?.trim()) {
+    return path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "agents",
+      normalizeAgentId(agentId),
+      DREAMS_FILENAMES[0],
+    );
+  }
   for (const name of DREAMS_FILENAMES) {
     const target = path.join(workspaceDir, name);
     try {
@@ -79,7 +94,66 @@ async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
   }
 }
 
-async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promise<void> {
+async function assertSafeDreamingArtifactPath(filePath: string): Promise<void> {
+  const stat = await fs.lstat(filePath).catch((err: unknown) => {
+    if (extractErrorCode(err) === "ENOENT") {
+      return null;
+    }
+    throw err;
+  });
+  if (!stat) {
+    return;
+  }
+  if (stat.isSymbolicLink()) {
+    throw new Error("Refusing to write symlinked dreaming artifact");
+  }
+  if (!stat.isFile()) {
+    throw new Error("Refusing to write non-file dreaming artifact");
+  }
+}
+
+export async function ensureDreamingArtifactDirectory(params: {
+  workspaceDir: string;
+  filePath: string;
+}): Promise<void> {
+  const directoryPath = path.dirname(params.filePath);
+  await assertNoSymlinkParents({
+    rootDir: params.workspaceDir,
+    targetPath: directoryPath,
+    requireDirectories: true,
+  });
+  await fs.mkdir(directoryPath, { recursive: true });
+  await assertNoSymlinkParents({
+    rootDir: params.workspaceDir,
+    targetPath: directoryPath,
+    allowMissing: false,
+    requireDirectories: true,
+  });
+}
+
+export async function writeDreamingArtifactFile(params: {
+  workspaceDir: string;
+  filePath: string;
+  content: string;
+}): Promise<void> {
+  await ensureDreamingArtifactDirectory(params);
+  await assertSafeDreamingArtifactPath(params.filePath);
+  await replaceFileAtomic({
+    filePath: params.filePath,
+    content: params.content,
+    mode: 0o600,
+    preserveExistingMode: true,
+    tempPrefix: `${path.basename(params.filePath)}.dreams`,
+    throwOnCleanupError: true,
+  });
+}
+
+async function writeDreamsFileAtomic(
+  workspaceDir: string,
+  dreamsPath: string,
+  content: string,
+): Promise<void> {
+  await ensureDreamingArtifactDirectory({ workspaceDir, filePath: dreamsPath });
   await assertSafeDreamsPath(dreamsPath);
   await replaceFileAtomic({
     filePath: dreamsPath,
@@ -93,6 +167,7 @@ async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promi
 
 export async function updateDreamsFile<T>(params: {
   workspaceDir: string;
+  agentId?: string;
   updater: (
     existing: string,
     dreamsPath: string,
@@ -104,8 +179,7 @@ export async function updateDreamsFile<T>(params: {
         shouldWrite?: boolean;
       };
 }): Promise<T> {
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+  const dreamsPath = await resolveDreamsPath(params.workspaceDir, params.agentId);
   let lockEntry = dreamsFileLocks.get(dreamsPath);
   if (!lockEntry) {
     lockEntry = { withLock: createAsyncLock(), refs: 0 };
@@ -114,10 +188,18 @@ export async function updateDreamsFile<T>(params: {
   lockEntry.refs += 1;
   try {
     return await lockEntry.withLock(async () => {
+      await ensureDreamingArtifactDirectory({
+        workspaceDir: params.workspaceDir,
+        filePath: dreamsPath,
+      });
       const existing = await readDreamsFile(dreamsPath);
       const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
       if (shouldWrite) {
-        await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
+        await writeDreamsFileAtomic(
+          params.workspaceDir,
+          dreamsPath,
+          content.endsWith("\n") ? content : `${content}\n`,
+        );
       }
       return result;
     });
@@ -131,11 +213,13 @@ export async function updateDreamsFile<T>(params: {
 
 export async function updateDeepDreamsFile(params: {
   workspaceDir: string;
+  agentId?: string;
   bodyLines: string[];
 }): Promise<string> {
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     updater: (existing, dreamsPath) => ({
       content: replaceManagedMarkdownBlock({
         original: existing,

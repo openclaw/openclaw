@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../api.js";
 
 export async function listMemoryCorePublicArtifacts(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
 }): Promise<MemoryPluginPublicArtifact[]> {
   return await listMemoryHostPublicArtifacts(params);
 }

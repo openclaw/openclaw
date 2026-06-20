@@ -248,11 +248,13 @@ async function applyLocalStatusRpcFallback(params: {
 }
 
 function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
-  if (cfg.agents?.defaults && Object.hasOwn(cfg.agents.defaults, "memorySearch")) {
+  if (cfg.memory && Object.hasOwn(cfg.memory, "search")) {
     return true;
   }
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  return agents.some((agent) => agent?.id === agentId && Object.hasOwn(agent, "memorySearch"));
+  return agents.some(
+    (agent) => agent?.id === agentId && agent.memory && Object.hasOwn(agent.memory, "search"),
+  );
 }
 
 /** Resolves whether memory status should be shown and which slot owns it. */

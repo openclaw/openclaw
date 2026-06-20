@@ -417,6 +417,31 @@ describe("dreaming controller", () => {
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
 
+  it("loads wiki import insights for the selected agent", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = "research";
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["wiki.importInsights"] },
+    };
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: { plugins: { entries: { "memory-wiki": { enabled: true } } } },
+    };
+    request.mockResolvedValue({
+      sourceType: "chatgpt",
+      totalItems: 1,
+      totalClusters: 0,
+      clusters: [],
+    });
+
+    await loadWikiImportInsights(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "research" });
+  });
+
   it("falls back to config gating for wiki import insights when methods are not advertised", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
@@ -586,6 +611,32 @@ describe("dreaming controller", () => {
     expect(state.wikiMemoryPalaceLoading).toBe(false);
   });
 
+  it("loads the wiki memory palace for the selected agent", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = "research";
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["wiki.palace"] },
+    };
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: { plugins: { entries: { "memory-wiki": { enabled: true } } } },
+    };
+    request.mockResolvedValue({
+      totalItems: 0,
+      totalClaims: 0,
+      totalQuestions: 0,
+      totalContradictions: 0,
+      clusters: [],
+    });
+
+    await loadWikiMemoryPalace(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "research" });
+  });
+
   it("derives legacy wiki memory palace page counts from clusters", async () => {
     const { state, request } = createState();
     state.hello = {
@@ -753,21 +804,16 @@ describe("dreaming controller", () => {
     expect(state.wikiMemoryPalaceLoading).toBe(false);
   });
 
-  it("patches config to update global dreaming enablement", async () => {
+  it("patches default-agent memory-core dreaming enablement", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
       hash: "hash-1",
       config: {
-        plugins: {
-          slots: {
-            memory: "memos-local-openclaw-plugin",
-          },
-          entries: {
-            "memos-local-openclaw-plugin": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
+        memory: {
+          extensions: {
+            "memory-core": {
+              dreaming: {
+                enabled: true,
               },
             },
           },
@@ -783,13 +829,11 @@ describe("dreaming controller", () => {
     expect(patchPayload.baseHash).toBe("hash-1");
     expect(patchPayload.sessionKey).toBe("main");
     expect(getConfigPatchRawPayload(request)).toEqual({
-      plugins: {
-        entries: {
-          "memos-local-openclaw-plugin": {
-            config: {
-              dreaming: {
-                enabled: false,
-              },
+      memory: {
+        extensions: {
+          "memory-core": {
+            dreaming: {
+              enabled: false,
             },
           },
         },
@@ -799,15 +843,14 @@ describe("dreaming controller", () => {
     expect(state.dreamingStatusError).toBeNull();
   });
 
-  it("falls back to memory-core when selected memory slot is blank", async () => {
+  it("patches selected-agent memory-core dreaming enablement", async () => {
     const { state, request } = createState();
+    state.selectedAgentId = "research";
     state.configSnapshot = {
       hash: "hash-1",
       config: {
-        plugins: {
-          slots: {
-            memory: "   ",
-          },
+        agents: {
+          list: [{ id: "research" }],
         },
       },
     };
@@ -817,21 +860,62 @@ describe("dreaming controller", () => {
 
     expect(ok).toBe(true);
     expect(getConfigPatchRawPayload(request)).toEqual({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
+      agents: {
+        list: [
+          {
+            id: "research",
+            memory: {
+              extensions: {
+                "memory-core": {
+                  dreaming: {
+                    enabled: true,
+                  },
+                },
               },
             },
           },
-        },
+        ],
       },
     });
   });
 
-  it("blocks dreaming patch when selected plugin config rejects unknown keys", async () => {
+  it("patches the configured agent id when the selected id is canonicalized", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = "team-ops";
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        agents: {
+          list: [{ id: "Team Ops" }],
+        },
+      },
+    };
+    request.mockResolvedValue({ ok: true });
+
+    const ok = await updateDreamingEnabled(state, true);
+
+    expect(ok).toBe(true);
+    expect(getConfigPatchRawPayload(request)).toEqual({
+      agents: {
+        list: [
+          {
+            id: "Team Ops",
+            memory: {
+              extensions: {
+                "memory-core": {
+                  dreaming: {
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  it("does not inspect the selected memory plugin when patching dreaming", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
       hash: "hash-1",
@@ -845,16 +929,7 @@ describe("dreaming controller", () => {
     };
     request.mockImplementation(async (method: string) => {
       if (method === "config.schema.lookup") {
-        return {
-          path: "plugins.entries.memory-lancedb.config",
-          schema: {
-            type: "object",
-            additionalProperties: false,
-          },
-          children: [
-            { key: "retentionDays", path: "plugins.entries.memory-lancedb.config.retentionDays" },
-          ],
-        };
+        throw new Error(`unexpected schema lookup: ${method}`);
       }
       if (method === "config.patch") {
         return { ok: true };
@@ -864,60 +939,29 @@ describe("dreaming controller", () => {
 
     const ok = await updateDreamingEnabled(state, true);
 
-    expect(ok).toBe(false);
-    expect(request).toHaveBeenCalledWith("config.schema.lookup", {
-      path: "plugins.entries.memory-lancedb.config",
-    });
-    expect(hasRequestMethodCall(request, "config.patch")).toBe(false);
-    expect(state.dreamingStatusError).toBe(
-      'Selected memory plugin "memory-lancedb" does not support dreaming settings.',
-    );
-  });
-
-  it("reads dreaming enabled state from the selected memory slot plugin", () => {
-    expect(
-      resolveConfiguredDreaming({
-        plugins: {
-          slots: {
-            memory: "memos-local-openclaw-plugin",
-          },
-          entries: {
-            "memos-local-openclaw-plugin": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: false,
-                },
-              },
+    expect(ok).toBe(true);
+    expect(hasRequestMethodCall(request, "config.schema.lookup")).toBe(false);
+    expect(getConfigPatchRawPayload(request)).toEqual({
+      memory: {
+        extensions: {
+          "memory-core": {
+            dreaming: {
+              enabled: true,
             },
           },
         },
-      }),
-    ).toEqual({
-      pluginId: "memos-local-openclaw-plugin",
-      enabled: true,
+      },
     });
   });
 
-  it('falls back to memory-core when selected memory slot is "none"', () => {
+  it("reads dreaming enabled state from the default memory-core extension", () => {
     expect(
       resolveConfiguredDreaming({
-        plugins: {
-          slots: {
-            memory: "none",
-          },
-          entries: {
+        memory: {
+          extensions: {
             "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
+              dreaming: {
+                enabled: true,
               },
             },
           },
@@ -926,6 +970,17 @@ describe("dreaming controller", () => {
     ).toEqual({
       pluginId: "memory-core",
       enabled: true,
+    });
+  });
+
+  it("defaults dreaming to disabled when memory-core config is absent", () => {
+    expect(
+      resolveConfiguredDreaming({
+        memory: {},
+      }),
+    ).toEqual({
+      pluginId: "memory-core",
+      enabled: false,
     });
   });
 

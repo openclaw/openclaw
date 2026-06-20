@@ -6,6 +6,7 @@ import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
 }) => string[];
 
 export type MemoryCorpusSearchResult = {
@@ -45,12 +46,14 @@ export type MemoryCorpusSupplement = {
   search(params: {
     query: string;
     maxResults?: number;
+    agentId?: string;
     agentSessionKey?: string;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;
     fromLine?: number;
     lineCount?: number;
+    agentId?: string;
     agentSessionKey?: string;
   }): Promise<MemoryCorpusGetResult | null>;
 };
@@ -124,7 +127,10 @@ export type MemoryPluginPublicArtifact = {
 };
 
 export type MemoryPluginPublicArtifactsProvider = {
-  listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPluginPublicArtifact[]>;
+  listArtifacts(params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+  }): Promise<MemoryPluginPublicArtifact[]>;
 };
 
 export type MemoryPluginCapability = {
@@ -231,6 +237,7 @@ export function registerMemoryPromptSupplement(
 export function buildMemoryPromptSection(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
 }): string[] {
   const primary = normalizeMemoryPromptLines(
     memoryPluginState.capability?.capability.promptBuilder?.(params) ?? [],
@@ -304,6 +311,7 @@ function cloneMemoryPublicArtifact(
 
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
 }): Promise<MemoryPluginPublicArtifact[]> {
   const artifacts =
     (await memoryPluginState.capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];

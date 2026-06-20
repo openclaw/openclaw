@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import { resolveAgentMemoryConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -256,7 +257,13 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
             files: memoryReferenceFiles,
             toolNames: params.memoryToolNames,
             memoryToolRouted: memoryToolsAvailable,
-            citationsMode: params.params.config?.memory?.citations,
+            citationsMode: params.params.config
+              ? resolveAgentMemoryConfig(
+                  params.params.config,
+                  params.params.agentId ?? params.sessionAgentId,
+                )?.citations
+              : undefined,
+            agentId: params.params.agentId ?? params.sessionAgentId,
           })
         : undefined,
       heartbeatCollaborationInstructions:
@@ -810,11 +817,13 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   toolNames: readonly string[];
   memoryToolRouted: boolean;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+  agentId?: string;
 }): string | undefined {
   const memoryRecallInstructions = params.memoryToolRouted
     ? renderCodexMemoryRecallInstructions({
         toolNames: params.toolNames,
         citationsMode: params.citationsMode,
+        agentId: params.agentId,
       })
     : undefined;
   const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
@@ -828,11 +837,13 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
 function renderCodexMemoryRecallInstructions(params: {
   toolNames: readonly string[];
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+  agentId?: string;
 }): string | undefined {
   const availableTools = new Set(params.toolNames);
   const memoryPrompt = buildMemorySystemPromptAddition({
     availableTools,
     citationsMode: params.citationsMode,
+    agentId: params.agentId,
   });
   if (!memoryPrompt) {
     // Memory recall policy belongs to the active memory plugin.

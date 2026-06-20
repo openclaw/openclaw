@@ -36,6 +36,8 @@ export {
   resolveAgentConfig,
   resolveAgentContextLimits,
   resolveAgentDir,
+  resolveAgentMemoryConfig,
+  resolveAgentMemoryExtensionConfig,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,

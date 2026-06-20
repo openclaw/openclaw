@@ -12,7 +12,7 @@ const manifest = JSON.parse(
 ) as { configSchema: JsonSchemaObject };
 
 describe("memory-lancedb config", () => {
-  it("accepts dreaming in the manifest schema and preserves it in runtime parsing", () => {
+  it("accepts legacy dreaming config so doctor can migrate it", () => {
     const manifestResult = validateJsonSchemaValue({
       schema: manifest.configSchema,
       cacheKey: "memory-lancedb.manifest.dreaming",

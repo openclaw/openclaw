@@ -368,26 +368,28 @@ describe("secrets runtime provider and media surfaces", () => {
     );
   });
 
-  it("treats defaults memorySearch ref as inactive when all enabled agents disable memorySearch", async () => {
+  it("treats defaults memory search ref as inactive when all enabled agents disable it", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        agents: {
-          defaults: {
-            memorySearch: {
-              remote: {
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "DEFAULT_MEMORY_REMOTE_API_KEY",
-                },
+        memory: {
+          search: {
+            remote: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "DEFAULT_MEMORY_REMOTE_API_KEY",
               },
             },
           },
+        },
+        agents: {
           list: [
             {
               enabled: true,
-              memorySearch: {
-                enabled: false,
+              memory: {
+                search: {
+                  enabled: false,
+                },
               },
             },
           ],
@@ -398,13 +400,13 @@ describe("secrets runtime provider and media surfaces", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toEqual({
+    expect(snapshot.config.memory?.search?.remote?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "DEFAULT_MEMORY_REMOTE_API_KEY",
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "agents.defaults.memorySearch.remote.apiKey",
+      "memory.search.remote.apiKey",
     );
   });
 });

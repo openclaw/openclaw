@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  resolveMemoryCorePluginConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -113,8 +114,8 @@ type LoadedMemoryCommandConfig = {
 
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set([
-    "agents.defaults.memorySearch.remote.apiKey",
-    "agents.list[].memorySearch.remote.apiKey",
+    "memory.search.remote.apiKey",
+    "agents.list[].memory.search.remote.apiKey",
   ]);
 }
 
@@ -148,9 +149,11 @@ function emitMemorySecretResolveDiagnostics(
   }
 }
 
-function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asRecord(entry?.config) ?? {};
+function resolveMemoryPluginConfig(
+  cfg: OpenClawConfig,
+  agentId = resolveDefaultAgentId(cfg),
+): Record<string, unknown> {
+  return resolveMemoryCorePluginConfig(cfg, agentId) ?? {};
 }
 
 const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
@@ -183,6 +186,7 @@ async function createHistoricalRemHarnessWorkspace(params: {
   inputPath: string;
   remLimit: number;
   nowMs: number;
+  agentId?: string;
   timezone?: string;
 }): Promise<{
   workspaceDir: string;
@@ -209,6 +213,7 @@ async function createHistoricalRemHarnessWorkspace(params: {
     filePaths: workspaceSourceFiles,
     limit: params.remLimit,
     nowMs: params.nowMs,
+    agentId: params.agentId,
     timezone: params.timezone,
   });
   return {
@@ -221,9 +226,9 @@ async function createHistoricalRemHarnessWorkspace(params: {
   };
 }
 
-function formatDreamingSummary(cfg: OpenClawConfig): string {
-  const pluginConfig = resolveMemoryPluginConfig(cfg);
-  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+function formatDreamingSummary(cfg: OpenClawConfig, agentId: string): string {
+  const pluginConfig = resolveMemoryPluginConfig(cfg, agentId);
+  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg, agentId });
   if (!dreaming.enabled) {
     return "off";
   }
@@ -788,17 +793,18 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         let dreamingAudit: DreamingArtifactsAuditSummary | undefined;
         let dreamingRepair: RepairDreamingArtifactsResult | undefined;
         if (workspaceDir) {
-          dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+          dreamingAudit = await auditDreamingArtifacts({ workspaceDir, agentId });
           if (opts.fix && dreamingAudit.issues.some((issue) => issue.fixable)) {
-            dreamingRepair = await repairDreamingArtifacts({ workspaceDir });
-            dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+            dreamingRepair = await repairDreamingArtifacts({ workspaceDir, agentId });
+            dreamingAudit = await auditDreamingArtifacts({ workspaceDir, agentId });
           }
           if (opts.fix) {
-            repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+            repair = await repairShortTermPromotionArtifacts({ workspaceDir, agentId });
           }
           const customQmd = asRecord(asRecord(status.custom)?.qmd);
           audit = await auditShortTermPromotionArtifacts({
             workspaceDir,
+            agentId,
             qmd:
               status.backend === "qmd"
                 ? {
@@ -881,7 +887,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(storePath)}`,
       `${label("Workspace")} ${info(workspacePath)}`,
-      `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
+      `${label("Dreaming")} ${info(formatDreamingSummary(cfg, agentId))}`,
     ].filter(Boolean) as string[];
     if (embeddingProbe) {
       const state =
@@ -1245,14 +1251,16 @@ export async function runMemorySearch(
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
-  const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
+  const memoryPluginConfig = resolveMemoryPluginConfig(cfg, agentId);
   const dreamingEnabled = resolveMemoryDreamingConfig({
     pluginConfig: memoryPluginConfig,
     cfg,
+    agentId,
   }).enabled;
   const dreaming = resolveShortTermPromotionDreamingConfig({
     pluginConfig: memoryPluginConfig,
     cfg,
+    agentId,
   });
   await withMemoryManagerForAgent({
     cfg,
@@ -1280,6 +1288,7 @@ export async function runMemorySearch(
       if (dreamingEnabled) {
         void recordShortTermRecalls({
           workspaceDir,
+          agentId,
           query,
           results,
           timezone: dreaming.timezone,
@@ -1335,8 +1344,9 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig: resolveMemoryPluginConfig(cfg, agentId),
         cfg,
+        agentId,
       });
       if (!workspaceDir) {
         defaultRuntime.error("Memory promote requires a resolvable workspace directory.");
@@ -1348,6 +1358,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
       try {
         candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
+          agentId,
           limit: opts.limit,
           minScore: opts.minScore ?? dreaming.minScore,
           minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
@@ -1367,6 +1378,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
         try {
           applyResult = await applyShortTermPromotions({
             workspaceDir,
+            agentId,
             candidates,
             limit: opts.limit,
             minScore: opts.minScore ?? dreaming.minScore,
@@ -1383,11 +1395,12 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
         }
       }
 
-      const storePath = resolveShortTermRecallStorePath(workspaceDir);
-      const lockPath = resolveShortTermRecallLockPath(workspaceDir);
+      const storePath = resolveShortTermRecallStorePath(workspaceDir, agentId);
+      const lockPath = resolveShortTermRecallLockPath(workspaceDir, agentId);
       const customQmd = asRecord(asRecord(status.custom)?.qmd);
       const audit = await auditShortTermPromotionArtifacts({
         workspaceDir,
+        agentId,
         qmd:
           status.backend === "qmd"
             ? {
@@ -1520,8 +1533,9 @@ export async function runMemoryPromoteExplain(
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig: resolveMemoryPluginConfig(cfg, agentId),
         cfg,
+        agentId,
       });
       if (!workspaceDir) {
         defaultRuntime.error("Memory promote-explain requires a resolvable workspace directory.");
@@ -1533,6 +1547,7 @@ export async function runMemoryPromoteExplain(
       try {
         candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
+          agentId,
           minScore: 0,
           minRecallCount: 0,
           minUniqueQueries: 0,
@@ -1626,7 +1641,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
     run: async (manager) => {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
-      const pluginConfig = resolveMemoryPluginConfig(cfg);
+      const pluginConfig = resolveMemoryPluginConfig(cfg, agentId);
       if (!managerWorkspaceDir && !opts.path) {
         defaultRuntime.error("Memory rem-harness requires a resolvable workspace directory.");
         process.exitCode = 1;
@@ -1635,6 +1650,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
       const remConfig = resolveMemoryRemDreamingConfig({
         pluginConfig,
         cfg,
+        agentId,
       });
       const nowMs = Date.now();
       let workspaceDir = managerWorkspaceDir ?? "";
@@ -1649,6 +1665,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
           inputPath: opts.path,
           remLimit: remConfig.limit,
           nowMs,
+          agentId,
           timezone: remConfig.timezone,
         });
         workspaceDir = historical.workspaceDir;
@@ -1676,6 +1693,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
         const preview = await previewRemHarness({
           workspaceDir,
           cfg,
+          agentId,
           pluginConfig,
           grounded: Boolean(opts.grounded),
           groundedInputPaths,
@@ -1806,10 +1824,11 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
-      const pluginConfig = resolveMemoryPluginConfig(cfg);
+      const pluginConfig = resolveMemoryPluginConfig(cfg, agentId);
       const remConfig = resolveMemoryRemDreamingConfig({
         pluginConfig,
         cfg,
+        agentId,
       });
       if (!workspaceDir) {
         defaultRuntime.error("Memory rem-backfill requires a resolvable workspace directory.");
@@ -1819,10 +1838,10 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
 
       if (opts.rollback || opts.rollbackShortTerm) {
         const diaryRollback = opts.rollback
-          ? await removeBackfillDiaryEntries({ workspaceDir })
+          ? await removeBackfillDiaryEntries({ workspaceDir, agentId })
           : null;
         const shortTermRollback = opts.rollbackShortTerm
-          ? await removeGroundedShortTermCandidates({ workspaceDir })
+          ? await removeGroundedShortTermCandidates({ workspaceDir, agentId })
           : null;
         if (opts.json) {
           defaultRuntime.writeJson({
@@ -1934,18 +1953,20 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
 
         const written = await writeBackfillDiaryEntries({
           workspaceDir,
+          agentId,
           entries,
           timezone: remConfig.timezone,
         });
         let stagedShortTermEntries = 0;
         let replacedShortTermEntries = 0;
         if (opts.stageShortTerm) {
-          const cleared = await removeGroundedShortTermCandidates({ workspaceDir });
+          const cleared = await removeGroundedShortTermCandidates({ workspaceDir, agentId });
           replacedShortTermEntries = cleared.removed;
           const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
           if (shortTermSeedItems.length > 0) {
             await recordGroundedShortTermCandidates({
               workspaceDir,
+              agentId,
               query: "__dreaming_grounded_backfill__",
               items: shortTermSeedItems,
               dedupeByQueryPerDay: true,

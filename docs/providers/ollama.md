@@ -31,7 +31,7 @@ Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accept
     Remote public hosts and Ollama Cloud (`https://ollama.com`) require a real credential through `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`. For direct hosted use, prefer provider `ollama-cloud`.
   </Accordion>
   <Accordion title="Custom provider ids">
-    Custom provider ids that set `api: "ollama"` follow the same rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential. Memory search can also set `agents.defaults.memorySearch.provider` to that custom provider id so embeddings use the matching Ollama endpoint.
+    Custom provider ids that set `api: "ollama"` follow the same rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential. Memory search can also set `memory.search.provider` to that custom provider id so embeddings use the matching Ollama endpoint.
   </Accordion>
   <Accordion title="Auth profiles">
     `auth-profiles.json` stores the credential for a provider id. Put endpoint settings (`baseUrl`, `api`, model ids, headers, timeouts) in `models.providers.<id>`. Older flat auth-profile files such as `{ "ollama-windows": { "apiKey": "ollama-local" } }` are not a runtime format; run `openclaw doctor --fix` to rewrite them to the canonical `ollama-windows:default` API-key profile with a backup. `baseUrl` in that file is compatibility noise and should be moved to provider config.
@@ -40,7 +40,7 @@ Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accept
     When Ollama is used for memory embeddings, bearer auth is scoped to the host where it was declared:
 
     - A provider-level key is sent only to that provider's Ollama host.
-    - `agents.*.memorySearch.remote.apiKey` is sent only to its remote embedding host.
+    - `agents.*.memory.search.remote.apiKey` is sent only to its remote embedding host.
     - A pure `OLLAMA_API_KEY` env value is treated as the Ollama Cloud convention, not sent to local or self-hosted hosts by default.
 
   </Accordion>
@@ -972,14 +972,12 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama",
-            remote: {
-              // Default for Ollama. Raise on larger hosts if reindexing is too slow.
-              nonBatchConcurrency: 1,
-            },
+      memory: {
+        search: {
+          provider: "ollama",
+          remote: {
+            // Default for Ollama. Raise on larger hosts if reindexing is too slow.
+            nonBatchConcurrency: 1,
           },
         },
       },
@@ -990,16 +988,14 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama",
-            model: "nomic-embed-text",
-            remote: {
-              baseUrl: "http://gpu-box.local:11434",
-              apiKey: "ollama-local",
-              nonBatchConcurrency: 2,
-            },
+      memory: {
+        search: {
+          provider: "ollama",
+          model: "nomic-embed-text",
+          remote: {
+            baseUrl: "http://gpu-box.local:11434",
+            apiKey: "ollama-local",
+            nonBatchConcurrency: 2,
           },
         },
       },

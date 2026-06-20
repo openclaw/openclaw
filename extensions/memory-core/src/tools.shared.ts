@@ -142,6 +142,7 @@ export function buildMemorySearchUnavailableResult(
 export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
+  agentId?: string;
   agentSessionKey?: string;
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }): Promise<MemoryCorpusSearchResult[]> {
@@ -171,6 +172,7 @@ export async function getMemoryCorpusSupplementResult(params: {
   lookup: string;
   fromLine?: number;
   lineCount?: number;
+  agentId?: string;
   agentSessionKey?: string;
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }) {

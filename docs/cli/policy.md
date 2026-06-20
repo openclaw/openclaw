@@ -398,12 +398,12 @@ allowlist such as `["all"]`.
 
 #### Data Handling
 
-| Policy field                                        | Observed state                                                                       | Use when                                                               |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| `dataHandling.sensitiveLogging.requireRedaction`    | `logging.redactSensitive`                                                            | Set to `true` to reject `logging.redactSensitive: "off"`.              |
-| `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                    | Set to `true` to reject telemetry content capture.                     |
-| `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                           | Set to `true` to require effective session maintenance mode `enforce`. |
-| `dataHandling.memory.denySessionTranscriptIndexing` | `memory.qmd.sessions.enabled` and `agents.*.memorySearch.experimental.sessionMemory` | Set to `true` to reject session transcript indexing into memory.       |
+| Policy field                                        | Observed state                                                                                 | Use when                                                               |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `dataHandling.sensitiveLogging.requireRedaction`    | `logging.redactSensitive`                                                                      | Set to `true` to reject `logging.redactSensitive: "off"`.              |
+| `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                              | Set to `true` to reject telemetry content capture.                     |
+| `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                                     | Set to `true` to require effective session maintenance mode `enforce`. |
+| `dataHandling.memory.denySessionTranscriptIndexing` | `agents.*.memory.qmd.sessions.enabled` and `agents.*.memory.search.experimental.sessionMemory` | Set to `true` to reject session transcript indexing into memory.       |
 
 #### Secrets
 

@@ -38,8 +38,8 @@ const STATIC_MODEL_TARGET_IDS = [
 ] as const;
 const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
-  "agents.defaults.memorySearch.remote.apiKey",
-  "agents.list[].memorySearch.remote.apiKey",
+  "memory.search.remote.apiKey",
+  "agents.list[].memory.search.remote.apiKey",
   "agents.list[].tts.providers.*.apiKey",
   "messages.tts.providers.*.apiKey",
   "skills.entries.*.apiKey",
@@ -48,8 +48,8 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
 ] as const;
 const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
-  "agents.defaults.memorySearch.remote.apiKey",
-  "agents.list[].memorySearch.remote.apiKey",
+  "memory.search.remote.apiKey",
+  "agents.list[].memory.search.remote.apiKey",
 ] as const;
 const STATIC_TTS_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
@@ -64,8 +64,8 @@ const STATIC_GATEWAY_AUTH_TARGET_IDS = [
 ] as const;
 const STATIC_STATUS_TARGET_IDS = [
   ...STATIC_GATEWAY_AUTH_TARGET_IDS,
-  "agents.defaults.memorySearch.remote.apiKey",
-  "agents.list[].memorySearch.remote.apiKey",
+  "memory.search.remote.apiKey",
+  "agents.list[].memory.search.remote.apiKey",
 ] as const;
 const STATIC_SECURITY_AUDIT_TARGET_IDS = [...STATIC_GATEWAY_AUTH_TARGET_IDS] as const;
 

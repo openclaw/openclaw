@@ -31,6 +31,7 @@ export async function writeImportedSourcePage(params: {
   vaultRoot: string;
   syncKey: string;
   sourcePath: string;
+  sourceContent?: string;
   sourceUpdatedAtMs: number;
   sourceSize: number;
   renderFingerprint: string;
@@ -65,7 +66,7 @@ export async function writeImportedSourcePage(params: {
     return { pagePath: params.pagePath, changed: false, created };
   }
 
-  const raw = await fs.readFile(params.sourcePath, "utf8");
+  const raw = params.sourceContent ?? (await fs.readFile(params.sourcePath, "utf8"));
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
   if (existing !== rendered) {

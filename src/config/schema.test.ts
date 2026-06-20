@@ -286,6 +286,33 @@ describe("config schema", () => {
     const pluginConfigProps = pluginConfigSchema?.properties as Record<string, unknown> | undefined;
     expect(pluginConfigProps).toHaveProperty("provider");
 
+    const agentsNode = schema.properties?.agents as Record<string, unknown> | undefined;
+    const agentProps = agentsNode?.properties as Record<string, unknown> | undefined;
+    const defaultsNode = agentProps?.defaults as Record<string, unknown> | undefined;
+    const defaultsProps = defaultsNode?.properties as Record<string, unknown> | undefined;
+    const defaultsMemory = defaultsProps?.memory as Record<string, unknown> | undefined;
+    const defaultsMemoryProps = defaultsMemory?.properties as Record<string, unknown> | undefined;
+    const defaultsExtensions = defaultsMemoryProps?.extensions as
+      | Record<string, unknown>
+      | undefined;
+    const defaultsExtensionProps = defaultsExtensions?.properties as
+      | Record<string, unknown>
+      | undefined;
+    const defaultVoiceCall = defaultsExtensionProps?.["voice-call"] as
+      | Record<string, unknown>
+      | undefined;
+    expect(defaultVoiceCall?.properties).toHaveProperty("provider");
+
+    const listNode = agentProps?.list as Record<string, unknown> | undefined;
+    const listItem = listNode?.items as Record<string, unknown> | undefined;
+    const listItemProps = listItem?.properties as Record<string, unknown> | undefined;
+    const listMemory = listItemProps?.memory as Record<string, unknown> | undefined;
+    const listMemoryProps = listMemory?.properties as Record<string, unknown> | undefined;
+    const listExtensions = listMemoryProps?.extensions as Record<string, unknown> | undefined;
+    const listExtensionProps = listExtensions?.properties as Record<string, unknown> | undefined;
+    const listVoiceCall = listExtensionProps?.["voice-call"] as Record<string, unknown> | undefined;
+    expect(listVoiceCall?.properties).toHaveProperty("provider");
+
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
     const channelsProps = channelsNode?.properties as Record<string, unknown> | undefined;
     const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
@@ -306,6 +333,12 @@ describe("config schema", () => {
     expect(progressPropsFor("slack")).toHaveProperty("commentary");
     expect(progressPropsFor("telegram")).toHaveProperty("commentary");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
+    expect(res.uiHints["memory.extensions.voice-call"]?.label).toBe(
+      "Voice Call Memory Config",
+    );
+    expect(res.uiHints["agents.list.*.memory.extensions.voice-call"]?.label).toBe(
+      "Voice Call Memory Config",
+    );
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
       "Matrix Progress Label",

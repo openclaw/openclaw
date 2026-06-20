@@ -1,6 +1,7 @@
 /** Collects core config secret refs during runtime preparation. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import {
   resolveConfiguredMediaEntryCapabilities,
@@ -113,26 +114,16 @@ function collectAgentMemorySearchAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const agents = params.config.agents as Record<string, unknown> | undefined;
-  if (!isRecord(agents)) {
-    return;
-  }
-  const defaultsConfig = isRecord(agents.defaults) ? agents.defaults : undefined;
-  const defaultsMemorySearch = isRecord(defaultsConfig?.memorySearch)
-    ? defaultsConfig.memorySearch
-    : undefined;
-  const defaultsEnabled = defaultsMemorySearch?.enabled !== false;
+  const globalMemorySearch = params.config.memory?.search;
+  const globalEnabled = globalMemorySearch?.enabled !== false;
 
-  const list = Array.isArray(agents.list) ? agents.list : [];
+  const list = params.config.agents?.list ?? [];
   let hasEnabledAgentWithoutOverride = false;
-  for (const rawAgent of list) {
-    if (!isRecord(rawAgent)) {
+  for (const agent of list) {
+    if ((agent as { enabled?: unknown }).enabled === false) {
       continue;
     }
-    if (rawAgent.enabled === false) {
-      continue;
-    }
-    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
+    const memorySearch = agent.memory?.search;
     if (memorySearch?.enabled === false) {
       continue;
     }
@@ -140,54 +131,52 @@ function collectAgentMemorySearchAssignments(params: {
       hasEnabledAgentWithoutOverride = true;
       continue;
     }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
+    const remote = memorySearch.remote;
     if (!remote || !Object.hasOwn(remote, "apiKey")) {
       hasEnabledAgentWithoutOverride = true;
       continue;
     }
   }
 
-  if (defaultsMemorySearch && isRecord(defaultsMemorySearch.remote)) {
-    const remote = defaultsMemorySearch.remote;
+  if (globalMemorySearch?.remote) {
+    const remote = globalMemorySearch.remote;
     collectSecretInputAssignment({
       value: remote.apiKey,
-      path: "agents.defaults.memorySearch.remote.apiKey",
+      path: "memory.search.remote.apiKey",
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: defaultsEnabled && (hasEnabledAgentWithoutOverride || list.length === 0),
+      active: globalEnabled && (hasEnabledAgentWithoutOverride || list.length === 0),
       inactiveReason: hasEnabledAgentWithoutOverride
         ? undefined
-        : "all enabled agents override memorySearch.remote.apiKey.",
+        : "all enabled agents override memory.search.remote.apiKey.",
       apply: (value) => {
-        remote.apiKey = value;
+        remote.apiKey = value as SecretInput | undefined;
       },
     });
   }
 
-  list.forEach((rawAgent, index) => {
-    if (!isRecord(rawAgent)) {
-      return;
-    }
-    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
+  list.forEach((agent, index) => {
+    const memorySearch = agent.memory?.search;
     if (!memorySearch) {
       return;
     }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
+    const remote = memorySearch.remote;
     if (!remote || !Object.hasOwn(remote, "apiKey")) {
       return;
     }
-    const enabled = rawAgent.enabled !== false && memorySearch.enabled !== false;
+    const enabled =
+      (agent as { enabled?: unknown }).enabled !== false && memorySearch.enabled !== false;
     collectSecretInputAssignment({
       value: remote.apiKey,
-      path: `agents.list.${index}.memorySearch.remote.apiKey`,
+      path: `agents.list.${index}.memory.search.remote.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
       active: enabled,
-      inactiveReason: "agent or memorySearch override is disabled.",
+      inactiveReason: "agent or memory search override is disabled.",
       apply: (value) => {
-        remote.apiKey = value;
+        remote.apiKey = value as SecretInput | undefined;
       },
     });
   });

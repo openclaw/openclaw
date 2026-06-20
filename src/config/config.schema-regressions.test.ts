@@ -15,13 +15,11 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it('accepts memorySearch fallback "voyage"', () => {
+  it('accepts memory search fallback "voyage"', () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            fallback: "voyage",
-          },
+      memory: {
+        search: {
+          fallback: "voyage",
         },
       },
     });
@@ -29,13 +27,11 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it('accepts memorySearch provider "mistral"', () => {
+  it('accepts memory search provider "mistral"', () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "mistral",
-          },
+      memory: {
+        search: {
+          provider: "mistral",
         },
       },
     });
@@ -43,13 +39,11 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it('accepts memorySearch provider "bedrock"', () => {
+  it('accepts memory search provider "bedrock"', () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "bedrock",
-          },
+      memory: {
+        search: {
+          provider: "bedrock",
         },
       },
     });
@@ -57,14 +51,13 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects local memorySearch GPU policy", () => {
+  it("rejects agents.defaults.memory in favor of the root memory baseline", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
-          memorySearch: {
-            provider: "local",
-            local: {
-              gpu: "cpu",
+          memory: {
+            search: {
+              provider: "openai",
             },
           },
         },
@@ -74,16 +67,29 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts memorySearch.qmd.extraCollections", () => {
+  it("rejects local memory search GPU policy", () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            qmd: {
-              extraCollections: [
-                { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-              ],
-            },
+      memory: {
+        search: {
+          provider: "local",
+          local: {
+            gpu: "cpu",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts memory.search.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      memory: {
+        search: {
+          qmd: {
+            extraCollections: [
+              { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+            ],
           },
         },
       },
@@ -92,17 +98,19 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts agents.list[].memorySearch.qmd.extraCollections", () => {
+  it("accepts agents.list[].memory.search.qmd.extraCollections", () => {
     const res = validateConfigObject({
       agents: {
         list: [
           {
             id: "main",
-            memorySearch: {
-              qmd: {
-                extraCollections: [
-                  { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-                ],
+            memory: {
+              search: {
+                qmd: {
+                  extraCollections: [
+                    { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+                  ],
+                },
               },
             },
           },

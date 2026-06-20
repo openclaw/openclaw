@@ -18,8 +18,10 @@ Dreaming is **opt-in** and disabled by default.
 
 Dreaming keeps two kinds of output:
 
-- **Machine state** in `memory/.dreams/` (recall store, phase signals, ingestion checkpoints, locks).
-- **Human-readable output** in `DREAMS.md` (or existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
+- **Agent-private state and artifacts** under
+  `memory/.dreams/agents/<agent-id>/` (recall journals, phase output, reports,
+  and the Dream Diary). Normal memory search does not index this directory.
+- **Shared durable memory** in `MEMORY.md`.
 
 Long-term promotion still writes only to `MEMORY.md`.
 
@@ -52,7 +54,7 @@ These phases are internal implementation details, not separate user-configured "
     - Requires `minScore`, `minRecallCount`, and `minUniqueQueries` to pass.
     - Rehydrates snippets from live daily files before writing, so stale/deleted snippets are skipped.
     - Appends promoted entries to `MEMORY.md`.
-    - Writes a `## Deep Sleep` summary into `DREAMS.md` and optionally writes `memory/dreaming/deep/YYYY-MM-DD.md`.
+    - Writes a `## Deep Sleep` summary into the agent's `DREAMS.md` and optionally writes an agent-private report.
 
   </Accordion>
   <Accordion title="REM phase">
@@ -72,7 +74,12 @@ Dreaming can ingest redacted session transcripts into the dreaming corpus. When 
 
 ## Dream Diary
 
-Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn and appends a short diary entry. It uses the default runtime model unless `dreaming.model` is configured. If the configured model is unavailable, Dream Diary retries once with the session default model.
+Dreaming also keeps a narrative **Dream Diary** in
+`memory/.dreams/agents/<agent-id>/DREAMS.md`. After each phase has enough
+material, `memory-core` runs a best-effort background subagent turn and appends
+a short diary entry. It uses the default runtime model unless `dreaming.model`
+is configured. If the configured model is unavailable, Dream Diary retries once
+with the session default model.
 
 <Note>
 This diary is for human reading in the Dreams UI, not a promotion source. Dreaming-generated diary/report artifacts are excluded from short-term promotion. Only grounded memory snippets are eligible to promote into `MEMORY.md`.
@@ -105,7 +112,8 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 | Consolidation       | 0.10   | Multi-day recurrence strength                     |
 | Conceptual richness | 0.06   | Concept-tag density from snippet/path             |
 
-Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
+Light and REM phase hits add a small recency-decayed boost from agent-scoped
+dreaming state.
 
 Shadow-trial results can be layered on top of that base score as a review
 signal before any durable write. A helpful trial gives the candidate a small
@@ -136,16 +144,18 @@ harmful verdicts map to `reject`; none of those recommendations writes to
 
 ## Scheduling
 
-When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.
+When enabled, `memory-core` auto-manages one cron job per enabled agent. Each
+sweep runs phases in order: light → REM → deep.
 
-The sweep includes the primary runtime workspace and any configured agent workspaces, deduped by path, so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+Each cron job runs only that agent's workspace and memory state. Agents that set
+`agents.*.memory.extensions.memory-core.dreaming.enabled: false` receive no job.
 
 Default cadence behavior:
 
-| Setting              | Default       |
-| -------------------- | ------------- |
-| `dreaming.frequency` | `0 3 * * *`   |
-| `dreaming.model`     | default model |
+| Setting                                            | Default       |
+| -------------------------------------------------- | ------------- |
+| `memory.extensions.memory-core.dreaming.frequency` | `0 3 * * *`   |
+| `memory.extensions.memory-core.dreaming.model`     | default model |
 
 ## Quick start
 
@@ -153,12 +163,14 @@ Default cadence behavior:
   <Tab title="Enable dreaming">
     ```json
     {
-      "plugins": {
-        "entries": {
-          "memory-core": {
-            "config": {
-              "dreaming": {
-                "enabled": true
+      "agents": {
+        "defaults": {
+          "memory": {
+            "extensions": {
+              "memory-core": {
+                "dreaming": {
+                  "enabled": true
+                }
               }
             }
           }
@@ -170,14 +182,16 @@ Default cadence behavior:
   <Tab title="Custom sweep cadence">
     ```json
     {
-      "plugins": {
-        "entries": {
-          "memory-core": {
-            "config": {
-              "dreaming": {
-                "enabled": true,
-                "timezone": "America/Los_Angeles",
-                "frequency": "0 */6 * * *"
+      "agents": {
+        "defaults": {
+          "memory": {
+            "extensions": {
+              "memory-core": {
+                "dreaming": {
+                  "enabled": true,
+                  "timezone": "America/Los_Angeles",
+                  "frequency": "0 */6 * * *"
+                }
               }
             }
           }
@@ -233,7 +247,7 @@ Default cadence behavior:
 
 ## Key defaults
 
-All settings live under `plugins.entries.memory-core.config.dreaming`.
+All settings live under `memory.extensions.memory-core.dreaming`.
 
 <ParamField path="enabled" type="boolean" default="false">
   Enable or disable the dreaming sweep.
@@ -249,7 +263,7 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 </ParamField>
 
 <Warning>
-`dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`. Trust or allowlist failures stay visible instead of falling back silently; the retry only covers model-unavailable errors.
+`memory.extensions.memory-core.dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`. Trust or allowlist failures stay visible instead of falling back silently; the retry only covers model-unavailable errors.
 </Warning>
 
 <Note>

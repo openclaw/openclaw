@@ -209,6 +209,97 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
+  it("resolves the requested agent's wiki config for gateway methods", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const writerConfig = {
+      ...config,
+      vault: {
+        ...config.vault,
+        path: `${config.vault.path}-writer`,
+      },
+    };
+    const resolveConfig = vi.fn((agentId?: string) =>
+      agentId === "writer" ? writerConfig : config,
+    );
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({
+      api,
+      config,
+      resolveConfig,
+      appConfig: {
+        agents: {
+          list: [{ id: "writer" }],
+        },
+      } as never,
+    });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.status");
+    if (!handler) {
+      throw new Error("wiki.status handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: { agentId: "writer" },
+      respond,
+    });
+
+    expect(resolveConfig).toHaveBeenCalledWith("writer", expect.any(Object));
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
+      config: writerConfig,
+      appConfig: expect.any(Object),
+    });
+    expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(writerConfig, {
+      appConfig: expect.any(Object),
+    });
+  });
+
+  it("resolves the application config at request time with the matching agent config", async () => {
+    const { config: mainConfig } = await createVault({ prefix: "memory-wiki-gateway-main-" });
+    const { config: writerConfig } = await createVault({
+      prefix: "memory-wiki-gateway-writer-",
+    });
+    const { api, registerGatewayMethod } = createPluginApi();
+    let appConfig = {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const resolveConfig = vi.fn((agentId?: string) =>
+      agentId === "writer" ? writerConfig : mainConfig,
+    );
+
+    registerMemoryWikiGatewayMethods({
+      api,
+      config: mainConfig,
+      resolveConfig,
+      resolveAppConfig: () => appConfig,
+    });
+    appConfig = {
+      agents: {
+        list: [{ id: "writer", default: true }],
+      },
+    };
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.status");
+    if (!handler) {
+      throw new Error("wiki.status handler missing");
+    }
+
+    await handler({
+      params: {},
+      respond: vi.fn(),
+    });
+
+    expect(resolveConfig).toHaveBeenLastCalledWith("writer", appConfig);
+    expect(syncMemoryWikiImportedSources).toHaveBeenLastCalledWith({
+      config: writerConfig,
+      appConfig,
+    });
+    expect(resolveMemoryWikiStatus).toHaveBeenLastCalledWith(writerConfig, {
+      appConfig,
+    });
+  });
+
   it("returns recent import runs over the gateway", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
@@ -571,6 +662,79 @@ describe("memory-wiki gateway methods", () => {
       searchBackend: "shared",
       searchCorpus: "memory",
       mode: undefined,
+    });
+  });
+
+  it("passes the canonical configured agent scope to shared wiki.search gateway calls", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const teamOpsConfig = { ...config, agentId: "team-ops" };
+    const resolveConfig = vi.fn(() => teamOpsConfig);
+    const { api, registerGatewayMethod } = createPluginApi();
+    const appConfig = {
+      agents: {
+        list: [{ id: "Team Ops", default: true }],
+      },
+    };
+
+    registerMemoryWikiGatewayMethods({ api, config, resolveConfig, appConfig });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.search");
+    if (!handler) {
+      throw new Error("wiki.search handler missing");
+    }
+
+    await handler({
+      params: {
+        agentId: "Team Ops",
+        query: "sessions",
+        corpus: "memory",
+        backend: "shared",
+      },
+      respond: vi.fn(),
+    });
+
+    expect(resolveConfig).toHaveBeenCalledWith("team-ops", appConfig);
+    expect(searchMemoryWiki).toHaveBeenCalledWith({
+      config: teamOpsConfig,
+      appConfig,
+      agentId: "team-ops",
+      query: "sessions",
+      maxResults: undefined,
+      searchBackend: "shared",
+      searchCorpus: "memory",
+      mode: undefined,
+    });
+  });
+
+  it("rejects unknown agent IDs before resolving shared wiki gateway requests", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const resolveConfig = vi.fn(() => config);
+    const { api, registerGatewayMethod } = createPluginApi();
+    const appConfig = {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    registerMemoryWikiGatewayMethods({ api, config, resolveConfig, appConfig });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.search");
+    if (!handler) {
+      throw new Error("wiki.search handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {
+        agentId: "removed-agent",
+        query: "sessions",
+      },
+      respond,
+    });
+
+    expect(resolveConfig).not.toHaveBeenCalled();
+    expect(searchMemoryWiki).not.toHaveBeenCalled();
+    expect(readRespondError(respond)).toEqual({
+      code: "INVALID_REQUEST",
+      message: 'Unknown agent id "removed-agent". Known agents: main.',
     });
   });
 

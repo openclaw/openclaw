@@ -71,11 +71,20 @@ const readAgentMemoryFileMock = vi.fn(
 vi.mock("./tools.runtime.js", () => ({
   resolveMemoryBackendConfig: ({
     cfg,
+    agentId,
   }: {
-    cfg?: { memory?: { backend?: string; qmd?: unknown } };
+    cfg?: {
+      memory?: { qmd?: unknown };
+      agents?: {
+        list?: Array<{ id?: string; memory?: { qmd?: unknown } }>;
+      };
+    };
+    agentId?: string;
   }) => ({
     backend,
-    qmd: cfg?.memory?.qmd,
+    qmd:
+      cfg?.agents?.list?.find((agent) => agent.id === agentId)?.memory?.qmd ??
+      cfg?.memory?.qmd,
   }),
   getMemorySearchManager: getMemorySearchManagerMock,
   readAgentMemoryFile: readAgentMemoryFileMock,

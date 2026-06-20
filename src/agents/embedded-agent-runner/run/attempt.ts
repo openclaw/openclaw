@@ -92,7 +92,11 @@ import {
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
-import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentMemoryConfig,
+  resolveSessionAgentIds,
+} from "../../agent-scope.js";
 import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
@@ -3315,7 +3319,10 @@ export async function runEmbeddedAttempt(
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
               availableTools: new Set(capabilityToolNames),
-              citationsMode: params.config?.memory?.citations,
+              citationsMode: params.config
+                ? resolveAgentMemoryConfig(params.config, sessionAgentId)?.citations
+                : undefined,
+              agentId: sessionAgentId,
               modelId: params.modelId,
               contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
               providerId: params.provider,

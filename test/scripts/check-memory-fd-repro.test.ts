@@ -148,7 +148,7 @@ describe("check-memory-fd-repro", () => {
         token: "test-token",
       });
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      const memorySearch = config.agents.defaults.memorySearch;
+      const memorySearch = config.memory.search;
 
       expect(memorySearch).toMatchObject({
         provider: "none",

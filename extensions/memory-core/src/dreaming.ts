@@ -1,6 +1,10 @@
 // Memory Core plugin module implements dreaming behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  listAgentIds,
+  resolveDefaultAgentId,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
   DEFAULT_MEMORY_DREAMING_FREQUENCY as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
   DEFAULT_MEMORY_DEEP_DREAMING_LIMIT as DEFAULT_MEMORY_DREAMING_LIMIT,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT as DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
@@ -46,6 +50,7 @@ type CronPayload =
   | { kind: "systemEvent"; text: string }
   | { kind: "agentTurn"; message: string; lightContext?: boolean };
 type ManagedCronJobCreate = {
+  agentId?: string;
   name: string;
   description: string;
   enabled: boolean;
@@ -59,6 +64,7 @@ type ManagedCronJobCreate = {
 };
 
 type ManagedCronJobPatch = {
+  agentId?: string;
   name?: string;
   description?: string;
   enabled?: boolean;
@@ -73,6 +79,7 @@ type ManagedCronJobPatch = {
 
 type ManagedCronJobLike = {
   id: string;
+  agentId?: string;
   name?: string;
   description?: string;
   enabled?: boolean;
@@ -155,18 +162,23 @@ function formatRepairSummary(repair: {
   return actions.join(", ");
 }
 
-function resolveManagedCronDescription(config: ShortTermPromotionDreamingConfig): string {
+function resolveManagedCronDescription(
+  config: ShortTermPromotionDreamingConfig,
+  agentId: string,
+): string {
   const recencyHalfLifeDays =
     config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
-  return `${MANAGED_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${config.maxAgeDays ?? "none"}).`;
+  return `${MANAGED_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md for agent=${agentId} (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${config.maxAgeDays ?? "none"}).`;
 }
 
 function buildManagedDreamingCronJob(
   config: ShortTermPromotionDreamingConfig,
+  agentId = "main",
 ): ManagedCronJobCreate {
   return {
-    name: MANAGED_DREAMING_CRON_NAME,
-    description: resolveManagedCronDescription(config),
+    agentId,
+    name: `${MANAGED_DREAMING_CRON_NAME} (${agentId})`,
+    description: resolveManagedCronDescription(config, agentId),
     enabled: true,
     schedule: {
       kind: "cron",
@@ -207,7 +219,21 @@ function isManagedDreamingJob(job: ManagedCronJobLike): boolean {
   }
   const name = normalizeTrimmedString(job.name);
   const payloadToken = resolveManagedDreamingPayloadToken(job.payload);
-  return name === MANAGED_DREAMING_CRON_NAME && payloadToken === DREAMING_SYSTEM_EVENT_TEXT;
+  return (
+    (name === MANAGED_DREAMING_CRON_NAME ||
+      name?.startsWith(`${MANAGED_DREAMING_CRON_NAME} (`) === true) &&
+    payloadToken === DREAMING_SYSTEM_EVENT_TEXT
+  );
+}
+
+function isManagedDreamingJobForAgent(job: ManagedCronJobLike, agentId: string): boolean {
+  const normalizedJobAgentId = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.agentId));
+  const normalizedAgentId = normalizeLowercaseStringOrEmpty(agentId);
+  return (
+    isManagedDreamingJob(job) &&
+    (normalizedJobAgentId === normalizedAgentId ||
+      (!normalizedJobAgentId && normalizedAgentId === "main"))
+  );
 }
 
 function isLegacyPhaseDreamingJob(job: ManagedCronJobLike): boolean {
@@ -271,6 +297,12 @@ function buildManagedDreamingPatch(
 
   if (!compareOptionalStrings(normalizeTrimmedString(job.name), desired.name)) {
     patch.name = desired.name;
+  }
+  if (
+    normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.agentId)) !==
+    normalizeLowercaseStringOrEmpty(desired.agentId)
+  ) {
+    patch.agentId = desired.agentId;
   }
   if (!compareOptionalStrings(normalizeTrimmedString(job.description), desired.description)) {
     patch.description = desired.description;
@@ -388,6 +420,7 @@ function hasPendingManagedDreamingCronEvent(sessionKey?: string): boolean {
 export function resolveShortTermPromotionDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): ShortTermPromotionDreamingConfig {
   const resolved = resolveMemoryDeepDreamingConfig(params);
   return {
@@ -412,6 +445,7 @@ export async function reconcileShortTermDreamingCronJob(params: {
   cron: CronServiceLike | null;
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
+  agentId?: string;
 }): Promise<ReconcileResult> {
   const cron = params.cron;
   if (!cron) {
@@ -419,7 +453,8 @@ export async function reconcileShortTermDreamingCronJob(params: {
   }
 
   const allJobs = await cron.list({ includeDisabled: true });
-  const managed = allJobs.filter(isManagedDreamingJob);
+  const agentId = params.agentId ?? "main";
+  const managed = allJobs.filter((job) => isManagedDreamingJobForAgent(job, agentId));
   const legacyPhaseJobs = allJobs.filter(isLegacyPhaseDreamingJob);
 
   if (!params.config.enabled) {
@@ -447,7 +482,7 @@ export async function reconcileShortTermDreamingCronJob(params: {
     return { status: "disabled", removed };
   }
 
-  const desired = buildManagedDreamingCronJob(params.config);
+  const desired = buildManagedDreamingCronJob(params.config, agentId);
   if (managed.length === 0) {
     await cron.add(desired);
     const migratedLegacy = await migrateLegacyPhaseDreamingCronJobs({
@@ -498,6 +533,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   trigger?: string;
   workspaceDir?: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
   subagent?: OpenClawPluginApi["runtime"]["subagent"];
@@ -518,7 +554,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   const workspaceCandidates = params.cfg
     ? resolveMemoryDreamingWorkspaces(params.cfg, {
         primaryWorkspaceDir: fallbackWorkspaceDir,
-        primaryAgentId: "main",
+        primaryAgentId: params.agentId ?? resolveDefaultAgentId(params.cfg),
+        agentIds: params.agentId ? [params.agentId] : undefined,
       }).map((entry) => entry.workspaceDir)
     : [];
   const seenWorkspaces = new Set<string>();
@@ -552,7 +589,10 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   let totalCandidates = 0;
   let totalApplied = 0;
   let failedWorkspaces = 0;
-  const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
+  const pluginConfig =
+    params.cfg && params.agentId
+      ? resolveMemoryCorePluginConfig(params.cfg, params.agentId)
+      : undefined;
   const detachNarratives = params.trigger === "cron";
   const [
     { writeDeepDreamingReport },
@@ -576,6 +616,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         workspaceDir,
         pluginConfig,
         cfg: params.cfg,
+        agentId: params.agentId,
         logger: params.logger,
         subagent: params.subagent,
         detachNarratives,
@@ -583,7 +624,10 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       });
 
       const reportLines: string[] = [];
-      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+      const repair = await repairShortTermPromotionArtifacts({
+        workspaceDir,
+        agentId: params.agentId,
+      });
       if (repair.changed) {
         params.logger.info(
           `memory-core: normalized recall artifacts before dreaming (${formatRepairSummary(repair)}) [workspace=${workspaceDir}].`,
@@ -592,6 +636,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       }
       const candidates = await rankShortTermPromotionCandidates({
         workspaceDir,
+        agentId: params.agentId,
         limit: params.config.limit,
         minScore: params.config.minScore,
         minRecallCount: params.config.minRecallCount,
@@ -618,6 +663,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       }
       const applied = await applyShortTermPromotions({
         workspaceDir,
+        agentId: params.agentId,
         candidates,
         limit: params.config.limit,
         minScore: params.config.minScore,
@@ -646,6 +692,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       }
       await writeDeepDreamingReport({
         workspaceDir,
+        agentId: params.agentId,
         bodyLines: reportLines,
         nowMs: sweepNowMs,
         timezone: params.config.timezone,
@@ -661,6 +708,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         if (!params.subagent) {
           await appendFallbackNarrativeEntry({
             workspaceDir,
+            agentId: params.agentId,
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
@@ -671,6 +719,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           runDetachedDreamNarrative({
             subagent: params.subagent,
             workspaceDir,
+            agentId: params.agentId,
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
@@ -681,6 +730,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           await generateAndAppendDreamNarrative({
             subagent: params.subagent,
             workspaceDir,
+            agentId: params.agentId,
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
@@ -753,39 +803,44 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     resolveStartupCron = null;
   };
 
-  const runtimeConfigKey = (config: ShortTermPromotionDreamingConfig): string =>
-    [
-      config.enabled ? "enabled" : "disabled",
-      config.cron,
-      config.timezone ?? "",
-      String(config.limit),
-      String(config.minScore),
-      String(config.minRecallCount),
-      String(config.minUniqueQueries),
-      String(config.recencyHalfLifeDays ?? ""),
-      String(config.maxAgeDays ?? ""),
-      config.verboseLogging ? "verbose" : "quiet",
-      config.storage?.mode ?? "",
-      config.storage?.separateReports ? "separate" : "inline",
-    ].join("|");
+  const runtimeConfigKey = (
+    plans: Array<{ agentId: string; config: ShortTermPromotionDreamingConfig }>,
+  ): string =>
+    plans
+      .map(({ agentId, config }) =>
+        [
+          agentId,
+          config.enabled ? "enabled" : "disabled",
+          config.cron,
+          config.timezone ?? "",
+          String(config.limit),
+          String(config.minScore),
+          String(config.minRecallCount),
+          String(config.minUniqueQueries),
+          String(config.recencyHalfLifeDays ?? ""),
+          String(config.maxAgeDays ?? ""),
+          config.verboseLogging ? "verbose" : "quiet",
+          config.storage?.mode ?? "",
+          config.storage?.separateReports ? "separate" : "inline",
+        ].join("|"),
+      )
+      .toSorted()
+      .join("\n");
 
   const reconcileManagedDreamingCron = async (params: {
     reason: "startup" | "startup_retry" | "runtime";
     startupConfig?: OpenClawConfig;
     startupCron?: (() => CronServiceLike | null) | null;
-  }): Promise<ShortTermPromotionDreamingConfig> => {
+  }): Promise<void> => {
     const startupCfg =
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
-    const pluginConfig =
-      params.reason === "startup"
-        ? (resolveMemoryCorePluginConfig(startupCfg) ??
-          resolveMemoryCorePluginConfig(api.config) ??
-          api.pluginConfig)
-        : resolveMemoryCorePluginConfig(startupCfg);
-    const config = resolveShortTermPromotionDreamingConfig({
-      pluginConfig,
-      cfg: startupCfg,
-    });
+    const plans = listAgentIds(startupCfg).map((agentId) => ({
+      agentId,
+      config: resolveShortTermPromotionDreamingConfig({
+        cfg: startupCfg,
+        agentId,
+      }),
+    }));
     if (params.reason === "startup") {
       resolveStartupCron = params.startupCron ?? null;
     }
@@ -805,8 +860,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         // Ignore — fall through with cron = null
       }
     }
-    const configKey = runtimeConfigKey(config);
-    if (!cron && config.enabled && !unavailableCronWarningEmitted) {
+    const configKey = runtimeConfigKey(plans);
+    if (!cron && plans.some((plan) => plan.config.enabled) && !unavailableCronWarningEmitted) {
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
       // The runtime reconciliation path (heartbeat-driven) will still warn if the
       // cron service remains unavailable after boot.
@@ -828,7 +883,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     // Startup retries only probe cron availability; the exhausted retry path
     // re-enters runtime reconciliation so persistent failures still warn once.
     if (!cron && params.reason === "startup_retry") {
-      return config;
+      return;
     }
     if (params.reason === "runtime") {
       const now = Date.now();
@@ -839,18 +894,29 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         lastRuntimeConfigKey === configKey &&
         lastRuntimeCronRef === cron
       ) {
-        return config;
+        return;
       }
       lastRuntimeReconcileAtMs = now;
       lastRuntimeConfigKey = configKey;
       lastRuntimeCronRef = cron;
     }
-    await reconcileShortTermDreamingCronJob({
-      cron,
-      config,
-      logger: api.logger,
-    });
-    return config;
+    for (const plan of plans) {
+      await reconcileShortTermDreamingCronJob({
+        cron,
+        config: plan.config,
+        logger: api.logger,
+        agentId: plan.agentId,
+      });
+    }
+    if (cron) {
+      const configuredAgentIds = new Set(plans.map((plan) => plan.agentId));
+      for (const job of await cron.list({ includeDisabled: true })) {
+        const jobAgentId = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.agentId));
+        if (isManagedDreamingJob(job) && (!jobAgentId || !configuredAgentIds.has(jobAgentId))) {
+          await cron.remove(job.id);
+        }
+      }
+    }
   };
 
   const scheduleStartupCronRetry = (): void => {
@@ -944,17 +1010,23 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       if (!shouldHandleManagedDreaming && !hasCronManagementContext()) {
         return undefined;
       }
-      const config = await reconcileManagedDreamingCron({
+      await reconcileManagedDreamingCron({
         reason: "runtime",
       });
       if (!shouldHandleManagedDreaming) {
         return undefined;
       }
+      const agentId = ctx.agentId ?? resolveDefaultAgentId(currentConfig);
+      const config = resolveShortTermPromotionDreamingConfig({
+        cfg: currentConfig,
+        agentId,
+      });
       return await runShortTermDreamingPromotionIfTriggered({
         cleanedBody: event.cleanedBody,
         trigger: ctx.trigger,
         workspaceDir: ctx.workspaceDir,
         cfg: currentConfig,
+        agentId,
         config,
         logger: api.logger,
         subagent: config.enabled ? api.runtime?.subagent : undefined,

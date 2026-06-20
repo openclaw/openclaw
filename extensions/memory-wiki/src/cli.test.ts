@@ -13,6 +13,7 @@ import {
   runWikiOkfImport,
   runWikiStatus,
 } from "./cli.js";
+import type { OpenClawConfig } from "../api.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { resolveMemoryWikiImportRunRecordPath } from "./import-runs-state.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
@@ -175,6 +176,52 @@ describe("memory-wiki cli", () => {
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[CLI Alpha](syntheses/cli-alpha.md)",
     );
+  });
+
+  it("uses the requested agent's config for wiki commands", async () => {
+    const { rootDir, config } = await createCliVault();
+    const writerRoot = path.join(rootDir, "writer");
+    const writerConfig = {
+      ...config,
+      vault: {
+        ...config.vault,
+        path: writerRoot,
+      },
+    };
+    const resolveConfig = vi.fn((agentId?: string) =>
+      agentId === "writer" ? writerConfig : config,
+    );
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, resolveConfig);
+
+    await program.parseAsync(["wiki", "--agent", "writer", "init"], { from: "user" });
+
+    await expect(fs.stat(writerRoot)).resolves.toMatchObject({ isDirectory: expect.any(Function) });
+    expect(resolveConfig).toHaveBeenCalledWith("writer");
+  });
+
+  it("rejects unknown agents when the app config provides an agent registry", async () => {
+    const { config } = await createCliVault();
+    const resolveConfig = vi.fn(() => config);
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(
+      program,
+      resolveConfig,
+      {
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig,
+    );
+    resolveConfig.mockClear();
+
+    await expect(
+      program.parseAsync(["wiki", "--agent", "missing", "init"], { from: "user" }),
+    ).rejects.toThrow('Unknown agent id "missing". Known agents: main.');
+
+    expect(resolveConfig).not.toHaveBeenCalled();
   });
 
   it("registers OKF import and searches imported concepts", async () => {
@@ -396,13 +443,14 @@ cli note
   });
 
   it("routes active bridge status and doctor through the gateway", async () => {
-    const { config } = await createCliVault({
+    const { config: baseConfig } = await createCliVault({
       config: {
         vaultMode: "bridge",
         bridge: { enabled: true, readMemoryArtifacts: true },
       },
       initialize: true,
     });
+    const config = { ...baseConfig, agentId: "writer" };
     const status = createGatewayStatus(config);
     const report: MemoryWikiDoctorReport = {
       healthy: false,
@@ -433,14 +481,14 @@ cli note
       1,
       "wiki.status",
       { timeout: "30000" },
-      undefined,
+      { agentId: "writer" },
       { progress: false },
     );
     expect(callGatewayFromCliMock).toHaveBeenNthCalledWith(
       2,
       "wiki.doctor",
       { timeout: "30000" },
-      undefined,
+      { agentId: "writer" },
       { progress: false },
     );
   });
@@ -570,13 +618,17 @@ cli note
   });
 
   it("routes active bridge imports through the gateway and keeps disabled bridge imports local", async () => {
-    const active = await createCliVault({
+    const activeVault = await createCliVault({
       config: {
         vaultMode: "bridge",
         bridge: { enabled: true, readMemoryArtifacts: true },
       },
       initialize: true,
     });
+    const active = {
+      ...activeVault,
+      config: { ...activeVault.config, agentId: "writer" },
+    };
     callGatewayFromCliMock.mockResolvedValueOnce({
       importedCount: 1,
       updatedCount: 0,
@@ -596,7 +648,7 @@ cli note
     expect(callGatewayFromCliMock).toHaveBeenCalledWith(
       "wiki.bridge.import",
       { timeout: "30000" },
-      undefined,
+      { agentId: "writer" },
       { progress: false },
     );
 

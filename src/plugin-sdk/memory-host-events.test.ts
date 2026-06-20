@@ -143,6 +143,53 @@ describe("memory host event journal helpers", () => {
       "memory.recall.skipped",
     ]);
   });
+
+  it("keeps agent-scoped journals isolated while preserving the legacy journal", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-agents-");
+
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-05T12:00:00.000Z",
+        query: "research-only",
+        resultCount: 0,
+        results: [],
+      },
+      "Research",
+    );
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-05T12:01:00.000Z",
+        query: "writer-only",
+        resultCount: 0,
+        results: [],
+      },
+      "writer",
+    );
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.recorded",
+      timestamp: "2026-04-05T12:02:00.000Z",
+      query: "legacy-only",
+      resultCount: 0,
+      results: [],
+    });
+
+    expect(resolveMemoryHostEventLogPath(workspaceDir, "Research")).toBe(
+      path.join(workspaceDir, "memory", ".dreams", "agents", "research", "events.jsonl"),
+    );
+    await expect(
+      readMemoryHostEvents({ workspaceDir, agentId: "research" }),
+    ).resolves.toMatchObject([{ type: "memory.recall.recorded", query: "research-only" }]);
+    await expect(readMemoryHostEvents({ workspaceDir, agentId: "writer" })).resolves.toMatchObject([
+      { type: "memory.recall.recorded", query: "writer-only" },
+    ]);
+    await expect(readMemoryHostEvents({ workspaceDir })).resolves.toMatchObject([
+      { type: "memory.recall.recorded", query: "legacy-only" },
+    ]);
+  });
 });
 
 describe("createPersistentDedupe", () => {

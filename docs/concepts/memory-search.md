@@ -18,11 +18,9 @@ backend, set a provider explicitly:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai", // or "gemini", "local", "ollama", "openai-compatible", etc.
-      },
+  memory: {
+    search: {
+      provider: "openai", // or "gemini", "local", "ollama", "openai-compatible", etc.
     },
   },
 }
@@ -39,8 +37,8 @@ may still require native build approval: `pnpm approve-builds` then
 
 Some OpenAI-compatible embedding endpoints require asymmetric labels such as
 `input_type: "query"` for searches and `input_type: "document"` or `"passage"`
-for indexed chunks. Configure those with `memorySearch.queryInputType` and
-`memorySearch.documentInputType`; see the [Memory configuration reference](/reference/memory-config#provider-specific-config).
+for indexed chunks. Configure those with `memory.search.queryInputType` and
+`memory.search.documentInputType`; see the [Memory configuration reference](/reference/memory-config#provider-specific-config).
 
 ## Supported providers
 
@@ -82,7 +80,7 @@ If only one path is available, the other runs alone. Intentional FTS-only mode
 lexical ranking when embeddings are unavailable.
 
 Explicit non-local embedding providers are different. If you set
-`memorySearch.provider` to a concrete remote-backed provider and that provider
+`memory.search.provider` to a concrete remote-backed provider and that provider
 is unavailable at runtime, `memory_search` reports memory as unavailable instead
 of silently using FTS-only results. This keeps a broken configured semantic
 provider visible. Set `provider: "none"` for deliberate FTS-only recall, or fix
@@ -117,14 +115,12 @@ different daily notes.
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        query: {
-          hybrid: {
-            mmr: { enabled: true },
-            temporalDecay: { enabled: true },
-          },
+  memory: {
+    search: {
+      query: {
+        hybrid: {
+          mmr: { enabled: true },
+          temporalDecay: { enabled: true },
         },
       },
     },
@@ -143,7 +139,7 @@ setup.
 
 You can optionally index session transcripts so `memory_search` can recall
 earlier conversations. This is opt-in via
-`memorySearch.experimental.sessionMemory`. See the
+`memory.search.experimental.sessionMemory`. See the
 [configuration reference](/reference/memory-config) for details.
 
 ## Troubleshooting
@@ -156,7 +152,7 @@ earlier conversations. This is opt-in via
 
 **Local embeddings time out?** `ollama`, `lmstudio`, and `local` use a longer
 inline batch timeout by default. If the host is simply slow, set
-`agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds` and rerun
+`memory.search.sync.embeddingBatchTimeoutSeconds` and rerun
 `openclaw memory index --force`.
 
 **CJK text not found?** Rebuild the FTS index with

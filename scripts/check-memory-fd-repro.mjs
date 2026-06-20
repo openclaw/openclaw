@@ -306,22 +306,24 @@ export function writeConfig({ homeDir, workspaceDir, port, token }) {
   const configPath = path.join(configDir, "openclaw.json");
   const indexPath = path.join(configDir, "memory", "main.sqlite");
   const config = {
+    memory: {
+      search: {
+        provider: "none",
+        model: "",
+        store: {
+          path: indexPath,
+          vector: { enabled: false },
+        },
+        sync: {
+          watch: true,
+          onSessionStart: false,
+          onSearch: false,
+        },
+      },
+    },
     agents: {
       defaults: {
         workspace: workspaceDir,
-        memorySearch: {
-          provider: "none",
-          model: "",
-          store: {
-            path: indexPath,
-            vector: { enabled: false },
-          },
-          sync: {
-            watch: true,
-            onSessionStart: false,
-            onSearch: false,
-          },
-        },
       },
       list: [
         {

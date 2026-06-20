@@ -46,6 +46,7 @@ import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./d
 import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
 
 type RuntimeMemoryAuditContext = {
+  agentId: string;
   workspaceDir?: string;
   backend?: string;
   dbPath?: string;
@@ -203,6 +204,7 @@ async function resolveRuntimeMemoryAuditContext(
     const customQmd =
       isRecord(status.custom) && isRecord(status.custom.qmd) ? status.custom.qmd : null;
     return {
+      agentId,
       workspaceDir: status.workspaceDir?.trim(),
       backend: status.backend,
       dbPath: status.dbPath,
@@ -251,11 +253,13 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
   try {
     const context = await resolveRuntimeMemoryAuditContext(cfg);
     const workspaceDir = context?.workspaceDir?.trim();
-    if (!workspaceDir) {
+    const agentId = context?.agentId;
+    if (!workspaceDir || !agentId) {
       return;
     }
     const audit = await auditShortTermPromotionArtifacts({
       workspaceDir,
+      agentId,
       qmd:
         context?.backend === "qmd"
           ? {
@@ -268,7 +272,7 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
     if (message) {
       note(message, "Memory search");
     }
-    const dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+    const dreamingAudit = await auditDreamingArtifacts({ workspaceDir, agentId });
     const dreamingMessage = buildDreamingArtifactIssueNote(dreamingAudit);
     if (dreamingMessage) {
       note(dreamingMessage, "Memory search");
@@ -287,11 +291,13 @@ export async function maybeRepairMemoryRecallHealth(params: {
   try {
     const context = await resolveRuntimeMemoryAuditContext(params.cfg);
     const workspaceDir = context?.workspaceDir?.trim();
-    if (!workspaceDir) {
+    const agentId = context?.agentId;
+    if (!workspaceDir || !agentId) {
       return;
     }
     const audit = await auditShortTermPromotionArtifacts({
       workspaceDir,
+      agentId,
       qmd:
         context?.backend === "qmd"
           ? {
@@ -307,7 +313,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
         initialValue: true,
       });
       if (approved) {
-        const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+        const repair = await repairShortTermPromotionArtifacts({ workspaceDir, agentId });
         if (repair.changed) {
           const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
           const details = [
@@ -329,7 +335,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
       }
     }
 
-    const dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+    const dreamingAudit = await auditDreamingArtifacts({ workspaceDir, agentId });
     const hasFixableDreamingIssue = dreamingAudit.issues.some((issue) => issue.fixable);
     if (!hasFixableDreamingIssue) {
       return;
@@ -341,7 +347,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
     if (!approvedDreamingRepair) {
       return;
     }
-    const dreamingRepair = await repairDreamingArtifacts({ workspaceDir });
+    const dreamingRepair = await repairDreamingArtifacts({ workspaceDir, agentId });
     if (!dreamingRepair.changed) {
       return;
     }
@@ -391,7 +397,7 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
 /**
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` — config-only checks where possible;
- * may spawn a short-lived probe process when `memory.backend=qmd` to verify
+ * may spawn a short-lived probe process when `agents.*.memory.backend=qmd` to verify
  * the configured `qmd` binary is available.
  */
 export async function noteMemorySearchHealth(
@@ -485,7 +491,7 @@ export async function noteMemorySearchHealth(
         `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
         `- Set a local GGUF model path in config`,
         suggestedRemoteProvider
-          ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`
+          ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set memory.search.provider ${suggestedRemoteProvider}`)}`
           : `- Switch to a remote embedding provider in config`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
@@ -504,10 +510,10 @@ export async function noteMemorySearchHealth(
     note(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embeddings endpoint was configured.`,
-        "Set agents.defaults.memorySearch.remote.baseUrl to the /v1 endpoint for your embeddings server.",
+        "Set memory.search.remote.baseUrl to the /v1 endpoint for your embeddings server.",
         "",
         "Fix:",
-        `- ${formatCliCommand("openclaw config set agents.defaults.memorySearch.remote.baseUrl http://127.0.0.1:1234/v1")}`,
+        `- ${formatCliCommand("openclaw config set memory.search.remote.baseUrl http://127.0.0.1:1234/v1")}`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].join("\n"),
@@ -520,10 +526,10 @@ export async function noteMemorySearchHealth(
     note(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embedding model was configured.`,
-        "Set agents.defaults.memorySearch.model to the embedding model id your server expects.",
+        "Set memory.search.model to the embedding model id your server expects.",
         "",
         "Fix:",
-        `- ${formatCliCommand("openclaw config set agents.defaults.memorySearch.model text-embedding-bge-m3")}`,
+        `- ${formatCliCommand("openclaw config set memory.search.model text-embedding-bge-m3")}`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].join("\n"),
@@ -590,7 +596,7 @@ export async function noteMemorySearchHealth(
       "Fix (pick one):",
       `- Set ${envVar} in your environment`,
       `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
-      `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
+      `- To disable: ${formatCliCommand("openclaw config set memory.search.enabled false")}`,
       "",
       `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
     ].join("\n"),

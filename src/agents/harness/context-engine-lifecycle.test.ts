@@ -127,6 +127,24 @@ describe("harness context engine lifecycle", () => {
     });
   });
 
+  it("passes the resolved agent identity into assemble hooks", async () => {
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: "agent:writer:session",
+      messages: [textMessage("user", "visible ask", 1)],
+      agentId: "writer",
+      modelId: "gpt-5.5",
+    });
+
+    expect(assemble.mock.calls.at(0)?.[0]?.agentId).toBe("writer");
+  });
+
   it("passes runtime settings through a configured context engine across lifecycle hooks", async () => {
     const engineId = uniqueConfiguredProofEngineId();
     const captured: Array<{

@@ -18,13 +18,11 @@ describe("secrets runtime snapshot inactive core surfaces", () => {
   it("skips inactive core refs and emits diagnostics", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        agents: {
-          defaults: {
-            memorySearch: {
-              enabled: false,
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "DISABLED_MEMORY_API_KEY" },
-              },
+        memory: {
+          search: {
+            enabled: false,
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "DISABLED_MEMORY_API_KEY" },
             },
           },
         },
@@ -41,7 +39,7 @@ describe("secrets runtime snapshot inactive core surfaces", () => {
     });
 
     expectWarningPaths(snapshot, [
-      "agents.defaults.memorySearch.remote.apiKey",
+      "memory.search.remote.apiKey",
       "gateway.auth.password",
     ]);
   });

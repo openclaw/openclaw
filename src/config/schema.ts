@@ -266,9 +266,14 @@ function collectExtensionHintKeys(
     if (!id) {
       continue;
     }
-    const prefix = `plugins.entries.${id}`;
-    collectPrefixedHintKeys(prefix);
-    collectSchemaKeys(plugin.configSchema, `${prefix}.config`);
+    for (const prefix of [
+      `plugins.entries.${id}.config`,
+      `memory.extensions.${id}`,
+      `agents.list.*.memory.extensions.${id}`,
+    ]) {
+      collectPrefixedHintKeys(prefix);
+      collectSchemaKeys(plugin.configSchema, prefix);
+    }
   }
 
   for (const channel of channels) {
@@ -311,6 +316,18 @@ function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): Co
       help: `Plugin-defined config payload for ${id}.`,
     };
 
+    const memoryBasePaths = [
+      `memory.extensions.${id}`,
+      `agents.list.*.memory.extensions.${id}`,
+    ];
+    for (const memoryBasePath of memoryBasePaths) {
+      next[memoryBasePath] = {
+        ...next[memoryBasePath],
+        label: `${name} Memory Config`,
+        help: `Per-agent memory config owned by ${id}.`,
+      };
+    }
+
     const uiHints = plugin.configUiHints ?? {};
     for (const [relPathRaw, hint] of Object.entries(uiHints)) {
       const relPath = relPathRaw.trim().replace(/^\./, "");
@@ -322,6 +339,13 @@ function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): Co
         ...next[key],
         ...hint,
       };
+      for (const memoryBasePath of memoryBasePaths) {
+        const memoryKey = `${memoryBasePath}.${relPath}`;
+        next[memoryKey] = {
+          ...next[memoryKey],
+          ...hint,
+        };
+      }
     }
   }
   return next;
@@ -407,13 +431,25 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
   const root = asJsonSchemaObject(next);
   const pluginsNode = asJsonSchemaObject(root?.properties?.plugins);
   const entriesNode = asJsonSchemaObject(pluginsNode?.properties?.entries);
-  if (!entriesNode) {
+  const memoryNode = asJsonSchemaObject(root?.properties?.memory);
+  const globalExtensionsNode = asJsonSchemaObject(memoryNode?.properties?.extensions);
+  const agentsNode = asJsonSchemaObject(root?.properties?.agents);
+  const listNode = asJsonSchemaObject(agentsNode?.properties?.list);
+  const listItemsNode = asJsonSchemaObject(listNode?.items);
+  const listMemoryNode = asJsonSchemaObject(listItemsNode?.properties?.memory);
+  const listExtensionsNode = asJsonSchemaObject(listMemoryNode?.properties?.extensions);
+  if (!entriesNode || !globalExtensionsNode || !listExtensionsNode) {
     return next;
   }
 
   const entryBase = asJsonSchemaObject(entriesNode.additionalProperties);
   const entryProperties = entriesNode.properties ?? {};
   entriesNode.properties = entryProperties;
+  const memoryExtensionProperties = [globalExtensionsNode, listExtensionsNode].map((node) => {
+    const properties = node.properties ?? {};
+    node.properties = properties;
+    return properties;
+  });
 
   for (const plugin of plugins) {
     if (!plugin.configSchema) {
@@ -438,6 +474,14 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
       config: nextConfigSchema,
     };
     entryProperties[plugin.id] = entryObject;
+    for (const properties of memoryExtensionProperties) {
+      const existing = asJsonSchemaObject(properties[plugin.id]);
+      const incoming = asJsonSchemaObject(plugin.configSchema);
+      properties[plugin.id] =
+        existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)
+          ? mergeObjectSchema(existing, incoming)
+          : cloneSchema(plugin.configSchema);
+    }
   }
 
   return next;

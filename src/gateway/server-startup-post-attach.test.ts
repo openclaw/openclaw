@@ -766,7 +766,9 @@ describe("startGatewayPostAttachRuntime", () => {
 
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
     expect(
-      testing.resolveGatewayMemoryStartupPolicy({ memory: { backend: "qmd" } } as never),
+      testing.resolveGatewayMemoryStartupPolicy({
+        memory: { backend: "qmd" },
+      } as never),
     ).toEqual({ mode: "off" });
     expect(
       testing.resolveGatewayMemoryStartupPolicy({
@@ -809,7 +811,10 @@ describe("startGatewayPostAttachRuntime", () => {
       await startGatewaySidecars({
         cfg: {
           hooks: { internal: { enabled: false } },
-          memory: { backend: "qmd", qmd: { update: { startup: "idle", startupDelayMs: 25 } } },
+          memory: {
+            backend: "qmd",
+            qmd: { update: { startup: "idle", startupDelayMs: 25 } },
+          },
         } as never,
         pluginRegistry: createPostAttachParams().pluginRegistry,
         defaultWorkspaceDir: "/tmp/openclaw-workspace",

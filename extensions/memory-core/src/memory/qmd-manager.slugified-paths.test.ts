@@ -175,9 +175,6 @@ describe("QmdMemoryManager slugified path resolution", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
 
     cfg = {
-      agents: {
-        list: [{ id: agentId, default: true, workspace: workspaceDir }],
-      },
       memory: {
         backend: "qmd",
         qmd: {
@@ -185,6 +182,9 @@ describe("QmdMemoryManager slugified path resolution", () => {
           update: { interval: "0s", debounceMs: 60_000, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
         },
+      },
+      agents: {
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
       },
     } as OpenClawConfig;
   });

@@ -7,6 +7,7 @@ export const CANONICAL_ROOT_MEMORY_FILENAME = "MEMORY.md";
 /** Legacy root memory file name kept out of auxiliary scans. */
 export const LEGACY_ROOT_MEMORY_FILENAME = "memory.md";
 const ROOT_MEMORY_REPAIR_RELATIVE_DIR = ".openclaw-repair/root-memory";
+const MEMORY_PRIVATE_ARTIFACTS_RELATIVE_DIR = "memory/.dreams";
 
 /** Resolves the canonical root memory file path for a workspace. */
 export function resolveCanonicalRootMemoryPath(workspaceDir: string): string {
@@ -54,7 +55,7 @@ export async function resolveCanonicalRootMemoryFile(workspaceDir: string): Prom
   return null;
 }
 
-/** Skips legacy/repair root memory paths when scanning workspace memory files. */
+/** Skips non-indexable legacy, repair, and private memory paths when scanning workspace files. */
 export function shouldSkipRootMemoryAuxiliaryPath(params: {
   workspaceDir: string;
   absPath: string;
@@ -67,6 +68,8 @@ export function shouldSkipRootMemoryAuxiliaryPath(params: {
   return (
     normalized === LEGACY_ROOT_MEMORY_FILENAME ||
     normalized === ROOT_MEMORY_REPAIR_RELATIVE_DIR ||
-    normalized.startsWith(`${ROOT_MEMORY_REPAIR_RELATIVE_DIR}/`)
+    normalized.startsWith(`${ROOT_MEMORY_REPAIR_RELATIVE_DIR}/`) ||
+    normalized === MEMORY_PRIVATE_ARTIFACTS_RELATIVE_DIR ||
+    normalized.startsWith(`${MEMORY_PRIVATE_ARTIFACTS_RELATIVE_DIR}/`)
   );
 }

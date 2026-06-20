@@ -746,7 +746,7 @@ describe("noteMemorySearchHealth", () => {
 
     const message = firstNoteMessage();
     expect(message).toContain('provider is set to "openai-compatible"');
-    expect(message).toContain("memorySearch.model");
+    expect(message).toContain("memory.search.model");
     expect(message).toContain("openclaw config set");
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
@@ -1019,7 +1019,12 @@ describe("memory recall doctor integration", () => {
 
     expect(auditShortTermPromotionArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
+      agentId: "agent-default",
       qmd: undefined,
+    });
+    expect(auditDreamingArtifacts).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/agent-default/workspace",
+      agentId: "agent-default",
     });
     expect(note).toHaveBeenCalledTimes(1);
     const message = firstNoteMessage();
@@ -1062,6 +1067,7 @@ describe("memory recall doctor integration", () => {
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
     expect(repairShortTermPromotionArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
+      agentId: "agent-default",
     });
     expect(note).toHaveBeenCalledTimes(1);
     const message = firstNoteMessage();
@@ -1105,6 +1111,7 @@ describe("memory recall doctor integration", () => {
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
     expect(repairDreamingArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
+      agentId: "agent-default",
     });
     const message = String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
     expect(message).toContain("Dreaming artifacts repaired:");

@@ -117,6 +117,7 @@ type FacadeModule = {
   ) => void;
   auditShortTermPromotionArtifacts: (params: {
     workspaceDir: string;
+    agentId?: string;
     qmd?: {
       dbPath?: string;
       collections?: number;
@@ -124,6 +125,7 @@ type FacadeModule = {
   }) => Promise<ShortTermAuditSummary>;
   auditDreamingArtifacts: (params: {
     workspaceDir: string;
+    agentId?: string;
   }) => Promise<DreamingArtifactsAuditSummary>;
   getBuiltinMemoryEmbeddingProviderDoctorMetadata: (
     providerId: string,
@@ -140,9 +142,11 @@ type FacadeModule = {
   MemoryIndexManager: MemoryIndexManagerFacade;
   repairShortTermPromotionArtifacts: (params: {
     workspaceDir: string;
+    agentId?: string;
   }) => Promise<RepairShortTermPromotionArtifactsResult>;
   repairDreamingArtifacts: (params: {
     workspaceDir: string;
+    agentId?: string;
     archiveDiary?: boolean;
     now?: Date;
   }) => Promise<RepairDreamingArtifactsResult>;

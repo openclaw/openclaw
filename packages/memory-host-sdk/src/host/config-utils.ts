@@ -101,11 +101,16 @@ export type MemoryQmdConfig = {
   scope?: SessionSendPolicyConfig;
 };
 
-/** Top-level memory config shared by host and runtime callers. */
-export type MemoryConfig = {
+/** Opaque config owned by one agent-scoped memory extension. */
+export type MemoryExtensionConfig = Record<string, unknown>;
+
+/** All memory settings resolved for one agent. */
+export type AgentMemoryConfig = {
+  search?: MemorySearchConfig;
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  extensions?: Record<string, MemoryExtensionConfig>;
 };
 
 /** Per-agent memory search enablement and extra collection paths. */
@@ -116,6 +121,9 @@ export type MemorySearchConfig = {
     extraCollections?: MemoryQmdIndexPath[];
   };
 };
+
+/** Global memory settings applied to every agent before agent-specific overrides. */
+export type MemoryConfig = AgentMemoryConfig;
 
 /** Agent context limits that bound memory file reads. */
 export type AgentContextLimitsConfig = {
@@ -137,7 +145,7 @@ type AgentConfig = {
   id?: string;
   default?: boolean;
   workspace?: string;
-  memorySearch?: MemorySearchConfig;
+  memory?: AgentMemoryConfig;
   contextLimits?: AgentContextLimitsConfig;
 };
 
@@ -146,11 +154,11 @@ export type OpenClawConfig = {
   agents?: {
     defaults?: {
       workspace?: string;
-      memorySearch?: MemorySearchConfig;
       contextLimits?: AgentContextLimitsConfig;
     };
     list?: AgentConfig[];
   };
+  /** Global memory configuration; agent entries can override it. */
   memory?: MemoryConfig;
   models?: {
     providers?: Record<
@@ -303,6 +311,20 @@ function listAgentEntries(cfg: OpenClawConfig): AgentConfig[] {
     : [];
 }
 
+/** Lists unique configured agent ids, falling back to the default agent id. */
+export function listAgentIds(cfg: OpenClawConfig): string[] {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const agent of listAgentEntries(cfg)) {
+    const agentId = normalizeAgentId(agent.id);
+    if (!seen.has(agentId)) {
+      seen.add(agentId);
+      ids.push(agentId);
+    }
+  }
+  return ids.length > 0 ? ids : [DEFAULT_AGENT_ID];
+}
+
 /** Resolve the default agent id from explicit default marker or first agent entry. */
 function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const agents = listAgentEntries(cfg);
@@ -317,6 +339,72 @@ function resolveDefaultAgentId(cfg: OpenClawConfig): string {
 function resolveAgentConfig(cfg: OpenClawConfig, agentId: string): AgentConfig | undefined {
   const id = normalizeAgentId(agentId);
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const ADDITIVE_MEMORY_ARRAY_PATHS = new Set([
+  "qmd.paths",
+  "search.extraPaths",
+  "search.qmd.extraCollections",
+]);
+
+function memoryArrayEntryKey(value: unknown): string {
+  if (typeof value === "string") {
+    return `string:${value}`;
+  }
+  if (isPlainRecord(value) && typeof value.path === "string") {
+    return `path:${value.path}\0${String(value.name ?? "")}\0${String(value.pattern ?? "")}`;
+  }
+  return `json:${JSON.stringify(value)}`;
+}
+
+function mergeAdditiveMemoryArrays(base: unknown[], override: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  const result: unknown[] = [];
+  for (const value of [...base, ...override]) {
+    const key = memoryArrayEntryKey(value);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+/** Resolves canonical memory settings for one agent. */
+export function resolveAgentMemoryConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): AgentMemoryConfig | undefined {
+  const global = cfg.memory;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory;
+  if (!global) {
+    return overrides;
+  }
+  if (!overrides) {
+    return global;
+  }
+
+  const merge = (base: unknown, override: unknown, path: string[]): unknown => {
+    if (Array.isArray(base) && Array.isArray(override)) {
+      return ADDITIVE_MEMORY_ARRAY_PATHS.has(path.join("."))
+        ? mergeAdditiveMemoryArrays(base, override)
+        : override;
+    }
+    if (!isPlainRecord(base) || !isPlainRecord(override)) {
+      return override ?? base;
+    }
+    const result: Record<string, unknown> = { ...base };
+    for (const [key, value] of Object.entries(override)) {
+      result[key] = key in result ? merge(result[key], value, [...path, key]) : value;
+    }
+    return result;
+  };
+  return merge(global, overrides, []) as AgentMemoryConfig;
 }
 
 /** Remove null bytes before paths are handed to filesystem APIs. */
@@ -364,8 +452,8 @@ export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): { enabled: boolean; extraPaths: string[] } | null {
-  const defaults = cfg.agents?.defaults?.memorySearch;
-  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   if (!enabled) {
     return null;

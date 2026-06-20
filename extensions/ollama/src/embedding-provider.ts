@@ -214,7 +214,7 @@ function resolveOllamaEmbeddingResolvedKeys(
   const remote = resolveSourcedOllamaEmbeddingKey({
     configString: resolveMemorySecretInputString({
       value: remoteValue,
-      path: "agents.*.memorySearch.remote.apiKey",
+      path: "agents.*.memory.search.remote.apiKey",
     }),
     declared: hasConfiguredSecretInput(remoteValue),
   });

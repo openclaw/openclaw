@@ -1485,6 +1485,7 @@ export function renderApp(state: AppViewState) {
       lookup,
       fromLine: 1,
       lineCount: 5000,
+      ...(dreamingSelectedAgentId ? { agentId: dreamingSelectedAgentId } : {}),
     });
     const title =
       typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
@@ -4011,9 +4012,15 @@ export function renderApp(state: AppViewState) {
               onRefresh: refreshDreaming,
               onSelectAgent: (agentId: string) => {
                 state.selectedAgentId = agentId;
+                state.wikiImportInsights = null;
+                state.wikiImportInsightsError = null;
+                state.wikiMemoryPalace = null;
+                state.wikiMemoryPalaceError = null;
                 switchChatSession(state, resolvePreferredSessionForAgent(state, agentId));
                 void loadDreamingStatus(state);
                 void loadDreamDiary(state);
+                void loadWikiImportInsights(state);
+                void loadWikiMemoryPalace(state);
               },
               onRefreshDiary: () => {
                 syncDreamingSelectedAgent();

@@ -1,6 +1,9 @@
 // Agent/runtime helpers.
 export { resolveCronStyleNow } from "../../../../src/agents/current-time.js";
 export {
+  listAgentIds,
+  resolveAgentMemoryConfig,
+  resolveAgentMemoryExtensionConfig,
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveAgentWorkspaceDir,

@@ -178,7 +178,11 @@
     }
   },
   "configContracts": {
-    "compatibilityMigrationPaths": ["plugins.entries.memory-wiki.config.bridge.readMemoryCore"]
+    "compatibilityMigrationPaths": [
+      "plugins.entries.memory-wiki.config",
+      "plugins.entries.memory-wiki.config.bridge.readMemoryCore",
+      "agents.list"
+    ]
   },
   "commandAliases": [{ "name": "wiki" }]
 }

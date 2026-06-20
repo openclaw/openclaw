@@ -131,7 +131,7 @@ Dreaming is the background memory consolidation system with three cooperative
 phases: **light** (sort/stage short-term material), **deep** (promote durable
 facts into `MEMORY.md`), and **REM** (reflect and surface themes).
 
-- Enable with `plugins.entries.memory-core.config.dreaming.enabled: true`.
+- Enable with `memory.extensions.memory-core.dreaming.enabled: true`.
 - Toggle from chat with `/dreaming on|off` (or inspect with `/dreaming status`).
 - Dreaming runs on one managed sweep schedule (`dreaming.frequency`) and executes phases in order: light, REM, deep.
 - Only the deep phase writes durable memory to `MEMORY.md`.
@@ -167,7 +167,7 @@ Example:
 Notes:
 
 - `memory index --verbose` prints per-phase details (provider, model, sources, batch activity).
-- `memory status` includes any extra paths configured via `memorySearch.extraPaths`.
+- `memory status` includes any extra paths configured via `memory.search.extraPaths`.
 - If effectively active memory remote API key fields are configured as SecretRefs, the command resolves those values from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
 - Tune scheduled sweep cadence with `dreaming.frequency`. Deep promotion policy is otherwise internal except for `dreaming.phases.deep.maxPromotedSnippetTokens`, which bounds promoted snippet length while keeping provenance visible. Use CLI flags on `memory promote` when you need one-off manual threshold overrides.

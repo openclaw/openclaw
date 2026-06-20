@@ -114,7 +114,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-04-26",
     source: "memorySearch",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
-    replacement: "agents.defaults.memorySearch",
+    replacement: "memory.search",
     docsPath: "/cli/doctor",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),

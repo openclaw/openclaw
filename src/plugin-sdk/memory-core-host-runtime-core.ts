@@ -16,6 +16,9 @@ export {
 } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
 export {
+  resolveAgentMemoryConfig,
+  resolveAgentMemoryExtensionConfig,
+  resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveSessionAgentIds,

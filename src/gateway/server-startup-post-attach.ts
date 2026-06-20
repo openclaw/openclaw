@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
+import { listAgentIds } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -12,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
+import { resolveMemoryBackendConfig } from "../memory-host-sdk/host/backend-config.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -152,20 +154,25 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
 }
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
-  if (cfg.memory?.backend !== "qmd") {
-    return { mode: "off" };
+  let idleDelayMs: number | undefined;
+  for (const agentId of listAgentIds(cfg)) {
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    if (resolved.backend !== "qmd") {
+      continue;
+    }
+    const startup = resolved.qmd?.update.startup;
+    if (startup === "immediate") {
+      return { mode: "immediate" };
+    }
+    if (startup === "idle") {
+      idleDelayMs = Math.min(
+        idleDelayMs ?? Number.POSITIVE_INFINITY,
+        resolved.qmd?.update.startupDelayMs ?? QMD_STARTUP_IDLE_DELAY_MS,
+      );
+    }
   }
-  const startup = cfg.memory.qmd?.update?.startup;
-  if (startup === "immediate") {
-    return { mode: "immediate" };
-  }
-  if (startup === "idle") {
-    const rawDelayMs = cfg.memory.qmd?.update?.startupDelayMs;
-    const delayMs =
-      typeof rawDelayMs === "number" && Number.isFinite(rawDelayMs) && rawDelayMs >= 0
-        ? Math.floor(rawDelayMs)
-        : QMD_STARTUP_IDLE_DELAY_MS;
-    return { mode: "idle", delayMs };
+  if (idleDelayMs !== undefined) {
+    return { mode: "idle", delayMs: idleDelayMs };
   }
   return { mode: "off" };
 }

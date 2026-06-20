@@ -7,7 +7,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentMemoryExtensionConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
@@ -147,11 +152,13 @@ export type MemoryDreamingConfig = {
 export type MemoryDreamingWorkspace = {
   workspaceDir: string;
   agentIds: string[];
+  configAgentId: string;
 };
 
 export type MemoryDreamingWorkspaceOptions = {
   primaryWorkspaceDir?: string | null;
   primaryAgentId?: string | null;
+  agentIds?: readonly string[];
   env?: NodeJS.ProcessEnv;
 };
 
@@ -351,23 +358,35 @@ export function resolveMemoryDreamingPluginId(
 
 export function resolveMemoryDreamingPluginConfig(
   cfg: OpenClawConfig | Record<string, unknown> | undefined,
+  agentId?: string,
 ): Record<string, unknown> | undefined {
-  const root = asNullableRecord(cfg);
-  const plugins = asNullableRecord(root?.plugins);
-  const entries = asNullableRecord(plugins?.entries);
-  const pluginId = resolveMemoryDreamingPluginId(cfg);
-  const memoryPlugin = asNullableRecord(entries?.[pluginId]);
-  return asNullableRecord(memoryPlugin?.config) ?? undefined;
+  if (!cfg || !isOpenClawConfig(cfg)) {
+    return undefined;
+  }
+  return resolveAgentMemoryExtensionConfig(
+    cfg,
+    agentId ?? resolveDefaultAgentId(cfg),
+    DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
+  );
 }
 
-/** @deprecated Use resolveMemoryDreamingPluginConfig. */
+/** Resolves canonical memory-core config for one agent. */
 export const resolveMemoryCorePluginConfig = resolveMemoryDreamingPluginConfig;
 
 export function resolveMemoryDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): MemoryDreamingConfig {
-  const dreaming = asNullableRecord(params.pluginConfig?.dreaming);
+  const pluginConfig =
+    params.pluginConfig ??
+    (params.cfg
+      ? resolveMemoryCorePluginConfig(
+          params.cfg,
+          params.agentId ?? resolveDefaultAgentId(params.cfg),
+        )
+      : undefined);
+  const dreaming = asNullableRecord(pluginConfig?.dreaming);
   const frequency =
     normalizeTrimmedString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
   const timezone =
@@ -529,6 +548,7 @@ export function resolveMemoryDreamingConfig(params: {
 export function resolveMemoryDeepDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): MemoryDeepDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
@@ -547,6 +567,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
 export function resolveMemoryLightDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): MemoryLightDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
@@ -565,6 +586,7 @@ export function resolveMemoryLightDreamingConfig(params: {
 export function resolveMemoryRemDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): MemoryRemDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
@@ -619,23 +641,10 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
-  const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  const agentIds: string[] = [];
-  const seenAgents = new Set<string>();
-  for (const entry of configured) {
-    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
-      continue;
-    }
-    const id = normalizeOptionalLowercaseString(entry.id);
-    if (!id || seenAgents.has(id)) {
-      continue;
-    }
-    seenAgents.add(id);
-    agentIds.push(id);
-  }
-  if (agentIds.length === 0) {
-    agentIds.push(resolveDefaultAgentId(cfg));
-  }
+  const requestedAgentIds = options.agentIds ?? listAgentIds(cfg);
+  const agentIds = requestedAgentIds.filter(
+    (agentId) => resolveMemoryDreamingConfig({ cfg, agentId }).enabled,
+  );
 
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
   const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
@@ -644,7 +653,8 @@ export function resolveMemoryDreamingWorkspaces(
       return;
     }
     const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
-    const key = normalizePathForComparison(workspaceDir);
+    const config = resolveMemoryCorePluginConfig(cfg, agentId);
+    const key = `${normalizePathForComparison(workspaceDir)}\0${JSON.stringify(config ?? {})}`;
     const existing = byWorkspace.get(key);
     if (existing) {
       if (!existing.agentIds.includes(agentId)) {
@@ -652,15 +662,21 @@ export function resolveMemoryDreamingWorkspaces(
       }
       return;
     }
-    byWorkspace.set(key, { workspaceDir, agentIds: [agentId] });
+    byWorkspace.set(key, { workspaceDir, agentIds: [agentId], configAgentId: agentId });
   };
 
   for (const agentId of agentIds) {
     addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
   }
-  addWorkspace(
-    options.primaryWorkspaceDir ?? undefined,
-    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
-  );
+  const primaryAgentId = options.primaryAgentId ?? resolveDefaultAgentId(cfg);
+  if (agentIds.includes(primaryAgentId)) {
+    addWorkspace(options.primaryWorkspaceDir ?? undefined, primaryAgentId);
+  }
   return [...byWorkspace.values()];
+}
+
+function isOpenClawConfig(
+  value: OpenClawConfig | Record<string, unknown>,
+): value is OpenClawConfig {
+  return typeof value === "object" && value !== null;
 }

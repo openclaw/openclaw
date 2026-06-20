@@ -2,7 +2,7 @@
 summary: "Install the official llama.cpp provider for local GGUF memory embeddings"
 read_when:
   - You want memory search embeddings from a local GGUF model
-  - You are configuring memorySearch.provider = "local"
+  - You are configuring memory.search.provider = "local"
   - You need the OpenClaw plugin that owns the node-llama-cpp runtime
 title: "llama.cpp Provider"
 sidebarTitle: "llama.cpp Provider"
@@ -10,7 +10,7 @@ sidebarTitle: "llama.cpp Provider"
 
 `llama-cpp` is the official external provider plugin for local GGUF embeddings.
 It owns the `node-llama-cpp` runtime dependency used by
-`memorySearch.provider: "local"`.
+`memory.search.provider: "local"`.
 
 Install it before using local memory embeddings:
 
@@ -28,13 +28,11 @@ Set the memory search provider to `local`:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "local",
-        local: {
-          modelPath: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
-        },
+  memory: {
+    search: {
+      provider: "local",
+      local: {
+        modelPath: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
       },
     },
   },

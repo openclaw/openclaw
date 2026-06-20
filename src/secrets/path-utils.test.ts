@@ -61,7 +61,7 @@ describe("secrets path utils", () => {
     expect(() =>
       setPathExistingStrict(
         config,
-        ["agents", "list", "0", "memorySearch", "remote", "apiKey"],
+        ["agents", "list", "0", "memory", "search", "remote", "apiKey"],
         "x",
       ),
     ).toThrow(/Path segment does not exist/);

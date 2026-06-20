@@ -382,8 +382,10 @@ describe("gateway config mutation guard coverage", () => {
 
   it("blocks memory.qmd.command rewrites via config.patch", () => {
     expectBlocked(
-      { memory: { qmd: { command: "/usr/local/bin/qmd" } } },
-      { memory: { qmd: { command: "/tmp/attacker.sh" } } },
+      { memory: { qmd: { command: "/usr/local/bin/qmd" } },
+ },
+      { memory: { qmd: { command: "/tmp/attacker.sh" } },
+ },
     );
   });
 

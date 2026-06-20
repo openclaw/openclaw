@@ -6,7 +6,11 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildTtsSystemPromptHint } from "../tts/tts.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentMemoryConfig,
+  resolveDefaultAgentId,
+} from "./agent-scope.js";
 import { buildModelAliasLines } from "./model-alias-lines.js";
 import { resolveOwnerDisplaySetting } from "./owner-display.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -49,7 +53,9 @@ export function resolveAgentSystemPromptConfig(params: {
       "suggest",
     ttsHint: config ? buildTtsSystemPromptHint(config, agentId) : undefined,
     modelAliasLines: buildModelAliasLines(config),
-    memoryCitationsMode: config?.memory?.citations,
+    memoryCitationsMode: config
+      ? resolveAgentMemoryConfig(config, agentId ?? resolveDefaultAgentId(config))?.citations
+      : undefined,
     fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
   };
 }

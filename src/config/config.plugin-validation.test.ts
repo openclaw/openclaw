@@ -1305,13 +1305,20 @@ describe("config plugin validation", () => {
 
   it("warns with actionable guidance when a runtime command name is used in plugins.allow", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "openclaw" }] },
+      memory: {
+        extensions: {
+          "memory-core": {
+            dreaming: { enabled: true },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "openclaw" }],
+      },
       plugins: {
         allow: ["dreaming"],
         entries: {
-          "memory-core": {
-            config: { dreaming: { enabled: true } },
-          },
+          "memory-core": {},
         },
       },
     });
@@ -1348,6 +1355,68 @@ describe("config plugin validation", () => {
       },
     );
     expect(res.ok).toBe(true);
+  });
+
+  it("validates merged memory extension config against the owning plugin schema", () => {
+    const res = validateInSuite({
+      memory: {
+        extensions: {
+          "memory-wiki": {
+            vault: { renderMode: "native" },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            memory: {
+              extensions: {
+                "memory-wiki": {
+                  vaultMode: "not-a-vault-mode",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessageIncludes(
+      res.issues,
+      "agents.list.0.memory.extensions.memory-wiki.vaultMode",
+      "invalid memory extension config",
+    );
+  });
+
+  it("reports inherited memory extension config errors on the defaults that supplied them", () => {
+    const res = validateInSuite({
+      memory: {
+        extensions: {
+          "memory-wiki": {
+            vaultMode: "not-a-vault-mode",
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "main" }, { id: "research" }],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    const matching = res.issues.filter(
+      (issue) =>
+        issue.path === "memory.extensions.memory-wiki.vaultMode" &&
+        issue.message.includes("invalid memory extension config"),
+    );
+    expect(matching).toHaveLength(1);
   });
 
   it("warns for removed legacy plugin ids instead of failing validation", () => {

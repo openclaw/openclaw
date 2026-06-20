@@ -397,54 +397,78 @@ engines or legacy prompt assembly that explicitly consume memory supplements.
 
 ## Configuration
 
-Put config under `plugins.entries.memory-wiki.config`:
+Put config under `memory.extensions.memory-wiki`. Agent entries
+can override the same object at `agents.list[].memory.extensions.memory-wiki`.
+Enable the plugin once under `plugins.entries`; runtime state remains agent-scoped.
 
 ```json5
 {
   plugins: {
     entries: {
+      "memory-wiki": { enabled: true },
+    },
+  },
+  memory: {
+    extensions: {
       "memory-wiki": {
-        enabled: true,
-        config: {
-          vaultMode: "isolated",
-          vault: {
-            path: "~/.openclaw/wiki/main",
-            renderMode: "obsidian",
-          },
-          obsidian: {
-            enabled: true,
-            useOfficialCli: true,
-            vaultName: "OpenClaw Wiki",
-            openAfterWrites: false,
-          },
-          bridge: {
-            enabled: false,
-            readMemoryArtifacts: true,
-            indexDreamReports: true,
-            indexDailyNotes: true,
-            indexMemoryRoot: true,
-            followMemoryEvents: true,
-          },
-          ingest: {
-            autoCompile: true,
-            maxConcurrentJobs: 1,
-            allowUrlIngest: true,
-          },
-          search: {
-            backend: "shared",
-            corpus: "wiki",
-          },
-          context: {
-            includeCompiledDigestPrompt: false,
-          },
-          render: {
-            preserveHumanBlocks: true,
-            createBacklinks: true,
-            createDashboards: true,
-          },
+        vaultMode: "isolated",
+        vault: {
+          renderMode: "obsidian",
+        },
+        obsidian: {
+          enabled: true,
+          useOfficialCli: true,
+          vaultName: "OpenClaw Wiki",
+          openAfterWrites: false,
+        },
+        bridge: {
+          enabled: false,
+          readMemoryArtifacts: true,
+          indexDreamReports: true,
+          indexDailyNotes: true,
+          indexMemoryRoot: true,
+          followMemoryEvents: true,
+        },
+        ingest: {
+          autoCompile: true,
+          maxConcurrentJobs: 1,
+          allowUrlIngest: true,
+        },
+        search: {
+          backend: "shared",
+          corpus: "wiki",
+        },
+        context: {
+          includeCompiledDigestPrompt: false,
+        },
+        render: {
+          preserveHumanBlocks: true,
+          createBacklinks: true,
+          createDashboards: true,
         },
       },
     },
+  },
+}
+```
+
+Agent entries can override the same `memory.extensions.memory-wiki` object:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "research",
+        memory: {
+          extensions: {
+            "memory-wiki": {
+              vaultMode: "isolated",
+            },
+          },
+        },
+      },
+    ],
   },
 }
 ```
@@ -468,30 +492,30 @@ knowledge layer:
 
 ```json5
 {
-  memory: {
-    backend: "qmd",
-  },
   plugins: {
     entries: {
+      "memory-wiki": { enabled: true },
+    },
+  },
+  memory: {
+    backend: "qmd",
+    extensions: {
       "memory-wiki": {
-        enabled: true,
-        config: {
-          vaultMode: "bridge",
-          bridge: {
-            enabled: true,
-            readMemoryArtifacts: true,
-            indexDreamReports: true,
-            indexDailyNotes: true,
-            indexMemoryRoot: true,
-            followMemoryEvents: true,
-          },
-          search: {
-            backend: "shared",
-            corpus: "all",
-          },
-          context: {
-            includeCompiledDigestPrompt: false,
-          },
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexDreamReports: true,
+          indexDailyNotes: true,
+          indexMemoryRoot: true,
+          followMemoryEvents: true,
+        },
+        search: {
+          backend: "shared",
+          corpus: "all",
+        },
+        context: {
+          includeCompiledDigestPrompt: false,
         },
       },
     },

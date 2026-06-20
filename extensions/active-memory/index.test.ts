@@ -1398,17 +1398,17 @@ describe("active-memory plugin", () => {
 
   it("lets active memory inherit the main QMD search mode when configured", async () => {
     api.config = {
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+        },
+      },
       agents: {
         defaults: {
           model: {
             primary: "github-copilot/gpt-5.4-mini",
           },
-        },
-      },
-      memory: {
-        backend: "qmd",
-        qmd: {
-          searchMode: "query",
         },
       },
     };
@@ -1434,7 +1434,8 @@ describe("active-memory plugin", () => {
     );
 
     const config = embeddedRunConfig();
-    expect(config.memory).toEqual({
+    const agents = requireRecord(config.agents, "expected agents config");
+    expect(requireRecord(agents.defaults, "expected agent defaults").memory).toEqual({
       backend: "qmd",
       qmd: {
         searchMode: "query",

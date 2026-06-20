@@ -361,7 +361,7 @@ vi.mock("../config/legacy.js", () => {
         addIssue(
           issues,
           ["memorySearch"],
-          'memorySearch is legacy; use agents.defaults.memorySearch. Run "openclaw doctor --fix".',
+          'memorySearch is legacy; use memory.search. Run "openclaw doctor --fix".',
         );
       }
       const gateway = asRecord(root.gateway);
@@ -2856,7 +2856,7 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("agents.defaults.heartbeat");
       expect(legacyMessages).toContain("channels.defaults.heartbeat");
       expect(legacyMessages).toContain("memorySearch:");
-      expect(legacyMessages).toContain("agents.defaults.memorySearch");
+      expect(legacyMessages).toContain("memory.search");
       expect(legacyMessages).toContain("gateway.bind:");
       expect(legacyMessages).toContain("gateway.bind host aliases");
       expect(legacyMessages).toContain("channels.telegram.groupMentionsOnly:");

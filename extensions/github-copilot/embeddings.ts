@@ -286,7 +286,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       config: options.config,
       env: process.env,
       value: options.remote?.apiKey,
-      path: "agents.*.memorySearch.remote.apiKey",
+      path: "agents.*.memory.search.remote.apiKey",
     });
     const { githubToken: profileGithubToken } = await resolveFirstGithubToken({
       agentDir: options.agentDir,

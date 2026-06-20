@@ -66,7 +66,7 @@ OpenClaw can pick up credentials from:
 - **Auth profiles** (per-agent, stored in `auth-profiles.json`).
 - **Environment variables** (e.g. `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`).
 - **Config** (`models.providers.*.apiKey`, `plugins.entries.*.config.webSearch.apiKey`,
-  `plugins.entries.firecrawl.config.webFetch.apiKey`, `memorySearch.*`,
+  `plugins.entries.firecrawl.config.webFetch.apiKey`, `memory.search.*`,
   `talk.providers.*.apiKey`).
 - **Skills** (`skills.entries.<name>.apiKey`) which may export keys to the skill process env.
 
@@ -113,16 +113,16 @@ and [Models](/concepts/models).
 
 Semantic memory search uses **embedding APIs** when configured for remote providers:
 
-- `memorySearch.provider = "openai"` → OpenAI embeddings
-- `memorySearch.provider = "gemini"` → Gemini embeddings
-- `memorySearch.provider = "voyage"` → Voyage embeddings
-- `memorySearch.provider = "mistral"` → Mistral embeddings
-- `memorySearch.provider = "deepinfra"` → DeepInfra embeddings
-- `memorySearch.provider = "lmstudio"` → LM Studio embeddings (local/self-hosted)
-- `memorySearch.provider = "ollama"` → Ollama embeddings (local/self-hosted; typically no hosted API billing)
+- `memory.search.provider = "openai"` → OpenAI embeddings
+- `memory.search.provider = "gemini"` → Gemini embeddings
+- `memory.search.provider = "voyage"` → Voyage embeddings
+- `memory.search.provider = "mistral"` → Mistral embeddings
+- `memory.search.provider = "deepinfra"` → DeepInfra embeddings
+- `memory.search.provider = "lmstudio"` → LM Studio embeddings (local/self-hosted)
+- `memory.search.provider = "ollama"` → Ollama embeddings (local/self-hosted; typically no hosted API billing)
 - Optional fallback to a remote provider if local embeddings fail
 
-You can keep it local with `memorySearch.provider = "local"` (no API usage).
+You can keep it local with `memory.search.provider = "local"` (no API usage).
 
 See [Memory](/concepts/memory).
 

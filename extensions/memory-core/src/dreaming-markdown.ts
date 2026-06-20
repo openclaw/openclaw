@@ -11,7 +11,12 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
-import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  ensureDreamingArtifactDirectory,
+  updateDeepDreamsFile,
+  writeDreamingArtifactFile,
+} from "./dreaming-dreams-file.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -35,8 +40,24 @@ function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
   };
 }
 
-function resolveDailyMemoryPath(workspaceDir: string, epochMs: number, timezone?: string): string {
+function resolveDailyMemoryPath(
+  workspaceDir: string,
+  epochMs: number,
+  timezone?: string,
+  agentId?: string,
+): string {
   const isoDay = formatMemoryDreamingDay(epochMs, timezone);
+  if (agentId?.trim()) {
+    return path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "agents",
+      normalizeAgentId(agentId),
+      "daily",
+      `${isoDay}.md`,
+    );
+  }
   return path.join(workspaceDir, "memory", `${isoDay}.md`);
 }
 
@@ -45,8 +66,21 @@ function resolveSeparateReportPath(
   phase: MemoryDreamingPhaseName,
   epochMs: number,
   timezone?: string,
+  agentId?: string,
 ): string {
   const isoDay = formatMemoryDreamingDay(epochMs, timezone);
+  if (agentId?.trim()) {
+    return path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "agents",
+      normalizeAgentId(agentId),
+      "reports",
+      phase,
+      `${isoDay}.md`,
+    );
+  }
   return path.join(workspaceDir, "memory", "dreaming", phase, `${isoDay}.md`);
 }
 
@@ -60,6 +94,7 @@ function shouldWriteSeparate(storage: MemoryDreamingStorageConfig): boolean {
 
 export async function writeDailyDreamingPhaseBlock(params: {
   workspaceDir: string;
+  agentId?: string;
   phase: Exclude<MemoryDreamingPhaseName, "deep">;
   bodyLines: string[];
   nowMs?: number;
@@ -72,8 +107,16 @@ export async function writeDailyDreamingPhaseBlock(params: {
   let reportPath: string | undefined;
 
   if (shouldWriteInline(params.storage)) {
-    inlinePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
-    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    inlinePath = resolveDailyMemoryPath(
+      params.workspaceDir,
+      nowMs,
+      params.timezone,
+      params.agentId,
+    );
+    await ensureDreamingArtifactDirectory({
+      workspaceDir: params.workspaceDir,
+      filePath: inlinePath,
+    });
     const original = await fs.readFile(inlinePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         return "";
@@ -88,7 +131,11 @@ export async function writeDailyDreamingPhaseBlock(params: {
       endMarker: markers.end,
       body,
     });
-    await fs.writeFile(inlinePath, withTrailingNewline(updated), "utf-8");
+    await writeDreamingArtifactFile({
+      workspaceDir: params.workspaceDir,
+      filePath: inlinePath,
+      content: withTrailingNewline(updated),
+    });
   }
 
   if (shouldWriteSeparate(params.storage)) {
@@ -97,26 +144,34 @@ export async function writeDailyDreamingPhaseBlock(params: {
       params.phase,
       nowMs,
       params.timezone,
+      params.agentId,
     );
-    await fs.mkdir(path.dirname(reportPath), { recursive: true });
     const report = [
       `# ${params.phase === "light" ? "Light Sleep" : "REM Sleep"}`,
       "",
       body,
       "",
     ].join("\n");
-    await fs.writeFile(reportPath, report, "utf-8");
+    await writeDreamingArtifactFile({
+      workspaceDir: params.workspaceDir,
+      filePath: reportPath,
+      content: report,
+    });
   }
 
-  await appendMemoryHostEvent(params.workspaceDir, {
-    type: "memory.dream.completed",
-    timestamp: resolveMemoryCoreTimestamp(nowMs),
-    phase: params.phase,
-    ...(inlinePath ? { inlinePath } : {}),
-    ...(reportPath ? { reportPath } : {}),
-    lineCount: params.bodyLines.length,
-    storageMode: params.storage.mode,
-  });
+  await appendMemoryHostEvent(
+    params.workspaceDir,
+    {
+      type: "memory.dream.completed",
+      timestamp: resolveMemoryCoreTimestamp(nowMs),
+      phase: params.phase,
+      ...(inlinePath ? { inlinePath } : {}),
+      ...(reportPath ? { reportPath } : {}),
+      lineCount: params.bodyLines.length,
+      storageMode: params.storage.mode,
+    },
+    params.agentId,
+  );
 
   return {
     ...(inlinePath ? { inlinePath } : {}),
@@ -126,6 +181,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
 
 export async function writeDeepDreamingReport(params: {
   workspaceDir: string;
+  agentId?: string;
   bodyLines: string[];
   nowMs?: number;
   timezone?: string;
@@ -135,22 +191,36 @@ export async function writeDeepDreamingReport(params: {
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
   const inlinePath = await updateDeepDreamsFile({
     workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
     bodyLines: params.bodyLines,
   });
   let reportPath: string | undefined;
   if (shouldWriteSeparate(params.storage)) {
-    reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
-    await fs.mkdir(path.dirname(reportPath), { recursive: true });
-    await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+    reportPath = resolveSeparateReportPath(
+      params.workspaceDir,
+      "deep",
+      nowMs,
+      params.timezone,
+      params.agentId,
+    );
+    await writeDreamingArtifactFile({
+      workspaceDir: params.workspaceDir,
+      filePath: reportPath,
+      content: `# Deep Sleep\n\n${body}\n`,
+    });
   }
-  await appendMemoryHostEvent(params.workspaceDir, {
-    type: "memory.dream.completed",
-    timestamp: resolveMemoryCoreTimestamp(nowMs),
-    phase: "deep",
-    inlinePath,
-    ...(reportPath ? { reportPath } : {}),
-    lineCount: params.bodyLines.length,
-    storageMode: params.storage.mode,
-  });
+  await appendMemoryHostEvent(
+    params.workspaceDir,
+    {
+      type: "memory.dream.completed",
+      timestamp: resolveMemoryCoreTimestamp(nowMs),
+      phase: "deep",
+      inlinePath,
+      ...(reportPath ? { reportPath } : {}),
+      lineCount: params.bodyLines.length,
+      storageMode: params.storage.mode,
+    },
+    params.agentId,
+  );
   return reportPath;
 }

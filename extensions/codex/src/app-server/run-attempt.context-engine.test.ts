@@ -71,9 +71,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
-function writeCodexAppServerBinding(
-  ...args: Parameters<typeof writeRawCodexAppServerBinding>
-) {
+function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -368,7 +366,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.requestedModelId = "gpt-5.4-codex-primary";
     params.fallbackReason = "provider_unavailable";
     params.degradedReason = "context_overflow";
-    params.config = { memory: { citations: "on" } } as EmbeddedRunAttemptParams["config"];
+    params.config = {
+      memory: { citations: "on" },
+    } as EmbeddedRunAttemptParams["config"];
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");

@@ -8,12 +8,15 @@ export default definePluginEntry({
   register(api) {
     api.registerCli(
       async ({ program, config: appConfig }) => {
-        const [{ registerWikiCli }, { resolveMemoryWikiConfig }] = await Promise.all([
+        const [{ registerWikiCli }, { resolveMemoryWikiConfigForAgent }] = await Promise.all([
           import("./src/cli.js"),
           import("./src/config.js"),
         ]);
-        const pluginConfig = appConfig.plugins?.entries?.["memory-wiki"]?.config;
-        registerWikiCli(program, resolveMemoryWikiConfig(pluginConfig), appConfig);
+        registerWikiCli(
+          program,
+          (agentId) => resolveMemoryWikiConfigForAgent(appConfig, agentId),
+          appConfig,
+        );
       },
       {
         descriptors: [

@@ -371,16 +371,14 @@ openclaw models list
   <Accordion title="Embeddings for memory search">
     Bedrock can also serve as the embedding provider for
     [memory search](/concepts/memory-search). This is configured separately from the
-    inference provider -- set `agents.defaults.memorySearch.provider` to `"bedrock"`:
+    inference provider -- set `memory.search.provider` to `"bedrock"`:
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "bedrock",
-            model: "amazon.titan-embed-text-v2:0", // default
-          },
+      memory: {
+        search: {
+          provider: "bedrock",
+          model: "amazon.titan-embed-text-v2:0", // default
         },
       },
     }
@@ -388,7 +386,7 @@ openclaw models list
 
     Bedrock embeddings use the same AWS SDK credential chain as inference (instance
     roles, SSO, access keys, shared config, and web identity). No API key is
-    needed. Set `memorySearch.provider: "bedrock"` explicitly to use Bedrock
+    needed. Set `memory.search.provider: "bedrock"` explicitly to use Bedrock
     embeddings.
 
     Supported embedding models include Amazon Titan Embed (v1, v2), Amazon Nova

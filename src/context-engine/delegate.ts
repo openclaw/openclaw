@@ -91,10 +91,12 @@ export async function delegateCompactionToRuntime(
 export function buildMemorySystemPromptAddition(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
 }): string | undefined {
   const lines = buildMemoryPromptSection({
     availableTools: params.availableTools,
     citationsMode: params.citationsMode,
+    agentId: params.agentId,
   });
   if (lines.length === 0) {
     return undefined;

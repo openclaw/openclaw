@@ -3890,6 +3890,39 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
+      memory: {
+        search: {
+          remote: {
+            headers: {
+              Authorization: {
+                source: "exec",
+                provider: "rogue",
+                id: "memory/root-authorization",
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "writer",
+            memory: {
+              search: {
+                remote: {
+                  headers: {
+                    Authorization: {
+                      source: "exec",
+                      provider: "rogue",
+                      id: "memory/writer-authorization",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
       tools: {
         media: {
           models: [
@@ -3983,6 +4016,20 @@ describe("registerPolicyDoctorChecks", () => {
           refSource: "exec",
           refProvider: "rogue",
           source: 'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source: "oc://openclaw.config/memory/search/remote/headers/Authorization",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source: "oc://openclaw.config/agents/list/#0/memory/search/remote/headers/Authorization",
         }),
         expect.objectContaining({
           kind: "input",
@@ -7468,13 +7515,13 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
+      memory: {
+        search: { experimental: { sessionMemory: true }, sources: ["memory", "sessions"] },
+      },
       agents: {
-        defaults: {
-          memorySearch: { experimental: { sessionMemory: true }, sources: ["memory", "sessions"] },
-        },
         list: [
           { id: "sebby" },
-          { id: "buddy", memorySearch: { experimental: { sessionMemory: false } } },
+          { id: "buddy", memory: { search: { experimental: { sessionMemory: false } } } },
         ],
       },
     } as unknown as OpenClawConfig;
@@ -7498,7 +7545,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/data-handling-session-transcript-memory-enabled",
-        ocPath: "oc://openclaw.config/agents/defaults/memorySearch/experimental/sessionMemory",
+        ocPath: "oc://openclaw.config/memory/search/experimental/sessionMemory",
         requirement:
           "oc://policy.jsonc/scopes/restricted/dataHandling/memory/denySessionTranscriptIndexing",
       }),
@@ -7509,11 +7556,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
-      agents: {
-        defaults: {
-          memorySearch: { experimental: { sessionMemory: true }, sources: ["sessions"] },
-        },
-      },
+      memory: { search: { experimental: { sessionMemory: true }, sources: ["sessions"] } },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
@@ -7535,7 +7578,51 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/data-handling-session-transcript-memory-enabled",
-        ocPath: "oc://openclaw.config/agents/defaults/memorySearch/experimental/sessionMemory",
+        ocPath: "oc://openclaw.config/memory/search/experimental/sessionMemory",
+        requirement:
+          "oc://policy.jsonc/scopes/restricted/dataHandling/memory/denySessionTranscriptIndexing",
+      }),
+    ]);
+  });
+
+  it("applies agent-scoped QMD session indexing posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      memory: { backend: "builtin" },
+      agents: {
+        list: [
+          {
+            id: "research",
+            memory: {
+              backend: "qmd",
+              qmd: { sessions: { enabled: true } },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["research"],
+            dataHandling: { memory: { denySessionTranscriptIndexing: true } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/data-handling-session-transcript-memory-enabled",
+        ocPath: "oc://openclaw.config/agents/list/#0/memory/qmd/sessions/enabled",
         requirement:
           "oc://policy.jsonc/scopes/restricted/dataHandling/memory/denySessionTranscriptIndexing",
       }),
@@ -7546,14 +7633,12 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
-      memory: { qmd: { sessions: { enabled: true } } },
-      agents: {
-        defaults: {
-          memorySearch: {
-            enabled: false,
-            experimental: { sessionMemory: true },
-            sources: ["sessions"],
-          },
+      memory: {
+        qmd: { sessions: { enabled: true } },
+        search: {
+          enabled: false,
+          experimental: { sessionMemory: true },
+          sources: ["sessions"],
         },
       },
     } as unknown as OpenClawConfig;
