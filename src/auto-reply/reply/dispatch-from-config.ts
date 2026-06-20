@@ -3101,14 +3101,11 @@ export async function dispatchReplyFromConfig(
                 if (suppressDelivery) {
                   return;
                 }
-                // Suppress reasoning payloads for channels that do not
-                // explicitly handle reasoning display. Channels with dedicated
-                // reasoning lanes (Telegram, Discord, Slack, MSTeams) route
-                // isReasoning blocks through their own presentation logic.
-                if (
-                  payload.isReasoning === true &&
-                  !["telegram", "discord", "slack", "msteams"].includes(channel)
-                ) {
+                // Suppress reasoning payloads for channels without dedicated
+                // reasoning lanes. Telegram's bot-message-dispatch handles
+                // isReasoning splitting at the channel level.
+                // Discord reasoning delivery was fixed separately (#95029 merged).
+                if (payload.isReasoning === true && channel !== "telegram") {
                   return;
                 }
                 // Accumulate block text for TTS generation after streaming.
@@ -3279,12 +3276,9 @@ export async function dispatchReplyFromConfig(
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery for channels
-      // that do not explicitly handle reasoning display. Channels with
-      // dedicated reasoning lanes route isReasoning replies at their own level.
-      if (
-        reply.isReasoning === true &&
-        !["telegram", "discord", "slack", "msteams"].includes(channel)
-      ) {
+      // without dedicated reasoning lanes. Telegram handles isReasoning
+      // at the channel level; Discord was fixed separately (#95029 merged).
+      if (reply.isReasoning === true && channel !== "telegram") {
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
