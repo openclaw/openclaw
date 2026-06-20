@@ -517,6 +517,8 @@ describe("user turn transcript persistence", () => {
         transcriptPath,
         input: {
           text: "secret prompt",
+          bareBody: "secret prompt",
+          inboundDecorated: true,
           idempotencyKey: "chat-run-1:user",
           senderIsOwner: true,
           provenance,
@@ -528,6 +530,8 @@ describe("user turn transcript persistence", () => {
         transcriptPath,
         input: {
           text: "secret prompt",
+          bareBody: "secret prompt",
+          inboundDecorated: true,
           idempotencyKey: "chat-run-1:user",
           senderIsOwner: true,
           provenance,
@@ -536,7 +540,8 @@ describe("user turn transcript persistence", () => {
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
 
-      expect(readTranscriptMessages(transcriptPath)).toEqual([
+      const persistedMessages = readTranscriptMessages(transcriptPath);
+      expect(persistedMessages).toEqual([
         expect.objectContaining({
           role: "user",
           content: "[redacted by hook]",
@@ -548,6 +553,8 @@ describe("user turn transcript persistence", () => {
           },
         }),
       ]);
+      expect(persistedMessages[0]).not.toHaveProperty("bareBody");
+      expect(persistedMessages[0]).not.toHaveProperty("inboundDecorated");
       expect(hookCalls).toBe(1);
     });
   });

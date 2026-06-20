@@ -383,16 +383,9 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   if (!params.beforeMessageWrite) {
     return message;
   }
-  const originalMessage = message as unknown as {
-    idempotencyKey?: unknown;
-    inboundDecorated?: unknown;
-    bareBody?: unknown;
-  };
+  const originalMessage = message as unknown as { idempotencyKey?: unknown };
   const idempotencyKey =
     typeof originalMessage.idempotencyKey === "string" ? originalMessage.idempotencyKey : undefined;
-  const inboundDecorated = originalMessage.inboundDecorated === true;
-  const bareBody =
-    typeof originalMessage.bareBody === "string" ? originalMessage.bareBody : undefined;
   const provenance = normalizeInputProvenance(
     (message as unknown as { provenance?: unknown }).provenance,
   );
