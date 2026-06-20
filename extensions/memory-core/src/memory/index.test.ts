@@ -603,7 +603,6 @@ describe("memory index", () => {
       "# Log\nOAuth token notes and Google testing mode details.",
     );
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-filename-token.sqlite"),
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
