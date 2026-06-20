@@ -9,7 +9,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
-import { join, relative, dirname } from "node:path";
+import { join, relative } from "node:path";
 
 const DOCS_DIR = join(process.cwd(), "docs");
 const OUTPUT_FILE = join(DOCS_DIR, "docs_map.md");
