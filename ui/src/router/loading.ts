@@ -42,7 +42,12 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
     }
     const timer = globalThis.setTimeout(() => {
       const current = matchStore.getCachedMatch(match.id);
-      if (!current || now() - current.lastAccessedAt < (route.gcTime ?? options.gcTime)) {
+      if (!current) {
+        gcTimers.delete(match.id);
+        return;
+      }
+      if (now() - current.lastAccessedAt < (route.gcTime ?? options.gcTime)) {
+        scheduleGc(current, route);
         return;
       }
       matchStore.removeCached(match.id);

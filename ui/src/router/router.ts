@@ -246,7 +246,17 @@ export function createRouter<
         }
       }
       if (lifecycleErrors.length > 0) {
-        throw lifecycleErrors[0];
+        const error = lifecycleErrors[0];
+        matches.updateMatch(resolvedMatch.id, (current) => ({
+          ...current,
+          status: "error",
+          error,
+        }));
+        matches.setStatus("error");
+        if (isCurrentRun(currentRun, run)) {
+          currentRun = null;
+        }
+        throw error;
       }
       if (isCurrentRun(currentRun, run)) {
         currentRun = null;
@@ -295,6 +305,13 @@ export function createRouter<
     const controller = new AbortController();
     const deps = route.loaderDeps?.(context, location) ?? "";
     const matchId = matchIdForLocation(routeId, location, deps);
+    const state = matches.getState();
+    if (
+      state.matches.some((match) => match.id === matchId) ||
+      state.pendingMatches.some((match) => match.id === matchId)
+    ) {
+      return Promise.resolve();
+    }
     const match =
       matches.getCachedMatch(matchId) ??
       createRouteMatch<TRouteId, TModule, TData>(
