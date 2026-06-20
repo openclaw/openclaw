@@ -2622,7 +2622,12 @@ export const dispatchTelegramMessage = async ({
   }
 
   const silentCallbackSuppressed =
-    callbackSuppressSilentFallback && !dispatchError && !deliverySummary.delivered && !sentFallback;
+    callbackSuppressSilentFallback &&
+    !dispatchError &&
+    !deliverySummary.delivered &&
+    !sentFallback &&
+    deliverySummary.skippedNonSilent === 0 &&
+    deliverySummary.failedNonSilent === 0;
 
   const hasFinalResponse =
     silentCallbackSuppressed ||

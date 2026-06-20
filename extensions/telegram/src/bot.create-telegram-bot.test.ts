@@ -1364,6 +1364,43 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("suppresses direct-chat silent fallback for silent OC_MULTI submits", async () => {
+    replySpy.mockResolvedValueOnce({ text: "NO_REPLY" });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-multi-submit-silent-1",
+        data: "OC_MULTI|submit",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "✅ Prod", callback_data: "OC_MULTI|toggle|env|prod" }],
+              [{ text: "Blue", callback_data: "OC_MULTI|toggle|blue" }],
+            ],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-submit-silent-1");
+  });
+
   it("submits OC_SELECT values as a synthetic inbound message and clears buttons", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = requireValue(
@@ -1398,6 +1435,43 @@ describe("createTelegramBot", () => {
     expect(requireValue(replySpy.mock.calls.at(0), "replySpy call")[0].Body).toContain(
       "Single-select submitted: env|canary",
     );
+  });
+
+  it("suppresses direct-chat silent fallback for silent OC_SELECT submits", async () => {
+    replySpy.mockResolvedValueOnce({ text: "NO_REPLY" });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-select-silent-1",
+        data: "OC_SELECT|env|canary",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+          reply_markup: {
+            inline_keyboard: [[{ text: "Canary", callback_data: "OC_SELECT|env|canary" }]],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-select-silent-1");
   });
 
   it("preserves native command source for prefixed callback_query payloads", async () => {

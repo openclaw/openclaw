@@ -2359,6 +2359,7 @@ export const registerTelegramHandlers = ({
             options: {
               forceWasMentioned: true,
               messageIdOverride: callback.id,
+              suppressSilentReplyFallback: true,
             },
           });
           return;
@@ -2390,6 +2391,7 @@ export const registerTelegramHandlers = ({
           options: {
             forceWasMentioned: true,
             messageIdOverride: callback.id,
+            suppressSilentReplyFallback: true,
           },
         });
         return;
