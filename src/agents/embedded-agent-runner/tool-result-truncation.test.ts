@@ -320,6 +320,25 @@ describe("estimateToolResultReductionPotential", () => {
     );
   });
 
+  it("matches live prompt aggregate quantum in reduction estimates", () => {
+    const messages: AgentMessage[] = [
+      makeToolResult("x".repeat(5_000), "call_1"),
+      makeToolResult("y".repeat(5_000), "call_2"),
+      makeToolResult("z".repeat(5_000), "call_3"),
+    ];
+
+    const estimate = estimateToolResultReductionPotential({
+      messages,
+      contextWindowTokens: 128_000,
+      maxCharsOverride: 12_000,
+      aggregateMaxCharsOverride: 12_000,
+    });
+
+    expect(estimate.aggregateBudgetChars).toBe(12_000);
+    expect(estimate.totalToolResultChars).toBe(15_000);
+    expect(estimate.aggregateReducibleChars).toBeGreaterThan(3_000);
+  });
+
   it("lets tiny caps drive aggregate recovery estimates without the old floor", () => {
     const medium = "alpha beta gamma delta epsilon ".repeat(600);
     const messages: AgentMessage[] = [
@@ -405,6 +424,41 @@ describe("truncateOversizedToolResultsInMessages", () => {
     }
   });
 
+  it("keeps the oldest aggregate projection stable when adjacent turns add tail results", () => {
+    const firstTurnMessages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage("calling tools"),
+      makeToolResult("x".repeat(5_000), "call_1"),
+      makeToolResult("y".repeat(5_000), "call_2"),
+      makeToolResult("z".repeat(5_000), "call_3"),
+    ];
+    const secondTurnMessages: AgentMessage[] = [
+      ...firstTurnMessages,
+      makeToolResult("w".repeat(5_000), "call_4"),
+    ];
+
+    const firstTurn = truncateOversizedToolResultsInMessages(
+      firstTurnMessages,
+      128_000,
+      12_000,
+      12_000,
+    );
+    const secondTurn = truncateOversizedToolResultsInMessages(
+      secondTurnMessages,
+      128_000,
+      12_000,
+      12_000,
+    );
+
+    const firstTurnOldestText = getFirstToolResultText(firstTurn.messages[2]!);
+    const secondTurnOldestText = getFirstToolResultText(secondTurn.messages[2]!);
+
+    expect(firstTurn.truncatedCount).toBe(1);
+    expect(secondTurn.truncatedCount).toBeGreaterThan(1);
+    expect(firstTurnOldestText).toContain("truncated");
+    expect(secondTurnOldestText).toBe(firstTurnOldestText);
+  });
+
   it("bounds aggregate tool-result text in prompt history without rewriting callers", () => {
     // Live replay truncates cloned tool-result messages; the source array keeps
     // full content for UI and transcript persistence.
@@ -440,6 +494,38 @@ describe("truncateOversizedToolResultsInMessages", () => {
 });
 
 describe("truncateOversizedToolResultsInSession", () => {
+  it("uses exact aggregate shaving for persisted session recovery", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage(makeUserMessage("hello"));
+    sm.appendMessage(makeAssistantMessage("calling tools"));
+    sm.appendMessage(makeToolResult("x".repeat(5_000), "call_1"));
+    sm.appendMessage(makeToolResult("y".repeat(5_000), "call_2"));
+    sm.appendMessage(makeToolResult("z".repeat(5_000), "call_3"));
+    const sessionFile = sm.getSessionFile()!;
+
+    const result = await truncateOversizedToolResultsInSession({
+      sessionFile,
+      contextWindowTokens: 128_000,
+      maxCharsOverride: 12_000,
+      aggregateMaxCharsOverride: 12_000,
+    });
+
+    expect(result.truncated).toBe(true);
+    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const totalChars = afterBranch.reduce(
+      (sum, entry) =>
+        sum +
+        (entry.type === "message" && entry.message.role === "toolResult"
+          ? getToolResultTextLength(entry.message)
+          : 0),
+      0,
+    );
+
+    expect(totalChars).toBeLessThanOrEqual(12_000);
+    expect(totalChars).toBeGreaterThan(10_200);
+  });
+
   it("readably truncates aggregate medium tool results in a session file", async () => {
     // Persisted truncation rewrites JSONL directly and emits the transcript
     // update event instead of reopening through SessionManager internals.
