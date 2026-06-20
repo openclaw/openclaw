@@ -91,32 +91,354 @@ const STRUCTURED_SECRET_FIELD_RE = new RegExp(
   String.raw`^(?:api[-_]?key|apiKey|token|secret|password|passwd|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key[-_]?material|keyMaterial|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
   "i",
 );
-// Only apple/icloud-specific field names and structured error-record fields trigger the
-// app-password sweep unconditionally.  Generic transcript fields (text, error, message, …) were
-// removed because a 4×4-char kebab identifier such as `help-desk-team-page` matches
-// APP_SPECIFIC_PASSWORD_RE and would be silently corrupted in transcript output.
-// `errorMessage` is kept here because it is a structured audit/error-record field (not a
-// free-form transcript field) and the audit persistence path expects app-password-shaped tokens
-// in error messages to be redacted before they land on disk (io.audit.test.ts:208).
+// Explicit Apple/iCloud/app-specific-password field names trigger the sweep UNCONDITIONALLY —
+// every 4×4-char lowercase kebab token in these fields is masked with no wordlist exception.
+// This is the fail-closed path: a real app-specific password that happens to consist of
+// dictionary words (e.g. `main-test-case-name` under `appSpecificPassword`) is still masked.
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
-  /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|errorMessage)$/i;
+  /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password)$/i;
+// Generic structured fields use wordlist-precision masking: mask unless ALL four segments are
+// recognized common words.  This fixes kebab-identifier over-masking in transcript/error fields
+// while keeping random credential tokens (e.g. `kxbv-qwfn-zptl-mrqd`) masked.
+// `errorMessage` is intentionally placed here (not in the explicit set) because it is an
+// audit/error-record field, not a dedicated credential field.  The wordlist discriminator still
+// catches real app-password shapes (sequential-alphabet tokens, random lowercase tokens) — the
+// io.audit.test.ts `abcd-efgh-ijkl-mnop` case is masked because none of its four segments are
+// dictionary words.
+const GENERIC_APP_PASSWORD_FIELD_RE =
+  /^(?:text|content|message|error|errorMessage|detail|details|reason)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
-// Mirrors the Discord-bot-token pattern: require an apple/icloud context token within
-// APP_PASSWORD_CONTEXT_WINDOW chars of the candidate before masking in generic fields.
+// Context anchor for unclassified fields: require an apple/icloud keyword nearby before masking.
 const APP_PASSWORD_CONTEXT_RE =
   /apple|icloud|app[.\s_-]?specific|app[.\s_-]?password|application[.\s_-]?password/i;
 const APP_PASSWORD_CONTEXT_WINDOW = 50;
-const BENIGN_APP_PASSWORD_WORDS = new Set([
+// 321-word lexicon of common English and devops/engineering 4-letter tokens.  Used ONLY on the
+// generic-field precision path — the explicit-credential path (apple/icloud/appSpecificPassword)
+// never consults this list and masks unconditionally.  Bias to security: any segment absent from
+// the list causes the whole token to be treated as a credential.
+const BENIGN_KEBAB_WORDS = new Set([
+  // Common English 4-letter words
+  "able",
+  "also",
+  "area",
+  "away",
+  "back",
+  "ball",
+  "band",
+  "bank",
+  "base",
+  "bash",
+  "bare",
+  "bear",
+  "beat",
+  "been",
+  "best",
+  "bill",
+  "bind",
+  "blue",
+  "body",
+  "bold",
+  "bond",
+  "book",
+  "born",
+  "both",
+  "bulk",
+  "burn",
+  "call",
+  "came",
+  "card",
+  "care",
+  "cart",
   "case",
+  "chat",
+  "chip",
   "claw",
+  "clip",
+  "code",
+  "cold",
+  "come",
+  "copy",
+  "cost",
+  "curl",
+  "dark",
+  "data",
+  "date",
+  "days",
+  "dead",
+  "deal",
+  "deep",
   "demo",
+  "deny",
+  "desc",
+  "desk",
+  "diff",
+  "dirs",
+  "disk",
+  "done",
+  "down",
+  "draw",
+  "drop",
+  "dump",
+  "each",
+  "easy",
+  "edge",
+  "else",
+  "emit",
+  "even",
+  "ever",
+  "exec",
+  "exit",
+  "fail",
+  "fast",
+  "feed",
   "file",
+  "fill",
+  "find",
+  "fire",
+  "flag",
+  "flat",
+  "flow",
+  "foam",
+  "fold",
+  "font",
+  "fore",
+  "fork",
+  "form",
+  "free",
+  "from",
+  "full",
+  "gate",
+  "give",
+  "glob",
+  "good",
+  "grid",
+  "grow",
+  "guid",
+  "hack",
+  "half",
+  "hand",
+  "hard",
+  "hash",
+  "have",
+  "head",
+  "heap",
+  "help",
+  "here",
+  "high",
+  "hint",
+  "home",
+  "hook",
+  "host",
+  "html",
+  "http",
+  "idle",
+  "info",
+  "init",
+  "item",
+  "join",
+  "just",
+  "keep",
+  "keys",
+  "kill",
+  "kind",
+  "kube",
+  "labs",
+  "last",
+  "late",
+  "lead",
+  "left",
+  "less",
+  "lets",
+  "link",
+  "list",
+  "lite",
+  "live",
+  "load",
+  "lock",
+  "logs",
+  "long",
+  "loop",
+  "loss",
+  "make",
   "main",
+  "mask",
+  "math",
+  "mesh",
+  "meta",
+  "mode",
+  "most",
+  "move",
+  "much",
   "name",
+  "need",
+  "next",
+  "node",
+  "none",
+  "norm",
+  "null",
+  "once",
+  "only",
   "open",
+  "opts",
+  "over",
+  "owns",
+  "pack",
+  "page",
+  "pair",
+  "part",
+  "pass",
   "path",
+  "peer",
+  "pipe",
+  "plan",
+  "play",
+  "plug",
+  "pods",
+  "poll",
+  "pool",
+  "port",
+  "post",
+  "prod",
+  "push",
+  "puts",
+  "race",
+  "rate",
+  "read",
+  "real",
+  "recv",
+  "refs",
+  "repo",
+  "rest",
+  "role",
+  "root",
+  "rows",
+  "rule",
+  "runs",
+  "safe",
+  "same",
+  "scan",
+  "seed",
+  "self",
+  "send",
+  "sets",
+  "show",
+  "side",
+  "sign",
+  "sink",
+  "site",
+  "size",
+  "skip",
   "slug",
+  "snap",
+  "sock",
+  "some",
+  "sort",
+  "span",
+  "spec",
+  "spin",
+  "stat",
+  "step",
+  "stop",
+  "stub",
+  "sync",
+  "tags",
+  "tail",
+  "task",
+  "team",
+  "temp",
+  "term",
   "test",
+  "text",
+  "than",
+  "that",
+  "them",
+  "then",
+  "this",
+  "tick",
+  "time",
+  "tool",
+  "tops",
+  "tree",
+  "trim",
+  "true",
+  "turn",
+  "type",
+  "unit",
+  "used",
+  "user",
+  "uuid",
+  "view",
+  "wait",
+  "walk",
+  "warn",
+  "well",
+  "when",
+  "with",
+  "word",
+  "work",
+  "wrap",
+  "yaml",
+  // Common devops/engineering 4-letter abbreviations
+  "cert",
+  "conf",
+  "conn",
+  "ctrl",
+  "defs",
+  "deps",
+  "devs",
+  "envs",
+  "evts",
+  "impl",
+  "indx",
+  "ingr",
+  "inst",
+  "ints",
+  "ipv4",
+  "ipv6",
+  "iter",
+  "json",
+  "mgmt",
+  "mock",
+  "msgs",
+  "mtls",
+  "nets",
+  "nsec",
+  "nums",
+  "objs",
+  "pkts",
+  "priv",
+  "proc",
+  "prom",
+  "ptrs",
+  "rbac",
+  "reqs",
+  "resp",
+  "retr",
+  "rets",
+  "rpcs",
+  "rsrc",
+  "rtmp",
+  "rtsp",
+  "secs",
+  "segs",
+  "sess",
+  "srcs",
+  "subs",
+  "svcs",
+  "thrd",
+  "toks",
+  "toml",
+  "ttys",
+  "txns",
+  "uris",
+  "urls",
+  "vals",
+  "vars",
+  "vers",
+  "vols",
+  "wasm",
+  "wkld",
+  "wksp",
 ]);
 const STRUCTURED_SECRET_ENV_FIELD_RE = new RegExp(
   String.raw`^(?:(?:[A-Z0-9]+[_-])+(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)|API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})$`,
@@ -947,30 +1269,55 @@ export function computeSensitiveRedactionBitmap(
   return bitmap;
 }
 
-function looksLikeAppSpecificPassword(candidate: string): boolean {
-  return candidate.split("-").every((part) => !BENIGN_APP_PASSWORD_WORDS.has(part.toLowerCase()));
+// Returns true when the candidate looks like a credential (should be masked) under the
+// wordlist-precision check used for generic fields.  All four segments must be recognized
+// common words; any unrecognized segment biases toward masking (security-first).
+function looksLikeKebabIdentifier(candidate: string): boolean {
+  return candidate.split("-").every((part) => BENIGN_KEBAB_WORDS.has(part.toLowerCase()));
 }
 
-// When fieldKey is an apple/icloud-specific name the mask is unconditional (field-gate path).
-// Otherwise, require an apple/icloud context token within APP_PASSWORD_CONTEXT_WINDOW chars of
-// the candidate — mirroring the Discord bot-token pattern's nearby-literal anchor.
+// Three-tier masking strategy:
+//
+// 1. EXPLICIT credential fields (apple/icloud/appSpecificPassword/…): FAIL-CLOSED.
+//    Every 4×4-char lowercase kebab token is masked unconditionally — no wordlist exception.
+//    An all-dictionary-word token (e.g. `main-test-case-name`) under `appSpecificPassword`
+//    is still masked because these field names signal the value IS a credential.
+//
+// 2. GENERIC structured fields (text/content/message/error/errorMessage/detail/…): PRECISION.
+//    Mask unless all four segments are recognized common words in BENIGN_KEBAB_WORDS.
+//    Random/sequential tokens (`kxbv-qwfn-zptl-mrqd`, `abcd-efgh-ijkl-mnop`) are masked;
+//    kebab identifiers (`help-desk-team-page`, `load-some-bare-init`) are left through.
+//
+// 3. Unclassified fields / no field key: context-anchor.
+//    Require an apple/icloud keyword within APP_PASSWORD_CONTEXT_WINDOW chars of the
+//    candidate — mirrors the Discord bot-token pattern's nearby-literal requirement.
+//
+// `localText` passed by replacePatternBounded is the per-chunk string; using it (not the
+// closed-over full `text`) keeps the 50-char context window correct when large inputs are
+// split into 16 KiB chunks.
 function redactAppSpecificPasswords(text: string, fieldKey?: string): string {
-  const fieldIsApple = fieldKey !== undefined && STRUCTURED_APP_PASSWORD_FIELD_RE.test(fieldKey);
+  const fieldIsExplicitCredential =
+    fieldKey !== undefined && STRUCTURED_APP_PASSWORD_FIELD_RE.test(fieldKey);
+  const fieldIsGeneric =
+    !fieldIsExplicitCredential &&
+    fieldKey !== undefined &&
+    GENERIC_APP_PASSWORD_FIELD_RE.test(fieldKey);
   return replacePatternBounded(
     text,
     APP_SPECIFIC_PASSWORD_RE,
-    // `localText` is the per-chunk string that `.replace` passes as its last positional arg.
-    // Using it (with chunk-relative `offset`) keeps the 50-char context window correct even
-    // when replacePatternBounded splits large inputs into 16 KiB chunks — the closed-over
-    // `text` is the whole value, so slicing it with a chunk-relative offset would land near
-    // the beginning of the string rather than near the actual match.
     (match: string, token: string, offset: number, localText: string) => {
-      if (!looksLikeAppSpecificPassword(token)) {
-        return match;
-      }
-      if (fieldIsApple) {
+      // Tier 1: explicit credential field — mask unconditionally.
+      if (fieldIsExplicitCredential) {
         return redactMatch(match, [token], APP_SPECIFIC_PASSWORD_RE);
       }
+      // Tier 2: generic field — wordlist precision, bias to masking.
+      if (fieldIsGeneric) {
+        if (looksLikeKebabIdentifier(token)) {
+          return match;
+        }
+        return redactMatch(match, [token], APP_SPECIFIC_PASSWORD_RE);
+      }
+      // Tier 3: unclassified — require a nearby apple/icloud context anchor.
       const windowStart = Math.max(0, offset - APP_PASSWORD_CONTEXT_WINDOW);
       const windowEnd = Math.min(
         localText.length,

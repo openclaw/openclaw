@@ -1195,6 +1195,77 @@ describe("redactSecrets", () => {
       "abcd-efgh-ijkl-mnop",
     );
   });
+
+  // Hybrid-design regressions (fail-closed explicit fields + wordlist precision generic fields)
+  it("masks an all-word 4x4 token in an explicit Apple credential field (fail-closed)", () => {
+    // Even though `main-test-case-name` consists entirely of dictionary words it MUST be masked
+    // when the field key is `appSpecificPassword` — explicit credential fields are fail-closed and
+    // never consult the wordlist.
+    expect(redactSensitiveFieldValue("appSpecificPassword", "main-test-case-name")).not.toBe(
+      "main-test-case-name",
+    );
+    // Random credential shapes also masked in explicit fields.
+    expect(redactSensitiveFieldValue("apple", "kxbv-qwfn-zptl-mrqd")).not.toBe(
+      "kxbv-qwfn-zptl-mrqd",
+    );
+    expect(redactSensitiveFieldValue("icloud", "kxbv-qwfn-zptl-mrqd")).not.toBe(
+      "kxbv-qwfn-zptl-mrqd",
+    );
+  });
+
+  it("does not mask kebab identifiers in errorMessage (wordlist precision)", () => {
+    // `errorMessage` is a generic field — wordlist precision applies.  All-word tokens survive.
+    expect(redactSensitiveFieldValue("errorMessage", "spec-prod-team-role")).toBe(
+      "spec-prod-team-role",
+    );
+    expect(
+      redactSensitiveFieldValue("errorMessage", "request failed on help-desk-team-page route"),
+    ).toContain("help-desk-team-page");
+  });
+
+  it("masks random credential tokens in errorMessage (wordlist precision)", () => {
+    // Random tokens whose segments are not dictionary words must still be masked.
+    expect(
+      redactSensitiveFieldValue("errorMessage", "auth failed: kxbv-qwfn-zptl-mrqd"),
+    ).not.toContain("kxbv-qwfn-zptl-mrqd");
+    // Sequential-alphabet token — not words → masked (covers the io.audit.test.ts path).
+    expect(
+      redactSensitiveFieldValue("errorMessage", "payload contained abcd-efgh-ijkl-mnop"),
+    ).not.toContain("abcd-efgh-ijkl-mnop");
+  });
+
+  it("does not mask kebab identifiers across all generic field types (wordlist precision)", () => {
+    const kebabCases: Array<[string, string]> = [
+      ["text", "help-desk-team-page"],
+      ["content", "kube-node-pool-spec"],
+      ["message", "load-some-bare-init"],
+      ["error", "spec-prod-team-role"],
+      ["detail", "help-desk-team-page"],
+      ["details", "kube-node-pool-spec"],
+      ["reason", "load-some-bare-init"],
+    ];
+    for (const [field, token] of kebabCases) {
+      expect(redactSensitiveFieldValue(field, `identifier is ${token}`)).toContain(token);
+    }
+  });
+
+  it("masks random credential tokens across all generic field types (wordlist precision)", () => {
+    const genericFields = [
+      "text",
+      "content",
+      "message",
+      "error",
+      "errorMessage",
+      "detail",
+      "details",
+      "reason",
+    ];
+    for (const field of genericFields) {
+      expect(redactSensitiveFieldValue(field, `token kxbv-qwfn-zptl-mrqd found`)).not.toContain(
+        "kxbv-qwfn-zptl-mrqd",
+      );
+    }
+  });
 });
 
 describe("redactSensitiveLines", () => {
