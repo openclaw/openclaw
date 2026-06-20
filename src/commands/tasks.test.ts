@@ -568,4 +568,55 @@ describe("tasks commands", () => {
       }
     });
   });
+
+  it("preserves running cron sessions whose job id is not a clean slug", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      const sessionsDir = state.sessionsDir("main");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const old = now - 8 * 24 * 60 * 60_000;
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            // Session key carries the slugified job segment (normalizeCronLaneSegment("Daily Report")).
+            "agent:main:cron:daily-report:run:old-run": {
+              sessionId: "running-run",
+              updatedAt: old,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      await saveCronStore(state.statePath("cron", "jobs.json"), {
+        version: 1,
+        jobs: [
+          {
+            id: "Daily Report",
+            name: "Daily Report",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            sessionKey: "cron:daily-report",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "ping" },
+            delivery: { mode: "none" },
+            createdAtMs: now,
+            updatedAtMs: now,
+            state: { runningAtMs: now - 5_000 },
+          },
+        ],
+      });
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+      // The running set must hold the slugified id "daily-report" (not "daily report") to match the
+      // session-key segment; otherwise this live running session is wrongly pruned as stale.
+      const updated = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+      expect(updated["agent:main:cron:daily-report:run:old-run"]).toBeDefined();
+    });
+  });
 });

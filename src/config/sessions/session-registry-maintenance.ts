@@ -16,7 +16,7 @@ export type SessionRegistryMaintenanceStoreOptions = {
   apply: boolean;
   /** Retention window for cron-run session entries. */
   retentionMs: number;
-  /** Currently running cron job ids, normalized to lowercase. */
+  /** Currently running cron job ids, normalized to the cron-run session-key job segment. */
   runningCronJobIds: ReadonlySet<string>;
   /** Resolved session registry store path for one agent. */
   storePath: string;

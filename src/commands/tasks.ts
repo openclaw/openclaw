@@ -11,6 +11,7 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
+import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -134,8 +135,10 @@ function readRunningCronJobIds(): Set<string> {
     return new Set(
       loadCronJobsStoreSync(cronStorePath)
         .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
-        // Cron session keys are matched case-insensitively against job ids.
-        .map((job) => job.id.toLowerCase()),
+        // Must match the slugified job segment in cron-run session keys (built by
+        // normalizeCronLaneSegment); a plain lowercase id misses non-slug ids like
+        // "Daily Report" and prunes their live running sessions.
+        .map((job) => normalizeCronLaneSegment(job.id, "job")),
     );
   } catch {
     return new Set();
