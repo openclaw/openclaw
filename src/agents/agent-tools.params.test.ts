@@ -8,6 +8,7 @@ import {
   REQUIRED_PARAM_GROUPS,
   getToolParamsRecord,
   stripMalformedXmlArgValueSuffix,
+  correctHallucinatedFileExtension,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 
@@ -252,5 +253,146 @@ describe("assertRequiredParams", () => {
         "write",
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("correctHallucinatedFileExtension", () => {
+  it("corrects .docodex to .docx", () => {
+    expect(correctHallucinatedFileExtension("report.docodex")).toBe("report.docx");
+  });
+
+  it("corrects .docxcodex to .docx", () => {
+    expect(correctHallucinatedFileExtension("notes.docxcodex")).toBe("notes.docx");
+  });
+
+  it("corrects .pptcodex to .pptx", () => {
+    expect(correctHallucinatedFileExtension("slides.pptcodex")).toBe("slides.pptx");
+  });
+
+  it("corrects .xlscodex to .xlsx", () => {
+    expect(correctHallucinatedFileExtension("data.xlscodex")).toBe("data.xlsx");
+  });
+
+  it("corrects hallucinated extension in a path with directory prefix", () => {
+    expect(correctHallucinatedFileExtension("/home/user/docs/report.docodex")).toBe(
+      "/home/user/docs/report.docx",
+    );
+  });
+
+  it("leaves normal .docx path unchanged", () => {
+    expect(correctHallucinatedFileExtension("report.docx")).toBe("report.docx");
+  });
+
+  it("leaves normal .pptx path unchanged", () => {
+    expect(correctHallucinatedFileExtension("slides.pptx")).toBe("slides.pptx");
+  });
+
+  it("leaves normal .xlsx path unchanged", () => {
+    expect(correctHallucinatedFileExtension("data.xlsx")).toBe("data.xlsx");
+  });
+
+  it("leaves unrelated file extensions unchanged", () => {
+    expect(correctHallucinatedFileExtension("script.ts")).toBe("script.ts");
+    expect(correctHallucinatedFileExtension("main.go")).toBe("main.go");
+    expect(correctHallucinatedFileExtension("index.html")).toBe("index.html");
+    expect(correctHallucinatedFileExtension("image.png")).toBe("image.png");
+  });
+
+  it("leaves empty string unchanged", () => {
+    expect(correctHallucinatedFileExtension("")).toBe("");
+  });
+
+  it("corrects hallucinated extension even with XML suffix present (chained cleanup)", () => {
+    // The write tool chaining: XML stripping runs first, then extension correction.
+    // A path like "report.docodex</arg_value>>" would first become "report.docodex"
+    // then corrected to "report.docx". This tests just the second half.
+    expect(correctHallucinatedFileExtension("report.docodex")).toBe("report.docx");
+  });
+
+  it("corrects hallucinated extension through wrapToolParamValidation (write tool)", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("id", {
+      path: "report.docodex",
+      content: "test content",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      {
+        path: "report.docx",
+        content: "test content",
+      },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("corrects hallucinated extension through wrapToolParamValidation (edit tool)", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "edit",
+        label: "edit",
+        description: "edit a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.edit,
+    );
+
+    await tool.execute("id", {
+      path: "slides.pptcodex",
+      edits: [{ oldText: "old", newText: "new" }],
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      {
+        path: "slides.pptx",
+        edits: [{ oldText: "old", newText: "new" }],
+      },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("passes through normal path unchanged via wrapToolParamValidation", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("id", {
+      path: "/home/user/docs/report.docx",
+      content: "content",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      {
+        path: "/home/user/docs/report.docx",
+        content: "content",
+      },
+      undefined,
+      undefined,
+    );
   });
 });

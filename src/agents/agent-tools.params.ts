@@ -16,6 +16,15 @@ const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>+$/;
 const XML_ARG_VALUE_PATH_PARAM_KEYS = new Set(["path"]);
 
+// Known hallucinated document-extension suffixes that models may produce.
+// E.g. .docx → .docodex is a common model-generated tokenization artifact.
+const HALLUCINATED_EXTENSION_SUFFIXES: [string, string][] = [
+  [".docodex", ".docx"],
+  [".docxcodex", ".docx"],
+  [".pptcodex", ".pptx"],
+  [".xlscodex", ".xlsx"],
+];
+
 function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
 }
@@ -110,6 +119,16 @@ export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
+/** Correct known hallucinated document file extensions produced by models (e.g. .docodex → .docx). */
+export function correctHallucinatedFileExtension(value: string): string {
+  for (const [hallucinated, correct] of HALLUCINATED_EXTENSION_SUFFIXES) {
+    if (value.endsWith(hallucinated)) {
+      return value.slice(0, -hallucinated.length) + correct;
+    }
+  }
+  return value;
+}
+
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,
@@ -125,6 +144,26 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
     if (stripped !== value) {
       normalized ??= { ...record };
       normalized[key as keyof T] = stripped as T[keyof T];
+    }
+  }
+  return normalized ?? record;
+}
+
+/** Correct hallucinated file extensions from selected string fields without mutating input. */
+export function correctHallucinatedExtensionsFromKeys<T extends Record<string, unknown>>(
+  record: T,
+  keys: readonly string[],
+): T {
+  let normalized: T | undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const corrected = correctHallucinatedFileExtension(value);
+    if (corrected !== value) {
+      normalized ??= { ...record };
+      normalized[key as keyof T] = corrected as T[keyof T];
     }
   }
   return normalized ?? record;
@@ -196,10 +235,13 @@ export function wrapToolParamValidation(
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
       const pathKeys = resolveMalformedXmlArgValuePathKeys(requiredParamGroups);
-      const normalizedParams =
-        record && pathKeys.length > 0
-          ? stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys)
-          : params;
+      let normalizedParams: typeof params = params;
+      if (record && pathKeys.length > 0) {
+        // Chained normalization: strip XML suffix corruption first, then correct
+        // hallucinated document extensions (e.g. .docodex → .docx).
+        const afterXml = stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys);
+        normalizedParams = correctHallucinatedExtensionsFromKeys(afterXml, pathKeys);
+      }
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
       }
