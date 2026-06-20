@@ -272,6 +272,27 @@ describe("noteMemorySearchHealth", () => {
     expect(firstNoteMessage()).toContain("a local model path is configured");
   });
 
+  it("does not warn when local provider probe was skipped (skipped: true)", async () => {
+    // `openclaw doctor` (and `openclaw doctor --deep`) probes gateway memory
+    // readiness with probe:false, so the gateway returns checked:false +
+    // skipped:true to mean "readiness was not tested", not "embeddings are
+    // broken". Key-optional providers already treat this as non-fatal; the
+    // local provider must do the same so a configured, healthy local embedding
+    // stack is not falsely flagged as "not confirmed ready".
+    // Regression test for: https://github.com/openclaw/openclaw/issues/92582
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: { modelPath: "hf:some-org/some-model-GGUF/model.gguf" },
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("does not emit provider guidance when no memory runtime is active", async () => {
     resolveActiveMemoryBackendConfig.mockReturnValue(null);
     resolveMemorySearchConfig.mockReturnValue({

@@ -472,6 +472,18 @@ export async function noteMemorySearchHealth(
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
+    // When the probe was intentionally skipped (skipped: true / checked: false
+    // from the probe:false path used by `openclaw doctor` and `openclaw doctor
+    // --deep`), we have no embedding readiness information — do not warn. A
+    // skipped probe means readiness was never checked, not that the configured
+    // local provider is broken, so flagging "not confirmed ready" is a false
+    // positive. This mirrors the key-optional provider branch below.
+    // NOTE: a transport timeout also sets checked: false, but skipped stays
+    // false/absent — a timeout is a real diagnostic signal and should fall
+    // through to the warning below.
+    if (opts?.gatewayMemoryProbe?.skipped) {
+      return;
+    }
     const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
     const detail = opts?.gatewayMemoryProbe?.error?.trim();
     note(
