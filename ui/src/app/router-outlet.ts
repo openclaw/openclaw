@@ -109,7 +109,6 @@ export function renderRouterOutlet<
     return options.pending?.(state) ?? null;
   }
 
-  const route = router.getRoute(routeId);
   const module =
     activeMatch?.routeId === routeId
       ? activeMatch.module
@@ -117,7 +116,10 @@ export function renderRouterOutlet<
         ? pendingMatch.module
         : undefined;
   const renderedMatch = activeMatch?.routeId === routeId ? activeMatch : pendingMatch;
-  if (route?.component && !module) {
+  if (renderedMatch?.status === "pending") {
+    return options.pending?.(state) ?? null;
+  }
+  if (!module) {
     return options.pending?.(state) ?? null;
   }
   if (!isRenderableModule<TContext, TData>(module)) {
