@@ -5,6 +5,7 @@ import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { resolveSlackConversationInfo } from "./channel-type.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
 import {
@@ -78,6 +79,8 @@ export const slackActionRuntime = {
 export type SlackActionContext = {
   /** Current channel ID for auto-threading. */
   currentChannelId?: string;
+  /** Current channel name, when available from the inbound transport context. */
+  currentChannelName?: string;
   /** Routable target for the current conversation when it differs from the channel ID. */
   currentMessagingTarget?: string;
   /** Current thread timestamp for auto-threading. */
@@ -152,15 +155,24 @@ function isImageContentType(value: string | undefined): boolean {
   return value?.trim().toLowerCase().startsWith("image/") === true;
 }
 
-function assertSlackReadTargetAllowed(params: {
+type SlackReadTargetAllowance = {
+  allowed: boolean;
+  explicitlyDenied: boolean;
+  groupPolicy: "open" | "disabled" | "allowlist";
+  channelAllowlistConfigured: boolean;
+};
+
+function resolveSlackReadTargetAllowance(params: {
   account: ResolvedSlackAccount;
   cfg: OpenClawConfig;
   channelId: string;
-}) {
+  channelName?: string;
+}): SlackReadTargetAllowance {
   const channels = params.account.config.channels;
   const channelKeys = Object.keys(channels ?? {});
   const channelConfig = resolveSlackChannelConfig({
     channelId: params.channelId,
+    channelName: params.channelName,
     channels,
     channelKeys,
     allowNameMatching: params.account.config.dangerouslyAllowNameMatching,
@@ -172,20 +184,67 @@ function assertSlackReadTargetAllowed(params: {
     groupPolicy: params.account.config.groupPolicy,
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
+  const policyAllowed = isSlackChannelAllowedByPolicy({
+    groupPolicy,
+    channelAllowlistConfigured: channelKeys.length > 0,
+    channelAllowed,
+  });
+  return {
+    allowed:
+      groupPolicy !== "disabled" &&
+      policyAllowed &&
+      (channelAllowed || (groupPolicy === "open" && !channelConfig?.matchSource)),
+    explicitlyDenied:
+      !channelAllowed && (groupPolicy !== "open" || Boolean(channelConfig?.matchSource)),
+    groupPolicy,
+    channelAllowlistConfigured: channelKeys.length > 0,
+  };
+}
+
+async function assertSlackReadTargetAllowed(params: {
+  account: ResolvedSlackAccount;
+  cfg: OpenClawConfig;
+  channelId: string;
+  channelName?: string;
+}) {
+  const direct = resolveSlackReadTargetAllowance(params);
+  if (direct.allowed) {
+    return;
+  }
+  if (direct.explicitlyDenied || direct.groupPolicy === "disabled") {
+    throw new Error("Slack read target channel is not allowed.");
+  }
+
+  // Action tools often receive only a Slack channel ID from permalinks. In
+  // allowlist mode, operators commonly configure human-readable channel names
+  // (for example "#allowed-channel"). If name matching is enabled, resolve the
+  // channel name lazily and re-check before failing closed.
   if (
-    groupPolicy === "disabled" ||
-    (groupPolicy === "allowlist" &&
-      !isSlackChannelAllowedByPolicy({
-        groupPolicy,
-        channelAllowlistConfigured: channelKeys.length > 0,
-        channelAllowed,
-      }))
+    direct.groupPolicy === "allowlist" &&
+    direct.channelAllowlistConfigured &&
+    params.account.config.dangerouslyAllowNameMatching === true &&
+    !params.channelName
   ) {
-    throw new Error("Slack read target channel is not allowed.");
+    const conversationInfo = await resolveSlackConversationInfo({
+      cfg: params.cfg,
+      accountId: params.account.accountId,
+      channelId: params.channelId,
+    });
+    if (conversationInfo.name) {
+      const named = resolveSlackReadTargetAllowance({
+        ...params,
+        channelName: conversationInfo.name,
+      });
+      if (named.allowed) {
+        return;
+      }
+      if (named.explicitlyDenied || named.groupPolicy === "disabled") {
+        throw new Error("Slack read target channel is not allowed.");
+      }
+    }
   }
-  if (!channelAllowed && (groupPolicy !== "open" || channelConfig?.matchSource)) {
-    throw new Error("Slack read target channel is not allowed.");
-  }
+
+  throw new Error("Slack read target channel is not allowed.");
 }
 
 export async function handleSlackAction(
@@ -264,7 +323,12 @@ export async function handleSlackAction(
       }
       return jsonResult({ ok: true, added: emoji });
     }
-    assertSlackReadTargetAllowed({ account, cfg, channelId });
+    await assertSlackReadTargetAllowed({
+      account,
+      cfg,
+      channelId,
+      channelName: context?.currentChannelName,
+    });
     const reactions = readOpts
       ? await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts)
       : await slackActionRuntime.listSlackReactions(channelId, messageId);
@@ -413,7 +477,12 @@ export async function handleSlackAction(
       }
       case "readMessages": {
         const channelId = resolveChannelId();
-        assertSlackReadTargetAllowed({ account, cfg, channelId });
+        await assertSlackReadTargetAllowed({
+          account,
+          cfg,
+          channelId,
+          channelName: context?.currentChannelName,
+        });
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",
         });
@@ -449,7 +518,12 @@ export async function handleSlackAction(
           );
         }
         const channelId = resolveSlackChannelId(channelTarget);
-        assertSlackReadTargetAllowed({ account, cfg, channelId });
+        await assertSlackReadTargetAllowed({
+          account,
+          cfg,
+          channelId,
+          channelName: context?.currentChannelName,
+        });
         const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
@@ -526,7 +600,12 @@ export async function handleSlackAction(
       }
       return jsonResult({ ok: true });
     }
-    assertSlackReadTargetAllowed({ account, cfg, channelId });
+    await assertSlackReadTargetAllowed({
+      account,
+      cfg,
+      channelId,
+      channelName: context?.currentChannelName,
+    });
     const pins = writeOpts
       ? await slackActionRuntime.listSlackPins(channelId, readOpts)
       : await slackActionRuntime.listSlackPins(channelId);
