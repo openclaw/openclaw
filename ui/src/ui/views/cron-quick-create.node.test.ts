@@ -37,5 +37,24 @@ describe("cron quick create", () => {
     expect(patch.sessionTarget).toBe("isolated");
     expect(patch.deliveryMode).toBe("announce");
     expect(patch.wakeMode).toBe("now");
+    expect(patch.payloadKind).toBe("agentTurn");
+  });
+
+  it("sets main session target and systemEvent payload for silent preset", () => {
+    const patch = draftToCronFormPatch(createDraft({ deliveryPreset: "silent" }));
+
+    expect(patch.sessionTarget).toBe("main");
+    expect(patch.deliveryMode).toBe("none");
+    expect(patch.wakeMode).toBe("now");
+    expect(patch.payloadKind).toBe("systemEvent");
+  });
+
+  it("sets isolated session target and agentTurn payload for isolated preset", () => {
+    const patch = draftToCronFormPatch(createDraft({ deliveryPreset: "isolated" }));
+
+    expect(patch.sessionTarget).toBe("isolated");
+    expect(patch.deliveryMode).toBe("none");
+    expect(patch.wakeMode).toBe("now");
+    expect(patch.payloadKind).toBe("agentTurn");
   });
 });
