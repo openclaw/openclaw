@@ -7292,7 +7292,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(receivedCfg).toBe(cfg);
   });
 
-  it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {
+  it("routes isReasoning payloads alongside non-reasoning payloads in final replies", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
@@ -7303,11 +7303,12 @@ describe("dispatchReplyFromConfig", () => {
       ] satisfies ReplyPayload[];
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls).toHaveLength(1);
-    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
+    expect(finalCalls).toHaveLength(2);
+    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("thinking...");
+    expect((finalCalls[1]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
   });
 
-  it("suppresses isReasoning payloads from block replies (generic dispatch path)", async () => {
+  it("routes isReasoning payloads through block reply dispatch", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
@@ -7331,7 +7332,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     );
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-    expect(blockReplySentTexts).not.toContain("thinking...");
+    expect(blockReplySentTexts).toContain("thinking...");
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
 

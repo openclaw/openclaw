@@ -3101,12 +3101,6 @@ export async function dispatchReplyFromConfig(
                 if (suppressDelivery) {
                   return;
                 }
-                // Suppress reasoning payloads — channels using this generic dispatch
-                // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
-                // Telegram has its own dispatch path that handles reasoning splitting.
-                if (payload.isReasoning === true) {
-                  return;
-                }
                 // Accumulate block text for TTS generation after streaming.
                 // Exclude status notices — they are informational UI signals
                 // and must not be synthesised into the spoken reply.
@@ -3274,11 +3268,6 @@ export async function dispatchReplyFromConfig(
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
-      // Suppress reasoning payloads from channel delivery — channels using this
-      // generic dispatch path do not have a dedicated reasoning lane.
-      if (reply.isReasoning === true) {
-        continue;
-      }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
         if (hasOutboundReplyContent(reply, { trimText: true })) {
           logVerbose(
