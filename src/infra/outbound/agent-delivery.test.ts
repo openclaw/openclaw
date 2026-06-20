@@ -443,6 +443,55 @@ describe("agent delivery helpers", () => {
     expect(plan.targetResolutionError).toBe(reservedError);
   });
 
+  it("keeps directory-resolved reserved explicit targets when session-route canonicalization misses", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: false,
+      error: new Error('Reserved target "current" for Telegram'),
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: true,
+      target: {
+        to: "telegram:-1002458651455",
+        kind: "group",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main",
+      sessionEntry: undefined,
+      requestedChannel: "telegram",
+      explicitTo: "current",
+      accountId: "work",
+      wantsDelivery: true,
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "telegram",
+      agentId: "agent",
+      accountId: "work",
+      target: "telegram:-1002458651455",
+      resolvedTarget: {
+        to: "telegram:-1002458651455",
+        kind: "group",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+      currentSessionKey: "agent:main",
+      threadId: undefined,
+    });
+    expect(plan.resolvedTo).toBe("telegram:-1002458651455");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
   it("surfaces stored explicit target errors even when explicit validation is disabled", () => {
     const targetResolutionError = new Error('reserved target "current"');
 

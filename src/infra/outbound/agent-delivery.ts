@@ -212,6 +212,14 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     }
   })();
   if (!route) {
+    if (resolvedSessionRouteTarget) {
+      return {
+        ...plan,
+        resolvedTo: resolvedSessionRouteTarget.to,
+        resolvedThreadId:
+          plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
+      };
+    }
     return plan;
   }
   return {
