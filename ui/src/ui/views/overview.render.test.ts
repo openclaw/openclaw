@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
@@ -132,6 +132,55 @@ describe("overview view rendering", () => {
     expect([...container.querySelectorAll(".mono")].map((node) => node.textContent)).toEqual([
       "openclaw devices list",
     ]);
+  });
+
+  it("renders recent Control Director truth-audit blocks", async () => {
+    const container = document.createElement("div");
+    const onNavigate = vi.fn();
+    const props = createOverviewProps({
+      onNavigate,
+      sessionsResult: {
+        ts: Date.now(),
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            controlDirectorTruthAudit: [
+              {
+                ts: Date.now(),
+                runId: "run-truth",
+                status: "blocked",
+                claims: [
+                  {
+                    claim: "remote proof passed",
+                    claimHash: "claim-123",
+                    claimType: "remote_proof",
+                    requiredEvidenceType: "github_run",
+                    matchStatus: "missing",
+                    missingCondition: "matching successful GitHub run",
+                    rewriteAction: "blocked_unsupported_truth_claim",
+                  },
+                ],
+                missing: ["matching successful GitHub run"],
+                payloadsChecked: 1,
+                payloadsRewritten: 1,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Control Director truth audit");
+    expect(container.textContent).toContain("Blocked");
+    expect(container.textContent).toContain("matching successful GitHub run");
   });
 
   it("renders recent session names through the shared display resolver", async () => {

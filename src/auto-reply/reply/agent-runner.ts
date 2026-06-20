@@ -9,6 +9,7 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { applyControlDirectorDeliveryGuards } from "../../agents/control-director-delivery-guards.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
@@ -1785,7 +1786,61 @@ export async function runReplyAgent(params: {
       }
     }
 
-    const payloadArray = runResult.payloads ?? [];
+    let payloadArray = runResult.payloads ?? [];
+
+    const controlDirectorHarnessClassification = normalizeOptionalString(
+      runResult.meta?.agentHarnessResultClassification,
+    );
+    const controlDirectorNoResponseFallbackPayload = payloadArray.some((payload) => {
+      const text = normalizeOptionalString(payload.text) ?? "";
+      return (
+        payload.isError === true &&
+        /agent couldn['’]?t generate a response|agent could not generate a response|please try again/iu.test(
+          text,
+        )
+      );
+    });
+    const controlDirectorClassification =
+      controlDirectorHarnessClassification === "empty" ||
+      controlDirectorHarnessClassification === "reasoning-only" ||
+      controlDirectorHarnessClassification === "planning-only"
+        ? controlDirectorHarnessClassification
+        : controlDirectorNoResponseFallbackPayload ||
+            (normalizeOptionalString(runResult.meta?.livenessState) === "blocked" &&
+              !normalizeOptionalString(runResult.meta?.finalAssistantVisibleText))
+          ? "empty"
+          : undefined;
+    const controlDirectorGuardResult = await applyControlDirectorDeliveryGuards({
+      agentId: followupRun.run.agentId,
+      provider: runResult.meta?.agentMeta?.provider,
+      model: runResult.meta?.agentMeta?.model,
+      payloads: payloadArray,
+      finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
+      classification: controlDirectorClassification,
+      canQueueContinuation: Boolean(sessionKey),
+      externalAbort: runResult.meta?.aborted === true || opts?.abortSignal?.aborted === true,
+      safeToContinue: runResult.meta?.replayInvalid === true ? false : undefined,
+      runId,
+      sessionId: followupRun.run.sessionId,
+      sessionKey,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+      storePath,
+      requestBody: commandBody,
+    });
+    payloadArray = controlDirectorGuardResult.payloads;
+    if (
+      controlDirectorGuardResult.guardActions.length > 0 ||
+      controlDirectorGuardResult.watchdogActions.length > 0
+    ) {
+      payloadArray = payloadArray.map((payload) =>
+        setReplyPayloadMetadata(payload, {
+          controlDirectorGuardedFinal: true,
+          deliverDespiteSourceReplySuppression: true,
+        }),
+      );
+    }
+    activeSessionEntry = controlDirectorGuardResult.sessionEntry ?? activeSessionEntry;
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });

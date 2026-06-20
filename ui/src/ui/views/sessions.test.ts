@@ -132,6 +132,51 @@ describe("sessions view", () => {
     });
   });
 
+  it("renders Control Director truth-audit details in expanded session rows", async () => {
+    const container = document.createElement("div");
+    const result = buildResult({
+      key: "agent:main",
+      kind: "direct",
+      updatedAt: Date.now(),
+      controlDirectorTruthAudit: [
+        {
+          ts: Date.now(),
+          runId: "run-truth",
+          status: "blocked",
+          claims: [
+            {
+              claim: "dashboard updated and tested",
+              claimHash: "hash-dashboard",
+              claimType: "dashboard",
+              requiredEvidenceType: "ui_smoke",
+              matchStatus: "missing",
+              missingCondition: "successful UI smoke artifact",
+              rewriteAction: "blocked_unsupported_truth_claim",
+            },
+          ],
+          missing: ["successful UI smoke artifact"],
+          payloadsChecked: 1,
+          payloadsRewritten: 1,
+        },
+      ],
+    });
+
+    render(
+      renderSessions({
+        ...buildProps(result),
+        expandedCheckpointKey: "agent:main",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Truth audit");
+    expect(container.textContent).toContain("Blocked");
+    expect(container.textContent).toContain("dashboard updated and tested");
+    expect(container.textContent).toContain("successful UI smoke artifact");
+    expect(container.textContent).toContain("hash-dashboard");
+  });
+
   it("offers workboard capture for dashboard sessions", async () => {
     const container = document.createElement("div");
     const onAddToWorkboard = vi.fn();
