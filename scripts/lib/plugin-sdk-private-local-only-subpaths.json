@@ -15,7 +15,6 @@
   "qa-lab",
   "qa-runtime",
   "reply-payload-testing",
-  "node-gateway-events-internal",
   "ssrf-runtime-internal",
   "test-env",
   "test-fixtures",
