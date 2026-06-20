@@ -26,6 +26,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(result).toEqual({
       prompt: "cached context\n\nhello",
       developerInstructions: "cached instructions",
+      promptInputRange: { start: 16, end: 21 },
     });
   });
 });

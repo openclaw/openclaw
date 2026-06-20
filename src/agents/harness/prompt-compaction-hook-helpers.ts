@@ -21,6 +21,8 @@ const log = createSubsystemLogger("agents/harness");
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
+  /** Span within prompt containing the original prompt input. */
+  promptInputRange?: { start: number; end: number };
 };
 
 /** Runs before-prompt hooks and returns the adjusted prompt fields. */
@@ -41,6 +43,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     return {
       prompt: params.prompt,
       developerInstructions: params.developerInstructions,
+      ...(params.prompt ? { promptInputRange: { start: 0, end: params.prompt.length } } : {}),
     };
   }
   const hookCtx = buildAgentHookContext(params.ctx);
@@ -75,15 +78,19 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     promptBuildResult,
     beforeAgentStartResult,
   });
+  const promptPrefix = joinPresentTextSegments([
+    promptBuildResult?.prependContext,
+    beforeAgentStartResult?.prependContext,
+  ]);
+  const promptSuffix = joinPresentTextSegments([
+    promptBuildResult?.appendContext,
+    beforeAgentStartResult?.appendContext,
+  ]);
+  const prompt =
+    joinPresentTextSegments([promptPrefix, params.prompt, promptSuffix]) ?? params.prompt;
+  const promptInputStart = promptPrefix ? promptPrefix.length + 2 : 0;
   return {
-    prompt:
-      joinPresentTextSegments([
-        promptBuildResult?.prependContext,
-        beforeAgentStartResult?.prependContext,
-        params.prompt,
-        promptBuildResult?.appendContext,
-        beforeAgentStartResult?.appendContext,
-      ]) ?? params.prompt,
+    prompt,
     developerInstructions:
       joinPresentTextSegments([
         wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
@@ -92,6 +99,14 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
         wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
         wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
       ]) ?? systemPrompt,
+    ...(params.prompt
+      ? {
+          promptInputRange: {
+            start: promptInputStart,
+            end: promptInputStart + params.prompt.length,
+          },
+        }
+      : {}),
   };
 }
 

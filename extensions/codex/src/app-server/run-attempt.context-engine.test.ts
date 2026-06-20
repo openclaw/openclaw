@@ -501,7 +501,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("bounds active context-engine projections when prompt hooks append context", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
-        { hookName: "before_prompt_build", handler: async () => ({ appendContext: "hook tail" }) },
+        {
+          hookName: "before_prompt_build",
+          handler: async (event) => ({ appendContext: event.prompt }),
+        },
       ]),
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -530,7 +533,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
     expect(inputText).toContain("recent anchor");
     expect(inputText).toContain("current prompt survives");
-    expect(inputText).toContain("hook tail");
 
     await harness.completeTurn();
     await run;

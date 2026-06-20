@@ -1026,15 +1026,21 @@ export async function runCodexAppServerAttempt(
     });
   const resolveShiftedPromptContextRange = (
     prompt: string,
+    promptInputRange: { start: number; end: number } | undefined,
     turnPromptText: string,
   ): CodexProjectedContextRange | undefined => {
-    if (!promptContextRange || !turnPromptText.endsWith(prompt)) {
+    if (
+      !promptContextRange ||
+      !promptInputRange ||
+      promptInputRange.start < 0 ||
+      promptInputRange.end < promptInputRange.start ||
+      promptInputRange.end > prompt.length ||
+      !turnPromptText.endsWith(prompt)
+    ) {
       return undefined;
     }
-    // Prompt-build hooks can append context after the projected prompt, so it
-    // is no longer necessarily the suffix of the assembled prompt.
-    const promptTextOffset = prompt.lastIndexOf(promptText);
-    if (promptTextOffset === -1) {
+    const promptTextOffset = promptInputRange.end - promptText.length;
+    if (promptTextOffset < promptInputRange.start) {
       return undefined;
     }
     const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;
@@ -1044,17 +1050,29 @@ export async function runCodexAppServerAttempt(
     };
   };
   let promptBuild = await buildPromptFromCurrentInputs();
-  const decorateCodexTurnPromptText = (prompt: string) => {
-    const turnPromptText = prependCodexOpenClawPromptContext(prompt, openClawPromptContext, {
-      preservePromptWithoutContext:
-        params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron",
-    });
+  const decorateCodexTurnPromptText = (promptBuild: {
+    prompt: string;
+    promptInputRange?: { start: number; end: number };
+  }) => {
+    const turnPromptText = prependCodexOpenClawPromptContext(
+      promptBuild.prompt,
+      openClawPromptContext,
+      {
+        preservePromptWithoutContext:
+          params.bootstrapContextMode === "lightweight" &&
+          params.bootstrapContextRunKind === "cron",
+      },
+    );
     return fitCodexProjectedContextForTurnStart({
       promptText: turnPromptText,
-      contextRange: resolveShiftedPromptContextRange(prompt, turnPromptText),
+      contextRange: resolveShiftedPromptContextRange(
+        promptBuild.prompt,
+        promptBuild.promptInputRange,
+        turnPromptText,
+      ),
     });
   };
-  let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
@@ -1070,7 +1088,7 @@ export async function runCodexAppServerAttempt(
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async () => {
     promptBuild = await buildPromptFromCurrentInputs();
-    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
   };
   const rebuildCodexTurnPromptTextFromCurrentProjection = async () => {
     const nextPromptBuild = await buildPromptFromCurrentInputs();
@@ -1079,8 +1097,9 @@ export async function runCodexAppServerAttempt(
     promptBuild = {
       ...promptBuild,
       prompt: nextPromptBuild.prompt,
+      promptInputRange: nextPromptBuild.promptInputRange,
     };
-    codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild.prompt);
+    codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild);
   };
   const selectNewerVisibleHistoryAfterBinding = (binding: CodexAppServerThreadBinding) => {
     const bindingUpdatedAt = Date.parse(binding.updatedAt);
