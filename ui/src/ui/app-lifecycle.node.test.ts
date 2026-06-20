@@ -31,7 +31,7 @@ function createHost() {
     logsAtBottom: true,
     logsEntries: [],
     sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
-    sessionPopStateHandler: vi.fn(),
+    sessionLocationSubscription: vi.fn(),
     topbarObserver: { disconnect: vi.fn() } as unknown as ResizeObserver,
   };
 }
@@ -50,25 +50,20 @@ describe("handleDisconnected", () => {
   });
 
   it("stops and clears gateway client on teardown", () => {
-    vi.stubGlobal("window", {
-      removeEventListener: vi.fn(),
-    });
-    const removeSpy = vi.spyOn(window, "removeEventListener").mockImplementation(() => undefined);
     const host = createHost();
+    const sessionLocationSubscription = host.sessionLocationSubscription;
     const disconnectSpy = (
       host.topbarObserver as unknown as { disconnect: ReturnType<typeof vi.fn> }
     ).disconnect;
 
     handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
 
-    expect(removeSpy).toHaveBeenCalledWith("popstate", host.sessionPopStateHandler);
+    expect(sessionLocationSubscription).toHaveBeenCalledTimes(1);
     expect(host.connectGeneration).toBe(1);
     expect(host.client).toBeNull();
     expect(host.connected).toBe(false);
     expect(disconnectSpy).toHaveBeenCalledTimes(1);
     expect(host.topbarObserver).toBeNull();
-    removeSpy.mockRestore();
-    vi.unstubAllGlobals();
   });
 
   it("clears pending session reload timers on teardown", () => {

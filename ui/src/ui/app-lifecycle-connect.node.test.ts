@@ -19,6 +19,8 @@ const {
 vi.mock("../app-routes.ts", () => ({
   appRouter: {
     subscribe: vi.fn(() => vi.fn()),
+    subscribeSelector: vi.fn(() => vi.fn()),
+    routeIdFromPath: vi.fn(() => "chat"),
     start: appRouterStartMock,
     stop: vi.fn(),
   },
@@ -122,6 +124,7 @@ describe("handleConnected", () => {
     scheduleChatScrollMock.mockReset();
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
+      location: { pathname: "/chat", search: "", hash: "" },
     });
   });
 
