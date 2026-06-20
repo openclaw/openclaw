@@ -92,20 +92,27 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
   let location = locationForPath("/");
   let resolvedLocation: RouteLocation | null = null;
   let status: RouterState<TRouteId, TModule, TData>["status"] = "idle";
+  let activeSnapshot: readonly RouteMatch<TRouteId, TModule, TData>[] = [];
+  let pendingSnapshot: readonly RouteMatch<TRouteId, TModule, TData>[] = [];
+  let cachedSnapshot: readonly RouteMatch<TRouteId, TModule, TData>[] = [];
   let transactionDepth = 0;
   let dirty = false;
   const changedMatchIds = new Set<string>();
-
-  const readPool = (pool: Map<string, RouteMatch<TRouteId, TModule, TData>>) => [...pool.values()];
 
   const readState = (): RouterState<TRouteId, TModule, TData> => ({
     location,
     resolvedLocation,
     status,
-    matches: readPool(active),
-    pendingMatches: readPool(pending),
-    cachedMatches: readPool(cached),
+    matches: activeSnapshot,
+    pendingMatches: pendingSnapshot,
+    cachedMatches: cachedSnapshot,
   });
+
+  const refreshSnapshots = () => {
+    activeSnapshot = [...active.values()];
+    pendingSnapshot = [...pending.values()];
+    cachedSnapshot = [...cached.values()];
+  };
 
   const notify = (matchId?: string) => {
     dirty = true;
@@ -176,6 +183,7 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
       }
     }
     if (changed) {
+      refreshSnapshots();
       notify();
     }
   };
@@ -223,6 +231,7 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
       if (!cached.delete(matchId)) {
         return;
       }
+      refreshSnapshots();
       notify(matchId);
     },
     updateMatch(matchId, update) {
@@ -234,6 +243,7 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
       const next = update(current);
       if (next !== current) {
         pool.set(matchId, next);
+        refreshSnapshots();
         notify(matchId);
       }
       return true;
@@ -248,6 +258,7 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
             }
           }
         }
+        refreshSnapshots();
       });
     },
     clear() {
@@ -258,6 +269,7 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
           }
           pool.clear();
         }
+        refreshSnapshots();
         location = locationForPath("/");
         resolvedLocation = null;
         status = "idle";
