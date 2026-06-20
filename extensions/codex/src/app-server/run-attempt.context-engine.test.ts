@@ -504,7 +504,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       createMockPluginRegistry([
         {
           hookName: "before_prompt_build",
-          handler: async (event) => ({ appendContext: event.prompt }),
+          handler: async (event) => ({
+            appendContext: `${event.prompt}\n\nhook append marker`,
+            prependContext: "hook prefix context",
+          }),
         },
       ]),
     );
@@ -536,6 +539,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(inputText).toContain("recent anchor");
     expect(inputText).toContain("current inbound context survives");
     expect(inputText).toContain("current prompt survives");
+    expect(inputText).toContain("hook append marker");
 
     await harness.completeTurn();
     await run;
