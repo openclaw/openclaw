@@ -90,6 +90,18 @@ function expectBaseStreamModelFields(baseStream: StreamFn, fields: Record<string
   expect(call[2]).toBeUndefined();
 }
 
+function expectBaseStreamCallModelFields(
+  baseStream: StreamFn,
+  callIndex: number,
+  fields: Record<string, unknown>,
+) {
+  const call = (baseStream as unknown as { mock: { calls: unknown[][] } }).mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected base stream call ${callIndex}`);
+  }
+  expectRecordFields(requireRecord(call[0], "base stream model"), fields);
+}
+
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
   const resolved = stream instanceof Promise ? await stream : stream;
   const events: StreamEvent[] = [];
@@ -337,6 +349,36 @@ describe("lmstudio stream wrapper", () => {
     expectBaseStreamModelFields(baseStream, {
       provider: "lmstudio",
       id: "gemma-4-e4b-it-ultra-uncensored-heretic",
+    });
+  });
+
+  it("reuses the canonical model key while preload failure cooldown is active", async () => {
+    const canonicalKey = "gemma-4-e4b-it-ultra-uncensored-heretic";
+    const variantModel = {
+      id: `lmstudio/${canonicalKey}@q4_k_m`,
+    };
+    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(
+      Object.assign(new Error("load failed"), {
+        resolvedModelKey: canonicalKey,
+      }),
+    );
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+
+    const firstEvents = await collectEvents(runWrappedLmstudioStream(wrapped, variantModel));
+    const secondEvents = await collectEvents(runWrappedLmstudioStream(wrapped, variantModel));
+
+    expectSingleDoneEvent(firstEvents);
+    expectSingleDoneEvent(secondEvents);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expect(baseStream).toHaveBeenCalledTimes(2);
+    expectBaseStreamCallModelFields(baseStream, 0, {
+      provider: "lmstudio",
+      id: canonicalKey,
+    });
+    expectBaseStreamCallModelFields(baseStream, 1, {
+      provider: "lmstudio",
+      id: canonicalKey,
     });
   });
 

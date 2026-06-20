@@ -37,6 +37,7 @@ const preloadInFlight = new Map<string, Promise<string | undefined>>();
 type PreloadCooldownEntry = {
   untilMs: number;
   consecutiveFailures: number;
+  resolvedModelKey?: string;
 };
 
 const preloadCooldown = new Map<string, PreloadCooldownEntry>();
@@ -54,12 +55,18 @@ function recordPreloadSuccess(preloadKey: string): void {
   preloadCooldown.delete(preloadKey);
 }
 
-function recordPreloadFailure(preloadKey: string, now: number): PreloadCooldownEntry {
+function recordPreloadFailure(
+  preloadKey: string,
+  now: number,
+  resolvedModelKey?: string,
+): PreloadCooldownEntry {
   const existing = preloadCooldown.get(preloadKey);
   const consecutiveFailures = (existing?.consecutiveFailures ?? 0) + 1;
+  const persistedResolvedModelKey = resolvedModelKey ?? existing?.resolvedModelKey;
   const entry: PreloadCooldownEntry = {
     consecutiveFailures,
     untilMs: now + computePreloadBackoffMs(consecutiveFailures),
+    ...(persistedResolvedModelKey ? { resolvedModelKey: persistedResolvedModelKey } : {}),
   };
   preloadCooldown.set(preloadKey, entry);
   return entry;
@@ -259,12 +266,13 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
                   return resolvedModelKey;
                 },
                 (error: unknown) => {
-                  const entry = recordPreloadFailure(preloadKey, Date.now());
+                  const resolvedModelKey = resolveLmstudioModelKeyFromError(error);
+                  const entry = recordPreloadFailure(preloadKey, Date.now(), resolvedModelKey);
                   throw Object.assign(new Error("preload-failed"), {
                     cause: error,
                     consecutiveFailures: entry.consecutiveFailures,
                     cooldownMs: entry.untilMs - Date.now(),
-                    resolvedModelKey: resolveLmstudioModelKeyFromError(error),
+                    resolvedModelKey,
                   });
                 },
               )
@@ -297,6 +305,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
           );
         }
       } else if (cooldownEntry) {
+        resolvedModelKey = cooldownEntry.resolvedModelKey;
         log.debug(
           `LM Studio inference preload for "${modelKey}" skipped while backoff active (${cooldownEntry.consecutiveFailures} prior failures)`,
         );
