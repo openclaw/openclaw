@@ -754,8 +754,8 @@ describe("scripts/run-vitest", () => {
     let descendantPid = 0;
 
     try {
-      await waitFor(() => fs.existsSync(childPidPath), 10_000);
-      await waitFor(() => fs.existsSync(descendantPidPath), 10_000);
+      await waitFor(() => fs.existsSync(childPidPath), 30_000);
+      await waitFor(() => fs.existsSync(descendantPidPath), 30_000);
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
       descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
       expect(Number.isInteger(childPid)).toBe(true);

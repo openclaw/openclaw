@@ -355,6 +355,7 @@ export class OpenClawApp extends LitElement {
   @state() loginShowGatewayPassword = false;
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
+  @state() chatFocusMode = false;
   @state() connected = false;
   @state() theme: ThemeName = this.settings.theme ?? "claw";
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
@@ -1050,7 +1051,7 @@ export class OpenClawApp extends LitElement {
   }
 
   private postPluginUiBridgeConnect(targetWindow: Window, port: MessagePort): void {
-    targetWindow.postMessage({ type: "openclaw.pluginUi.connect" }, "*", [port]);
+    targetWindow.postMessage({ type: "openclaw.pluginUi.connect" }, window.location.origin, [port]);
   }
 
   private syncPluginUiBridge() {

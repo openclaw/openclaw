@@ -1423,7 +1423,7 @@ export function renderApp(state: AppViewState) {
   const isChat = displayTab === "chat";
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatViewError = state.lastError;
-  const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
+  const chatFocus = isChat && (state.chatFocusMode || state.onboarding);
   const chatHeaderHidden = isChat && (chatFocus || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
@@ -3853,6 +3853,10 @@ export function renderApp(state: AppViewState) {
                   onDismissError: () => dismissChatError(state),
                   onDismissRealtimeTalkError: () => dismissRealtimeTalkError(state),
                   sessions: state.sessionsResult,
+                  focusMode: state.chatFocusMode,
+                  onToggleFocusMode: () => {
+                    state.chatFocusMode = !state.chatFocusMode;
+                  },
                   composerControls: renderGuardedChatControls(state),
                   sessionWorkspace: {
                     collapsed: chatWorkspaceFiles.collapsed,
