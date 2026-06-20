@@ -19,6 +19,9 @@ import {
   clearTelegramPollContextCache,
   getTelegramPollContext,
   resetTelegramPollContextCacheForTest,
+  setTelegramPollContextStoreForTest,
+  TELEGRAM_POLL_CONTEXT_MAX_ENTRIES,
+  TELEGRAM_POLL_CONTEXT_NAMESPACE,
 } from "./poll-context-store.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -131,6 +134,7 @@ const sendMessageTelegram: typeof sendMessageTelegramImpl = async (to, text, opt
 
 const TELEGRAM_TEST_CFG = {};
 let sentMessageStore: NonNullable<Parameters<typeof setTelegramSentMessageStoreForTest>[0]>;
+let pollContextStore: NonNullable<Parameters<typeof setTelegramPollContextStoreForTest>[0]>;
 
 function markdownTable(columns: number): string {
   return [
@@ -167,6 +171,12 @@ beforeEach(() => {
   });
   sentMessageStore.clear();
   setTelegramSentMessageStoreForTest(sentMessageStore);
+  pollContextStore = createPluginStateSyncKeyedStoreForTests("telegram", {
+    namespace: TELEGRAM_POLL_CONTEXT_NAMESPACE,
+    maxEntries: TELEGRAM_POLL_CONTEXT_MAX_ENTRIES,
+  });
+  pollContextStore.clear();
+  setTelegramPollContextStoreForTest(pollContextStore);
 });
 
 function installTelegramStateRuntimeForTest(): void {
@@ -317,15 +327,16 @@ function capturedLogText(logFile: string): string {
 }
 
 afterEach(() => {
-  clearTelegramRuntime();
+  clearTelegramPollContextCache();
+  resetTelegramPollContextCacheForTest();
   clearSentMessageCache();
   setTelegramSentMessageStoreForTest(undefined);
+  setTelegramPollContextStoreForTest(undefined);
+  clearTelegramRuntime();
   resetPluginStateStoreForTests();
   setLoggerOverride(null);
   resetLogger();
   resetTelegramMessageCacheBucketsForTest();
-  clearTelegramPollContextCache();
-  resetTelegramPollContextCacheForTest();
   vi.restoreAllMocks();
 });
 
@@ -481,6 +492,104 @@ describe("sent-message-cache", () => {
       cacheA.clearSentMessageCache();
       cacheA.setTelegramSentMessageStoreForTest(undefined);
       cacheB.setTelegramSentMessageStoreForTest(undefined);
+    }
+  });
+});
+
+describe("poll-context-store", () => {
+  it("keeps poll context across restart without writing a sidecar", async () => {
+    const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-poll-restart.json`;
+    const pollContextCfg = { session: { store: persistedStorePath } };
+
+    await sendPollTelegram(
+      "-100555",
+      { question: "Q", options: ["A", "B"] },
+      {
+        cfg: pollContextCfg,
+        token: "t",
+        api: {
+          sendPoll: vi.fn(async () => ({
+            message_id: 123,
+            chat: { id: -100555 },
+            poll: { id: "p1" },
+          })),
+        } as unknown as Bot["api"],
+        accountId: "work",
+        messageThreadId: 77,
+      },
+    );
+
+    expect(getTelegramPollContext("work", "p1", pollContextCfg)).toEqual({
+      accountId: "work",
+      chatId: "-100555",
+      question: "Q",
+      options: ["A", "B"],
+      messageThreadId: 77,
+      updatedAt: expect.any(Number),
+    });
+    expect(fs.existsSync(`${persistedStorePath}.telegram-poll-context.json`)).toBe(false);
+
+    resetTelegramPollContextCacheForTest();
+
+    const restartedStore = await importFreshModule<typeof import("./poll-context-store.js")>(
+      import.meta.url,
+      "./poll-context-store.js?scope=restart",
+    );
+    restartedStore.setTelegramPollContextStoreForTest(pollContextStore);
+
+    try {
+      expect(restartedStore.getTelegramPollContext("work", "p1", pollContextCfg)).toEqual({
+        accountId: "work",
+        chatId: "-100555",
+        question: "Q",
+        options: ["A", "B"],
+        messageThreadId: 77,
+        updatedAt: expect.any(Number),
+      });
+      expect(fs.existsSync(`${persistedStorePath}.telegram-poll-context.json`)).toBe(false);
+    } finally {
+      restartedStore.clearTelegramPollContextCache();
+      restartedStore.setTelegramPollContextStoreForTest(undefined);
+      fs.rmSync(persistedStorePath, { force: true });
+      fs.rmSync(`${persistedStorePath}.telegram-poll-context.json`, { force: true });
+    }
+  });
+
+  it("migrates legacy poll context sidecars into plugin state", () => {
+    const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-poll-legacy.json`;
+    const legacyPath = `${persistedStorePath}.telegram-poll-context.json`;
+    const pollContextCfg = { session: { store: persistedStorePath } };
+    const now = Date.now();
+
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        "work:p1": {
+          accountId: "work",
+          chatId: "-100555",
+          question: "Q",
+          options: ["A", "B"],
+          messageThreadId: 77,
+          updatedAt: now,
+        },
+      }),
+      "utf8",
+    );
+
+    try {
+      expect(getTelegramPollContext("work", "p1", pollContextCfg)).toEqual({
+        accountId: "work",
+        chatId: "-100555",
+        question: "Q",
+        options: ["A", "B"],
+        messageThreadId: 77,
+        updatedAt: now,
+      });
+      expect(fs.existsSync(legacyPath)).toBe(false);
+    } finally {
+      clearTelegramPollContextCache();
+      fs.rmSync(persistedStorePath, { force: true });
+      fs.rmSync(legacyPath, { force: true });
     }
   });
 });
