@@ -28,13 +28,19 @@ function walkMarkdownFiles(dir, base = dir) {
   const entries = readdirSync(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
+    if (entry.name.startsWith(".")) {
+      continue;
+    }
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (EXCLUDED_DIRS.has(entry.name)) continue;
+      if (EXCLUDED_DIRS.has(entry.name)) {
+        continue;
+      }
       files.push(...walkMarkdownFiles(fullPath, base));
     } else if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".mdx"))) {
-      if (entry.name === "docs_map.md") continue; // skip self
+      if (entry.name === "docs_map.md") {
+        continue;
+      } // skip self
       files.push(relative(base, fullPath));
     }
   }
@@ -71,11 +77,13 @@ function extractPageInfo(fullPath) {
   const headings = [];
   let inFence = false;
   for (const line of body.split("\n")) {
-    if (line.match(/^```/)) {
+    if (/^```/.test(line)) {
       inFence = !inFence;
       continue;
     }
-    if (inFence) continue;
+    if (inFence) {
+      continue;
+    }
     const match = line.match(/^(#{2,4})\s+(.+)$/);
     if (match) {
       const level = match[1].length; // 2, 3, or 4
@@ -95,7 +103,9 @@ function buildTree(files) {
   for (const file of files) {
     const parts = file.split("/");
     const dir = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
-    if (!tree[dir]) tree[dir] = [];
+    if (!tree[dir]) {
+      tree[dir] = [];
+    }
     tree[dir].push(file);
   }
   return tree;
@@ -120,10 +130,14 @@ lines.push(
 lines.push("");
 
 // Sort directories for consistent output
-const sortedDirs = Object.keys(tree).sort((a, b) => {
+const sortedDirs = Object.keys(tree).toSorted((a, b) => {
   // Root files first, then alphabetical
-  if (a === "") return -1;
-  if (b === "") return 1;
+  if (a === "") {
+    return -1;
+  }
+  if (b === "") {
+    return 1;
+  }
   return a.localeCompare(b);
 });
 
