@@ -964,14 +964,13 @@ describe("createChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    await createChatSession(state, { source: "user", label: "Browser Proof Alpha" });
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
       state,
       {
         agentId: "ops",
         parentSessionKey: undefined,
-        label: "Browser Proof Alpha",
         emitCommandHooks: undefined,
       },
       {
@@ -1003,14 +1002,13 @@ describe("createChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    await createChatSession(state, { source: "user", label: "Browser Label Alpha" });
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
       state,
       {
         agentId: "main",
         parentSessionKey: undefined,
-        label: "Browser Label Alpha",
         emitCommandHooks: undefined,
       },
       {

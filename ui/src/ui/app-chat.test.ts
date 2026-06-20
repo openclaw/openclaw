@@ -1334,7 +1334,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
-  it("passes a typed /new label to the fresh-session action", async () => {
+  it("routes typed /new arguments through the existing fresh-session action", async () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -1349,7 +1349,7 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(request).not.toHaveBeenCalled();
-    expect(onSlashAction).toHaveBeenCalledWith("new-session", { label: "Research Plan" });
+    expect(onSlashAction).toHaveBeenCalledWith("new-session");
     expect(host.chatMessage).toBe("");
   });
 
@@ -2186,17 +2186,10 @@ describe("handleSendChat", () => {
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
   });
 
-  it("patches the current session label for /label", async () => {
-    const request = vi.fn(async (method: string, params: unknown) => {
-      if (method === "sessions.patch") {
-        expect(params).toStrictEqual({
-          key: "agent:main",
-          label: "Research Plan",
-        });
-        return { ok: true };
-      }
-      if (method === "sessions.list") {
-        return createSessionsResult([row("agent:main", { label: "Research Plan" })]);
+  it("sends /label as a normal chat message instead of patching the session locally", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return {};
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -2208,101 +2201,14 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "agent:main",
-      label: "Research Plan",
-    });
-    expect(host.chatMessage).toBe("");
-    expect(host.sessionsError).toBeNull();
-  });
-
-  it("scopes /label patches for selected-agent global sessions", async () => {
-    const request = vi.fn(async (method: string, params: unknown) => {
-      if (method === "sessions.patch") {
-        expect(params).toStrictEqual({
-          key: "global",
-          agentId: "work",
-          label: "Work Plan",
-        });
-        return { ok: true };
-      }
-      if (method === "sessions.list") {
-        expect(params).toMatchObject({ agentId: "work" });
-        return createSessionsResult([row("global", { label: "Work Plan" })]);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const host = makeHost({
-      client: { request } as unknown as ChatHost["client"],
-      chatMessage: "/label Work Plan",
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-    });
-
-    await handleSendChat(host);
-
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "global",
-      agentId: "work",
-      label: "Work Plan",
-    });
-    expect(host.chatMessage).toBe("");
-    expect(host.sessionsError).toBeNull();
-  });
-
-  it("runs /label immediately for busy selected-agent global sessions", async () => {
-    const request = vi.fn(async (method: string, params: unknown) => {
-      if (method === "sessions.patch") {
-        expect(params).toStrictEqual({
-          key: "global",
-          agentId: "work",
-          label: "Work Plan",
-        });
-        return { ok: true };
-      }
-      if (method === "sessions.list") {
-        expect(params).toMatchObject({ agentId: "work" });
-        return createSessionsResult([row("global", { label: "Work Plan" })]);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const host = makeHost({
-      client: { request } as unknown as ChatHost["client"],
-      chatMessage: "/label Work Plan",
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-      chatRunId: "run-active",
-      chatStream: "Working...",
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "global",
-      agentId: "work",
-      label: "Work Plan",
-    });
-    expect(host.chatMessage).toBe("");
-    expect(host.sessionsError).toBeNull();
-  });
-
-  it("shows an error when /label has no label", async () => {
-    const request = vi.fn(async (method: string) => {
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const host = makeHost({
-      client: { request } as unknown as ChatHost["client"],
-      chatMessage: "/label   ",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host);
-
-    expect(request).not.toHaveBeenCalled();
-    expect(host.lastError).toBe("Usage: /label <name>");
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "/label Research Plan",
+        sessionKey: "agent:main",
+      }),
+    );
+    expect(executeSlashCommandMock).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("");
   });
 

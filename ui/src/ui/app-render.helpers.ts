@@ -767,7 +767,7 @@ function resolveNewChatParentSessionKey(
   return normalizedPreviousSessionKey;
 }
 
-export type CreateChatSessionIntent = { source: "user"; label?: string };
+export type CreateChatSessionIntent = { source: "user" };
 
 export async function createChatSession(
   state: AppViewState,
@@ -793,7 +793,6 @@ export async function createChatSession(
   state.lastError = null;
   state.chatError = null;
   const previousSessionKey = state.sessionKey;
-  const label = normalizeOptionalString(intent.label);
   const parentSessionKey = resolveNewChatParentSessionKey(state, previousSessionKey);
   const nextSessionKey = await createSessionAndRefresh(
     state as unknown as Parameters<typeof createSessionAndRefresh>[0],
@@ -802,7 +801,6 @@ export async function createChatSession(
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
         resolveAgentIdFromSessionKey(previousSessionKey),
       parentSessionKey,
-      ...(label ? { label } : {}),
       emitCommandHooks: parentSessionKey !== undefined ? true : undefined,
     },
     {

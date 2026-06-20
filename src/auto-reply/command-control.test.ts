@@ -1126,7 +1126,6 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/COMPACT keep CaseSensitivePath")).toBe(true);
     expect(hasControlCommand("/compact:")).toBe(true);
     expect(hasControlCommand("compact")).toBe(false);
-    expect(hasControlCommand("/label Research Plan")).toBe(false);
   });
 
   it("respects disabled config/debug commands", () => {

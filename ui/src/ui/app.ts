@@ -345,7 +345,7 @@ export class OpenClawApp extends LitElement {
   private chatMobileControlsTrigger: HTMLElement | null = null;
   @state() navDrawerOpen = false;
 
-  onSlashAction?: (action: string, payload?: { label?: string }) => void | Promise<void>;
+  onSlashAction?: (action: string) => void | Promise<void>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>> = {};
   chatInputHistorySessionKey: string | null = null;
   chatInputHistoryItems: string[] | null = null;
@@ -835,13 +835,10 @@ export class OpenClawApp extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.onSlashAction = async (action: string, payload?: { label?: string }) => {
+    this.onSlashAction = async (action: string) => {
       switch (action) {
         case "new-session":
-          await createChatSessionInternal(this as unknown as AppViewState, {
-            source: "user",
-            label: payload?.label,
-          });
+          await createChatSessionInternal(this as unknown as AppViewState, { source: "user" });
           break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);

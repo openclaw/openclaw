@@ -135,7 +135,7 @@ export type ChatHost = ChatInputHistoryState & {
   eventLog?: unknown[];
   tab?: string;
   /** Callback for slash-command side effects that need app-level access. */
-  onSlashAction?: (action: string, payload?: { label?: string }) => void | Promise<void>;
+  onSlashAction?: (action: string) => void | Promise<void>;
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -1869,7 +1869,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "export-session", "steer", "redirect", "new", "label"].includes(name);
+  return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
 // ── Slash Command Dispatch ──
@@ -1884,19 +1884,13 @@ async function dispatchSlashCommand(
     case "stop":
       await handleAbortChat(host);
       return;
-    case "new": {
+    case "new":
       if (!host.onSlashAction) {
         setChatError(host, "New Chat is unavailable.");
         return;
       }
-      const label = args.trim();
-      if (label) {
-        await host.onSlashAction("new-session", { label });
-      } else {
-        await host.onSlashAction("new-session");
-      }
+      await host.onSlashAction("new-session");
       return;
-    }
     case "reset":
       await sendChatMessageNow(host, args ? `/reset ${args}` : "/reset", {
         refreshSessions: true,
@@ -1910,29 +1904,6 @@ async function dispatchSlashCommand(
     case "export-session":
       await host.onSlashAction?.("export");
       return;
-    case "label": {
-      if (!host.client || !host.connected) {
-        setChatError(host, "Gateway not connected");
-        return;
-      }
-      const label = args.trim();
-      if (!label) {
-        setChatError(host, "Usage: /label <name>");
-        return;
-      }
-      try {
-        const sessionScope = scopedAgentParamsForSession(host, host.sessionKey);
-        await host.client.request("sessions.patch", {
-          key: host.sessionKey,
-          ...sessionScope,
-          label,
-        });
-        await loadSessions(host as unknown as Parameters<typeof loadSessions>[0], sessionScope);
-      } catch (err) {
-        setChatError(host, String(err));
-      }
-      return;
-    }
   }
 
   if (!host.client || !host.connected) {

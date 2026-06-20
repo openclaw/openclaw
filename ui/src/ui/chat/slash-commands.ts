@@ -65,7 +65,6 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   skill: "zap",
   commands: "book",
   new: "plus",
-  label: "terminal",
   reset: "refresh",
   compact: "loader",
   stop: "stop",
@@ -84,7 +83,6 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
 const LOCAL_COMMANDS = new Set([
   "help",
   "new",
-  "label",
   "reset",
   "stop",
   "compact",
@@ -100,16 +98,6 @@ const LOCAL_COMMANDS = new Set([
 ]);
 
 const UI_ONLY_COMMANDS: SlashCommandDef[] = [
-  {
-    key: "label",
-    name: "label",
-    description: "Name the current session.",
-    args: "<name>",
-    icon: "terminal",
-    category: "session",
-    executeLocal: true,
-    tier: "standard",
-  },
   {
     key: "clear",
     name: "clear",
@@ -148,7 +136,6 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   stop: "session",
   reset: "session",
   new: "session",
-  label: "session",
   compact: "session",
   model: "model",
   models: "model",
@@ -166,7 +153,6 @@ const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
 
 const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
   steer: "<message>",
-  label: "<name>",
 };
 
 function normalizeUiKey(command: CommandLike): string {
