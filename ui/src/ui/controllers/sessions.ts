@@ -50,7 +50,6 @@ export type SessionsState = SessionsChatRunState & {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsShowArchived: boolean;
-  sidebarRecentSessionsAllAgents?: boolean;
   sessionsExpandedCheckpointKey: string | null;
   sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;
@@ -1124,8 +1123,7 @@ async function loadSessionsOnce(
       includeUnknown,
       configuredAgentsOnly,
     };
-    const agentId =
-      state.sidebarRecentSessionsAllAgents === true ? undefined : overrides?.agentId?.trim();
+    const agentId = overrides?.agentId?.trim();
     const resultAgentId = agentId ? normalizeAgentId(agentId) : null;
     if (agentId) {
       params.agentId = agentId;

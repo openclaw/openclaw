@@ -563,23 +563,11 @@ function toggleSidebarRecentSessionsAgentScope(state: AppViewState) {
   });
 }
 
-function hasSidebarRecentSessionsForAllAgents(state: AppViewState): boolean {
-  return (state.sessionsResult?.sessions ?? []).some(
-    (row) =>
-      !row.archived &&
-      row.kind !== "global" &&
-      row.kind !== "unknown" &&
-      row.kind !== "cron" &&
-      !isCronSessionKey(row.key),
-  );
-}
-
 function renderSidebarSessions(state: AppViewState) {
   const collapsed = state.settings.navCollapsed;
   const busy = isSidebarSessionBusy(state);
   const recent = collapsed ? [] : resolveSidebarRecentSessions(state);
-  const showRecentSection =
-    !collapsed && (recent.length > 0 || hasSidebarRecentSessionsForAllAgents(state));
+  const showRecentSection = !collapsed;
   const newSessionDisabled = !state.connected || state.sessionsLoading || busy || !state.client;
   const newSessionTitle = !state.connected
     ? "Connect to create a new session"

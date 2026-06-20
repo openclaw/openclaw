@@ -585,6 +585,31 @@ describe("renderApp assistant avatar routing", () => {
     expect(labels).toEqual(["Work new", "Work older"]);
   });
 
+  it("keeps the all-agents sidebar scope control reachable with no recent rows", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "agent:main:main",
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 0,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const scopeButton = container.querySelector(".sidebar-recent-sessions__scope");
+    expect(scopeButton).toBeInstanceOf(HTMLButtonElement);
+    expect(scopeButton?.textContent?.trim()).toBe("All agents");
+  });
+
   it("shows cross-agent subagent sessions when sidebar all-agents mode is active", () => {
     const container = document.createElement("div");
 
