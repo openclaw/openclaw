@@ -27,7 +27,8 @@ import {
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
+import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
+import { loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -319,23 +320,6 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
   );
 }
 
-export function collectArtifactsFromMessages(params: {
-  messages: unknown[];
-  sessionKey: string;
-  runId?: string;
-  taskId?: string;
-  includeDownloadData?: boolean;
-  downloadArtifactId?: string;
-}): ArtifactRecord[] {
-  const artifacts: ArtifactRecord[] = [];
-  let messageFallbackSeq = 0;
-  for (const message of params.messages) {
-    messageFallbackSeq += 1;
-    collectArtifactsFromMessage({ ...params, message, messageFallbackSeq, artifacts });
-  }
-  return artifacts;
-}
-
 function collectArtifactsFromMessage(params: {
   message: unknown;
   messageFallbackSeq: number;
@@ -422,8 +406,14 @@ function resolveQuerySession(
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
     const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
-    const taskAgentId =
-      asNonEmptyString(task?.agentId) ?? resolveRequesterSessionAgentId(requesterSessionKey, cfg);
+    const ownerAgentId = parseAgentSessionKey(task?.ownerKey)?.agentId;
+    const requesterAgentId =
+      asNonEmptyString(task?.requesterAgentId) ??
+      ownerAgentId ??
+      (requesterSessionKey === "global"
+        ? undefined
+        : resolveRequesterSessionAgentId(requesterSessionKey, cfg));
+    const taskAgentId = asNonEmptyString(task?.agentId) ?? requesterAgentId;
     if (
       query.agentId &&
       taskAgentId &&
@@ -431,11 +421,20 @@ function resolveQuerySession(
     ) {
       return undefined;
     }
-    const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
     if (requesterSessionKey) {
-      const scopedSessionKey = resolveScopedArtifactSessionKey(requesterSessionKey, agentId, cfg);
-      return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
+      // task.agentId identifies the executor. requesterAgentId keeps global
+      // requester transcripts in the correct agent store across restarts.
+      const sessionAgentId = requesterAgentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
+      const scopedSessionKey = resolveScopedArtifactSessionKey(
+        requesterSessionKey,
+        sessionAgentId,
+        cfg,
+      );
+      return scopedSessionKey
+        ? { sessionKey: scopedSessionKey, agentId: sessionAgentId }
+        : undefined;
     }
+    const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
     const runId = asNonEmptyString(task?.runId);
     const sessionKey = runId ? resolveSessionKeyForRun(runId, { agentId }) : undefined;
     const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
@@ -466,9 +465,13 @@ async function loadArtifacts(
   }
   const artifacts: ArtifactRecord[] = [];
   await visitSessionMessagesAsync(
-    sessionId,
-    storePath,
-    entry?.sessionFile,
+    {
+      agentId: resolved.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
+      sessionEntry: entry,
+      sessionId,
+      sessionKey,
+      storePath,
+    },
     (message, seq) => {
       collectArtifactsFromMessage({
         message,

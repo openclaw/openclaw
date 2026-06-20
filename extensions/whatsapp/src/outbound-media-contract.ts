@@ -7,6 +7,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import { formatError } from "./session-errors.js";
+import { isWhatsAppSocketOperationTimeoutError } from "./socket-timing.js";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
@@ -268,6 +269,9 @@ function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | 
 }
 
 function isRetryableWhatsAppOutboundError(error: unknown): boolean {
+  if (isWhatsAppSocketOperationTimeoutError(error)) {
+    return false;
+  }
   return /closed|reset|timed\s*out|disconnect/i.test(formatError(error));
 }
 

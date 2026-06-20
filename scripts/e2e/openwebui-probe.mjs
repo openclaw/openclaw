@@ -74,12 +74,16 @@ function createTimeoutError(label, timeoutMs) {
 async function withRequestTimeout(label, timeoutMs, run) {
   const controller = new AbortController();
   const timeoutError = createTimeoutError(label, timeoutMs);
-  const timer = setTimeout(() => {
-    controller.abort(timeoutError);
-  }, timeoutMs);
-  timer.unref?.();
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timer.unref?.();
+  });
   try {
-    return await run(controller.signal);
+    return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
   } catch (error) {
     if (controller.signal.aborted) {
       throw timeoutError;
@@ -90,12 +94,17 @@ async function withRequestTimeout(label, timeoutMs, run) {
   }
 }
 
-async function readBoundedResponseText(response, label, byteLimit = responseBodyMaxBytes) {
-  return await readBoundedResponseTextWithLimit(response, label, byteLimit);
+async function readBoundedResponseText(response, label, timeoutPromise) {
+  return await readBoundedResponseTextWithLimit(
+    response,
+    label,
+    responseBodyMaxBytes,
+    timeoutPromise,
+  );
 }
 
-async function readBoundedResponseJson(response, label) {
-  const body = await readBoundedResponseText(response, label);
+async function readBoundedResponseJson(response, label, timeoutPromise) {
+  const body = await readBoundedResponseText(response, label, timeoutPromise);
   try {
     return JSON.parse(body);
   } catch (error) {
@@ -134,39 +143,51 @@ function sleep(ms) {
 }
 
 async function fetchSignin() {
-  return await withRequestTimeout("Open WebUI signin", controlTimeoutMs, async (signal) => {
-    const response = await fetch(`${baseUrl}/api/v1/auths/signin`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password }),
-      signal,
-    });
-    if (!response.ok) {
-      const body = await readBoundedResponseText(response, "Open WebUI signin");
-      throw new Error(`signin failed: HTTP ${response.status} ${body}`);
-    }
-    return {
-      cookie: getCookieHeader(response),
-      json: await readBoundedResponseJson(response, "Open WebUI signin"),
-    };
-  });
+  return await withRequestTimeout(
+    "Open WebUI signin",
+    controlTimeoutMs,
+    async (signal, timeoutPromise) => {
+      const response = await fetch(`${baseUrl}/api/v1/auths/signin`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+        signal,
+      });
+      if (!response.ok) {
+        const body = await readBoundedResponseText(response, "Open WebUI signin", timeoutPromise);
+        throw new Error(`signin failed: HTTP ${response.status} ${body}`);
+      }
+      return {
+        cookie: getCookieHeader(response),
+        json: await readBoundedResponseJson(response, "Open WebUI signin", timeoutPromise),
+      };
+    },
+  );
 }
 
 async function fetchModels(authHeaders, attempt) {
   return await withRequestTimeout(
     `Open WebUI models attempt ${attempt}`,
     controlTimeoutMs,
-    async (signal) => {
+    async (signal, timeoutPromise) => {
       const response = await fetch(`${baseUrl}/api/models`, { headers: authHeaders, signal });
       if (!response.ok) {
         return {
           ok: false,
           status: response.status,
-          text: await readBoundedResponseText(response, `Open WebUI models attempt ${attempt}`),
+          text: await readBoundedResponseText(
+            response,
+            `Open WebUI models attempt ${attempt}`,
+            timeoutPromise,
+          ),
         };
       }
       return {
-        json: await readBoundedResponseJson(response, `Open WebUI models attempt ${attempt}`),
+        json: await readBoundedResponseJson(
+          response,
+          `Open WebUI models attempt ${attempt}`,
+          timeoutPromise,
+        ),
         ok: true,
       };
     },
@@ -174,25 +195,33 @@ async function fetchModels(authHeaders, attempt) {
 }
 
 async function fetchChatCompletion(authHeaders, targetModel) {
-  return await withRequestTimeout("Open WebUI chat completion", chatTimeoutMs, async (signal) => {
-    const response = await fetch(`${baseUrl}/api/chat/completions`, {
-      method: "POST",
-      headers: {
-        ...authHeaders,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: targetModel,
-        messages: [{ role: "user", content: prompt }],
-      }),
-      signal,
-    });
-    if (!response.ok) {
-      const body = await readBoundedResponseText(response, "Open WebUI chat completion");
-      throw new Error(`/api/chat/completions failed: HTTP ${response.status} ${body}`);
-    }
-    return await readBoundedResponseJson(response, "Open WebUI chat completion");
-  });
+  return await withRequestTimeout(
+    "Open WebUI chat completion",
+    chatTimeoutMs,
+    async (signal, timeoutPromise) => {
+      const response = await fetch(`${baseUrl}/api/chat/completions`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: targetModel,
+          messages: [{ role: "user", content: prompt }],
+        }),
+        signal,
+      });
+      if (!response.ok) {
+        const body = await readBoundedResponseText(
+          response,
+          "Open WebUI chat completion",
+          timeoutPromise,
+        );
+        throw new Error(`/api/chat/completions failed: HTTP ${response.status} ${body}`);
+      }
+      return await readBoundedResponseJson(response, "Open WebUI chat completion", timeoutPromise);
+    },
+  );
 }
 
 function extractModelIds(modelsJson) {

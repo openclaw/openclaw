@@ -4,15 +4,21 @@
  */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
+  consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
   extractMessagingToolSend,
   extractMessagingToolSendResult,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  finalizeToolTerminalPresentation,
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
+  getChannelAgentToolMeta,
+  getPluginToolMeta,
   type EmbeddedRunAttemptParams,
+  isReplaySafeToolCall,
   isToolWrappedWithBeforeToolCallHook,
   isToolResultError,
   isMessagingTool,
@@ -42,6 +48,7 @@ import type {
   CodexDynamicToolCallParams,
   CodexDynamicToolCallResponse,
   CodexDynamicToolDiagnosticTerminalType,
+  CodexDynamicToolFunctionSpec,
   CodexDynamicToolSpec,
   JsonValue,
 } from "./protocol.js";
@@ -59,6 +66,8 @@ type CodexDynamicToolHookContext = {
   currentThreadId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  onToolOutcome?: EmbeddedRunAttemptParams["onToolOutcome"];
+  allocateToolOutcomeOrdinal?: EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"];
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
@@ -100,6 +109,7 @@ export type CodexDynamicToolBridge = {
     options?: {
       signal?: AbortSignal;
       onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
+      toolCallOrdinal?: number;
     },
   ) => Promise<CodexDynamicToolCallResponse>;
   telemetry: {
@@ -178,6 +188,13 @@ export function createCodexDynamicToolBridge(params: {
     runtime: "codex",
     ...toolResultHookContext,
   });
+  const isReplaySafeToolInstance = (tool: AnyAgentTool): boolean => {
+    const pluginMeta = getPluginToolMeta(tool);
+    if (pluginMeta) {
+      return pluginMeta.replaySafe === true;
+    }
+    return getChannelAgentToolMeta(tool as never) === undefined;
+  };
   const legacyExtensionRunner =
     createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
   const directToolNames = new Set([
@@ -185,20 +202,16 @@ export function createCodexDynamicToolBridge(params: {
     ...(params.directToolNames ?? []),
   ]);
   return {
-    availableSpecs: availableTools.map((entry) =>
-      createCodexDynamicToolSpec({
-        entry,
-        loading: params.loading ?? "searchable",
-        directToolNames,
-      }),
-    ),
-    specs: registeredSpecTools.map((entry) =>
-      createCodexDynamicToolSpec({
-        entry,
-        loading: params.loading ?? "searchable",
-        directToolNames,
-      }),
-    ),
+    availableSpecs: createCodexDynamicToolSpecs({
+      entries: availableTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+    }),
+    specs: createCodexDynamicToolSpecs({
+      entries: registeredSpecTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+    }),
     telemetry,
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
@@ -206,6 +219,15 @@ export function createCodexDynamicToolBridge(params: {
         const message = registeredToolNames.has(call.tool)
           ? `OpenClaw tool is not available for this turn: ${call.tool}`
           : `Unknown OpenClaw tool: ${call.tool}`;
+        finalizeToolTerminalPresentation({
+          toolCallId: call.callId,
+          runId: toolResultHookContext.runId,
+          result: failedToolResult(message),
+          isError: true,
+          observer: params.hookContext?.onToolOutcome,
+          toolName: call.tool,
+          toolCallOrdinal: options?.toolCallOrdinal,
+        });
         notifyAgentToolResult(
           options?.onAgentToolResult,
           call.tool,
@@ -233,40 +255,45 @@ export function createCodexDynamicToolBridge(params: {
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
       let didStartExecution = false;
+      let executionPrevented = false;
+      let executedArgs = structuredClone(args);
       try {
         // Prepare before marking side-effect evidence; argument preparation can
         // fail without the target tool actually starting.
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
         const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
-        const messagingTelemetryArgs = applyCurrentMessageProvider(
-          toolName,
-          telemetryArgs,
-          params.hookContext?.currentChannelProvider,
-        );
-        const messagingTarget =
-          isMessagingTool(toolName) && isMessagingToolSendAction(toolName, telemetryArgs)
-            ? extractMessagingToolSend(toolName, messagingTelemetryArgs, {
-                config: params.hookContext?.config,
-                currentChannelId: params.hookContext?.currentChannelId,
-                currentMessagingTarget: params.hookContext?.currentMessagingTarget,
-                currentThreadId: params.hookContext?.currentThreadId,
-                replyToMode: params.hookContext?.replyToMode,
-                hasRepliedRef: params.hookContext?.hasRepliedRef,
-              })
-            : undefined;
+        executedArgs = structuredClone(telemetryArgs);
+        const messagingContext = {
+          config: params.hookContext?.config,
+          currentChannelId: params.hookContext?.currentChannelId,
+          currentMessagingTarget: params.hookContext?.currentMessagingTarget,
+          currentThreadId: params.hookContext?.currentThreadId,
+          replyToMode: params.hookContext?.replyToMode,
+          hasRepliedRef: params.hookContext?.hasRepliedRef
+            ? { value: params.hookContext.hasRepliedRef.value }
+            : undefined,
+        };
         didStartExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);
+        const adjustedExecutedArgs = consumeAdjustedParamsForToolCall(
+          call.callId,
+          toolResultHookContext.runId,
+        );
+        if (isRecord(adjustedExecutedArgs)) {
+          executedArgs = structuredClone(adjustedExecutedArgs);
+        }
+        executionPrevented = consumePreExecutionBlockedToolCall(
+          call.callId,
+          toolResultHookContext.runId,
+        );
+        const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isCodexToolResultError(rawResult);
-        const confirmedMessagingTarget =
-          !rawIsError && messagingTarget
-            ? extractMessagingToolSendResult(messagingTarget, rawResult)
-            : messagingTarget;
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
           toolCallId: call.callId,
           toolName,
-          args,
+          args: structuredClone(executedArgs),
           isError: rawIsError,
           result: rawResult,
         });
@@ -275,20 +302,11 @@ export function createCodexDynamicToolBridge(params: {
           turnId: call.turnId,
           toolCallId: call.callId,
           toolName,
-          args,
+          args: structuredClone(executedArgs),
           result: middlewareResult,
         });
         const resultIsError = rawIsError || isCodexToolResultError(result);
         notifyAgentToolResult(options?.onAgentToolResult, toolName, result, resultIsError);
-        collectToolTelemetry({
-          toolName,
-          args: telemetryArgs,
-          result,
-          mediaTrustResult: rawResult,
-          telemetry,
-          isError: resultIsError,
-          messagingTarget: confirmedMessagingTarget,
-        });
         void runAgentHarnessAfterToolCallHook({
           toolName,
           toolCallId: call.callId,
@@ -297,9 +315,40 @@ export function createCodexDynamicToolBridge(params: {
           sessionId: toolResultHookContext.sessionId,
           sessionKey: toolResultHookContext.sessionKey,
           channelId: toolResultHookContext.channelId,
-          startArgs: args,
+          startArgs: executedArgs,
           result,
           startedAt,
+        });
+        finalizeToolTerminalPresentation({
+          toolCallId: call.callId,
+          runId: toolResultHookContext.runId,
+          result,
+          isError: resultIsError,
+          observer: params.hookContext?.onToolOutcome,
+          toolName,
+          toolCallOrdinal: options?.toolCallOrdinal,
+        });
+        const messagingTelemetryArgs = applyCurrentMessageProvider(
+          toolName,
+          executedArgs,
+          params.hookContext?.currentChannelProvider,
+        );
+        const messagingTarget =
+          isMessagingTool(toolName) && isMessagingToolSendAction(toolName, executedArgs)
+            ? extractMessagingToolSend(toolName, messagingTelemetryArgs, messagingContext)
+            : undefined;
+        const confirmedMessagingTarget =
+          !rawIsError && messagingTarget
+            ? extractMessagingToolSendResult(messagingTarget, telemetryRawResult)
+            : messagingTarget;
+        collectToolTelemetry({
+          toolName,
+          args: executedArgs,
+          result,
+          mediaTrustResult: telemetryRawResult,
+          telemetry,
+          isError: resultIsError,
+          messagingTarget: confirmedMessagingTarget,
         });
         const terminalType = inferToolResultDiagnosticTerminalType(result, resultIsError);
         const response = withDiagnosticTerminalType(
@@ -316,22 +365,41 @@ export function createCodexDynamicToolBridge(params: {
             isToolResultYield(rawResult) ||
             isToolResultYield(result),
         );
-        withDynamicToolAsyncStarted(
-          response,
-          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result),
-        );
-        return withSideEffectEvidence(response, terminalType !== "blocked");
+        const asyncStarted =
+          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
+        withDynamicToolAsyncStarted(response, asyncStarted);
+        const replaySafe =
+          executionPrevented ||
+          (!asyncStarted &&
+            isReplaySafeToolInstance(toolEntry.tool) &&
+            isReplaySafeToolCall(toolName, executedArgs));
+        return withSideEffectEvidence(response, !replaySafe);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        notifyAgentToolResult(
-          options?.onAgentToolResult,
-          toolName,
-          failedToolResult(errorMessage),
-          true,
+        const adjustedExecutedArgs = consumeAdjustedParamsForToolCall(
+          call.callId,
+          toolResultHookContext.runId,
         );
+        if (isRecord(adjustedExecutedArgs)) {
+          executedArgs = structuredClone(adjustedExecutedArgs);
+        }
+        executionPrevented =
+          executionPrevented ||
+          consumePreExecutionBlockedToolCall(call.callId, toolResultHookContext.runId);
+        const failedResult = failedToolResult(errorMessage);
+        finalizeToolTerminalPresentation({
+          toolCallId: call.callId,
+          runId: toolResultHookContext.runId,
+          result: failedResult,
+          isError: true,
+          observer: params.hookContext?.onToolOutcome,
+          toolName,
+          toolCallOrdinal: options?.toolCallOrdinal,
+        });
+        notifyAgentToolResult(options?.onAgentToolResult, toolName, failedResult, true);
         collectToolTelemetry({
           toolName,
-          args,
+          args: executedArgs,
           result: undefined,
           telemetry,
           isError: true,
@@ -344,10 +412,15 @@ export function createCodexDynamicToolBridge(params: {
           sessionId: toolResultHookContext.sessionId,
           sessionKey: toolResultHookContext.sessionKey,
           channelId: toolResultHookContext.channelId,
-          startArgs: args,
+          startArgs: executedArgs,
           error: errorMessage,
           startedAt,
         });
+        const replaySafe =
+          !didStartExecution ||
+          executionPrevented ||
+          (isReplaySafeToolInstance(toolEntry.tool) &&
+            isReplaySafeToolCall(toolName, executedArgs));
         return withSideEffectEvidence(
           withDiagnosticTerminalType(
             {
@@ -361,7 +434,7 @@ export function createCodexDynamicToolBridge(params: {
             },
             "error",
           ),
-          didStartExecution,
+          didStartExecution && !replaySafe,
         );
       }
     },
@@ -426,23 +499,40 @@ function wrapProjectedCodexDynamicTools(
   return { tools: wrappedTools, quarantinedTools };
 }
 
-function createCodexDynamicToolSpec(params: {
-  entry: ProjectedCodexDynamicTool;
+function createCodexDynamicToolSpecs(params: {
+  entries: readonly ProjectedCodexDynamicTool[];
   loading: CodexDynamicToolsLoading;
   directToolNames: ReadonlySet<string>;
-}): CodexDynamicToolSpec {
-  const base = {
+}): CodexDynamicToolSpec[] {
+  const specs: CodexDynamicToolSpec[] = [];
+  const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
+  for (const entry of params.entries) {
+    const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
+    if (params.loading === "direct" || params.directToolNames.has(entry.name)) {
+      specs.push(functionSpec);
+      continue;
+    }
+    namespaceTools.push({ ...functionSpec, deferLoading: true });
+  }
+  if (namespaceTools.length > 0) {
+    specs.push({
+      type: "namespace",
+      name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      description: "",
+      tools: namespaceTools,
+    });
+  }
+  return specs;
+}
+
+function createCodexDynamicToolFunctionSpec(params: {
+  entry: ProjectedCodexDynamicTool;
+}): CodexDynamicToolFunctionSpec {
+  return {
+    type: "function",
     name: params.entry.name,
     description: params.entry.description,
     inputSchema: params.entry.inputSchema,
-  };
-  if (params.loading === "direct" || params.directToolNames.has(params.entry.name)) {
-    return base;
-  }
-  return {
-    ...base,
-    namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-    deferLoading: true,
   };
 }
 
@@ -674,7 +764,7 @@ function collectToolTelemetry(params: {
   toolName: string;
   args: Record<string, unknown>;
   result: AgentToolResult<unknown> | undefined;
-  mediaTrustResult?: AgentToolResult<unknown>;
+  mediaTrustResult?: unknown;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
   messagingTarget?: MessagingToolSend;

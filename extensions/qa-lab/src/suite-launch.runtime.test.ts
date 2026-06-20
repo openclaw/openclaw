@@ -8,7 +8,8 @@ const { runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
   runQaTestFileScenarios: vi.fn(),
 }));
 
-vi.mock("./suite.js", () => ({
+vi.mock("./suite.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./suite.js")>()),
   runQaFlowSuite,
 }));
 
@@ -27,26 +28,73 @@ async function makeTempRepo(prefix: string) {
   return repoRoot;
 }
 
+async function writeEvidence(pathLocal: string) {
+  await fs.mkdir(path.dirname(pathLocal), { recursive: true });
+  await fs.writeFile(
+    pathLocal,
+    `${JSON.stringify(
+      {
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-06-14T00:00:00.000Z",
+        evidenceMode: "full",
+        entries: [],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
 describe("qa suite runtime launcher", () => {
   beforeEach(() => {
     runQaFlowSuite.mockReset();
     runQaTestFileScenarios.mockReset();
-    runQaFlowSuite.mockResolvedValue({
-      outputDir: "/tmp/qa-flow",
-      evidencePath: "/tmp/qa-flow/qa-evidence.json",
-      reportPath: "/tmp/qa-flow/qa-suite-report.md",
-      summaryPath: "/tmp/qa-flow/qa-suite-summary.json",
-      report: "# QA Suite Report\n",
-      scenarios: [],
-      watchUrl: "http://127.0.0.1:43124",
+    runQaFlowSuite.mockImplementation(async (params: { outputDir?: string } | undefined) => {
+      const outputDir = params?.outputDir ?? "/tmp/qa-flow";
+      const evidencePath = path.join(outputDir, "qa-evidence.json");
+      await writeEvidence(evidencePath);
+      return {
+        outputDir,
+        evidencePath,
+        reportPath: path.join(outputDir, "qa-suite-report.md"),
+        summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+        report: "# QA Suite Report\n",
+        scenarios: [
+          {
+            name: "channel-chat-baseline",
+            status: "pass",
+            steps: [],
+          },
+        ],
+        watchUrl: "http://127.0.0.1:43124",
+      };
     });
-    runQaTestFileScenarios.mockResolvedValue({
-      outputDir: "/tmp/qa-test-file",
-      executionKind: "playwright",
-      reportPath: "/tmp/qa-test-file/qa-playwright-report.md",
-      evidencePath: "/tmp/qa-test-file/qa-evidence.json",
-      results: [{ status: "pass" }],
-    });
+    runQaTestFileScenarios.mockImplementation(
+      async (params: {
+        outputDir: string;
+        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
+      }) => {
+        const [scenario] = params.scenarios;
+        if (!scenario) {
+          throw new Error("expected scenario");
+        }
+        const evidencePath = path.join(params.outputDir, "qa-evidence.json");
+        await writeEvidence(evidencePath);
+        return {
+          outputDir: params.outputDir,
+          executionKind: scenario.execution.kind,
+          evidencePath,
+          results: params.scenarios.map((scenarioItem) => ({
+            durationMs: 1,
+            logPath: path.join(params.outputDir, `${scenarioItem.id}.log`),
+            scenario: scenarioItem,
+            status: "pass",
+          })),
+        };
+      },
+    );
   });
 
   afterEach(async () => {
@@ -88,9 +136,22 @@ describe("qa suite runtime launcher", () => {
     });
 
     expect(result).toMatchObject({
-      executionKind: "playwright",
+      executionKind: "suite",
       result: {
-        evidencePath: "/tmp/qa-test-file/qa-evidence.json",
+        evidencePath: path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-test",
+          "qa-evidence.json",
+        ),
+        summaryPath: path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-test",
+          "qa-suite-summary.json",
+        ),
       },
     });
     expect(runQaFlowSuite).not.toHaveBeenCalled();
@@ -98,7 +159,7 @@ describe("qa suite runtime launcher", () => {
     const [call] = runQaTestFileScenarios.mock.calls[0] ?? [];
     expect(call).toMatchObject({
       repoRoot,
-      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-test"),
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-test", "playwright"),
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
     });
@@ -110,16 +171,53 @@ describe("qa suite runtime launcher", () => {
     ).toEqual([{ id: "control-ui-chat-flow-playwright", kind: "playwright" }]);
   });
 
-  it("rejects mixed flow and Vitest/Playwright scenarios", async () => {
-    await expect(
-      runQaSuite({
-        repoRoot: process.cwd(),
-        scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
-      }),
-    ).rejects.toThrow("qa suite cannot mix execution.kind: flow with Vitest/Playwright scenarios");
+  it("runs mixed flow and Vitest/Playwright scenarios as one suite", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-mixed-");
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mixed",
+      scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
+    });
 
-    expect(runQaFlowSuite).not.toHaveBeenCalled();
-    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mixed");
+    expect(result).toMatchObject({
+      executionKind: "suite",
+      result: {
+        evidencePath: path.join(outputDir, "qa-evidence.json"),
+        summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+      },
+    });
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow"),
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaTestFileScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "playwright"),
+      }),
+    );
+    await expect(fs.access(path.join(outputDir, "qa-suite-summary.json"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).resolves.toBeUndefined();
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
+    ) as {
+      run?: { scenarioIds?: unknown };
+      scenarios?: Array<{ details?: unknown; name?: unknown; status?: unknown }>;
+    };
+    expect(summary.run?.scenarioIds).toEqual([
+      "channel-chat-baseline",
+      "control-ui-chat-flow-playwright",
+    ]);
+    expect(summary.scenarios).toMatchObject([
+      { name: "channel-chat-baseline", status: "pass" },
+      { name: "Control UI chat flow Playwright coverage", status: "pass" },
+    ]);
+    expect(JSON.stringify(summary)).not.toContain(repoRoot);
+    expect(summary.scenarios?.[1]?.details).toContain(
+      "log=.artifacts/qa-e2e/mixed/playwright/control-ui-chat-flow-playwright.log",
+    );
   });
 
   it("rejects runtime-pair requests for Vitest/Playwright scenarios", async () => {

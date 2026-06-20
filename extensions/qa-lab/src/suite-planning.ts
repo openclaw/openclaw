@@ -29,7 +29,7 @@ function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function scenarioMatchesLiveLane(params: {
+function scenarioMatchesQaProviderLane(params: {
   scenario: QaSeedScenario;
   primaryModel: string;
   providerMode: QaProviderMode;
@@ -99,7 +99,7 @@ function selectQaFlowSuiteScenarios(params: {
   return params.scenarios.filter(
     (scenario) =>
       scenario.execution.kind === "flow" &&
-      scenarioMatchesLiveLane({
+      scenarioMatchesQaProviderLane({
         scenario,
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
@@ -144,12 +144,21 @@ function collectQaSuiteGatewayRuntimeOptions(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
   let forwardHostHome = false;
+  let preserveDebugArtifacts = false;
   for (const scenario of scenarios) {
     if (scenario.gatewayRuntime?.forwardHostHome === true) {
       forwardHostHome = true;
     }
+    if (scenario.gatewayRuntime?.preserveDebugArtifacts === true) {
+      preserveDebugArtifacts = true;
+    }
   }
-  return forwardHostHome ? { forwardHostHome: true } : undefined;
+  return forwardHostHome || preserveDebugArtifacts
+    ? {
+        ...(forwardHostHome ? { forwardHostHome: true } : {}),
+        ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
+      }
+    : undefined;
 }
 
 function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
@@ -282,6 +291,7 @@ export {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
+  scenarioMatchesQaProviderLane,
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,

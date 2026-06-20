@@ -315,6 +315,24 @@ describe("monitorLineProvider lifecycle", () => {
     monitor.stop();
   });
 
+  it("does not record running state when bot startup fails", async () => {
+    createLineBotMock.mockImplementation(() => {
+      throw new Error("line bot startup failed");
+    });
+
+    await expect(
+      monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "secret", // pragma: allowlist secret
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+      }),
+    ).rejects.toThrow("line bot startup failed");
+
+    expect(getLineRuntimeState("default")?.running).not.toBe(true);
+    expect(registerWebhookTargetWithPluginRouteMock).not.toHaveBeenCalled();
+  });
+
   it("dispatches shared-path webhook posts to the account matching the signature", async () => {
     const firstMonitor = await monitorLineProvider({
       channelAccessToken: "first-token",

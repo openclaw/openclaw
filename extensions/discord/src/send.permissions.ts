@@ -379,17 +379,14 @@ export async function hasAllGuildPermissionsDiscord(
   );
 }
 
-/**
- * @deprecated Prefer hasAnyGuildPermissionDiscord or hasAllGuildPermissionsDiscord for clarity.
- */
-export const hasGuildPermissionDiscord = hasAnyGuildPermissionDiscord;
-
 export async function fetchChannelPermissionsDiscord(
   channelId: string,
   opts: DiscordReactOpts,
 ): Promise<DiscordPermissionsSummary> {
+  opts.signal?.throwIfAborted();
   const rest = resolveDiscordRest(opts);
   const channel = await getChannel(rest, channelId);
+  opts.signal?.throwIfAborted();
   const channelType = "type" in channel ? channel.type : undefined;
   const guildId = "guild_id" in channel ? channel.guild_id : undefined;
   if (!guildId) {
@@ -403,10 +400,12 @@ export async function fetchChannelPermissionsDiscord(
   }
 
   const botId = await fetchBotUserId(rest);
+  opts.signal?.throwIfAborted();
   const [guild, member] = await Promise.all([
     getGuild(rest, guildId),
     getGuildMember(rest, guildId, botId),
   ]);
+  opts.signal?.throwIfAborted();
 
   const permissions = resolveMemberChannelPermissionBits({
     guildId,

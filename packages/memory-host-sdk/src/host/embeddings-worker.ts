@@ -88,6 +88,7 @@ function serializeLocalEmbeddingOptions(
     provider: "local",
     model: options.model,
     fallback: "none",
+    outputDimensionality: options.outputDimensionality,
     local: {
       ...options.local,
       ...(runtimeOptions?.nodeLlamaCppImportUrl

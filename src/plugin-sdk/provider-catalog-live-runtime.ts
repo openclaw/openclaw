@@ -127,6 +127,12 @@ function buildHeaders(params: FetchLiveProviderModelIdsParams): Headers {
   return headers;
 }
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 export async function fetchLiveProviderModelRows(
   params: FetchLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
@@ -145,6 +151,7 @@ export async function fetchLiveProviderModelRows(
   });
   try {
     if (!response.ok) {
+      await cancelUnreadResponseBody(response);
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
     return (params.readRows ?? readDefaultLiveModelCatalogRows)(await response.json());

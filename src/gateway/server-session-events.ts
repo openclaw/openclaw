@@ -18,9 +18,11 @@ import { hasTrackedActiveSessionRun } from "./server-methods/session-active-runs
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
+  readSessionMessageCountAsync,
+} from "./session-transcript-readers.js";
+import {
   loadGatewaySessionRow,
   loadSessionEntry,
-  readSessionMessageCountAsync,
   type GatewaySessionRow,
 } from "./session-utils.js";
 
@@ -181,7 +183,13 @@ async function handleTranscriptUpdateBroadcast(
     const { entry, storePath } = loadSessionEntry(sessionKey, { agentId: visibleAgentId });
     messageSeq = entry?.sessionId
       ? asPositiveSafeInteger(
-          await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile),
+          await readSessionMessageCountAsync({
+            agentId: visibleAgentId,
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey,
+            storePath,
+          }),
         )
       : undefined;
   }

@@ -1,9 +1,9 @@
 ---
-summary: "DuckDuckGo web search -- key-free fallback provider (experimental, HTML-based)"
+summary: "DuckDuckGo web search -- key-free provider (experimental, HTML-based)"
 read_when:
   - You want a web search provider that requires no API key
   - You want to use DuckDuckGo for web_search
-  - You need a zero-config search fallback
+  - You want an explicitly selected key-free search provider
 title: "DuckDuckGo search"
 ---
 
@@ -85,16 +85,16 @@ parameters override config values per-query.
 
 ## Notes
 
-- **No API key** - works out of the box, zero configuration
+- **No API key** - works after you select DuckDuckGo as your `web_search`
+  provider
 - **Experimental** - gathers results from DuckDuckGo's non-JavaScript HTML
   search pages, not an official API or SDK
 - **Bot-challenge risk** - DuckDuckGo may serve CAPTCHAs or block requests
   under heavy or automated use
 - **HTML parsing** - results depend on page structure, which can change without
   notice
-- **Auto-detection order** - DuckDuckGo is the first key-free fallback
-  (order 100) in auto-detection. API-backed providers with configured keys run
-  first, then Ollama Web Search (order 110), then SearXNG (order 200)
+- **Explicit selection** - OpenClaw does not choose DuckDuckGo automatically
+  when no API-backed provider is configured
 - **SafeSearch defaults to moderate** when not configured
 
 <Tip>

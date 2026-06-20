@@ -103,6 +103,16 @@ describe("scanOpenRouterModels", () => {
     expect(result?.createdAtMs).toBeNull();
   });
 
+  it("cancels catalog error response bodies", async () => {
+    const response = new Response("unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchImpl = withFetchPreconnect(async () => response);
+
+    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(/HTTP 503/);
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });
     await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {

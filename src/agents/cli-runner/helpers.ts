@@ -85,21 +85,27 @@ export function buildClaudeOwnerKey(input: {
 /** Resolves the serialization key for a CLI backend run. */
 export function resolveCliRunQueueKey(params: {
   backendId: string;
+  liveSession?: CliBackendConfig["liveSession"];
   serialize?: boolean;
   runId: string;
   workspaceDir: string;
   cliSessionId?: string;
   ownerKey?: string;
 }): string {
-  if (params.serialize === false) {
+  const requiresLiveSessionSerialization =
+    isClaudeCliProvider(params.backendId) && params.liveSession === "claude-stdio";
+  if (params.serialize === false && !requiresLiveSessionSerialization) {
     return `${params.backendId}:${params.runId}`;
   }
   if (isClaudeCliProvider(params.backendId)) {
+    const ownerKey = params.ownerKey?.trim();
+    if (requiresLiveSessionSerialization && ownerKey) {
+      return `${params.backendId}:owner:${ownerKey}`;
+    }
     const sessionId = params.cliSessionId?.trim();
     if (sessionId) {
       return `${params.backendId}:session:${sessionId}`;
     }
-    const ownerKey = params.ownerKey?.trim();
     if (ownerKey) {
       return `${params.backendId}:owner:${ownerKey}`;
     }
@@ -119,6 +125,7 @@ export function buildCliAgentSystemPrompt(params: {
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
@@ -168,6 +175,7 @@ export function buildCliAgentSystemPrompt(params: {
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
@@ -188,9 +196,6 @@ export function buildCliAgentSystemPrompt(params: {
     contextFiles: params.contextFiles,
   });
 }
-
-/** Alternate export name for the CLI system prompt builder. */
-export const buildSystemPrompt = buildCliAgentSystemPrompt;
 
 /** Applies backend model aliases to a requested CLI model id. */
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {

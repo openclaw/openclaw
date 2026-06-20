@@ -183,6 +183,7 @@ describe("dynamic tool execution helpers", () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;
     const onTimeout = vi.fn();
+    const onFallbackSelected = vi.fn();
     const onAgentToolResult = vi.fn();
     const response = handleDynamicToolCallWithTimeout({
       call: {
@@ -202,6 +203,7 @@ describe("dynamic tool execution helpers", () => {
       signal: new AbortController().signal,
       timeoutMs: 1,
       onAgentToolResult,
+      onFallbackSelected,
       onTimeout,
     });
 
@@ -217,6 +219,7 @@ describe("dynamic tool execution helpers", () => {
       ],
     });
     expect(capturedSignal?.aborted).toBe(true);
+    expect(onFallbackSelected).toHaveBeenCalledOnce();
     expect(onTimeout).toHaveBeenCalledTimes(1);
     expect(onAgentToolResult).toHaveBeenCalledWith({
       toolName: "message",

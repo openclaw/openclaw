@@ -62,6 +62,7 @@ export type TuiSessionList = {
       | "inputTokens"
       | "outputTokens"
       | "totalTokens"
+      | "totalTokensFresh"
       | "goal"
       | "modelProvider"
       | "displayName"
@@ -140,6 +141,7 @@ export type TuiBackend = {
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
   stop: () => void | Promise<void>;
+  subscribeSessionEvents?: () => Promise<unknown>;
   sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
   abortChat: (opts: {
     sessionKey: string;

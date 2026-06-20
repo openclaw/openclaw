@@ -59,6 +59,17 @@ async function withEnv<T>(env: Record<string, string>, callback: () => Promise<T
   }
 }
 
+async function waitUntil(matches: () => boolean, label: string): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 1000) {
+    if (matches()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
 async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise<{
   port: number;
   stop: () => Promise<void>;
@@ -88,6 +99,21 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
 }
 
 describe("release user journey assertions", () => {
+  it("rejects loose mock OpenAI port args", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+
+    try {
+      const result = runAssertion(home, ["configure-mock-model", "1e3"]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("mock OpenAI port must be a TCP port from 1 to 65535");
+      expect(result.stderr).toContain('"1e3"');
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("scans large files when checking release user journey output text", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
@@ -288,6 +314,33 @@ describe("release user journey assertions", () => {
     }
   });
 
+  it("cancels successful ClickClack inbound response bodies", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    let socketClosed = false;
+    const server = await startTcpFixtureServer((socket) => {
+      socket.on("close", () => {
+        socketClosed = true;
+      });
+      socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nleft-open");
+    });
+
+    try {
+      await expect(
+        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
+          runReleaseUserJourneyAssertion("post-clickclack-inbound", [
+            `http://127.0.0.1:${server.port}`,
+            "hello",
+          ]),
+        ),
+      ).resolves.toBeUndefined();
+      await waitUntil(() => socketClosed, "ClickClack inbound socket close");
+    } finally {
+      await server.stop();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("bounds stalled ClickClack fixture HTTP probes", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
@@ -301,7 +354,7 @@ describe("release user journey assertions", () => {
         withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100" }, () =>
           runReleaseUserJourneyAssertion("wait-clickclack-socket", [
             `http://127.0.0.1:${server.port}`,
-            "0.2",
+            "1",
           ]),
         ),
       ).rejects.toThrow("Timed out waiting for ClickClack websocket connection");
@@ -324,7 +377,7 @@ describe("release user journey assertions", () => {
         withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100ms" }, () =>
           runReleaseUserJourneyAssertion("wait-clickclack-socket", [
             `http://127.0.0.1:${server.port}`,
-            "0.2",
+            "1",
           ]),
         ),
       ).rejects.toThrow(
@@ -332,6 +385,33 @@ describe("release user journey assertions", () => {
       );
     } finally {
       await server.stop();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects loose ClickClack wait timeout args instead of parsing prefixes", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const statePath = path.join(root, "state.json");
+
+    try {
+      await expect(
+        withEnv({ HOME: home }, () =>
+          runReleaseUserJourneyAssertion("wait-clickclack-socket", ["http://127.0.0.1:9", "1e3"]),
+        ),
+      ).rejects.toThrow(
+        'ClickClack websocket timeout seconds must be a positive integer. Got: "1e3"',
+      );
+      await expect(
+        withEnv({ HOME: home }, () =>
+          runReleaseUserJourneyAssertion("wait-clickclack-reply", [
+            statePath,
+            "OPENCLAW_E2E_OK",
+            "30s",
+          ]),
+        ),
+      ).rejects.toThrow('ClickClack reply timeout seconds must be a positive integer. Got: "30s"');
+    } finally {
       rmSync(root, { force: true, recursive: true });
     }
   });
@@ -361,6 +441,33 @@ describe("release user journey assertions", () => {
             ]),
         ),
       ).rejects.toThrow("ClickClack inbound response body exceeded 16 bytes");
+    } finally {
+      await server.stop();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps the ClickClack HTTP timeout active while reading error bodies", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const server = await startTcpFixtureServer((socket) => {
+      socket.write("HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\n\r\npartial");
+    });
+
+    try {
+      await expect(
+        withEnv(
+          {
+            HOME: home,
+            OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "25",
+          },
+          () =>
+            runReleaseUserJourneyAssertion("post-clickclack-inbound", [
+              `http://127.0.0.1:${server.port}`,
+              "hello",
+            ]),
+        ),
+      ).rejects.toThrow(`http://127.0.0.1:${server.port}/fixture/inbound timed out after 25ms`);
     } finally {
       await server.stop();
       rmSync(root, { force: true, recursive: true });

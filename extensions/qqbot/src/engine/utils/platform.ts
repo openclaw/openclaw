@@ -132,18 +132,6 @@ function getOpenClawMediaDir(): string {
   return path.join(resolveOpenClawHome(), ".openclaw", "media");
 }
 
-// ---- Basic platform information ----
-
-type PlatformType = "darwin" | "linux" | "win32" | "other";
-
-export function getPlatform(): PlatformType {
-  const p = process.platform;
-  if (p === "darwin" || p === "linux" || p === "win32") {
-    return p;
-  }
-  return "other";
-}
-
 export function isWindows(): boolean {
   return process.platform === "win32";
 }

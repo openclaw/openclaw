@@ -8,17 +8,21 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearLoadPluginMetadataSnapshotMemo } from "../plugins/plugin-metadata-snapshot.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
+import { hashConfigIncludeRaw } from "./includes.js";
 import {
   createConfigIO,
   getRuntimeConfigSourceSnapshot,
+  readConfigFileSnapshotForWrite,
   registerConfigWriteListener,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
   writeConfigFile,
 } from "./io.js";
+import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
+
+const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 // Mock the plugin manifest registry so we can register a fake channel whose
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
@@ -328,6 +332,49 @@ describe("config io write", () => {
           plugins: [],
         } satisfies PluginManifestRegistry);
       }
+    });
+  });
+
+  it("retains included shipped plugin install records in write snapshots", async () => {
+    await withSuiteHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const pluginsPath = path.join(configDir, "plugins.json5");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ plugins: { $include: "./plugins.json5" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        pluginsPath,
+        `${JSON.stringify(
+          {
+            installs: {
+              demo: {
+                source: "npm",
+                spec: "demo@1.0.0",
+                installPath: "/tmp/demo",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const prepared = await createFastConfigIO(home).readConfigFileSnapshotForWrite();
+
+      expect(prepared.snapshot.valid).toBe(true);
+      expect(prepared.snapshot.parsed).toEqual({
+        plugins: { $include: "./plugins.json5" },
+      });
+      expectInstallRecord(prepared.snapshot.sourceConfig.plugins?.installs?.demo, {
+        source: "npm",
+        spec: "demo@1.0.0",
+        installPath: "/tmp/demo",
+      });
     });
   });
 
@@ -1085,13 +1132,14 @@ describe("config io write", () => {
         },
       );
       expect(acceptedWrite.persistedConfig.gateway).toEqual({ mode: "local" });
+      const acceptedSnapshot = await io.readConfigFileSnapshot();
 
       await expectConfigWriteRejected(
         io.writeConfigFile(
           { meta: original.meta },
           {
             allowConfigSizeDrop: true,
-            baseSnapshot,
+            baseSnapshot: acceptedSnapshot,
           },
         ),
       );
@@ -1201,6 +1249,290 @@ describe("config io write", () => {
     });
   });
 
+  it("returns the read-time environment snapshot for invalid config repairs", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: {
+              mode: "local",
+              auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+            },
+            channels: { "test-plugin-channel": { enabled: true } },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      const io = createConfigIO({
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "gateway-token-at-read",
+          OPENCLAW_TEST_FAST: "1",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const result = await io.readConfigFileSnapshotForWrite();
+
+      expect(result.snapshot.valid).toBe(false);
+      expect(result.writeOptions.envSnapshotForRestore?.OPENCLAW_GATEWAY_TOKEN).toBe(
+        "gateway-token-at-read",
+      );
+    });
+  });
+
+  it("returns the read-time environment snapshot when invalid reads fall back after resolution", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: {
+              mode: "local",
+              auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+            },
+            channels: { "test-plugin-channel": { enabled: true } },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      mockLoadPluginManifestRegistry.mockImplementationOnce(() => {
+        throw new Error("plugin metadata failed");
+      });
+      const io = createConfigIO({
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "gateway-token-at-read",
+          OPENCLAW_TEST_FAST: "1",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const result = await io.readConfigFileSnapshotForWrite();
+
+      expect(result.snapshot.valid).toBe(false);
+      expect(result.writeOptions.envSnapshotForRestore?.OPENCLAW_GATEWAY_TOKEN).toBe(
+        "gateway-token-at-read",
+      );
+    });
+  });
+
+  it("returns the snapshot-time hash when an included file is malformed", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const includePath = path.join(home, ".openclaw", "plugins.json5");
+      const malformedRaw = "{ malformed";
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ plugins: { $include: "./plugins.json5" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(includePath, malformedRaw, "utf-8");
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const result = await io.readConfigFileSnapshotForWrite();
+      await fs.writeFile(includePath, "{ differently malformed", "utf-8");
+
+      expect(result.snapshot.valid).toBe(false);
+      expect(result.writeOptions.includeFileHashesForWrite?.[includePath]).toBe(
+        hashConfigIncludeRaw(malformedRaw),
+      );
+      expect(result.writeOptions.includeFileTargetsForWrite?.[includePath]).toBe(
+        await fs.realpath(includePath),
+      );
+    });
+  });
+
+  it("returns a write guard that rejects a changed active config path", async () => {
+    await withSuiteHome(async (home) => {
+      const firstConfigPath = path.join(home, ".openclaw", "first.json");
+      const secondConfigPath = path.join(home, ".openclaw", "second.json");
+      await fs.mkdir(path.dirname(firstConfigPath), { recursive: true });
+      await fs.writeFile(firstConfigPath, "{}", "utf-8");
+      await fs.writeFile(secondConfigPath, "{}", "utf-8");
+      const env = {
+        OPENCLAW_CONFIG_PATH: firstConfigPath,
+        OPENCLAW_TEST_FAST: "1",
+      } as NodeJS.ProcessEnv;
+      const io = createConfigIO({ env, homedir: () => home, logger: silentLogger });
+
+      const result = await io.readConfigFileSnapshotForWrite();
+      env.OPENCLAW_CONFIG_PATH = secondConfigPath;
+
+      expect(() => result.writeOptions.assertConfigPathForWrite?.()).toThrow(
+        "config path changed since last load",
+      );
+    });
+  });
+
+  it("rejects write snapshots when the IO instance no longer owns its config path", async () => {
+    await withSuiteHome(async (home) => {
+      const firstConfigPath = path.join(home, ".openclaw", "first.json");
+      const secondConfigPath = path.join(home, ".openclaw", "second.json");
+      await fs.mkdir(path.dirname(firstConfigPath), { recursive: true });
+      await fs.writeFile(firstConfigPath, "{}", "utf-8");
+      await fs.writeFile(secondConfigPath, "{}", "utf-8");
+      const env = {
+        OPENCLAW_CONFIG_PATH: firstConfigPath,
+        OPENCLAW_TEST_FAST: "1",
+      } as NodeJS.ProcessEnv;
+      const io = createConfigIO({ env, homedir: () => home, logger: silentLogger });
+      env.OPENCLAW_CONFIG_PATH = secondConfigPath;
+
+      await expect(io.readConfigFileSnapshotForWrite()).rejects.toThrow(
+        "config path changed since last load",
+      );
+    });
+  });
+
+  it("rejects local write ownership when config env changes path selection during the read", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const configuredNextPath = path.join(home, ".openclaw", "next.json");
+      const sourceConfig = {
+        env: { OPENCLAW_CONFIG_PATH: configuredNextPath },
+        gateway: { mode: "local" },
+      } satisfies OpenClawConfig;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf-8");
+      const io = createFastConfigIO(home);
+
+      await expect(io.readConfigFileSnapshotForWrite()).rejects.toThrow(
+        "config path changed since last load",
+      );
+    });
+  });
+
+  it("follows config env path selection before returning global write ownership", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const configuredNextPath = path.join(home, ".openclaw", "next.json");
+      const sourceConfig = {
+        env: { OPENCLAW_CONFIG_PATH: configuredNextPath },
+        gateway: { mode: "local" },
+      } satisfies OpenClawConfig;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf-8");
+      await fs.writeFile(
+        configuredNextPath,
+        `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_HOME: home,
+          OPENCLAW_STATE_DIR: undefined,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const prepared = await readConfigFileSnapshotForWrite();
+
+          expect(prepared.snapshot.path).toBe(configuredNextPath);
+          expect(() => prepared.writeOptions.assertConfigPathForWrite?.()).not.toThrow();
+          await writeConfigFile(
+            {
+              ...prepared.snapshot.sourceConfig,
+              gateway: { mode: "remote" },
+            },
+            {
+              baseSnapshot: prepared.snapshot,
+              ...prepared.writeOptions,
+            },
+          );
+        },
+      );
+
+      const initialConfig = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      const persisted = JSON.parse(
+        await fs.readFile(configuredNextPath, "utf-8"),
+      ) as OpenClawConfig;
+      expect(initialConfig.gateway?.mode).toBe("local");
+      expect(persisted.gateway?.mode).toBe("remote");
+    });
+  });
+
+  it("does not use expectedConfigPath as the write destination", async () => {
+    await withSuiteHome(async (home) => {
+      const expectedConfigPath = path.join(home, ".openclaw", "expected.json");
+      const activeConfigPath = path.join(home, ".openclaw", "active.json");
+      await fs.mkdir(path.dirname(expectedConfigPath), { recursive: true });
+      await fs.writeFile(
+        expectedConfigPath,
+        `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(activeConfigPath, "{}\n", "utf-8");
+
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: activeConfigPath,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          await writeConfigFile(
+            { gateway: { mode: "remote" } },
+            {
+              expectedConfigPath,
+            },
+          );
+        },
+      );
+
+      const expectedConfig = JSON.parse(
+        await fs.readFile(expectedConfigPath, "utf-8"),
+      ) as OpenClawConfig;
+      const activeConfig = JSON.parse(
+        await fs.readFile(activeConfigPath, "utf-8"),
+      ) as OpenClawConfig;
+      expect(expectedConfig.gateway?.mode).toBe("local");
+      expect(activeConfig.gateway?.mode).toBe("remote");
+    });
+  });
+
+  it("returns the missing-file hash when an included file is absent", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const includePath = path.join(home, ".openclaw", "plugins.json5");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ plugins: { $include: "./plugins.json5" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const result = await io.readConfigFileSnapshotForWrite();
+
+      expect(result.snapshot.valid).toBe(false);
+      expect(result.writeOptions.includeFileHashesForWrite?.[includePath]).toBe(
+        hashConfigIncludeRaw(null),
+      );
+      expect(result.writeOptions.includeFileTargetsForWrite?.[includePath]).toBe(
+        path.join(await fs.realpath(path.dirname(includePath)), path.basename(includePath)),
+      );
+    });
+  });
+
   it("rejects root-include partial writes instead of flattening the root config", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -1222,6 +1554,546 @@ describe("config io write", () => {
         "Config write would flatten $include-owned config at <root>",
       );
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
+    });
+  });
+
+  it("rejects a stale base snapshot before overwriting the root config", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      const concurrentRaw = `${JSON.stringify(
+        { gateway: { mode: "local", port: 19001 } },
+        null,
+        2,
+      )}\n`;
+      await fs.writeFile(configPath, concurrentRaw, "utf-8");
+
+      await expect(
+        io.writeConfigFile({ gateway: { mode: "local", port: 19002 } }, { baseSnapshot: snapshot }),
+      ).rejects.toThrow("config changed since last load");
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
+    });
+  });
+
+  it("rejects a base snapshot from a different config path before overwriting the root config", async () => {
+    await withSuiteHome(async (home) => {
+      const firstConfigPath = path.join(home, ".openclaw", "first.json");
+      const secondConfigPath = path.join(home, ".openclaw", "second.json");
+      await fs.mkdir(path.dirname(firstConfigPath), { recursive: true });
+      const originalRaw = `${JSON.stringify(
+        { gateway: { mode: "local", port: 18789 } },
+        null,
+        2,
+      )}\n`;
+      await fs.writeFile(firstConfigPath, originalRaw, "utf-8");
+      await fs.writeFile(secondConfigPath, originalRaw, "utf-8");
+      const firstIo = createConfigIO({
+        configPath: firstConfigPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const secondIo = createConfigIO({
+        configPath: secondConfigPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const firstSnapshot = await firstIo.readConfigFileSnapshot();
+
+      await expect(
+        secondIo.writeConfigFile(
+          { gateway: { mode: "local", port: 19002 } },
+          { baseSnapshot: firstSnapshot },
+        ),
+      ).rejects.toThrow("config path changed since last load");
+
+      await expect(fs.readFile(secondConfigPath, "utf-8")).resolves.toBe(originalRaw);
+    });
+  });
+
+  it("rolls back a root write when config path ownership changes during commit", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const secondConfigPath = path.join(home, ".openclaw", "second.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const originalRaw = `${JSON.stringify(
+        { gateway: { mode: "local", port: 18789 } },
+        null,
+        2,
+      )}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      let activeConfigPath = configPath;
+      const assertConfigPathForWrite = () => {
+        if (fsNode.readFileSync(configPath, "utf-8") !== originalRaw) {
+          activeConfigPath = secondConfigPath;
+        }
+        if (activeConfigPath !== configPath) {
+          throw new ConfigMutationConflictError("config path changed since last load", {
+            currentHash: null,
+            retryable: false,
+          });
+        }
+      };
+
+      await expect(
+        io.writeConfigFile(
+          { gateway: { mode: "local", port: 19002 } },
+          { baseSnapshot: snapshot, assertConfigPathForWrite },
+        ),
+      ).rejects.toThrow("config path changed since last load");
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
+    });
+  });
+
+  it("rejects a base snapshot changed during preflight before replacing the root config", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      const concurrentRaw = `${JSON.stringify(
+        { gateway: { mode: "local", port: 19001 } },
+        null,
+        2,
+      )}\n`;
+
+      await expect(
+        io.writeConfigFile(
+          { gateway: { mode: "local", port: 19002 } },
+          {
+            baseSnapshot: snapshot,
+            preCommitRuntimePreflight: async () => {
+              await fs.writeFile(configPath, concurrentRaw, "utf-8");
+            },
+          },
+        ),
+      ).rejects.toThrow("config changed since last load");
+
+      expect(mockMaintainConfigBackups).not.toHaveBeenCalled();
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
+    });
+  });
+
+  it("rejects a base snapshot changed during backup rotation", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      const concurrentRaw = `${JSON.stringify(
+        { gateway: { mode: "local", port: 19001 } },
+        null,
+        2,
+      )}\n`;
+      mockMaintainConfigBackups.mockImplementationOnce(async () => {
+        await fs.writeFile(configPath, concurrentRaw, "utf-8");
+      });
+
+      await expect(
+        io.writeConfigFile({ gateway: { mode: "local", port: 19002 } }, { baseSnapshot: snapshot }),
+      ).rejects.toThrow("config changed since last load");
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
+    });
+  });
+
+  it("rejects a missing base config created empty during preflight", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.exists).toBe(false);
+
+      await expect(
+        io.writeConfigFile(
+          { gateway: { mode: "local", port: 19002 } },
+          {
+            baseSnapshot: snapshot,
+            preCommitRuntimePreflight: async () => {
+              await fs.writeFile(configPath, "", "utf-8");
+            },
+          },
+        ),
+      ).rejects.toThrow("config changed since last load");
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe("");
+    });
+  });
+
+  it("assigns distinct snapshot hashes to missing and empty root config", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const missingSnapshot = await io.readConfigFileSnapshot();
+      expect(missingSnapshot.exists).toBe(false);
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, "", "utf-8");
+      const emptySnapshot = await io.readConfigFileSnapshot();
+      expect(emptySnapshot.exists).toBe(true);
+      expect(emptySnapshot.hash).not.toBe(missingSnapshot.hash);
+    });
+  });
+
+  it("rejects an empty base config removed during preflight", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, "", "utf-8");
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.exists).toBe(true);
+
+      await expect(
+        io.writeConfigFile(
+          { gateway: { mode: "local", port: 19002 } },
+          {
+            baseSnapshot: snapshot,
+            preCommitRuntimePreflight: async () => {
+              await fs.unlink(configPath);
+            },
+          },
+        ),
+      ).rejects.toThrow("config changed since last load");
+
+      await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("rejects invalid include-backed repairs instead of persisting substituted secrets", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const includePath = path.join(home, ".openclaw", "gateway.json5");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        includePath,
+        `${JSON.stringify(
+          {
+            mode: "local",
+            auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+            invalid: true,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { $include: "./gateway.json5" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const originalRootRaw = await fs.readFile(configPath, "utf-8");
+      const io = createConfigIO({
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "gateway-token-runtime",
+          OPENCLAW_TEST_FAST: "1",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+
+      await expect(
+        io.writeConfigFile({
+          gateway: {
+            mode: "local",
+            auth: { mode: "token", token: "gateway-token-runtime" },
+          },
+        }),
+      ).rejects.toThrow("Config write would flatten $include-owned config at gateway");
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRootRaw);
+      await expect(fs.readFile(includePath, "utf-8")).resolves.toContain(
+        '"token": "${OPENCLAW_GATEWAY_TOKEN}"',
+      );
+    });
+  });
+
+  it("repairs invalid root-authored siblings without flattening included config", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const includePath = path.join(home, ".openclaw", "agent-defaults.json5");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        includePath,
+        `${JSON.stringify({ maxConcurrent: 1 }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            agents: {
+              defaults: { $include: "./agent-defaults.json5", legacyKey: true },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      const originalIncludeRaw = await fs.readFile(includePath, "utf-8");
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+
+      await io.writeConfigFile({ agents: { defaults: { maxConcurrent: 1 } } });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        agents?: { defaults?: Record<string, unknown> };
+      };
+      expect(persisted.agents?.defaults).toEqual({ $include: "./agent-defaults.json5" });
+      await expect(fs.readFile(includePath, "utf-8")).resolves.toBe(originalIncludeRaw);
+    });
+  });
+
+  it("rejects repairs that would flatten a valid outer include with a broken nested include", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const pluginsPath = path.join(home, ".openclaw", "plugins.json5");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        pluginsPath,
+        `${JSON.stringify({ $include: "./missing-entries.json5" }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ plugins: { $include: "./plugins.json5" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const originalRootRaw = await fs.readFile(configPath, "utf-8");
+      const originalPluginsRaw = await fs.readFile(pluginsPath, "utf-8");
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+
+      await expect(io.writeConfigFile({ plugins: { entries: {} } })).rejects.toThrow(
+        "Config write would flatten $include-owned config at plugins",
+      );
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRootRaw);
+      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(originalPluginsRaw);
+    });
+  });
+
+  it("allows replacement repair of a malformed include directive", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ plugins: { $include: 42 } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+
+      await io.writeConfigFile({ plugins: {} });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        plugins?: Record<string, unknown>;
+      };
+      expect(persisted.plugins).toEqual({});
+    });
+  });
+
+  it("preserves escaped root literals before validating unrelated includes", async () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "literal-plugin",
+          origin: "bundled",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: "/tmp/openclaw-test-literal-plugin",
+          source: "/tmp/openclaw-test-literal-plugin/index.ts",
+          manifestPath: "/tmp/openclaw-test-literal-plugin/openclaw.plugin.json",
+          configSchema: {
+            type: "object",
+            properties: {
+              token: { type: "string", const: "${ROOT_LITERAL_TOKEN}" },
+            },
+            required: ["token"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    } satisfies PluginManifestRegistry);
+
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const agentsPath = path.join(home, ".openclaw", "agents.json5");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        agentsPath,
+        `${JSON.stringify({ list: [{ id: "main", default: true }] }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            agents: { $include: "./agents.json5" },
+            plugins: {
+              entries: {
+                "literal-plugin": {
+                  enabled: true,
+                  config: { token: "$${ROOT_LITERAL_TOKEN}" },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      const io = createConfigIO({
+        env: {
+          OPENCLAW_TEST_FAST: "1",
+          ROOT_LITERAL_TOKEN: "secret",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      await io.writeConfigFile({
+        ...snapshot.sourceConfig,
+        gateway: { mode: "local" },
+      });
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
+        '"token": "$${ROOT_LITERAL_TOKEN}"',
+      );
+    });
+  });
+
+  it("repairs invalid config without flattening array-nested includes", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const includePath = path.join(home, ".openclaw", "main-agent.json5");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        includePath,
+        `${JSON.stringify({ id: "main", workspace: "${OPENCLAW_AGENT_WORKSPACE}" }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            agents: {
+              defaults: { params: { stale: true } },
+              list: [{ $include: "./main-agent.json5" }],
+            },
+            channels: { "test-plugin-channel": { enabled: true } },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      const originalRootRaw = await fs.readFile(configPath, "utf-8");
+      const io = createConfigIO({
+        env: {
+          OPENCLAW_AGENT_WORKSPACE: "/resolved/agent-workspace",
+          OPENCLAW_TEST_FAST: "1",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+
+      await io.writeConfigFile({
+        agents: { list: [{ id: "main", workspace: "/resolved/agent-workspace" }] },
+      });
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.not.toBe(originalRootRaw);
+      const persistedRoot = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        agents?: { defaults?: unknown; list?: unknown[] };
+      };
+      expect(persistedRoot.agents?.defaults).toBeUndefined();
+      expect(persistedRoot.agents?.list).toEqual([{ $include: "./main-agent.json5" }]);
+      await expect(fs.readFile(includePath, "utf-8")).resolves.toContain(
+        '"workspace": "${OPENCLAW_AGENT_WORKSPACE}"',
+      );
     });
   });
 
@@ -1448,6 +2320,58 @@ describe("config io write", () => {
       } finally {
         unsubscribe();
       }
+    });
+  });
+
+  it("rejects ambiguous removals from arrays containing environment references", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const originalRaw = `${JSON.stringify(
+        { plugins: { allow: ["${PLUGIN_A}", "${PLUGIN_B}"] } },
+        null,
+        2,
+      )}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createConfigIO({
+        env: {
+          OPENCLAW_TEST_FAST: "1",
+          PLUGIN_A: "same-plugin",
+          PLUGIN_B: "same-plugin",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      await expect(io.writeConfigFile({ plugins: { allow: ["same-plugin"] } })).rejects.toThrow(
+        "Config write would reorder or modify an array",
+      );
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
+    });
+  });
+
+  it("preserves escaped literals when config writes reorder arrays", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ plugins: { allow: ["$${PLUGIN_ID}", "literal-plugin"] } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      await io.writeConfigFile({ plugins: { allow: ["literal-plugin", "${PLUGIN_ID}"] } });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        plugins?: { allow?: string[] };
+      };
+      expect(persisted.plugins?.allow).toEqual(["literal-plugin", "$${PLUGIN_ID}"]);
     });
   });
 
@@ -1809,6 +2733,99 @@ describe("config io write", () => {
       } finally {
         setRuntimeConfigSnapshotRefreshHandler(null);
       }
+    });
+  });
+
+  it("rolls back root writes when canonical reread changes config path ownership", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const nextConfigPath = path.join(home, ".openclaw", "next.json");
+      const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
+      const initialRaw = `${JSON.stringify(initialConfig, null, 2)}\n`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_HOME: home,
+          OPENCLAW_STATE_DIR: undefined,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const prepared = await readConfigFileSnapshotForWrite();
+
+          await expect(
+            writeConfigFile(
+              {
+                gateway: { mode: "local", port: 19001 },
+                env: { OPENCLAW_CONFIG_PATH: nextConfigPath },
+              },
+              {
+                baseSnapshot: prepared.snapshot,
+                ...prepared.writeOptions,
+              },
+            ),
+          ).rejects.toThrow("config path changed since last load");
+
+          await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+          expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+          await expect(fs.stat(nextConfigPath)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    });
+  });
+
+  it("uses injected filesystem operations when rolling back ownership loss", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const otherConfigPath = path.join(home, ".openclaw", "other.json");
+      const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
+      const initialRaw = `${JSON.stringify(initialConfig, null, 2)}\n`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+      const env = {
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_TEST_FAST: "1",
+      } as NodeJS.ProcessEnv;
+      const readFile = fsNode.promises.readFile.bind(fsNode.promises);
+      const rename = fsNode.promises.rename.bind(fsNode.promises);
+      let committed = false;
+      let rollbackReadUsedInjectedFs = false;
+      const injectedFs = {
+        ...fsNode,
+        promises: {
+          ...fsNode.promises,
+          readFile: async (target, options) => {
+            if (committed && target === configPath) {
+              rollbackReadUsedInjectedFs = true;
+            }
+            return await readFile(target, options);
+          },
+          rename: async (from, to) => {
+            await rename(from, to);
+            if (!committed && to === configPath) {
+              committed = true;
+              env.OPENCLAW_CONFIG_PATH = otherConfigPath;
+            }
+          },
+        },
+      } as typeof fsNode;
+      const io = createConfigIO({ env, fs: injectedFs, homedir: () => home, logger: silentLogger });
+      const prepared = await io.readConfigFileSnapshotForWrite();
+
+      await expect(
+        io.writeConfigFile(
+          { gateway: { mode: "local", port: 19001 } },
+          {
+            baseSnapshot: prepared.snapshot,
+            ...prepared.writeOptions,
+          },
+        ),
+      ).rejects.toThrow("config path changed since last load");
+
+      expect(rollbackReadUsedInjectedFs).toBe(true);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
     });
   });
 

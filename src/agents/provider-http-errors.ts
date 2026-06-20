@@ -27,7 +27,7 @@ export function truncateErrorDetail(detail: string, limit = 220): string {
 }
 
 /** Redacts secrets before preserving a bounded provider error body preview. */
-export function redactProviderErrorBody(body: string): string {
+function redactProviderErrorBody(body: string): string {
   return truncateErrorDetail(redactSensitiveText(body), ERROR_BODY_METADATA_LIMIT);
 }
 
@@ -77,6 +77,9 @@ export async function readResponseTextLimited(
       // Stop the upstream body once the diagnostic budget is full.
       await reader.cancel().catch(() => {});
     }
+    try {
+      reader.releaseLock();
+    } catch {}
   }
 
   return text;
@@ -145,7 +148,7 @@ function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPay
 }
 
 /** Metadata extracted from a non-2xx provider response body and headers. */
-export type ProviderHttpErrorInfo = {
+type ProviderHttpErrorInfo = {
   detail?: string;
   code?: string;
   type?: string;
@@ -154,7 +157,7 @@ export type ProviderHttpErrorInfo = {
 };
 
 /** Extracts normalized provider error metadata while keeping the raw body bounded and redacted. */
-export async function extractProviderErrorInfo(response: Response): Promise<ProviderHttpErrorInfo> {
+async function extractProviderErrorInfo(response: Response): Promise<ProviderHttpErrorInfo> {
   const rawBody = trimToUndefined(await readResponseTextLimited(response).catch(() => ""));
   const requestId = extractProviderRequestId(response);
   if (!rawBody) {

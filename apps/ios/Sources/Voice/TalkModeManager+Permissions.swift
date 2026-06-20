@@ -66,22 +66,6 @@ extension TalkModeManager {
 
     static func permissionMessage(
         kind: String,
-        status: AVAudioSession.RecordPermission) -> String
-    {
-        switch status {
-        case .denied:
-            return "\(kind) permission denied"
-        case .undetermined:
-            return "\(kind) permission not granted"
-        case .granted:
-            return "\(kind) permission denied"
-        @unknown default:
-            return "\(kind) permission denied"
-        }
-    }
-
-    static func permissionMessage(
-        kind: String,
         status: SFSpeechRecognizerAuthorizationStatus) -> String
     {
         switch status {

@@ -66,10 +66,10 @@ function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
 }
 
 /** Per-payload durable delivery status. */
-export type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
+type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
 
 /** Delivery outcome for one normalized outbound payload. */
-export type AgentCommandDeliveryPayloadOutcome = {
+type AgentCommandDeliveryPayloadOutcome = {
   index: number;
   status: AgentCommandDeliveryPayloadStatus;
   reason?: string;
@@ -84,7 +84,7 @@ export type AgentCommandDeliveryPayloadOutcome = {
 };
 
 /** Aggregate delivery status for an agent command result. */
-export type AgentCommandDeliveryStatus = {
+type AgentCommandDeliveryStatus = {
   requested: true;
   attempted: boolean;
   status: "sent" | "suppressed" | "partial_failed" | "failed";
@@ -100,7 +100,7 @@ export type AgentCommandDeliveryStatus = {
 };
 
 /** Agent command result after payload normalization and optional delivery. */
-export type AgentCommandDeliveryResult = {
+type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
   meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
   didSendViaMessagingTool?: boolean;

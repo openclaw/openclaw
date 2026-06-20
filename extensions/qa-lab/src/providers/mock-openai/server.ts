@@ -198,7 +198,7 @@ type MockScenarioState = {
 function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
   return providerVariant === "anthropic"
     ? "repo/docs/help/testing.md"
-    : "repo/qa/scenarios/index.md";
+    : "repo/qa/scenarios/index.yaml";
 }
 
 function subagentHandoffTaskForProvider(providerVariant: MockOpenAiProviderVariant) {
@@ -1461,7 +1461,7 @@ function buildAssistantText(
   ) {
     return [
       "Worked:",
-      "- Read all three seeded files: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
+      "- Read all three seeded files: repo/qa/scenarios/index.yaml, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
       "- Extra QA scenario candidates: config restart capability flip and image generation roundtrip.",
       "Failed:",
       "- None observed in mock mode.",

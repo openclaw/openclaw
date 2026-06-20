@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sessions from "../config/sessions.js";
 import * as gateway from "../gateway/call.js";
-import * as sessionUtils from "../gateway/session-utils.fs.js";
+import * as sessionUtils from "../gateway/session-transcript-readers.js";
 import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
 import {
@@ -32,7 +32,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "test-run-id" })),
 }));
 
-vi.mock("../gateway/session-utils.fs.js", () => ({
+vi.mock("../gateway/session-transcript-readers.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
 }));
 

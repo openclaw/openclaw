@@ -28,9 +28,24 @@ import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
-import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
+import {
+  createWhatsAppSocketOperationTimeoutAdapter,
+  isWhatsAppSocketOperationTimeoutError,
+  resolveWhatsAppSocketOperationTimeoutMs,
+  resolveWhatsAppSocketTiming,
+  withWhatsAppSocketOperationTimeout,
+  type WhatsAppSocketOperationAdapter,
+  type WhatsAppSocketTimingOptions,
+} from "../socket-timing.js";
 import { resolveJidToE164 } from "../text-runtime.js";
-import { checkInboundAccessControl } from "./access-control.js";
+import {
+  checkInboundAccessControl,
+  type AcceptedInboundAccessControlResult,
+} from "./access-control.js";
+import {
+  requireAdmittedWhatsAppInboundMessage,
+  requireWhatsAppInboundAdmission,
+} from "./admission.js";
 import {
   claimRecentInboundMessageDelivery,
   commitRecentInboundMessage,
@@ -50,6 +65,7 @@ import {
 } from "./durable-receive.js";
 import {
   describeReplyContext,
+  extractExternalAdReplyContext,
   extractLocationData,
   extractContactContext,
   extractMediaPlaceholder,
@@ -72,7 +88,12 @@ import {
 import { DisconnectReason, isJidGroup } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
-import type { WebInboundMessageInput, WebInboundMessage, WebListenerCloseReason } from "./types.js";
+import type {
+  AdmittedWebInboundMessage,
+  WebInboundMessage,
+  WebInboundMessageInput,
+  WebListenerCloseReason,
+} from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
@@ -170,6 +191,9 @@ function recordAcceptedInboundActivity(accountId: string): void {
 }
 
 function isRetryableSendDisconnectError(err: unknown): boolean {
+  if (isWhatsAppSocketOperationTimeoutError(err)) {
+    return false;
+  }
   return /closed|reset|timed\s*out|disconnect|no active socket/i.test(formatError(err));
 }
 
@@ -181,13 +205,18 @@ function isNonEmptyString(value: string | undefined): value is string {
   return Boolean(value);
 }
 
+type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
+  admission: AdmittedWebInboundMessage["admission"];
+};
+
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
+  socketTiming?: Required<WhatsAppSocketTimingOptions>;
   verbose: boolean;
   accountId: string;
   authDir: string;
-  onMessage: (msg: WebInboundMessage) => Promise<void>;
+  onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
   mediaMaxMb?: number;
   /** Keep the global presence unavailable so self-chat sessions do not mute phone pushes. */
   selfChatMode?: boolean;
@@ -196,7 +225,7 @@ type MonitorWebInboxOptions = {
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Optional debounce gating predicate. */
-  shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   /** Optional shared socket reference so reply closures can follow reconnects. */
   socketRef?: { current: WASocket | null };
   /** Whether send retries should wait for a reconnect. */
@@ -217,8 +246,9 @@ type MonitorWebInboxOptions = {
 
 type AttachWebInboxToSocketOptions = Omit<
   MonitorWebInboxOptions,
-  "onMessage" | "shouldDebounce"
+  "onMessage" | "shouldDebounce" | "socketTiming"
 > & {
+  socketTiming: Required<WhatsAppSocketTimingOptions>;
   onMessage: (msg: WebInboundMessageInput) => Promise<void>;
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
 };
@@ -241,6 +271,9 @@ export async function attachWebInboxToSocket(
     disconnectRetryPolicy.maxAttempts > 0
       ? disconnectRetryPolicy.maxAttempts
       : DEFAULT_RECONNECT_POLICY.maxAttempts;
+  const sendOperationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(
+    options.socketTiming.defaultQueryTimeoutMs,
+  );
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -257,7 +290,10 @@ export async function attachWebInboxToSocket(
   const presence = options.selfChatMode ? "unavailable" : "available";
 
   try {
-    await sock.sendPresenceUpdate(presence);
+    await createWhatsAppSocketOperationTimeoutAdapter(
+      sock,
+      sendOperationTimeoutMs,
+    ).sendPresenceUpdate(presence);
     logWhatsAppVerbose(options.verbose, `Sent global '${presence}' presence on connect`);
   } catch (err) {
     logWhatsAppVerbose(
@@ -300,34 +336,35 @@ export async function attachWebInboxToSocket(
     return successor.getCurrentSock();
   };
   type QueuedInboundMessageMetadata = {
+    admission: AdmittedWebInboundCallbackMessage["admission"];
     dedupeKey?: string;
     debounceKey?: string;
     durableId?: string;
     readReceipt?: WhatsAppReadReceiptTarget;
     receiveOrder?: number;
   };
-  type QueuedInboundMessage = WebInboundMessage & QueuedInboundMessageMetadata;
+  type QueuedInboundMessage = AdmittedWebInboundCallbackMessage & QueuedInboundMessageMetadata;
   const durableInboundJournal = createWhatsAppDurableInboundReceiveJournal(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
-  const buildInboundDebounceKey = (msg: WebInboundMessage): string | null => {
+  const buildInboundDebounceKey = (msg: QueuedInboundMessage): string | null => {
+    const admission = requireWhatsAppInboundAdmission(msg);
     const sender = msg.platform.sender;
     const senderKey =
-      msg.chatType === "group"
+      admission.conversation.kind === "group"
         ? (getPrimaryIdentityId(sender ?? null) ??
           msg.platform.senderJid ??
           msg.platform.senderE164 ??
           msg.platform.senderName ??
-          msg.from)
-        : msg.from;
+          admission.sender.id)
+        : admission.conversation.id;
     if (!senderKey) {
       return null;
     }
-    const conversationKey = msg.chatType === "group" ? msg.platform.chatJid : msg.from;
-    return `${msg.accountId}:${conversationKey}:${senderKey}`;
+    return `${admission.accountId}:${admission.conversation.id}:${senderKey}`;
   };
-  const shouldDebounceInboundMessage = (msg: WebInboundMessage): boolean =>
+  const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {
@@ -476,6 +513,16 @@ export async function attachWebInboxToSocket(
       messageId,
     });
   };
+  const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
+    // The local send has failed terminally, but Baileys may still deliver it.
+    // Track a late message id only to suppress the resulting self-echo.
+    void promise.then(
+      (result) => {
+        rememberOutboundMessage(jid, result);
+      },
+      () => {},
+    );
+  };
 
   const sendTrackedMessage = async (
     jid: string,
@@ -487,9 +534,15 @@ export async function attachWebInboxToSocket(
       const currentSock = getCurrentSock();
       if (currentSock) {
         try {
-          const result = sendOptions
-            ? await currentSock.sendMessage(jid, content, sendOptions)
-            : await currentSock.sendMessage(jid, content);
+          const result = await createWhatsAppSocketOperationTimeoutAdapter(
+            currentSock,
+            sendOperationTimeoutMs,
+            {
+              onSendMessageTimeout: ({ jid: timedOutJid, promise }) => {
+                trackLateAcceptedSend(timedOutJid, promise);
+              },
+            },
+          ).sendMessage(jid, content, sendOptions);
           rememberOutboundMessage(jid, result);
           return result;
         } catch (err) {
@@ -522,6 +575,19 @@ export async function attachWebInboxToSocket(
         throw lastErr;
       }
     }
+  };
+  const sendApiSocketOperations: WhatsAppSocketOperationAdapter = {
+    sendMessage: (jid, content, sendOptions) => sendTrackedMessage(jid, content, sendOptions),
+    sendPresenceUpdate: async (presenceLocal, jid) => {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+      }
+      return await createWhatsAppSocketOperationTimeoutAdapter(
+        currentSock,
+        sendOperationTimeoutMs,
+      ).sendPresenceUpdate(presenceLocal, jid);
+    },
   };
 
   const summarizeGroupMeta = async (meta: GroupMetadata) => {
@@ -635,7 +701,7 @@ export async function attachWebInboxToSocket(
     groupSubject?: string;
     groupParticipants?: string[];
     messageTimestampMs?: number;
-    access: Awaited<ReturnType<typeof checkInboundAccessControl>>;
+    access: AcceptedInboundAccessControlResult;
   };
 
   const normalizeInboundMessage = async (
@@ -710,6 +776,7 @@ export async function attachWebInboxToSocket(
       from,
       selfE164: self.e164 ?? null,
       senderE164,
+      senderJid: participantJid,
       group,
       pushName: msg.pushName ?? undefined,
       isFromMe: Boolean(msg.key?.fromMe),
@@ -756,9 +823,11 @@ export async function attachWebInboxToSocket(
     }
     const { id, remoteJid, participant } = target;
     try {
-      await (getCurrentSock() ?? sock).readMessages([
-        { remoteJid, id, participant, fromMe: false },
-      ]);
+      await withWhatsAppSocketOperationTimeout(
+        "readMessages",
+        (getCurrentSock() ?? sock).readMessages([{ remoteJid, id, participant, fromMe: false }]),
+        sendOperationTimeoutMs,
+      );
       const suffix = participant ? ` (participant ${participant})` : "";
       logWhatsAppVerbose(options.verbose, `Marked message ${id} as read for ${remoteJid}${suffix}`);
     } catch (err) {
@@ -776,18 +845,7 @@ export async function attachWebInboxToSocket(
     }
   };
 
-  const maybeMarkReadReceiptAfterCompletedDelivery = async (
-    inbound: NormalizedInboundMessage,
-    target: WhatsAppReadReceiptTarget | undefined,
-  ) => {
-    if (inbound.access.isSelfChat) {
-      maybeLogSkippedSelfChatReadReceipt(inbound, target);
-      return;
-    }
-    await maybeMarkInboundAsRead(target);
-  };
-
-  const maybeMarkReadReceiptForSkippedAppend = async (
+  const maybeMarkNonSelfChatReadReceipt = async (
     inbound: NormalizedInboundMessage,
     target: WhatsAppReadReceiptTarget | undefined,
   ) => {
@@ -852,7 +910,7 @@ export async function attachWebInboxToSocket(
     const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
 
     if (!stored && shouldSkipStaleAppend(msg, upsertType)) {
-      await maybeMarkReadReceiptForSkippedAppend(inbound, readReceipt);
+      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
       return;
     }
 
@@ -879,7 +937,7 @@ export async function attachWebInboxToSocket(
           },
         );
         if (accepted.kind === "completed") {
-          await maybeMarkReadReceiptAfterCompletedDelivery(
+          await maybeMarkNonSelfChatReadReceipt(
             inbound,
             accepted.record.metadata?.readReceipt ?? deliveryReadReceipt,
           );
@@ -904,7 +962,7 @@ export async function attachWebInboxToSocket(
     const enriched = await enrichInboundMessage(msg);
     if (!enriched) {
       await completeUndeliverableDurableInbound(durableId, durableMetadata);
-      await maybeMarkReadReceiptAfterCompletedDelivery(inbound, deliveryReadReceipt);
+      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
       return;
     }
 
@@ -913,7 +971,7 @@ export async function attachWebInboxToSocket(
     if (dedupeClaim !== "claimed") {
       if (dedupeClaim === "duplicate") {
         await completeUndeliverableDurableInbound(durableId, durableMetadata);
-        await maybeMarkReadReceiptAfterCompletedDelivery(inbound, deliveryReadReceipt);
+        await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
       }
       return;
     }
@@ -946,6 +1004,7 @@ export async function attachWebInboxToSocket(
     body: string;
     location?: ReturnType<typeof extractLocationData>;
     contactContext?: ReturnType<typeof extractContactContext>;
+    externalAdReplyContext?: ReturnType<typeof extractExternalAdReplyContext>;
     replyContext?: ReturnType<typeof describeReplyContext>;
     mediaPath?: string;
     mediaType?: string;
@@ -956,6 +1015,7 @@ export async function attachWebInboxToSocket(
     const location = extractLocationData(msg.message ?? undefined);
     const locationText = location ? formatLocationText(location) : undefined;
     const contactContext = extractContactContext(msg.message ?? undefined);
+    const externalAdReplyContext = extractExternalAdReplyContext(msg.message ?? undefined);
     let body = extractText(msg.message ?? undefined);
     if (locationText) {
       body = [body, locationText].filter(Boolean).join("\n").trim();
@@ -1000,6 +1060,7 @@ export async function attachWebInboxToSocket(
       body,
       location: location ?? undefined,
       contactContext,
+      externalAdReplyContext,
       replyContext,
       mediaPath,
       mediaType,
@@ -1019,12 +1080,11 @@ export async function attachWebInboxToSocket(
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
-      const currentSock = getCurrentSock();
-      if (!currentSock) {
+      if (!getCurrentSock()) {
         return;
       }
       try {
-        await currentSock.sendPresenceUpdate("composing", chatJid);
+        await sendApiSocketOperations.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
       }
@@ -1083,7 +1143,30 @@ export async function attachWebInboxToSocket(
             mentions: groupMentions,
           }
         : undefined;
+    const untrustedStructuredContext = [
+      ...(enriched.contactContext
+        ? [
+            {
+              label: "WhatsApp contact",
+              source: "whatsapp",
+              type: enriched.contactContext.kind,
+              payload: enriched.contactContext,
+            },
+          ]
+        : []),
+      ...(enriched.externalAdReplyContext
+        ? [
+            {
+              label: "WhatsApp external ad reply",
+              source: "whatsapp",
+              type: "external_ad_reply",
+              payload: enriched.externalAdReplyContext,
+            },
+          ]
+        : []),
+    ];
     const inboundMessage: QueuedInboundMessage = withDeprecatedWebInboundMessageFlatAliases({
+      admission: inbound.access.admission,
       event: {
         id: inbound.id,
         timestamp,
@@ -1091,16 +1174,8 @@ export async function attachWebInboxToSocket(
       payload: {
         body: enriched.body,
         location: enriched.location ?? undefined,
-        untrustedStructuredContext: enriched.contactContext
-          ? [
-              {
-                label: "WhatsApp contact",
-                source: "whatsapp",
-                type: enriched.contactContext.kind,
-                payload: enriched.contactContext,
-              },
-            ]
-          : undefined,
+        untrustedStructuredContext:
+          untrustedStructuredContext.length > 0 ? untrustedStructuredContext : undefined,
         media,
       },
       platform: {
@@ -1124,11 +1199,6 @@ export async function attachWebInboxToSocket(
         reply,
         sendMedia,
       },
-      from: inbound.from,
-      conversationId: inbound.from,
-      accountId: inbound.access.resolvedAccountId,
-      accessControlPassed: true,
-      chatType: inbound.group ? "group" : "direct",
       quote: enriched.replyContext
         ? {
             context: enriched.replyContext,
@@ -1155,14 +1225,17 @@ export async function attachWebInboxToSocket(
       }
     }
     if (inboundMessage.event.id) {
+      const admission = requireWhatsAppInboundAdmission(inboundMessage);
       cacheInboundMessageMeta(
-        inboundMessage.accountId,
+        admission.accountId,
         inboundMessage.platform.chatJid,
         inboundMessage.event.id,
         {
           participant: inboundMessage.platform.senderJid,
           participantE164:
-            inboundMessage.chatType === "direct" ? inboundMessage.platform.senderE164 : undefined,
+            admission.conversation.kind === "direct"
+              ? inboundMessage.platform.senderE164
+              : undefined,
           body: inboundMessage.payload.body,
           fromMe: inboundMessage.platform.fromMe,
         },
@@ -1335,20 +1408,7 @@ export async function attachWebInboxToSocket(
   })();
 
   const sendApi = createWebSendApi({
-    sock: {
-      sendMessage: (
-        jid: string,
-        content: AnyMessageContent,
-        optionsLocal?: MiscMessageGenerationOptions,
-      ) => sendTrackedMessage(jid, content, optionsLocal),
-      sendPresenceUpdate: async (presenceLocal, jid?: string) => {
-        const currentSock = getCurrentSock();
-        if (!currentSock) {
-          throw new Error(RECONNECT_IN_PROGRESS_ERROR);
-        }
-        return currentSock.sendPresenceUpdate(presenceLocal, jid);
-      },
-    },
+    sock: sendApiSocketOperations,
     defaultAccountId: options.accountId,
     resolveOutboundMentions: ({ jid, text }) => resolveOutboundMentionsForGroup(jid, text),
     authDir: options.authDir,
@@ -1381,7 +1441,7 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
-  const socketTiming = resolveWhatsAppSocketTiming(options.cfg);
+  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming(options.cfg);
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
     ...socketTiming,
@@ -1393,14 +1453,21 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     throw err;
   }
   const shouldDebounce = options.shouldDebounce;
+  const normalizeAdmittedWebInboundMessage = (
+    msg: WebInboundMessageInput,
+  ): AdmittedWebInboundCallbackMessage =>
+    requireAdmittedWhatsAppInboundMessage(
+      normalizeWebInboundMessage(msg),
+    ) as AdmittedWebInboundCallbackMessage;
   return attachWebInboxToSocket({
     ...options,
     onMessage: async (msg) => {
-      await options.onMessage(normalizeWebInboundMessage(msg));
+      await options.onMessage(normalizeAdmittedWebInboundMessage(msg));
     },
     shouldDebounce: shouldDebounce
-      ? (msg) => shouldDebounce(normalizeWebInboundMessage(msg))
+      ? (msg) => shouldDebounce(normalizeAdmittedWebInboundMessage(msg))
       : undefined,
+    socketTiming,
     sock,
   });
 }

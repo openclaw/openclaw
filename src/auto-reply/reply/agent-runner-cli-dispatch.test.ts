@@ -101,6 +101,44 @@ describe("runCliAgentWithLifecycle", () => {
       ),
     ).toBe(false);
   });
+
+  it("propagates yielded result metadata on lifecycle end", async () => {
+    cliDispatchMocks.emitAgentEvent.mockClear();
+    cliDispatchMocks.runCliAgent.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-yielded",
+      provider: "claude-cli",
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "off",
+        timeoutMs: 1_000,
+        runId: "run-yielded",
+      },
+    });
+
+    const terminal = cliDispatchMocks.emitAgentEvent.mock.calls
+      .map(([event]) => event as { stream?: string; data?: Record<string, unknown> })
+      .find((event) => event.stream === "lifecycle" && event.data?.phase === "end");
+    expect(terminal?.data).toMatchObject({
+      yielded: true,
+      livenessState: "paused",
+      stopReason: "end_turn",
+    });
+  });
 });
 
 describe("keepCliSessionBindingOnlyWhenReused", () => {

@@ -27,7 +27,7 @@ type CachedSnapshotPath = {
   path: string;
 };
 
-export type StaleSessionSnapshotPathFinding = {
+type StaleSessionSnapshotPathFinding = {
   sessionKey: string;
   field: SnapshotPathSource;
   cachedPath: string;
