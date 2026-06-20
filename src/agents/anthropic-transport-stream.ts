@@ -6,6 +6,7 @@
 import { readResponseTextSnippet } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
+import { resolveClaudeCodeVersion } from "../llm/utils/claude-code-version.js";
 import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
@@ -60,7 +61,10 @@ import {
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
-const CLAUDE_CODE_VERSION = "2.1.75";
+// Lazy-resolved Claude Code version for OAuth user-agent headers.
+// Only invoked when building the claude-cli/* user-agent in the OAuth bearer
+// path, so non-OAuth Anthropic imports (API-key auth) never trigger the lookup.
+const CLAUDE_CODE_VERSION = () => resolveClaudeCodeVersion(import.meta.url);
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
@@ -890,7 +894,7 @@ function createAnthropicTransportClient(params: {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
             ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
-            "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
+            "user-agent": `claude-cli/${CLAUDE_CODE_VERSION()}`,
             "x-app": "cli",
           },
           model.headers,

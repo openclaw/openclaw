@@ -62,6 +62,7 @@ import {
   findActiveAnthropicToolTurnAssistantIndex,
 } from "./anthropic-thinking-replay.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
+import { resolveClaudeCodeVersion } from "../utils/claude-code-version.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
@@ -98,8 +99,10 @@ function getCacheControl(
   };
 }
 
-// Stealth mode: Mimic Claude Code's tool naming exactly
-const claudeCodeVersion = "2.1.75";
+// Lazy-resolved Claude Code version for OAuth user-agent headers.
+// Only invoked when building the claude-cli/* user-agent in the OAuth bearer
+// path, so non-OAuth Anthropic imports (API-key auth) never trigger the lookup.
+const claudeCodeVersion = () => resolveClaudeCodeVersion(import.meta.url);
 
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
@@ -1015,7 +1018,7 @@ function createClient(
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
           "anthropic-beta": ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
-          "user-agent": `claude-cli/${claudeCodeVersion}`,
+          "user-agent": `claude-cli/${claudeCodeVersion()}`,
           "x-app": "cli",
         },
         model.headers,
