@@ -3,124 +3,16 @@ import type { Component, DefaultTextStyle, MarkdownTheme } from "@earendil-works
 import { Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
 
-type MarkdownSegment =
-  | { kind: "markdown"; text: string }
-  | { kind: "code"; prefix: string; fence: string; info: string; lines: string[]; closed: boolean };
+type MarkdownToken = { type: string; lang?: string; text?: string };
+type RenderToken = (
+  token: MarkdownToken,
+  width: number,
+  nextTokenType?: string,
+  styleContext?: unknown,
+) => string[];
 
-const OPEN_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
-const HTML_BLOCK_START_RE = /^(?: {0,3})<([A-Za-z][\w:-]*)(?:\s[^>]*)?>\s*$/;
 const CODE_WRAP_TOKEN_RE = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]+/gu;
 const WHITESPACE_RE = /^\s+$/;
-
-function parseOpeningFence(
-  line: string,
-): { prefix: string; fence: string; info: string } | undefined {
-  const match = OPEN_FENCE_RE.exec(line);
-  if (!match) {
-    return undefined;
-  }
-  const fence = match[2];
-  const info = match[3].trim();
-  if (fence[0] === "`" && info.includes("`")) {
-    return undefined;
-  }
-  return { prefix: match[1], fence, info };
-}
-
-function parseInvalidBacktickFence(line: string): { fence: string } | undefined {
-  const match = OPEN_FENCE_RE.exec(line);
-  if (!match || match[2][0] !== "`" || !match[3].includes("`")) {
-    return undefined;
-  }
-  return { fence: match[2] };
-}
-
-function parseHtmlBlockStart(line: string): string | undefined {
-  const match = HTML_BLOCK_START_RE.exec(line);
-  if (!match || line.includes("</") || line.trimEnd().endsWith("/>")) {
-    return undefined;
-  }
-  return match[1].toLowerCase();
-}
-
-function isHtmlBlockEnd(line: string, tag: string): boolean {
-  return line.trim().toLowerCase() === `</${tag}>`;
-}
-
-function isClosingFence(line: string, openingFence: string): boolean {
-  const marker = openingFence[0];
-  const minLength = openingFence.length;
-  const withoutIndent = line.replace(/^ {0,3}/, "").trimEnd();
-  let markerLength = 0;
-  while (withoutIndent[markerLength] === marker) {
-    markerLength += 1;
-  }
-  return markerLength >= minLength && withoutIndent.slice(markerLength).trim() === "";
-}
-
-function parseMarkdownSegments(text: string): MarkdownSegment[] {
-  const lines = text.replace(/\t/g, "   ").split("\n");
-  const segments: MarkdownSegment[] = [];
-  let markdownLines: string[] = [];
-
-  const flushMarkdown = () => {
-    if (markdownLines.length > 0) {
-      segments.push({ kind: "markdown", text: markdownLines.join("\n") });
-      markdownLines = [];
-    }
-  };
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const htmlTag = parseHtmlBlockStart(lines[i]);
-    if (htmlTag) {
-      markdownLines.push(lines[i]);
-      i += 1;
-      for (; i < lines.length; i += 1) {
-        markdownLines.push(lines[i]);
-        if (isHtmlBlockEnd(lines[i], htmlTag)) {
-          break;
-        }
-      }
-      continue;
-    }
-
-    const opening = parseOpeningFence(lines[i]);
-    if (!opening) {
-      const invalidOpening = parseInvalidBacktickFence(lines[i]);
-      markdownLines.push(lines[i]);
-      if (invalidOpening) {
-        i += 1;
-        for (; i < lines.length; i += 1) {
-          markdownLines.push(lines[i]);
-          if (isClosingFence(lines[i], invalidOpening.fence)) {
-            break;
-          }
-        }
-      }
-      continue;
-    }
-
-    flushMarkdown();
-    const codeLines: string[] = [];
-    let closed = false;
-    i += 1;
-    for (; i < lines.length; i += 1) {
-      if (isClosingFence(lines[i], opening.fence)) {
-        closed = true;
-        break;
-      }
-      codeLines.push(lines[i]);
-    }
-    segments.push({ kind: "code", ...opening, lines: codeLines, closed });
-  }
-
-  flushMarkdown();
-  return segments;
-}
-
-function hasFencedCode(text: string): boolean {
-  return parseMarkdownSegments(text).some((segment) => segment.kind === "code");
-}
 
 function splitTokenToWidth(token: string, maxWidth: number): string[] {
   const chunks: string[] = [];
@@ -189,6 +81,59 @@ function fitCodeLineWithIndent(line: string, indent: string, maxWidth: number): 
   return visibleWidth(combined) <= width ? combined : truncateToWidth(combined, width);
 }
 
+function renderCodeToken(
+  token: MarkdownToken,
+  width: number,
+  nextTokenType: string | undefined,
+  theme: MarkdownTheme,
+): string[] {
+  const contentWidth = Math.max(1, width);
+  const language = token.lang || undefined;
+  const indent = theme.codeBlockIndent ?? "  ";
+  const codeWidth = Math.max(1, contentWidth - visibleWidth(indent));
+  const wrappedCodeLines = (token.text ?? "")
+    .split("\n")
+    .flatMap((line) => wrapCodeLine(line, codeWidth));
+  const highlightedLines = theme.highlightCode
+    ? wrappedCodeLines.flatMap((line) => theme.highlightCode?.(line, language) ?? [])
+    : wrappedCodeLines.map((line) => theme.codeBlock(line));
+  const lines = wrapCodeLine(`\`\`\`${language ?? ""}`, contentWidth).map((line) =>
+    theme.codeBlockBorder(line),
+  );
+  for (const line of highlightedLines) {
+    lines.push(fitCodeLineWithIndent(line, indent, contentWidth));
+  }
+  lines.push(...wrapCodeLine("```", contentWidth).map((line) => theme.codeBlockBorder(line)));
+  if (nextTokenType && nextTokenType !== "space") {
+    lines.push("");
+  }
+  return lines;
+}
+
+function createCodeAwareMarkdown(
+  text: string,
+  paddingX: number,
+  paddingY: number,
+  theme: MarkdownTheme,
+  defaultTextStyle?: DefaultTextStyle,
+): Markdown {
+  const markdown = new Markdown(text, paddingX, paddingY, theme, defaultTextStyle);
+  const patched = markdown as unknown as { renderToken: RenderToken };
+  const renderToken: RenderToken = patched.renderToken.bind(markdown);
+  patched.renderToken = (
+    token: MarkdownToken,
+    width: number,
+    nextTokenType?: string,
+    styleContext?: unknown,
+  ) => {
+    if (token.type === "code") {
+      return renderCodeToken(token, width, nextTokenType, theme);
+    }
+    return renderToken(token, width, nextTokenType, styleContext);
+  };
+  return markdown;
+}
+
 /**
  * Wrapper around pi-tui's Markdown component that adds OSC 8 terminal
  * hyperlinks to rendered output, making URLs clickable even when broken
@@ -197,7 +142,6 @@ function fitCodeLineWithIndent(line: string, indent: string, maxWidth: number): 
 export class HyperlinkMarkdown implements Component {
   private inner: Markdown;
   private urls: string[];
-  private text: string;
 
   constructor(
     text: string,
@@ -206,91 +150,20 @@ export class HyperlinkMarkdown implements Component {
     private theme: MarkdownTheme,
     private defaultTextStyle?: DefaultTextStyle,
   ) {
-    this.text = text;
-    this.inner = new Markdown(text, paddingX, paddingY, theme, defaultTextStyle);
+    this.inner = createCodeAwareMarkdown(text, paddingX, paddingY, theme, defaultTextStyle);
     this.urls = extractUrls(text);
   }
 
   render(width: number): string[] {
-    const rendered = hasFencedCode(this.text)
-      ? this.renderWithVerbatimFencedCode(width)
-      : this.inner.render(width);
-    return addOsc8Hyperlinks(rendered, this.urls);
+    return addOsc8Hyperlinks(this.inner.render(width), this.urls);
   }
 
   setText(text: string): void {
-    this.text = text;
     this.inner.setText(text);
     this.urls = extractUrls(text);
   }
 
   invalidate(): void {
     this.inner.invalidate();
-  }
-
-  private renderWithVerbatimFencedCode(width: number): string[] {
-    if (!this.text || this.text.trim() === "") {
-      return [];
-    }
-
-    const renderedLines: string[] = [];
-    for (const segment of parseMarkdownSegments(this.text)) {
-      if (segment.kind === "markdown") {
-        renderedLines.push(...this.renderMarkdownSegment(segment.text, width));
-      } else {
-        renderedLines.push(...this.renderCodeSegment(segment, width));
-      }
-    }
-
-    if (renderedLines.length === 0) {
-      return [""];
-    }
-
-    const emptyLines = Array.from({ length: this.paddingY }, () => this.applyLineChrome("", width));
-    return emptyLines.concat(renderedLines, emptyLines);
-  }
-
-  private renderMarkdownSegment(text: string, width: number): string[] {
-    if (!text || text.trim() === "") {
-      return [];
-    }
-    return new Markdown(text, this.paddingX, 0, this.theme, this.defaultTextStyle).render(width);
-  }
-
-  private renderCodeSegment(
-    segment: Extract<MarkdownSegment, { kind: "code" }>,
-    width: number,
-  ): string[] {
-    const language = segment.info.split(/\s+/, 1)[0] || undefined;
-    const indent = this.theme.codeBlockIndent ?? "  ";
-    const contentWidth = Math.max(1, width - this.paddingX * 2);
-    const codeWidth = Math.max(1, contentWidth - visibleWidth(indent));
-    const wrappedCodeLines = segment.lines.flatMap((line) => wrapCodeLine(line, codeWidth));
-    const highlightCode = this.theme.highlightCode;
-    const highlightedLines = highlightCode
-      ? wrappedCodeLines.flatMap((line) => highlightCode(line, language))
-      : wrappedCodeLines.map((line) => this.theme.codeBlock(line));
-    const borderPrefixWidth = visibleWidth(segment.prefix);
-    const borderWidth = Math.max(1, contentWidth - borderPrefixWidth);
-    const renderBorderLine = (line: string) =>
-      this.theme.codeBlockBorder(`${segment.prefix}${line}`);
-    const lines = wrapCodeLine(`${segment.fence}${segment.info}`, borderWidth).map(
-      renderBorderLine,
-    );
-    for (const line of highlightedLines) {
-      lines.push(fitCodeLineWithIndent(line, indent, contentWidth));
-    }
-    if (segment.closed) {
-      lines.push(...wrapCodeLine(segment.fence, borderWidth).map(renderBorderLine));
-    }
-    return lines.map((line) => this.applyLineChrome(line, width));
-  }
-
-  private applyLineChrome(line: string, width: number): string {
-    const margin = " ".repeat(this.paddingX);
-    const withMargins = `${margin}${line}${margin}`;
-    const paddingNeeded = Math.max(0, width - visibleWidth(withMargins));
-    const padded = `${withMargins}${" ".repeat(paddingNeeded)}`;
-    return this.defaultTextStyle?.bgColor ? this.defaultTextStyle.bgColor(padded) : padded;
   }
 }
