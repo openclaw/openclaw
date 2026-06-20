@@ -262,6 +262,25 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
     }
   }
 
+  // Warn about potentially stale gateway after a version-changing update.
+  // The running gateway process still references the old package files on disk
+  // and may use stale module import paths until restarted.
+  if (
+    result.status === "ok" &&
+    result.before?.version &&
+    result.after?.version &&
+    result.before.version !== result.after.version
+  ) {
+    defaultRuntime.log("");
+    defaultRuntime.log(
+      theme.warn(
+        "Gateway restart may be required. If the gateway was running before the update, " +
+          "restart it to pick up the new package files: " +
+          theme.command("openclaw gateway restart"),
+      ),
+    );
+  }
+
   defaultRuntime.log("");
   defaultRuntime.log(`Total time: ${theme.muted(formatDurationPrecise(result.durationMs))}`);
 }
