@@ -138,12 +138,12 @@ type CapabilityEnvelope = {
   error?: string;
 };
 
-const CAPABILITY_METADATA: CapabilityMetadata[] = [
+export const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",
     transports: ["local", "gateway"],
-    flags: ["--prompt", "--file", "--model", "--local", "--gateway", "--json"],
+    flags: ["--prompt", "--file", "--model", "--thinking", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
   },
   {
@@ -171,14 +171,14 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.auth.login",
     description: "Run the existing provider auth login flow.",
     transports: ["local"],
-    flags: ["--provider"],
+    flags: ["--provider", "--method"],
     resultShape: "interactive auth result",
   },
   {
     id: "model.auth.logout",
     description: "Remove saved auth profiles for one provider.",
     transports: ["local"],
-    flags: ["--provider", "--json"],
+    flags: ["--provider", "--agent", "--json"],
     resultShape: "removed profile ids",
   },
   {
@@ -257,7 +257,7 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "audio.transcribe",
     description: "Transcribe one audio file.",
     transports: ["local"],
-    flags: ["--file", "--model", "--json"],
+    flags: ["--file", "--language", "--prompt", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {
