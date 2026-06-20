@@ -58,10 +58,6 @@ export type GetReplyOptions = {
   runId?: string;
   /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */
   promptCacheKey?: string;
-  /** Existing session id asserted by clients for the selected session key. */
-  requestedSessionId?: string;
-  /** Allow the asserted session id to resume after a client reconnect despite reset freshness. */
-  resumeRequestedSession?: boolean;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
   /** Optional inbound images (used for webchat attachments). */

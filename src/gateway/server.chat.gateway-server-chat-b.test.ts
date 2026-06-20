@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -2470,7 +2471,7 @@ describe("gateway server chat", () => {
 
         await createSessionDir();
         await writeMainSessionStore();
-        let capturedOpts: GetReplyOptions | undefined;
+        let capturedOpts: InternalGetReplyOptions | undefined;
         mockGetReplyFromConfigOnce(async (_ctx, opts) => {
           capturedOpts = opts;
           return undefined;
