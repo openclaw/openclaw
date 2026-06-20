@@ -81,7 +81,7 @@
     },
     "query.embeddingCache.enabled": {
       "label": "Query Embedding Cache",
-      "help": "Cache recall-query embeddings in a per-instance in-memory LRU so identical embeds collapse to one provider call. Default on.",
+      "help": "Default off. Set to true to cache recall-query embeddings in a per-instance in-memory LRU so identical embeds within a turn collapse to one provider call.",
       "advanced": true
     },
     "query.embeddingCache.maxEntries": {

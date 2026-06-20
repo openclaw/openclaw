@@ -139,8 +139,10 @@ function resolveBoundedIntegerConfig(params: {
 const MAX_QUERY_EMBED_CACHE_ENTRIES = 1_000_000;
 
 function resolveQueryEmbeddingCacheConfig(query: unknown): MemoryConfig["queryEmbeddingCache"] {
+  // Default-off: existing users who omit `query` see no behavior change (cache
+  // stays disabled). Opt in with `query.embeddingCache.enabled: true`.
   if (query === undefined) {
-    return { enabled: true };
+    return { enabled: false };
   }
   if (!query || typeof query !== "object" || Array.isArray(query)) {
     throw new Error("query config must be an object");
@@ -150,7 +152,7 @@ function resolveQueryEmbeddingCacheConfig(query: unknown): MemoryConfig["queryEm
 
   const rawCache = queryCfg.embeddingCache;
   if (rawCache === undefined) {
-    return { enabled: true };
+    return { enabled: false };
   }
   if (!rawCache || typeof rawCache !== "object" || Array.isArray(rawCache)) {
     throw new Error("query.embeddingCache must be an object");
@@ -161,8 +163,8 @@ function resolveQueryEmbeddingCacheConfig(query: unknown): MemoryConfig["queryEm
   if (cache.enabled !== undefined && typeof cache.enabled !== "boolean") {
     throw new Error("query.embeddingCache.enabled must be a boolean");
   }
-  // Default-on, matching the host memorySearch.cache convention.
-  const enabled = cache.enabled !== false;
+  // Opt-in: require explicit true; any other value (false, undefined) leaves cache off.
+  const enabled = cache.enabled === true;
 
   let maxEntries: number | undefined;
   if (cache.maxEntries !== undefined) {

@@ -214,13 +214,37 @@ describe("memory-lancedb config", () => {
     }).toThrow("dreaming config must be an object");
   });
 
-  it("defaults the query embedding recall cache to enabled with no maxEntries override", () => {
+  it("defaults the query embedding recall cache to disabled (opt-in) when query is omitted", () => {
     const parsed = memoryConfigSchema.parse({
       embedding: {
         apiKey: "sk-test",
       },
     });
+    expect(parsed.queryEmbeddingCache).toEqual({ enabled: false });
+  });
+
+  it("enables the cache when query.embeddingCache.enabled is explicitly true", () => {
+    const parsed = memoryConfigSchema.parse({
+      embedding: {
+        apiKey: "sk-test",
+      },
+      query: {
+        embeddingCache: {
+          enabled: true,
+        },
+      },
+    });
     expect(parsed.queryEmbeddingCache).toEqual({ enabled: true });
+  });
+
+  it("keeps cache disabled when query is present but embeddingCache is omitted", () => {
+    // Providing `query: {}` or `query: { embeddingCache: {} }` without enabled:true
+    // must NOT turn the cache on. Users must opt in explicitly.
+    const parsedNoCache = memoryConfigSchema.parse({
+      embedding: { apiKey: "sk-test" },
+      query: {},
+    });
+    expect(parsedNoCache.queryEmbeddingCache).toEqual({ enabled: false });
   });
 
   it("surfaces query.embeddingCache in the manifest schema and runtime parser", () => {
@@ -246,7 +270,8 @@ describe("memory-lancedb config", () => {
     expect(parsed.queryEmbeddingCache).toEqual({ enabled: false, maxEntries: 64 });
   });
 
-  it("treats an omitted enabled flag as enabled while honoring maxEntries", () => {
+  it("treats an omitted enabled flag as disabled while honoring maxEntries", () => {
+    // enabled defaults to false (opt-in); maxEntries is still validated and stored.
     const parsed = memoryConfigSchema.parse({
       embedding: {
         apiKey: "sk-test",
@@ -257,7 +282,7 @@ describe("memory-lancedb config", () => {
         },
       },
     });
-    expect(parsed.queryEmbeddingCache).toEqual({ enabled: true, maxEntries: 128 });
+    expect(parsed.queryEmbeddingCache).toEqual({ enabled: false, maxEntries: 128 });
   });
 
   it("rejects a non-integer or out-of-range query.embeddingCache.maxEntries", () => {

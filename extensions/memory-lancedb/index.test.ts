@@ -2186,6 +2186,7 @@ describe("memory plugin e2e", () => {
   async function setupAutoCaptureCursorHarness(overrides?: {
     embeddingsCreate?: ReturnType<typeof vi.fn>;
     searchResults?: Array<Record<string, unknown>>;
+    query?: Record<string, unknown>;
   }) {
     const embeddingsCreate =
       overrides?.embeddingsCreate ??
@@ -2246,6 +2247,7 @@ describe("memory plugin e2e", () => {
         dbPath: getDbPath(),
         autoCapture: true,
         autoRecall: false,
+        ...(overrides?.query ? { query: overrides.query } : {}),
       },
       runtime: {},
       logger,
@@ -2413,7 +2415,14 @@ describe("memory plugin e2e", () => {
   });
 
   test("evicts auto-capture cursor state on session end", async () => {
-    const harness = await setupAutoCaptureCursorHarness();
+    // Opt the cache in so that identical capture text for the same text within
+    // the same instance reuses the cached vector (one embed call, two stores).
+    // This isolates the cursor-eviction behavior: add() must be called twice
+    // while embeddingsCreate is called only once because the cache collapses
+    // the duplicate embed.
+    const harness = await setupAutoCaptureCursorHarness({
+      query: { embeddingCache: { enabled: true } },
+    });
 
     try {
       const event = {

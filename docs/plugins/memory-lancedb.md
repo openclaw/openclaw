@@ -232,19 +232,21 @@ Chinese, Japanese, and Korean memory phrases.
 `memory-lancedb` embeds the recall query before every vector search. A single
 turn can embed the same query more than once (the `memory_recall` tool, the
 auto-recall hook, and capture deduplication), and each embed is a provider
-round-trip. Recall-query embeddings are therefore cached in a small
-per-instance LRU so identical embeds collapse to one provider call.
+round-trip. A per-instance in-memory LRU is available that collapses identical
+recall embeds to one provider call. It is **off by default** and must be
+opted in explicitly.
 
 | Setting                           | Default | Range     | Applies to                                           |
 | --------------------------------- | ------- | --------- | ---------------------------------------------------- |
-| `query.embeddingCache.enabled`    | `true`  | boolean   | whether recall-query embeddings are cached           |
+| `query.embeddingCache.enabled`    | `false` | boolean   | whether recall-query embeddings are cached           |
 | `query.embeddingCache.maxEntries` | `512`   | 1-1000000 | maximum cached query vectors per embeddings instance |
 
-The cache is on by default. `(model, text)` to `embedding` is deterministic, so
-a cached vector never goes stale for a fixed embedding identity; eviction is
-purely by capacity (least-recently-used) with no TTL. Failed or degenerate
-embeds (empty, all-zero, or non-finite vectors) are never cached, so a transient
-provider failure is always retried.
+To enable, set `query.embeddingCache.enabled: true`. When enabled,
+`(model, text)` to `embedding` is deterministic, so a cached vector never
+goes stale for a fixed embedding identity; eviction is purely by capacity
+(least-recently-used) with no TTL. Failed or degenerate embeds (empty,
+all-zero, or non-finite vectors) are never cached, so a transient provider
+failure is always retried.
 
 The cache is in-memory and per-instance. It is not persisted: it starts empty on
 Gateway restart, and any reconfiguration that rebuilds the embeddings instance
@@ -252,10 +254,6 @@ Gateway restart, and any reconfiguration that rebuilds the embeddings instance
 keyed to the new identity. It is separate from memory-core's persistent
 chunk-embedding cache, which stores index-time chunk vectors in SQLite; this
 cache only holds recall-query vectors at search time.
-
-To turn it off, set `query.embeddingCache.enabled` to `false`. Lower
-`maxEntries` to bound memory on a long-running instance that sees a very large
-variety of distinct recall queries.
 
 ```json5
 {
@@ -266,7 +264,7 @@ variety of distinct recall queries.
         config: {
           query: {
             embeddingCache: {
-              enabled: true,
+              enabled: true, // opt in to collapse duplicate recall-query embeds
               maxEntries: 512,
             },
           },
