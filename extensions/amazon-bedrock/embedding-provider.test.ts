@@ -1,8 +1,11 @@
 // Amazon Bedrock tests cover embedding provider plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing, hasAwsCredentials } from "./embedding-provider.js";
 
 describe("hasAwsCredentials", () => {
+  afterEach(() => {
+    testing.resetAwsCredentialProbeCacheForTesting();
+  });
   it("accepts static AWS key credentials without loading the credential chain", async () => {
     const loadCredentialProvider = vi.fn();
 
@@ -62,6 +65,94 @@ describe("hasAwsCredentials", () => {
     const loadCredentialProvider = vi.fn().mockResolvedValue(null);
 
     await expect(hasAwsCredentials({}, loadCredentialProvider)).resolves.toBe(false);
+  });
+
+  it("skips the credential chain when no AWS probe signals are present (#64891)", async () => {
+    const loadCredentialProvider = vi.fn();
+
+    await expect(hasAwsCredentials({}, loadCredentialProvider)).resolves.toBe(false);
+
+    expect(loadCredentialProvider).not.toHaveBeenCalled();
+  });
+
+  it("returns false immediately when AWS_EC2_METADATA_DISABLED is set without probe signals", async () => {
+    const loadCredentialProvider = vi.fn();
+
+    await expect(
+      hasAwsCredentials({ AWS_EC2_METADATA_DISABLED: "true" }, loadCredentialProvider),
+    ).resolves.toBe(false);
+
+    expect(loadCredentialProvider).not.toHaveBeenCalled();
+  });
+
+  it("preserves the default credential chain for explicit Bedrock configs", async () => {
+    const env = {} as NodeJS.ProcessEnv;
+    const defaultProvider = vi.fn(() => async () => {
+      expect(env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
+      return { accessKeyId: "resolved-access-key" };
+    });
+    const loadCredentialProvider = vi.fn().mockResolvedValue({ defaultProvider });
+
+    await expect(hasAwsCredentials(env, loadCredentialProvider, { allowImds: true })).resolves.toBe(
+      true,
+    );
+
+    expect(defaultProvider).toHaveBeenCalledOnce();
+  });
+
+  it("disables IMDS during defaultProvider probing and restores env", async () => {
+    const env = { AWS_PROFILE: "work" } as NodeJS.ProcessEnv;
+    const defaultProvider = vi.fn(() => async () => {
+      expect(env.AWS_EC2_METADATA_DISABLED).toBe("true");
+      return { accessKeyId: "resolved-access-key" };
+    });
+    const loadCredentialProvider = vi.fn().mockResolvedValue({ defaultProvider });
+
+    await expect(hasAwsCredentials(env, loadCredentialProvider)).resolves.toBe(true);
+
+    expect(env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
+    expect(defaultProvider).toHaveBeenCalledOnce();
+  });
+
+  it("memoizes process.env credential probes and coalesces concurrent calls", async () => {
+    const defaultProvider = vi.fn(() => async () => ({ accessKeyId: "resolved-access-key" }));
+    const loadCredentialProvider = vi.fn().mockResolvedValue({ defaultProvider });
+    const previousProfile = process.env.AWS_PROFILE;
+    process.env.AWS_PROFILE = "work";
+
+    try {
+      const [first, second] = await Promise.all([
+        hasAwsCredentials(process.env, loadCredentialProvider),
+        hasAwsCredentials(process.env, loadCredentialProvider),
+      ]);
+
+      expect(first).toBe(true);
+      expect(second).toBe(true);
+      expect(loadCredentialProvider).toHaveBeenCalledOnce();
+      expect(defaultProvider).toHaveBeenCalledOnce();
+    } finally {
+      if (previousProfile === undefined) {
+        delete process.env.AWS_PROFILE;
+      } else {
+        process.env.AWS_PROFILE = previousProfile;
+      }
+      testing.resetAwsCredentialProbeCacheForTesting();
+    }
+  });
+
+  it("keeps IMDS enabled when explicit Bedrock probing allows it", async () => {
+    const env = {} as NodeJS.ProcessEnv;
+    const defaultProvider = vi.fn(() => async () => {
+      expect(env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
+      return { accessKeyId: "imds-access-key" };
+    });
+    const loadCredentialProvider = vi.fn().mockResolvedValue({ defaultProvider });
+
+    await expect(hasAwsCredentials(env, loadCredentialProvider, { allowImds: true })).resolves.toBe(
+      true,
+    );
+
+    expect(defaultProvider).toHaveBeenCalledOnce();
   });
 });
 
@@ -129,9 +220,7 @@ describe("stripInferenceProfilePrefix", () => {
   });
 
   it("strips apac prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe(
-      "cohere.embed-v4:0",
-    );
+    expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
   });
 
   it("strips au prefix", () => {

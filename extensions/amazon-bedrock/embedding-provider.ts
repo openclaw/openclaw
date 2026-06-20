@@ -315,12 +315,6 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
   return asNumberArrayBatch(embeddings);
 }
 
-export const testing = {
-  parseCohereBatch,
-  parseSingle,
-  stripInferenceProfilePrefix,
-};
-
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
@@ -452,20 +446,62 @@ function resolveBedrockEmbeddingClient(
 // Credential detection
 // ---------------------------------------------------------------------------
 
-export async function hasAwsCredentials(
-  env: NodeJS.ProcessEnv = process.env,
-  loadCredentialProvider: AwsCredentialProviderLoader = loadCredentialProviderSdk,
+const CREDENTIAL_CHAIN_PROBE_ENV_VARS = ["AWS_PROFILE"] as const;
+
+const CONTAINER_OR_ROLE_CREDENTIAL_SIGNALS = [
+  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "AWS_ROLE_ARN",
+] as const;
+
+const AWS_CREDENTIAL_PROBE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+let cachedCredentialProbeResult: boolean | undefined;
+let cachedCredentialProbeTimestamp: number | undefined;
+let cachedCredentialProbeAllowsImds: boolean | undefined;
+let inflightCredentialProbe: Promise<boolean> | undefined;
+let inflightCredentialProbeAllowsImds: boolean | undefined;
+
+type AwsCredentialProbeOptions = {
+  allowImds?: boolean;
+};
+
+function isAwsEc2MetadataExplicitlyDisabled(env: NodeJS.ProcessEnv): boolean {
+  return env.AWS_EC2_METADATA_DISABLED?.trim().toLowerCase() === "true";
+}
+
+function hasAwsCredentialProbeSignals(env: NodeJS.ProcessEnv): boolean {
+  if (CREDENTIAL_CHAIN_PROBE_ENV_VARS.some((key) => env[key]?.trim())) {
+    return true;
+  }
+  return CONTAINER_OR_ROLE_CREDENTIAL_SIGNALS.some((key) => env[key]?.trim());
+}
+
+function shouldProbeAwsCredentialChain(
+  env: NodeJS.ProcessEnv,
+  options: AwsCredentialProbeOptions,
+): boolean {
+  return options.allowImds === true || hasAwsCredentialProbeSignals(env);
+}
+
+async function probeAwsCredentials(
+  env: NodeJS.ProcessEnv,
+  loadCredentialProvider: AwsCredentialProviderLoader,
+  options: AwsCredentialProbeOptions,
 ): Promise<boolean> {
-  if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
-    return true;
-  }
-  if (env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
-    return true;
-  }
   const credentialProviderSdk = await loadCredentialProvider();
   if (!credentialProviderSdk) {
     return false;
   }
+
+  const previousImdsDisabled = env.AWS_EC2_METADATA_DISABLED;
+  const shouldTemporarilyDisableImds =
+    !isAwsEc2MetadataExplicitlyDisabled(env) && options.allowImds !== true;
+  if (shouldTemporarilyDisableImds) {
+    env.AWS_EC2_METADATA_DISABLED = "true";
+  }
+
   try {
     const credentials = await credentialProviderSdk.defaultProvider({
       timeout: 1000,
@@ -474,6 +510,81 @@ export async function hasAwsCredentials(
     return typeof credentials.accessKeyId === "string" && credentials.accessKeyId.trim().length > 0;
   } catch {
     return false;
+  } finally {
+    if (shouldTemporarilyDisableImds) {
+      if (previousImdsDisabled === undefined) {
+        delete env.AWS_EC2_METADATA_DISABLED;
+      } else {
+        env.AWS_EC2_METADATA_DISABLED = previousImdsDisabled;
+      }
+    }
   }
 }
+
+/** @internal Resets memoized credential probe state for tests. */
+function resetAwsCredentialProbeCacheForTesting(): void {
+  cachedCredentialProbeResult = undefined;
+  cachedCredentialProbeTimestamp = undefined;
+  cachedCredentialProbeAllowsImds = undefined;
+  inflightCredentialProbe = undefined;
+  inflightCredentialProbeAllowsImds = undefined;
+}
+
+export async function hasAwsCredentials(
+  env: NodeJS.ProcessEnv = process.env,
+  loadCredentialProvider?: AwsCredentialProviderLoader,
+  options: AwsCredentialProbeOptions = {},
+): Promise<boolean> {
+  if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
+    return true;
+  }
+  if (env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
+    return true;
+  }
+  if (isAwsEc2MetadataExplicitlyDisabled(env) && !shouldProbeAwsCredentialChain(env, options)) {
+    return false;
+  }
+  if (!shouldProbeAwsCredentialChain(env, options)) {
+    return false;
+  }
+
+  const credentialProviderLoader = loadCredentialProvider ?? loadCredentialProviderSdk;
+  const allowImds = options.allowImds === true;
+  if (env === process.env) {
+    if (
+      cachedCredentialProbeResult !== undefined &&
+      cachedCredentialProbeTimestamp !== undefined &&
+      cachedCredentialProbeAllowsImds === allowImds &&
+      Date.now() - cachedCredentialProbeTimestamp < AWS_CREDENTIAL_PROBE_CACHE_TTL_MS
+    ) {
+      return cachedCredentialProbeResult;
+    }
+    if (!inflightCredentialProbe || inflightCredentialProbeAllowsImds !== allowImds) {
+      inflightCredentialProbeAllowsImds = allowImds;
+      const probe = probeAwsCredentials(env, credentialProviderLoader, options);
+      inflightCredentialProbe = probe;
+      void probe.finally(() => {
+        if (inflightCredentialProbe === probe) {
+          inflightCredentialProbe = undefined;
+          inflightCredentialProbeAllowsImds = undefined;
+        }
+      });
+    }
+    const result = await inflightCredentialProbe;
+    cachedCredentialProbeResult = result;
+    cachedCredentialProbeTimestamp = Date.now();
+    cachedCredentialProbeAllowsImds = allowImds;
+    return result;
+  }
+
+  return probeAwsCredentials(env, credentialProviderLoader, options);
+}
+
+export const testing = {
+  parseCohereBatch,
+  parseSingle,
+  resetAwsCredentialProbeCacheForTesting,
+  stripInferenceProfilePrefix,
+};
+
 export { testing as __testing };
