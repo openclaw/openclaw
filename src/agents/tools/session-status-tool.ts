@@ -53,6 +53,7 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
+import { optionalStringEnum } from "../schema/string-enum.js";
 import {
   describeSessionStatusTool,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
@@ -71,13 +72,15 @@ import {
   shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
 
+const SESSION_STATUS_ACTIONS = ["status", "compact"] as const;
+
 const SessionStatusToolSchema = Type.Object({
-  action: Type.Optional(Type.Union([Type.Literal("status"), Type.Literal("compact")])),
+  action: optionalStringEnum(SESSION_STATUS_ACTIONS),
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
 });
 
-type SessionStatusAction = "status" | "compact";
+type SessionStatusAction = (typeof SESSION_STATUS_ACTIONS)[number];
 
 export type SessionStatusSelfCompactRequest = {
   sessionKey: string;

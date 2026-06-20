@@ -470,6 +470,20 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
   });
 
+  it("exposes action as a provider-safe flat enum", () => {
+    const tool = getSessionStatusTool();
+    const parameters = tool.parameters as {
+      properties?: Record<string, { type?: unknown; enum?: unknown; anyOf?: unknown }>;
+    };
+    const action = parameters.properties?.action;
+
+    expect(action).toMatchObject({
+      type: "string",
+      enum: ["status", "compact"],
+    });
+    expect(action?.anyOf).toBeUndefined();
+  });
+
   it("requests self-compaction for the current session", async () => {
     resetSessionStore({
       main: {
