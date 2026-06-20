@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { markdownTheme } from "../theme/theme.js";
@@ -51,5 +51,22 @@ describe("HyperlinkMarkdown", () => {
     expect(rendered).toContain("  ```ts");
     expect(rendered).toContain("  ```");
     expect(rendered).not.toContain("```ts");
+  });
+
+  it("matches upstream markdown for backtick info strings containing backticks", () => {
+    const text = ["``` foo ` bar", "x", "```"].join("\n");
+
+    const rendered = plainLines(new HyperlinkMarkdown(text, 0, 0, markdownTheme).render(40));
+    const upstream = plainLines(new Markdown(text, 0, 0, markdownTheme).render(40));
+
+    expect(rendered).toEqual(upstream);
+  });
+
+  it("keeps wide graphemes within very narrow fenced code width", () => {
+    const markdown = new HyperlinkMarkdown(["```", "👨", "```"].join("\n"), 0, 0, markdownTheme);
+
+    const rendered = plainLines(markdown.render(3));
+
+    expect(rendered.every((line) => visibleWidth(line) <= 3)).toBe(true);
   });
 });

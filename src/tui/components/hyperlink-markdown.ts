@@ -1,6 +1,6 @@
 // Hyperlink markdown helpers render markdown links with TUI hyperlink styling.
 import type { Component, DefaultTextStyle, MarkdownTheme } from "@earendil-works/pi-tui";
-import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
 
 type MarkdownSegment =
@@ -18,7 +18,20 @@ function parseOpeningFence(
   if (!match) {
     return undefined;
   }
-  return { prefix: match[1], fence: match[2], info: match[3].trim() };
+  const fence = match[2];
+  const info = match[3].trim();
+  if (fence[0] === "`" && info.includes("`")) {
+    return undefined;
+  }
+  return { prefix: match[1], fence, info };
+}
+
+function parseInvalidBacktickFence(line: string): { fence: string } | undefined {
+  const match = OPEN_FENCE_RE.exec(line);
+  if (!match || match[2][0] !== "`" || !match[3].includes("`")) {
+    return undefined;
+  }
+  return { fence: match[2] };
 }
 
 function isClosingFence(line: string, openingFence: string): boolean {
@@ -47,7 +60,17 @@ function parseMarkdownSegments(text: string): MarkdownSegment[] {
   for (let i = 0; i < lines.length; i += 1) {
     const opening = parseOpeningFence(lines[i]);
     if (!opening) {
+      const invalidOpening = parseInvalidBacktickFence(lines[i]);
       markdownLines.push(lines[i]);
+      if (invalidOpening) {
+        i += 1;
+        for (; i < lines.length; i += 1) {
+          markdownLines.push(lines[i]);
+          if (isClosingFence(lines[i], invalidOpening.fence)) {
+            break;
+          }
+        }
+      }
       continue;
     }
 
@@ -70,7 +93,7 @@ function parseMarkdownSegments(text: string): MarkdownSegment[] {
 }
 
 function hasFencedCode(text: string): boolean {
-  return text.split("\n").some((line) => parseOpeningFence(line));
+  return parseMarkdownSegments(text).some((segment) => segment.kind === "code");
 }
 
 function splitTokenToWidth(token: string, maxWidth: number): string[] {
@@ -129,6 +152,15 @@ function wrapCodeLine(line: string, maxWidth: number): string[] {
     pushCurrent();
   }
   return rows;
+}
+
+function fitCodeLineWithIndent(line: string, indent: string, maxWidth: number): string {
+  const width = Math.max(1, maxWidth);
+  const lineWidth = visibleWidth(line);
+  const indentWidth = Math.max(0, width - Math.min(lineWidth, width));
+  const effectiveIndent = visibleWidth(indent) <= indentWidth ? indent : " ".repeat(indentWidth);
+  const combined = `${effectiveIndent}${line}`;
+  return visibleWidth(combined) <= width ? combined : truncateToWidth(combined, width);
 }
 
 /**
@@ -205,21 +237,22 @@ export class HyperlinkMarkdown implements Component {
   ): string[] {
     const language = segment.info.split(/\s+/, 1)[0] || undefined;
     const indent = this.theme.codeBlockIndent ?? "  ";
-    const codeWidth = Math.max(1, width - this.paddingX * 2 - visibleWidth(indent));
+    const contentWidth = Math.max(1, width - this.paddingX * 2);
+    const codeWidth = Math.max(1, contentWidth - visibleWidth(indent));
     const wrappedCodeLines = segment.lines.flatMap((line) => wrapCodeLine(line, codeWidth));
     const highlightCode = this.theme.highlightCode;
     const highlightedLines = highlightCode
       ? wrappedCodeLines.flatMap((line) => highlightCode(line, language))
       : wrappedCodeLines.map((line) => this.theme.codeBlock(line));
     const borderPrefixWidth = visibleWidth(segment.prefix);
-    const borderWidth = Math.max(1, width - this.paddingX * 2 - borderPrefixWidth);
+    const borderWidth = Math.max(1, contentWidth - borderPrefixWidth);
     const renderBorderLine = (line: string) =>
       this.theme.codeBlockBorder(`${segment.prefix}${line}`);
     const lines = wrapCodeLine(`${segment.fence}${segment.info}`, borderWidth).map(
       renderBorderLine,
     );
     for (const line of highlightedLines) {
-      lines.push(`${indent}${line}`);
+      lines.push(fitCodeLineWithIndent(line, indent, contentWidth));
     }
     if (segment.closed) {
       lines.push(...wrapCodeLine(segment.fence, borderWidth).map(renderBorderLine));
