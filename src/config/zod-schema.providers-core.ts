@@ -263,6 +263,12 @@ export const TelegramAccountSchemaBase = z
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
+    isolatedIngress: z
+      .boolean()
+      .optional()
+      .describe(
+        "When false, disables isolated polling ingress for this account. Falls back to legacy main-thread polling. Default: true.",
+      ),
     configWrites: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     botToken: SecretInputSchema.optional().register(sensitive),
