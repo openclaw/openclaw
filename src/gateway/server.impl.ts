@@ -45,6 +45,7 @@ import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -924,7 +925,13 @@ export async function startGatewayServer(
       hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
       getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
       pluginRegistry,
-      getPluginRouteRegistry: () => pluginRegistry,
+      getPluginRouteRegistry: () => {
+        // Merge HTTP routes from the active plugin registry so deferred
+        // runtime-loaded workspace plugins are discoverable. (#94572)
+        const active = getPluginRegistryState()?.activeRegistry;
+        if (!active?.httpRoutes?.length) return pluginRegistry;
+        return { ...pluginRegistry, httpRoutes: [...(pluginRegistry.httpRoutes ?? []), ...active.httpRoutes] };
+      },
       getGatewayRequestContext: () => currentPluginRegistryGatewayContext,
       pinChannelRegistry: !minimalTestGateway,
       deps,
