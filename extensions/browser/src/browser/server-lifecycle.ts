@@ -1,7 +1,7 @@
 /**
  * Browser server lifecycle helpers for relay setup and profile shutdown.
  */
-import { emitNodeGatewayEvent } from "openclaw/plugin-sdk/gateway-runtime";
+import { emitNodeGatewayEvent } from "openclaw/plugin-sdk/node-gateway-events-internal";
 import { getRuntimeConfig } from "../config/config.js";
 import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
