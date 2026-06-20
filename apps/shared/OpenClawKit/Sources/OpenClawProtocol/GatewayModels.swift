@@ -57,6 +57,17 @@ public enum SessionFileRelevance: String, Codable, Sendable {
     case mixed = "mixed"
 }
 
+public enum TaskFlowStatus: String, Codable, Sendable {
+    case queued = "queued"
+    case running = "running"
+    case waiting = "waiting"
+    case blocked = "blocked"
+    case succeeded = "succeeded"
+    case failed = "failed"
+    case cancelled = "cancelled"
+    case lost = "lost"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
