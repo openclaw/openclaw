@@ -1869,4 +1869,81 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toMatch(/\bsummary\b/i);
   });
+
+  it("keeps a successful isolated turn at status ok when post-run delivery fails", async () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/94058:
+    // a successful isolated session followed by a delivery-dispatch failure
+    // must not collapse the execution status into `error`. Delivery failure is
+    // recorded separately so the outer scheduled run keeps `status=ok` while
+    // the run log records the delivery as not-delivered.
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: "Final cron report",
+      outputText: "Final cron report",
+      synthesizedText: "Final cron report",
+      deliveryPayload: { text: "Final cron report" },
+      deliveryPayloads: [{ text: "Final cron report" }],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      (params: {
+        withRunSession: (result: {
+          status: "error";
+          summary: string;
+          outputText: string;
+          error: string;
+          deliveryAttempted: true;
+        }) => unknown;
+      }) => ({
+        result: params.withRunSession({
+          status: "error",
+          summary: "Final cron report",
+          outputText: "Final cron report",
+          error: "Message failed",
+          deliveryAttempted: true,
+        }),
+        delivered: false,
+        deliveryAttempted: true,
+        summary: "Final cron report",
+        outputText: "Final cron report",
+        synthesizedText: "Final cron report",
+        deliveryPayloads: [{ text: "Final cron report" }],
+      }),
+    );
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        id: "delivery-failure-after-success",
+        name: "Delivery Failure After Success",
+      }),
+    });
+
+    // Execution succeeded: status stays ok despite the delivery failure.
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+    // Delivery failure metadata is preserved and decoupled from status.
+    expect(result.delivered).toBe(false);
+    expect(result.deliveryAttempted).toBe(true);
+    expectDeliveryFields(result.delivery, {
+      intended: { channel: "messagechat", to: "123", source: "explicit" },
+      resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
+      fallbackUsed: true,
+      delivered: false,
+    });
+    // The delivery error remains visible to operators via run diagnostics.
+    expect(result.diagnostics?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "delivery",
+          severity: "error",
+          message: "Message failed",
+        }),
+      ]),
+    );
+  });
 });

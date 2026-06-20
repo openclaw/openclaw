@@ -1376,6 +1376,7 @@ async function finalizeCronRun(params: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
     delivery?: CronDeliveryTrace;
+    deliveryDiagnostics?: RunCronAgentTurnResult["diagnostics"];
   }) =>
     prepared.withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
@@ -1390,12 +1391,13 @@ async function finalizeCronRun(params: {
       diagnostics: hasFatalErrorPayload
         ? mergeCronRunDiagnostics(
             runDiagnostics,
+            result?.deliveryDiagnostics,
             createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
             ),
           )
-        : runDiagnostics,
+        : mergeCronRunDiagnostics(runDiagnostics, result?.deliveryDiagnostics),
       ...telemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
@@ -1515,7 +1517,24 @@ async function finalizeCronRun(params: {
     failPendingPresentationWarningUnlessDelivered(
       resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
     );
-    if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
+    if (!hasFatalErrorPayload) {
+      // A successful isolated agent turn must keep `status: "ok"` even when the
+      // post-run delivery phase fails. Collapsing the delivery error into the
+      // execution status made the outer scheduled run report `status=error`
+      // for a session that actually ended successfully (#94058). Delivery
+      // failure is recorded separately via `delivered`/`deliveryAttempted` and
+      // delivery diagnostics, which drive the decoupled run-log delivery status.
+      if (deliveryResult.result.status === "error" && !params.isAborted()) {
+        return resolveRunOutcome({
+          delivered: resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
+          deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
+          delivery: deliveryTrace,
+          deliveryDiagnostics: resultWithDeliveryMeta.diagnostics,
+        });
+      }
+      return resultWithDeliveryMeta;
+    }
+    if (deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
     return resolveRunOutcome({
