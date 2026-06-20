@@ -66,11 +66,14 @@ async function resolveApproveScopesForRequest(
 }
 
 function isUnknownNodePairRequestIdError(error: unknown): boolean {
+  const requestError = error as (Error & { gatewayCode?: unknown; details?: unknown }) | undefined;
+  const details = requestError?.details;
   return (
-    error instanceof Error &&
-    error.name === "GatewayClientRequestError" &&
-    (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown requestId")
+    requestError instanceof Error &&
+    requestError.name === "GatewayClientRequestError" &&
+    requestError.gatewayCode === "INVALID_REQUEST" &&
+    requestError.message === "unknown requestId" &&
+    details === undefined
   );
 }
 

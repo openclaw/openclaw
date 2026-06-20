@@ -152,6 +152,34 @@ describe("nodes-cli coverage", () => {
     expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
   });
 
+  it("explains unknown nodes approve request ids when no pending requests are visible", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [{ requestId: "expired-request", nodeId: "n1", ts: Date.now() }],
+        paired: [],
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("unknown requestId"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        }),
+      )
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [],
+      });
+
+    await expect(
+      sharedProgram.parseAsync(["nodes", "approve", "expired-request"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: expired-request");
+    expect(output).toContain("No pending node pairing requests are currently visible.");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+  });
+
   it("blocks system.run on nodes invoke", async () => {
     await expect(
       sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {
