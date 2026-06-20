@@ -334,6 +334,10 @@ export class OpenClawApp extends LitElement {
     silenceDurationMs: "",
     prefixPaddingMs: "",
     reasoningEffort: "",
+    noiseSuppression: "",
+    echoCancellation: "",
+    autoGainControl: "",
+    phaseSounds: "",
   };
   private realtimeTalkSession: RealtimeTalkSession | null = null;
   private realtimeTalkConversationState: RealtimeTalkConversationState =
@@ -1253,6 +1257,10 @@ export class OpenClawApp extends LitElement {
       silenceDurationMs: "",
       prefixPaddingMs: "",
       reasoningEffort: "",
+      noiseSuppression: "",
+      echoCancellation: "",
+      autoGainControl: "",
+      phaseSounds: "",
     };
     const text = (value: string) => value.trim() || undefined;
     const number = (value: string) => {
@@ -1262,6 +1270,12 @@ export class OpenClawApp extends LitElement {
       }
       const parsed = Number(trimmed);
       return Number.isFinite(parsed) ? parsed : undefined;
+    };
+    const bool = (value: string) => {
+      const trimmed = value.trim().toLowerCase();
+      if (trimmed === "true" || trimmed === "1") return true;
+      if (trimmed === "false" || trimmed === "0") return false;
+      return undefined;
     };
     const transport = text(options.transport) as RealtimeTalkLaunchOptions["transport"] | undefined;
     return {
@@ -1273,6 +1287,10 @@ export class OpenClawApp extends LitElement {
       silenceDurationMs: number(options.silenceDurationMs),
       prefixPaddingMs: number(options.prefixPaddingMs),
       reasoningEffort: text(options.reasoningEffort),
+      noiseSuppression: bool(options.noiseSuppression),
+      echoCancellation: bool(options.echoCancellation),
+      autoGainControl: bool(options.autoGainControl),
+      phaseSounds: bool(options.phaseSounds),
     };
   }
 

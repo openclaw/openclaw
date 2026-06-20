@@ -973,6 +973,19 @@ export const TranscribeAudioSchema = z
   .strict()
   .optional();
 
+export const ImmersiveAudioSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    noiseSuppression: z.boolean().optional(),
+    echoCancellation: z.boolean().optional(),
+    autoGainControl: z.boolean().optional(),
+    vadThreshold: z.number().min(0).max(1).optional(),
+    silenceTimeoutMs: z.number().int().positive().optional(),
+    phaseSounds: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const HexColorSchema = z.string().regex(/^#?[0-9a-fA-F]{6}$/, "expected hex color (RRGGBB)");
 
 export const ExecutableTokenSchema = z

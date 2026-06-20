@@ -107,6 +107,13 @@ export type RealtimeTalkTransportContext = {
   callbacks: RealtimeTalkCallbacks;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
+  /** Immersive audio processing settings applied to microphone input. */
+  immersiveAudio?: {
+    noiseSuppression?: boolean;
+    echoCancellation?: boolean;
+    autoGainControl?: boolean;
+    phaseSounds?: boolean;
+  };
 };
 
 export function createRealtimeTalkEventEmitter(

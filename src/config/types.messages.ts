@@ -68,6 +68,23 @@ export type AudioConfig = {
     command: string[];
     timeoutSeconds?: number;
   };
+  /** Immersive audio enhancement settings for voice conversations. */
+  immersive?: {
+    /** Master toggle for immersive audio processing. */
+    enabled?: boolean;
+    /** Enable noise suppression for microphone input. */
+    noiseSuppression?: boolean;
+    /** Enable acoustic echo cancellation. */
+    echoCancellation?: boolean;
+    /** Enable automatic gain control. */
+    autoGainControl?: boolean;
+    /** Voice activity detection threshold (0–1). Lower values = more sensitive. */
+    vadThreshold?: number;
+    /** Silence timeout in milliseconds before submitting transcript. */
+    silenceTimeoutMs?: number;
+    /** Play sound effects during talk mode phase transitions. */
+    phaseSounds?: boolean;
+  };
 };
 
 export type StatusReactionsEmojiConfig = {

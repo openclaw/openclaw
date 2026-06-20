@@ -79,11 +79,12 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       }
       this.handleRelayEvent(evt.payload as GatewayRelayEvent);
     });
+    const immersive = this.ctx.immersiveAudio ?? {};
     this.media = await navigator.mediaDevices.getUserMedia({
       audio: {
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
+        autoGainControl: immersive.autoGainControl ?? true,
+        echoCancellation: immersive.echoCancellation ?? true,
+        noiseSuppression: immersive.noiseSuppression ?? true,
       },
     });
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });

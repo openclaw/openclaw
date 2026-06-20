@@ -32,6 +32,14 @@ export type RealtimeTalkLaunchOptions = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
+  /** Immersive audio: enable noise suppression on microphone input. */
+  noiseSuppression?: boolean;
+  /** Immersive audio: enable acoustic echo cancellation. */
+  echoCancellation?: boolean;
+  /** Immersive audio: enable automatic gain control. */
+  autoGainControl?: boolean;
+  /** Immersive audio: play phase transition sounds (listening, thinking, speaking). */
+  phaseSounds?: boolean;
 };
 
 function createTransport(
@@ -95,6 +103,12 @@ export class RealtimeTalkSession {
       callbacks: this.callbacks,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
+      immersiveAudio: {
+        noiseSuppression: this.options.noiseSuppression,
+        echoCancellation: this.options.echoCancellation,
+        autoGainControl: this.options.autoGainControl,
+        phaseSounds: this.options.phaseSounds,
+      },
     });
     await this.transport.start();
   }

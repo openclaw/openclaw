@@ -620,6 +620,22 @@ export const FIELD_HELP: Record<string, string> = {
     'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
   "audio.transcription.timeoutSeconds":
     "Maximum time allowed for the transcription command to finish before it is aborted. Increase this for longer recordings, and keep it tight in latency-sensitive deployments.",
+  "audio.immersive":
+    "Immersive audio enhancement settings for voice conversations. Configure noise suppression, echo cancellation, voice activity detection, and phase transition sounds to create a natural hands-free voice experience. When supported by the platform and transport, these settings improve audio quality and conversation flow.",
+  "audio.immersive.enabled":
+    "Master toggle for immersive audio processing. When enabled, voice conversations apply noise suppression, echo cancellation, and automatic gain control for clearer audio quality on supported transports (WebRTC, gateway-relay).",
+  "audio.immersive.noiseSuppression":
+    "Enable noise suppression to reduce background noise from microphone input. Recommended for noisy environments such as offices, cafes, or public spaces. When disabled, raw microphone audio is transmitted without filtering.",
+  "audio.immersive.echoCancellation":
+    "Enable acoustic echo cancellation to prevent the assistant's audio output from being picked up by the microphone and re-transmitted. Keep enabled when using speakers to avoid howling and feedback loops.",
+  "audio.immersive.autoGainControl":
+    "Enable automatic gain control to normalize microphone input volume. Helps maintain consistent voice levels when the speaker moves closer to or farther from the microphone.",
+  "audio.immersive.vadThreshold":
+    "Voice Activity Detection sensitivity threshold between 0 and 1. Lower values make the system more sensitive to quiet speech, ideal for quiet environments. Higher values require louder input before triggering, helpful in noisy settings. Provider-specific defaults apply when unset.",
+  "audio.immersive.silenceTimeoutMs":
+    "Duration of silence in milliseconds before the system considers the user has finished speaking and submits the transcript. Shorter values (300-500 ms) feel more responsive but may cut off natural pauses. Longer values (1000-2000 ms) reduce premature cuts at the cost of a small delay. Platform-specific defaults apply when unset.",
+  "audio.immersive.phaseSounds":
+    "Play short sound effects during talk mode phase transitions — entering listening, thinking, speaking, and idle states. Provides audible feedback about the current voice session state, similar to the macOS Talk Mode experience (Tink, Pop, Bottle, Submarine).",
   bindings:
     "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",
   "bindings[].type":
