@@ -44,7 +44,7 @@ function attachFakeWs(
     terminate: vi.fn(),
   };
   if (unref) {
-    (ws as { _socket: FakeSocket })._socket = { unref };
+    (ws as { _socket: FakeSocket })["_socket"] = { unref };
   }
   (client as unknown as { ws: unknown }).ws = ws;
 }
