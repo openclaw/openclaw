@@ -16,7 +16,10 @@ import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
-import { setPersistentPreferenceField } from "../../config/sessions/persistent-preferences.js";
+import {
+  clearPersistentPreferenceField,
+  setPersistentPreferenceField,
+} from "../../config/sessions/persistent-preferences.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -376,6 +379,8 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     }
     if (persistFlag.persist) {
       setPersistentPreferenceField(targetSessionEntry, "responseUsage");
+    } else {
+      clearPersistentPreferenceField(targetSessionEntry, "responseUsage");
     }
     params.sessionStore[params.sessionKey] = targetSessionEntry;
     await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
