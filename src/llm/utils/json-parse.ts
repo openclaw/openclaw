@@ -107,9 +107,9 @@ export function repairJson(json: string): string {
 export function parseJsonWithRepair(json: string): unknown {
   const repairedJson = repairJson(json);
   if (repairedJson !== json) {
-    return JSON.parse(repairedJson) as unknown;
+    return stripTrailingKeySpaces(JSON.parse(repairedJson) as unknown);
   }
-  return JSON.parse(json) as unknown;
+  return stripTrailingKeySpaces(JSON.parse(json) as unknown);
 }
 
 function looksLikeWindowsPathPrefix(prefix: string): boolean {
@@ -121,6 +121,34 @@ function asStreamingJsonRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+/**
+ * Recursively strips trailing whitespace from object keys.
+ *
+ * Some local/small tool-call parsers (e.g. certain llama.cpp builds)
+ * produce JSON where specific top-level keys carry a trailing space
+ * ("schedule " instead of "schedule").  Standard JSON.parse rejects
+ * those, but the `partial-json` streaming parser can silently accept
+ * them, leaving the caller with unmatchable property names.
+ *
+ * This helper is applied after every parse path so downstream schema
+ * validation sees canonical key names regardless of the upstream parser.
+ */
+function stripTrailingKeySpaces(value: unknown): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(stripTrailingKeySpaces);
+  }
+  const record = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(record)) {
+    const trimmed = key.trimEnd();
+    result[trimmed] = stripTrailingKeySpaces(record[key]);
+  }
+  return result;
 }
 
 /**
@@ -140,11 +168,11 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
   } catch {
     try {
       const result = partialParse(partialJson);
-      return asStreamingJsonRecord(result);
+      return asStreamingJsonRecord(stripTrailingKeySpaces(result));
     } catch {
       try {
         const result = partialParse(repairJson(partialJson));
-        return asStreamingJsonRecord(result);
+        return asStreamingJsonRecord(stripTrailingKeySpaces(result));
       } catch {
         return {};
       }

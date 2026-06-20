@@ -44,3 +44,57 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     },
   );
 });
+
+describe("json-parse trailing-space key stripping", () => {
+  it("strips trailing spaces from top-level keys via parseJsonWithRepair", () => {
+    // Simulates model output where partial-json parser accepts keys with trailing spaces.
+    const input = '{"name":"test","schedule ":{"kind":"cron"},"enabled ":true}';
+    // JSON.parse rejects this, but partial-json accepts it.
+    const { parse } = require("partial-json");
+    const parsed = parse(input);
+    // Verify partial-json actually produces the trailing-space keys.
+    expect(Object.keys(parsed)).toContain("schedule ");
+    // parseStreamingJson should strip them.
+    const result = parseStreamingJson(input);
+    expect(result).toEqual({ name: "test", schedule: { kind: "cron" }, enabled: true });
+    expect(Object.keys(result)).not.toContain("schedule ");
+    expect(Object.keys(result)).not.toContain("enabled ");
+  });
+
+  it("strips trailing spaces from nested object keys", () => {
+    const input = '{"job":{"schedule ":{"expr ":"30 10 * * *"}}}';
+    const { parse } = require("partial-json");
+    const parsed = parse(input);
+    const result = parseStreamingJson(input);
+    expect(result).toEqual({ job: { schedule: { expr: "30 10 * * *" } } });
+  });
+
+  it("handles mixed clean and trailing-space keys", () => {
+    const input =
+      '{"name":"Holiday","description":"test","schedule ":{"kind":"cron"},"sessionTarget ":"isolated","payload ":{"kind":"agentTurn"},"enabled ":true}';
+    const result = parseStreamingJson(input);
+    expect(result).toEqual({
+      name: "Holiday",
+      description: "test",
+      schedule: { kind: "cron" },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn" },
+      enabled: true,
+    });
+  });
+
+  it("does not affect keys without trailing spaces", () => {
+    const input = '{"action":"add","job":{"name":"test"}}';
+    const result = parseStreamingJson(input);
+    expect(result).toEqual({ action: "add", job: { name: "test" } });
+  });
+
+  it("handles arrays with objects containing trailing-space keys", () => {
+    const input = '[{"key ":"value"}]';
+    const result = parseStreamingJson(input);
+    expect(result).toEqual({});
+    // Direct parseJsonWithRepair should handle arrays.
+    const direct = parseJsonWithRepair(input);
+    expect(direct).toEqual([{ key: "value" }]);
+  });
+});
