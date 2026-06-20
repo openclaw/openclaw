@@ -451,13 +451,15 @@ export function resolveMemoryBackendConfig(params: {
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
+  const commandCandidate = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   // FIX #92302: Resolve the command through resolvePath so Windows paths
   // whose backslashes were stripped by JSON parsing are repaired.
-  const commandedResolved = resolvePath(
-    parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd",
-    workspaceDir,
-  );
-  const command = commandedResolved;
+  // Only path-like commands (containing /, \, or a Windows drive letter)
+  // need resolution; bare command names like "qmd" are looked up via PATH
+  // and must not be resolved relative to workspaceDir.
+  const command = /[/\\:]/.test(commandCandidate)
+    ? resolvePath(commandCandidate, workspaceDir)
+    : commandCandidate;
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
