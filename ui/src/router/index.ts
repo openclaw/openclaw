@@ -1,4 +1,5 @@
-export { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "./router.ts";
+export { createRouter } from "./router.ts";
+export { normalizeRouteBasePath, normalizeRoutePath } from "./matches.ts";
 export {
   definePage,
   type MaybePromise,
