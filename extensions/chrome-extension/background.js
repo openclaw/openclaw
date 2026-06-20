@@ -433,9 +433,10 @@ async function ensureRelayConnection() {
   if (relayConnectPromise) return await relayConnectPromise;
 
   relayConnectPromise = (async () => {
-    // Loopback intakes don't verify the relay token; a non-empty placeholder is
-    // enough for the HMAC builder when no gateway token is configured.
-    const gatewayToken = (await getGatewayToken()) || "local";
+    // With a configured gateway token we present its derived HMAC; when the
+    // gateway runs with auth disabled there is no token and the relay URL is
+    // tokenless (the node bridge accepts it only because it also has no token).
+    const gatewayToken = await getGatewayToken();
     const stored = await chrome.storage.local.get(["relayPort"]);
     let port, relayHost;
     if (stored.relayPort) {

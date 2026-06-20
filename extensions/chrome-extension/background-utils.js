@@ -30,14 +30,16 @@ export async function deriveRelayToken(gatewayToken, port) {
 
 export async function buildRelayWsUrl(port, gatewayToken, host) {
   const token = String(gatewayToken || "").trim();
-  if (!token) {
-    throw new Error(
-      "Missing gatewayToken in extension settings (chrome.storage.local.gatewayToken)",
-    );
-  }
   const relayHost = String(host || "127.0.0.1").trim() || "127.0.0.1";
   const isSecure = relayHost !== "127.0.0.1" && relayHost !== "localhost";
   const protocol = isSecure ? "wss" : "ws";
+  // No token => tokenless relay URL. The node-owned bridge accepts a tokenless
+  // loopback connection only when the gateway runs with auth disabled
+  // (gateway.auth.mode "none"); a token-protected bridge still rejects it, so
+  // this never weakens auth.
+  if (!token) {
+    return `${protocol}://${relayHost}:${port}/extension`;
+  }
   const relayToken = await deriveRelayToken(token, port);
   return `${protocol}://${relayHost}:${port}/extension?token=${encodeURIComponent(relayToken)}`;
 }
