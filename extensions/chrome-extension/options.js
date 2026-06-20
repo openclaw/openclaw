@@ -38,8 +38,12 @@ async function save() {
   const gatewayUrl = document.getElementById("gateway-url").value.trim() || DEFAULT_GATEWAY;
   const token = document.getElementById("token").value.trim();
 
-  if (!token) {
-    setStatus("error", "Token is required. Find it in openclaw.json under gateway.auth.token");
+  // Loopback gateways may run with auth disabled (gateway.auth.mode "none"), and
+  // the relay/side panel now support tokenless loopback; allow saving a tokenless
+  // setup there. Remote gateways still require a token.
+  const isLoopback = /\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(gatewayUrl);
+  if (!token && !isLoopback) {
+    setStatus("error", "Token is required for remote gateways. Find it in openclaw.json under gateway.auth.token");
     return;
   }
 
