@@ -1,2 +1,6 @@
 // Telegram API module exposes the plugin public contract.
-export { resolveTelegramSessionConversation as resolveSessionConversation } from "./src/session-conversation.js";
+export {
+  parseTelegramDirectSessionKey,
+  resolveTelegramSessionConversation as resolveSessionConversation,
+  type ParsedTelegramDirectSessionKey,
+} from "./src/session-conversation.js";
