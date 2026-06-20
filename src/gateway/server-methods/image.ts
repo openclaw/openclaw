@@ -9,7 +9,11 @@ import type { GatewayRequestHandlers } from "./types.js";
  * Check if a provider has generic config (auth profile, model config, plugin config).
  * Reuses the same logic as CLI capability-cli.ts for consistency.
  */
-function providerHasGenericConfig(cfg: OpenClawConfig, providerId: string): boolean {
+function providerHasGenericConfig(
+  cfg: OpenClawConfig,
+  providerId: string,
+  agentDir?: string,
+): boolean {
   const modelsProviders = (cfg.models?.providers ?? {}) as Record<string, unknown>;
   const pluginEntries = (cfg.plugins?.entries ?? {}) as Record<string, { config?: unknown }>;
   return (
@@ -51,9 +55,13 @@ export const imageHandlers: GatewayRequestHandlers = {
   "image.providers": async ({ respond, context }) => {
     try {
       const cfg = context.getRuntimeConfig();
+      const agentDir = context.agentDir;
+
       const providers = listImageGenerationProviders(cfg).map((provider) => {
+        // Use provider's isConfigured with agentDir if available, otherwise fallback to generic config check
         const isConfigured =
-          provider.isConfigured?.({ cfg }) ?? providerHasGenericConfig(cfg, provider.id);
+          provider.isConfigured?.({ cfg, agentDir }) ??
+          providerHasGenericConfig(cfg, provider.id, agentDir);
         return {
           id: provider.id,
           label: provider.label ?? provider.id,
