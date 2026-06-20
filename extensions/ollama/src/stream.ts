@@ -54,6 +54,38 @@ export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+
+/**
+ * Determines if a base URL represents a remote (non-localhost) host.
+ * Remote hosts may have higher latency for model loading and token generation.
+ */
+function isRemoteOllamaHost(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  try {
+    const parsed = new URL(baseUrl.trim());
+    const hostname = parsed.hostname.toLowerCase();
+    // Localhost variants
+    if (
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "[::1]"
+    ) {
+      return false;
+    }
+    // Private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+    if (
+      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+      /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+      /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)
+    ) {
+      return false; // Treat LAN as "local" for timeout purposes
+    }
+    return true;
+  } catch {
+    return false; // Invalid URL, assume local
+  }
+}
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -71,7 +103,14 @@ function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
 
 function createOllamaStreamCooperativeScheduler(
   signal?: AbortSignal,
+  params?: {
+    yieldIntervalMs?: number;
+    maxEventsBeforeYield?: number;
+  },
 ): OllamaStreamCooperativeScheduler {
+  const yieldIntervalMs = params?.yieldIntervalMs ?? OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS;
+  const maxEventsBeforeYield = params?.maxEventsBeforeYield ?? OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS;
+
   let lastYieldedAt = Date.now();
   let eventsSinceYield = 0;
   return {
@@ -80,8 +119,8 @@ function createOllamaStreamCooperativeScheduler(
       eventsSinceYield += 1;
       const now = Date.now();
       if (
-        eventsSinceYield < OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
-        now - lastYieldedAt < OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
+        eventsSinceYield < maxEventsBeforeYield &&
+        now - lastYieldedAt < yieldIntervalMs
       ) {
         return;
       }
@@ -1131,12 +1170,27 @@ function resolveOllamaModelHeaders(model: {
 function resolveOllamaRequestTimeoutMs(
   model: object,
   options: { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
-): number | undefined {
+  baseUrl?: string,
+): number {
   const raw =
     options?.requestTimeoutMs ??
     options?.timeoutMs ??
     (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
-  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
+
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+
+  // Provide different defaults for local vs remote Ollama hosts
+  // Remote hosts may need more time for model loading and network latency
+  const DEFAULT_LOCAL_TIMEOUT_MS = 30000;  // 30s for localhost
+  const DEFAULT_REMOTE_TIMEOUT_MS = 180000;  // 3min for remote/LAN hosts
+
+  if (baseUrl && isRemoteOllamaHost(baseUrl)) {
+    return DEFAULT_REMOTE_TIMEOUT_MS;
+  }
+
+  return DEFAULT_LOCAL_TIMEOUT_MS;
 }
 
 function createRawOllamaStreamFn(
@@ -1193,6 +1247,7 @@ function createRawOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
+        const remoteHost = isRemoteOllamaHost(baseUrl);
         const { response, release } = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
@@ -1205,8 +1260,9 @@ function createRawOllamaStreamFn(
           timeoutMs: resolveOllamaRequestTimeoutMs(
             model,
             options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
+            baseUrl,
           ),
-          auditContext: "ollama-stream.chat",
+          auditContext: `ollama-stream.chat${remoteHost ? ".remote" : ""}`,
         });
 
         try {
@@ -1234,7 +1290,14 @@ function createRawOllamaStreamFn(
           };
           const shouldEmitThinking = model.reasoning ?? true;
           const visibleContentSanitizer = createOllamaVisibleContentSanitizer(model.id);
-          const cooperativeScheduler = createOllamaStreamCooperativeScheduler(options?.signal);
+          // For remote hosts, use a more relaxed cooperative scheduler to accommodate
+          // higher latency in token generation and network transmission
+          const cooperativeScheduler = remoteHost
+            ? createOllamaStreamCooperativeScheduler(options?.signal, {
+                yieldIntervalMs: 50,  // Increased from 12ms to 50ms for remote
+                maxEventsBeforeYield: 128,  // Increased from 64 to 128 for remote
+              })
+            : createOllamaStreamCooperativeScheduler(options?.signal);
           let streamStarted = false;
           let thinkingStarted = false;
           let thinkingEnded = false;
