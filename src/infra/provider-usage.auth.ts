@@ -93,6 +93,13 @@ function resolveXiaomiApiKey(): string | undefined {
   });
 }
 
+function resolveOpenRouterApiKey(): string | undefined {
+  return resolveProviderApiKeyFromConfigAndStore({
+    providerId: "openrouter",
+    envDirect: [process.env.OPENROUTER_API_KEY],
+  });
+}
+
 function resolveProviderApiKeyFromConfigAndStore(params: {
   providerId: UsageProviderId;
   envDirect: Array<string | undefined>;
@@ -246,6 +253,13 @@ export async function resolveProviderAuths(params: {
     }
     if (provider === "xiaomi") {
       const apiKey = resolveXiaomiApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+    if (provider === "openrouter") {
+      const apiKey = resolveOpenRouterApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
