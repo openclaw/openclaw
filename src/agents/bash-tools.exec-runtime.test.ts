@@ -660,6 +660,33 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.reason).toContain("same macOS/Linux user");
     expect(outcome.reason).toContain("VPN/Network Extension filters");
   });
+
+  it("annotates hostname commands when stderr reports a private-network route failure", () => {
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "exit",
+        exitCode: 255,
+        exitSignal: null,
+        durationMs: 123,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "ssh: connect to host 192.168.147.163 port 22: No route to host",
+      durationMs: 123,
+      timeoutSec: 30,
+      command: "ssh -o ConnectTimeout=5 docker-arr hostname",
+    });
+
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") {
+      throw new Error(`Expected completed outcome, got ${outcome.status}`);
+    }
+    expect(outcome.aggregated).toContain("OpenClaw exec private-network diagnostic");
+    expect(outcome.aggregated).toContain("same macOS/Linux user");
+    expect(outcome.aggregated).toContain("exit code 255");
+  });
 });
 
 describe("runExecProcess POSIX command wrapper", () => {

@@ -457,11 +457,11 @@ const PRIVATE_HOST_PATTERNS = [
   /\bfe80:/i,
 ];
 
-function commandTargetsPrivateNetwork(command: string | undefined): boolean {
-  if (!command?.trim()) {
+function textTargetsPrivateNetwork(text: string | undefined): boolean {
+  if (!text?.trim()) {
     return false;
   }
-  return PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(command));
+  return PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 function outputLooksLikeNetworkFailure(output: string): boolean {
@@ -473,7 +473,7 @@ function appendPrivateNetworkExecDiagnostic(params: {
   output: string;
   exitCode: number | null;
 }): string {
-  if (!commandTargetsPrivateNetwork(params.command)) {
+  if (!textTargetsPrivateNetwork(params.command) && !textTargetsPrivateNetwork(params.output)) {
     return params.output;
   }
   if (!outputLooksLikeNetworkFailure(params.output)) {
