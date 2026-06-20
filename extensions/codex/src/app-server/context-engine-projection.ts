@@ -121,6 +121,7 @@ export function resolveCodexContextEngineProjectionReserveTokens(params: {
 export function fitCodexProjectedContextForTurnStart(params: {
   promptText: string;
   contextRange?: CodexProjectedContextRange;
+  requestRange?: CodexProjectedContextRange;
   maxChars?: number;
 }): string {
   const maxChars =
@@ -138,6 +139,24 @@ export function fitCodexProjectedContextForTurnStart(params: {
   const beforeContext = params.promptText.slice(0, range.start);
   const context = params.promptText.slice(range.start, range.end);
   const afterContext = params.promptText.slice(range.end);
+  const requestRange = normalizeProjectedContextRange(
+    params.requestRange,
+    params.promptText.length,
+  );
+  if (
+    requestRange &&
+    requestRange.start >= range.end &&
+    requestRange.end < params.promptText.length
+  ) {
+    const request = params.promptText.slice(requestRange.start, requestRange.end);
+    if (request.length >= maxChars) {
+      return truncateOlderContext(request, maxChars);
+    }
+    const contextBudget = maxChars - request.length;
+    const fittedContext = truncateOlderContext(context, contextBudget);
+    const beforeContextBudget = maxChars - fittedContext.length - request.length;
+    return `${truncateOlderContext(beforeContext, beforeContextBudget)}${fittedContext}${request}`;
+  }
   const contextBudget = maxChars - beforeContext.length - afterContext.length;
   if (contextBudget > 0) {
     const fittedContext = truncateOlderContext(context, contextBudget);

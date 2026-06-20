@@ -1032,7 +1032,12 @@ export async function runCodexAppServerAttempt(
     prompt: string,
     promptInputRange: { start: number; end: number } | undefined,
     turnPromptText: string,
-  ): CodexProjectedContextRange | undefined => {
+  ):
+    | {
+        contextRange: CodexProjectedContextRange;
+        requestRange: CodexProjectedContextRange;
+      }
+    | undefined => {
     const promptTextInputOffset = promptInputRange
       ? promptInputRange.end - promptText.length
       : undefined;
@@ -1059,9 +1064,16 @@ export async function runCodexAppServerAttempt(
       return undefined;
     }
     const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;
-    return {
+    const contextRange = {
       start: turnPromptOffset + promptContextRange.start,
       end: turnPromptOffset + promptContextRange.end,
+    };
+    return {
+      contextRange,
+      requestRange: {
+        start: contextRange.end,
+        end: turnPromptOffset + promptTextOffset + promptText.length,
+      },
     };
   };
   let promptBuild = await buildPromptFromCurrentInputs();
@@ -1078,13 +1090,15 @@ export async function runCodexAppServerAttempt(
           params.bootstrapContextRunKind === "cron",
       },
     );
+    const projectedRanges = resolveShiftedPromptContextRange(
+      promptBuild.prompt,
+      promptBuild.promptInputRange,
+      turnPromptText,
+    );
     return fitCodexProjectedContextForTurnStart({
       promptText: turnPromptText,
-      contextRange: resolveShiftedPromptContextRange(
-        promptBuild.prompt,
-        promptBuild.promptInputRange,
-        turnPromptText,
-      ),
+      contextRange: projectedRanges?.contextRange,
+      requestRange: projectedRanges?.requestRange,
     });
   };
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);

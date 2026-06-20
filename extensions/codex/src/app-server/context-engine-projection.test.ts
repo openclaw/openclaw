@@ -255,6 +255,30 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(fitted).toContain("[truncated ");
   });
 
+  it("keeps the current request when a hook appends oversized context", () => {
+    const before = "OpenClaw assembled context for this turn:\n<conversation_context>\n";
+    const context = `recent context ${"c".repeat(200)}`;
+    const request = "\n</conversation_context>\n\nCurrent user request:\nkeep this request";
+    const hookAppend = `\n\nhook context ${"h".repeat(800)}`;
+    const promptText = `${before}${context}${request}${hookAppend}`;
+    const maxChars = 420;
+
+    const fitted = fitCodexProjectedContextForTurnStart({
+      promptText,
+      contextRange: { start: before.length, end: before.length + context.length },
+      requestRange: {
+        start: before.length + context.length,
+        end: before.length + context.length + request.length,
+      },
+      maxChars,
+    });
+
+    expect(fitted.length).toBeLessThanOrEqual(maxChars);
+    expect(fitted).toContain("recent context");
+    expect(fitted).toContain("Current user request:\nkeep this request");
+    expect(fitted).not.toContain("hook context");
+  });
+
   it("bounds output for a large request under the default Codex turn limit", () => {
     const maxChars = CODEX_TURN_START_TEXT_INPUT_MAX_CHARS;
     // A large assembled header prefix already over the cap forces the

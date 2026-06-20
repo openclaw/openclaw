@@ -573,12 +573,13 @@ export function createCopilotAgentHarness(
         const currentCompactKey = computeSessionCompactKey(params);
         const compactionCleanupPending =
           openclawSessionId !== undefined && hasPendingDeferredCompactionCleanup(openclawSessionId);
+        const replayBlocked =
+          openclawSessionId !== undefined &&
+          (compactionCleanupPending || resetBlockedStoredSessions.has(openclawSessionId));
         const tracked =
-          openclawSessionId && !compactionCleanupPending
-            ? trackedSessions.get(openclawSessionId)
-            : undefined;
+          openclawSessionId && !replayBlocked ? trackedSessions.get(openclawSessionId) : undefined;
         const stored = openclawSessionId
-          ? compactionCleanupPending || resetBlockedStoredSessions.has(openclawSessionId)
+          ? replayBlocked
             ? undefined
             : lookupStoredBinding(options?.sessionStore, openclawSessionId)
           : undefined;

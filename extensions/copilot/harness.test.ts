@@ -625,6 +625,69 @@ describe("createCopilotAgentHarness", () => {
     expect(sessionStore.entries.get("oc-reset-race")?.sdkSessionId).toBe("sdk-sess-replacement");
   });
 
+  it("does not reuse a reset target while deferred cleanup is pending", async () => {
+    const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
+    const abort = vi.fn();
+    const replacementDeleteSession = vi.fn().mockResolvedValue(undefined);
+    const duringResetDeleteSession = vi.fn().mockResolvedValue(undefined);
+    const sessionStore = makeSessionStoreMock();
+    let attempt = 0;
+    mocks.runCopilotAttempt.mockImplementation(async (params, deps) => {
+      attempt += 1;
+      if (attempt === 1) {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-before-reset",
+          pooledClient: { key: {} as any, client: {} as any },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        deps.onDeferredCompaction?.({
+          abort,
+          cleanup: cleanup.promise,
+          sdkSessionId: "sdk-sess-before-reset",
+        });
+      } else if (attempt === 2) {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-replacement",
+          pooledClient: {
+            key: {} as any,
+            client: { deleteSession: replacementDeleteSession } as any,
+          },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+      } else if (attempt === 3 && !params.initialReplayState?.sdkSessionId) {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-during-reset",
+          pooledClient: {
+            key: {} as any,
+            client: { deleteSession: duringResetDeleteSession } as any,
+          },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+      }
+      return ATTEMPT_RESULT;
+    });
+    const harness = createCopilotAgentHarness({
+      pool: makePoolMock(),
+      sessionStore: sessionStore.store,
+    });
+    const params = { ...ATTEMPT_PARAMS, sessionId: "oc-reset-reuse" };
+
+    await harness.runAttempt(params);
+    await harness.runAttempt(params);
+    const reset = harness.reset?.({ sessionId: "oc-reset-reuse" });
+    await vi.waitFor(() => expect(abort).toHaveBeenCalledOnce());
+    await harness.runAttempt(params);
+    cleanup.resolve("aborted");
+    await reset;
+
+    expect(
+      mocks.runCopilotAttempt.mock.calls[2]?.[0]?.initialReplayState?.sdkSessionId,
+    ).toBeUndefined();
+    expect(replacementDeleteSession).toHaveBeenCalledWith("sdk-sess-replacement");
+    expect(duringResetDeleteSession).not.toHaveBeenCalled();
+    expect(sessionStore.entries.get("oc-reset-reuse")?.sdkSessionId).toBe("sdk-sess-during-reset");
+  });
+
   describe("session reuse across turns (dogfood finding #4)", () => {
     // These tests pin the harness's session-reuse contract: subsequent
     // `runAttempt` calls within the same OpenClaw session should pass
