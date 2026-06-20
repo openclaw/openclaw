@@ -1319,4 +1319,227 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
     expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
   });
+
+  it("writes unresumable notice to transcript when session has no deliverable channel (WebChat)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        lastChannel: "webchat",
+        lastTo: "webchat:user:u1",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "partial answer" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    // webchat is non-deliverable: gateway must not be called.
+    expect(callGateway).not.toHaveBeenCalled();
+
+    const transcriptPath = path.join(sessionsDir, "main-session.jsonl");
+    const transcriptLines = (await fs.readFile(transcriptPath, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { message?: { role?: string; content?: unknown } });
+    const noticeEntry = transcriptLines.find(
+      (l) =>
+        l.message?.role === "assistant" &&
+        Array.isArray(l.message.content) &&
+        (l.message.content as Array<{ type?: string; text?: string }>).some(
+          (c) => c.type === "text" && c.text?.includes("couldn't safely resume"),
+        ),
+    );
+    expect(noticeEntry).toBeDefined();
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.status).toBe("failed");
+  });
+
+  it("writes unresumable notice to <sessionId>.jsonl even when entry.sessionFile is a stale generated path", async () => {
+    const sessionsDir = await makeSessionsDir();
+    // A real generated sessionFile: a UUID filename encoding a different sessionId — stale.
+    const staleFile = "aaaaaaaa-0000-4000-8000-000000000000.jsonl";
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        lastChannel: "webchat",
+        lastTo: "webchat:user:u1",
+        sessionFile: staleFile,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "partial answer" },
+    ]);
+    // staleFile exists so resolveAndPersistSessionFile would follow it without the fix.
+    await fs.writeFile(path.join(sessionsDir, staleFile), "");
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+
+    // Notice lands in canonical <sessionId>.jsonl, not the stale file.
+    const canonicalPath = path.join(sessionsDir, "main-session.jsonl");
+    const canonicalLines = (await fs.readFile(canonicalPath, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { message?: { role?: string; content?: unknown } });
+    const noticeInCanonical = canonicalLines.find(
+      (l) =>
+        l.message?.role === "assistant" &&
+        Array.isArray(l.message.content) &&
+        (l.message.content as Array<{ type?: string; text?: string }>).some(
+          (c) => c.type === "text" && c.text?.includes("couldn't safely resume"),
+        ),
+    );
+    expect(noticeInCanonical).toBeDefined();
+
+    const staleContent = await fs.readFile(path.join(sessionsDir, staleFile), "utf8");
+    expect(staleContent).not.toContain("couldn't safely resume");
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.status).toBe("failed");
+  });
+
+  it("writes unresumable notice to non-stale custom sessionFile when session has no deliverable channel", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const customPath = path.join(sessionsDir, "my-custom-transcript.jsonl");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        lastChannel: "webchat",
+        lastTo: "webchat:user:u1",
+        sessionFile: customPath,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [{ role: "user", content: "do the thing" }]);
+    await fs.writeFile(customPath, "");
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+
+    const customLines = (await fs.readFile(customPath, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { message?: { role?: string; content?: unknown } });
+    const noticeInCustom = customLines.find(
+      (l) =>
+        l.message?.role === "assistant" &&
+        Array.isArray(l.message.content) &&
+        (l.message.content as Array<{ type?: string; text?: string }>).some(
+          (c) => c.type === "text" && c.text?.includes("couldn't safely resume"),
+        ),
+    );
+    expect(noticeInCustom).toBeDefined();
+
+    const canonicalContent = await fs.readFile(
+      path.join(sessionsDir, "main-session.jsonl"),
+      "utf8",
+    );
+    expect(canonicalContent).not.toContain("couldn't safely resume");
+  });
+
+  it("writes unresumable notice to canonical when sessionFile is a relative basename (resolver normalizes)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    // Relative basename: resolveSessionFilePath resolves it inside sessionsDir.
+    const relativeFile = "relative-custom.jsonl";
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        lastChannel: "webchat",
+        lastTo: "webchat:user:u1",
+        sessionFile: relativeFile,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "partial answer" },
+    ]);
+    await fs.writeFile(path.join(sessionsDir, relativeFile), "");
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+
+    // Relative name resolved inside sessionsDir — notice lands there.
+    const resolvedLines = (await fs.readFile(path.join(sessionsDir, relativeFile), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { message?: { role?: string; content?: unknown } });
+    expect(
+      resolvedLines.some(
+        (l) =>
+          l.message?.role === "assistant" &&
+          Array.isArray(l.message.content) &&
+          (l.message.content as Array<{ type?: string; text?: string }>).some(
+            (c) => c.type === "text" && c.text?.includes("couldn't safely resume"),
+          ),
+      ),
+    ).toBe(true);
+  });
+
+  it("falls back to canonical when sessionFile metadata is out-of-dir (containment check)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    // An out-of-dir absolute path that resolvePathWithinSessionsDir will reject.
+    const outOfDirFile = path.join(path.dirname(sessionsDir), "escape.jsonl");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        lastChannel: "webchat",
+        lastTo: "webchat:user:u1",
+        sessionFile: outOfDirFile,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "partial answer" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+
+    // Out-of-dir → resolveSessionFilePath falls back to canonical.
+    const canonicalPath = path.join(sessionsDir, "main-session.jsonl");
+    const canonicalLines = (await fs.readFile(canonicalPath, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { message?: { role?: string; content?: unknown } });
+    expect(
+      canonicalLines.some(
+        (l) =>
+          l.message?.role === "assistant" &&
+          Array.isArray(l.message.content) &&
+          (l.message.content as Array<{ type?: string; text?: string }>).some(
+            (c) => c.type === "text" && c.text?.includes("couldn't safely resume"),
+          ),
+      ),
+    ).toBe(true);
+    // Out-of-dir file must not be created.
+    await expect(fs.access(outOfDirFile)).rejects.toThrow();
+  });
 });

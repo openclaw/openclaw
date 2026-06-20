@@ -16,7 +16,12 @@ import {
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions.js";
+import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import { applyRestartRecoveryLifecycle } from "../config/sessions/session-accessor.js";
+import {
+  appendExactAssistantMessageToSessionTranscript,
+  type SessionTranscriptAssistantMessage,
+} from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
@@ -25,6 +30,7 @@ import {
   getAgentEventLifecycleGeneration,
   listAgentRunsForSession,
 } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -526,6 +532,70 @@ async function sendUnresumableSessionNotice(params: {
   }
 }
 
+async function writeUnresumableNoticeToTranscript(params: {
+  agentId: string | undefined;
+  sessionKey: string;
+  storePath: string;
+  sessionId: string;
+}): Promise<void> {
+  let result: Awaited<ReturnType<typeof appendExactAssistantMessageToSessionTranscript>>;
+  try {
+    const sessionsDir = path.dirname(params.storePath);
+    const store = loadSessionStore(params.storePath, { skipCache: true });
+    const existingSessionFile = store[params.sessionKey]?.sessionFile?.trim() || undefined;
+    // Stale: generated path encodes a different sessionId → use canonical.
+    // Non-stale: route through resolveSessionFilePath so relative/malformed paths get containment
+    // checks and fall back to canonical if the stored value is outside the sessions directory.
+    const extractedId = extractGeneratedTranscriptSessionId(existingSessionFile);
+    const isStaleGeneratedPath = !!extractedId && extractedId !== params.sessionId;
+    const sessionFile =
+      existingSessionFile && !isStaleGeneratedPath
+        ? resolveSessionFilePath(
+            params.sessionId,
+            { sessionFile: existingSessionFile },
+            { sessionsDir },
+          )
+        : resolveSessionTranscriptPathInDir(params.sessionId, sessionsDir);
+    result = await appendExactAssistantMessageToSessionTranscript({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      sessionFile,
+      idempotencyKey: `main-session-restart-recovery:unresumable-notice:${params.sessionId}`,
+      message: {
+        role: "assistant" as const,
+        content: [{ type: "text", text: UNRESUMABLE_SESSION_NOTICE }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop" as const,
+        timestamp: Date.now(),
+      } as SessionTranscriptAssistantMessage,
+    });
+  } catch (err) {
+    // Best-effort: transcript write failure must not propagate so markSessionFailed always runs.
+    log.warn(
+      `failed to write unresumable session notice to transcript: ${params.sessionKey} (${formatErrorMessage(err)})`,
+    );
+    return;
+  }
+  if (result.ok) {
+    log.info(`wrote unresumable session notice to transcript: ${params.sessionKey}`);
+  } else {
+    log.warn(
+      `failed to write unresumable session notice to transcript: ${params.sessionKey} (${result.reason})`,
+    );
+  }
+}
+
 function resolveRestartRecoveryDeliveryContext(params: {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
@@ -824,12 +894,31 @@ async function recoverStore(params: {
 
     const resumeBlockReason = resolveMainSessionResumeBlockReason(messages);
     if (resumeBlockReason) {
-      await sendUnresumableSessionNotice({
+      const noticed = await sendUnresumableSessionNotice({
         cfg: params.cfg,
         entry,
         sessionKey,
         reason: resumeBlockReason,
       });
+      if (!noticed) {
+        // Transcript fallback only when there is no outbound channel; deliverable-channel transient failures skip it.
+        const hasDeliveryChannel = Boolean(
+          resolveRestartRecoveryDeliveryContext({
+            cfg: params.cfg,
+            entry,
+            includeSessionDeliveryFallback: true,
+            sessionKey,
+          }),
+        );
+        if (!hasDeliveryChannel) {
+          await writeUnresumableNoticeToTranscript({
+            agentId: resolveAgentIdFromSessionKey(sessionKey),
+            sessionKey,
+            storePath: params.storePath,
+            sessionId: entry.sessionId,
+          });
+        }
+      }
       await markSessionFailed({
         storePath: params.storePath,
         sessionKey,
