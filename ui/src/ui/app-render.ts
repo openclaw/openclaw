@@ -4,7 +4,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import { SIDEBAR_SECTIONS, subtitleForRoute, titleForRoute } from "../app-navigation.ts";
 import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
-import { renderRouterOutlet } from "../app/router-outlet.ts";
+import { routerOutlet } from "../app/router-outlet.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatCommands } from "./app-chat.ts";
@@ -306,7 +306,7 @@ export function renderApp(state: AppViewState) {
     activeRouteModule !== null &&
     "header" in activeRouteModule &&
     activeRouteModule.header === true;
-  const routedPage = renderRouterOutlet(
+  const routedPage = routerOutlet(
     appRouter,
     { state },
     {

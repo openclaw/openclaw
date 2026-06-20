@@ -136,10 +136,16 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
       isFetching: "loader",
       fetchCount,
     }));
-    const promise = Promise.all([
-      loadData(current, route, context, hookOptions, force),
-      loadModule(route, current),
-    ]).then(([data, module]) => {
+    const dataPromise = loadData(current, route, context, hookOptions, force);
+    const modulePromise = loadModule(route, current);
+    const visibleModulePromise = modulePromise.then((module) => {
+      const latest = matchStore.getMatch(current.id);
+      if (latest?.fetchCount === fetchCount && !hookOptions.signal.aborted) {
+        matchStore.updateMatch(current.id, (next) => ({ ...next, module }));
+      }
+      return module;
+    });
+    const promise = Promise.all([dataPromise, visibleModulePromise]).then(([data, module]) => {
       const latest = matchStore.getMatch(current.id);
       if (latest?.fetchCount !== fetchCount || hookOptions.signal.aborted) {
         return { data, module };
