@@ -681,18 +681,30 @@ export function createCopilotAgentHarness(
       if (!openclawSessionId) {
         return;
       }
-      await abortDeferredCompactionCleanups(openclawSessionId);
+      // Deferred cleanup yields while another attempt can establish a fresh
+      // session. Capture the reset target first so reset never deletes that
+      // replacement session or its durable binding.
       const tracked = trackedSessions.get(openclawSessionId);
-      if (deleteStoredBinding(options?.sessionStore, openclawSessionId)) {
-        resetBlockedStoredSessions.delete(openclawSessionId);
+      const stored = lookupStoredBinding(options?.sessionStore, openclawSessionId);
+      resetBlockedStoredSessions.add(openclawSessionId);
+      await abortDeferredCompactionCleanups(openclawSessionId);
+      const currentStored = lookupStoredBinding(options?.sessionStore, openclawSessionId);
+      const stillOwnsStoredSession =
+        stored !== undefined && currentStored?.sdkSessionId === stored.sdkSessionId;
+      if (stillOwnsStoredSession) {
+        if (deleteStoredBinding(options?.sessionStore, openclawSessionId)) {
+          resetBlockedStoredSessions.delete(openclawSessionId);
+        }
       } else {
-        resetBlockedStoredSessions.add(openclawSessionId);
+        resetBlockedStoredSessions.delete(openclawSessionId);
       }
       if (!tracked) {
         // Session was created by a different harness, or already reset.
         return;
       }
-      trackedSessions.delete(openclawSessionId);
+      if (trackedSessions.get(openclawSessionId)?.sdkSessionId === tracked.sdkSessionId) {
+        trackedSessions.delete(openclawSessionId);
+      }
       try {
         await tracked.client.deleteSession(tracked.sdkSessionId);
       } catch {

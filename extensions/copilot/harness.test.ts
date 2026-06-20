@@ -576,6 +576,55 @@ describe("createCopilotAgentHarness", () => {
     expect(abort).toHaveBeenCalledTimes(1);
   });
 
+  it("does not delete a replacement session while reset awaits deferred cleanup", async () => {
+    const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
+    const abort = vi.fn();
+    const oldDeleteSession = vi.fn().mockResolvedValue(undefined);
+    const replacementDeleteSession = vi.fn().mockResolvedValue(undefined);
+    const sessionStore = makeSessionStoreMock();
+    let attempt = 0;
+    mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+      attempt += 1;
+      if (attempt === 1) {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-before-reset",
+          pooledClient: { key: {} as any, client: { deleteSession: oldDeleteSession } as any },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        deps.onDeferredCompaction?.({
+          abort,
+          cleanup: cleanup.promise,
+          sdkSessionId: "sdk-sess-before-reset",
+        });
+      } else {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-replacement",
+          pooledClient: {
+            key: {} as any,
+            client: { deleteSession: replacementDeleteSession } as any,
+          },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+      }
+      return ATTEMPT_RESULT;
+    });
+    const harness = createCopilotAgentHarness({
+      pool: makePoolMock(),
+      sessionStore: sessionStore.store,
+    });
+
+    await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-reset-race" });
+    const reset = harness.reset?.({ sessionId: "oc-reset-race" });
+    await vi.waitFor(() => expect(abort).toHaveBeenCalledOnce());
+    await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-reset-race" });
+    cleanup.resolve("aborted");
+    await reset;
+
+    expect(oldDeleteSession).toHaveBeenCalledWith("sdk-sess-before-reset");
+    expect(replacementDeleteSession).not.toHaveBeenCalled();
+    expect(sessionStore.entries.get("oc-reset-race")?.sdkSessionId).toBe("sdk-sess-replacement");
+  });
+
   describe("session reuse across turns (dogfood finding #4)", () => {
     // These tests pin the harness's session-reuse contract: subsequent
     // `runAttempt` calls within the same OpenClaw session should pass
