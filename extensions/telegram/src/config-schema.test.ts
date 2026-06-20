@@ -504,6 +504,47 @@ describe("telegram poll actions schema", () => {
   });
 });
 
+describe("telegram isolatedIngress schema", () => {
+  it("accepts isolatedIngress at top level", () => {
+    const res = TelegramConfigSchema.safeParse({ isolatedIngress: false });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.isolatedIngress).toBe(false);
+    }
+  });
+
+  it("accepts isolatedIngress per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      isolatedIngress: true,
+      accounts: { ops: { isolatedIngress: false } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.isolatedIngress).toBe(true);
+      expect(res.data.accounts?.ops?.isolatedIngress).toBe(false);
+    }
+  });
+
+  it("preserves isolatedIngress inheritance for account overrides", () => {
+    const res = TelegramConfigSchema.safeParse({
+      isolatedIngress: false,
+      accounts: { ops: {} },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.isolatedIngress).toBe(false);
+      expect(res.data.accounts?.ops?.isolatedIngress).toBeUndefined();
+    }
+  });
+
+  it("rejects non-boolean isolatedIngress values", () => {
+    expectTelegramConfigIssue({ isolatedIngress: "off" }, "isolatedIngress");
+  });
+});
+
 describe("telegram webhook schema", () => {
   it("accepts a positive webhookPort", () => {
     expectTelegramConfigValid({

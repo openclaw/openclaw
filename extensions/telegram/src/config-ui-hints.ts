@@ -158,6 +158,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Polling Stall Threshold (ms)",
     help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
   },
+  isolatedIngress: {
+    label: "Telegram Isolated Ingress",
+    help: "Use the isolated polling ingress path. Default: true. Set to false to fall back to the legacy polling loop.",
+  },
   silentErrorReplies: {
     label: "Telegram Silent Error Replies",
     help: "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",

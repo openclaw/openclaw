@@ -911,6 +911,57 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("uses isolated ingress by default", async () => {
+    readTelegramUpdateOffsetSpy.mockResolvedValueOnce(456);
+    const abort = new AbortController();
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({
+      token: "tok",
+      abortSignal: abort.signal,
+      config: {
+        agents: { defaults: { maxConcurrent: 2 } },
+        channels: { telegram: {} },
+      },
+    });
+
+    expect(createTelegramBotCalls[0]?.updateOffset?.lastUpdateId).toBeNull();
+  });
+
+  it("uses isolated ingress when config isolatedIngress is true", async () => {
+    readTelegramUpdateOffsetSpy.mockResolvedValueOnce(789);
+    const abort = new AbortController();
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({
+      token: "tok",
+      abortSignal: abort.signal,
+      config: {
+        agents: { defaults: { maxConcurrent: 2 } },
+        channels: { telegram: { isolatedIngress: true } },
+      },
+    });
+
+    expect(createTelegramBotCalls[0]?.updateOffset?.lastUpdateId).toBeNull();
+  });
+
+  it("uses legacy polling when config isolatedIngress is false", async () => {
+    readTelegramUpdateOffsetSpy.mockResolvedValueOnce(123);
+    const abort = new AbortController();
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({
+      token: "tok",
+      abortSignal: abort.signal,
+      config: {
+        agents: { defaults: { maxConcurrent: 2 } },
+        channels: { telegram: { isolatedIngress: false } },
+      },
+    });
+
+    expect(createTelegramBotCalls[0]?.updateOffset?.lastUpdateId).toBe(123);
+  });
+
   it("passes configured webhookHost to webhook listener", async () => {
     const setStatus = vi.fn();
     await monitorTelegramProvider({

@@ -299,7 +299,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         stallThresholdMs: account.config.pollingStallThresholdMs,
         setStatus: opts.setStatus,
         isolatedIngress: {
-          enabled: opts.isolatedIngress?.enabled ?? true,
+          enabled: opts.isolatedIngress?.enabled ?? account.config.isolatedIngress ?? true,
           apiRoot: account.config.apiRoot,
           timeoutSeconds: account.config.timeoutSeconds,
           proxy: account.config.proxy,
