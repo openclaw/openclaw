@@ -229,7 +229,6 @@ export function createTelegramDraftStream(params: {
   let lastRequestedPreview: TelegramDraftPreview | undefined;
   let firstShortPreviewSeenMs: number | undefined;
   let initialPreviewTimer: ReturnType<typeof setTimeout> | undefined;
-  let flushInitialPreview: (() => Promise<void>) | undefined;
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
@@ -509,7 +508,7 @@ export function createTelegramDraftStream(params: {
     state: streamState,
     sendOrEditStreamMessage,
   });
-  flushInitialPreview = loop.flush;
+  const flushInitialPreview = loop.flush;
 
   const requestDraftUpdate = (text: string, preview?: TelegramDraftPreview) => {
     if (streamState.stopped || streamState.final) {
