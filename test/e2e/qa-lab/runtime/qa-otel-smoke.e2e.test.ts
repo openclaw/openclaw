@@ -1,7 +1,7 @@
 // QA OTEL Smoke tests cover QA Lab telemetry evidence.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection as createNetConnection } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +42,7 @@ describe("qa-otel-smoke receiver bounds", () => {
       },
       childExitCode: 0,
       disallowedBodyNeedles: ["OTEL-QA-SECRET"],
+      logsExporter: "otlp",
       logRecords: [
         {
           body: "diagnostics-otel: logs exporter enabled",
@@ -82,6 +83,8 @@ describe("qa-otel-smoke receiver bounds", () => {
           logCount: 1,
         },
       ],
+      stdoutLogLines: [],
+      stdoutLogRecords: [],
       spans: [
         { name: "openclaw.run", parent: false, attributes: {} },
         { name: "openclaw.harness.run", parent: true, attributes: {} },
@@ -110,13 +113,40 @@ describe("qa-otel-smoke receiver bounds", () => {
         "--provider-mode",
         "mock-openai",
         "--scenario",
-        "otel-trace-smoke",
+        "otel-stdout-log-smoke",
+        "--logs-exporter",
+        "stdout",
       ]),
     ).toMatchObject({
       collectorMode: "docker",
+      logsExporter: "stdout",
       providerMode: "mock-openai",
-      scenarioId: "otel-trace-smoke",
+      scenarioId: "otel-stdout-log-smoke",
     });
+  });
+
+  it("selects the matching scenario for the requested log exporter", () => {
+    expect(testing.parseArgs(["--logs-exporter", "otlp"]).scenarioId).toBe("otel-trace-smoke");
+    expect(testing.parseArgs(["--logs-exporter", "stdout"]).scenarioId).toBe(
+      "otel-stdout-log-smoke",
+    );
+    expect(testing.parseArgs(["--logs-exporter", "both"]).scenarioId).toBe("otel-both-log-smoke");
+  });
+
+  it("rejects explicit scenarios that do not match the log exporter", () => {
+    expect(() =>
+      testing.parseArgs(["--logs-exporter", "stdout", "--scenario", "otel-trace-smoke"]),
+    ).toThrow("--logs-exporter stdout requires --scenario otel-stdout-log-smoke");
+  });
+
+  it("allows explicit custom scenarios to own their exporter config", () => {
+    expect(testing.parseArgs(["--scenario", "custom-otel-smoke"]).scenarioId).toBe(
+      "custom-otel-smoke",
+    );
+    expect(
+      testing.parseArgs(["--logs-exporter", "stdout", "--scenario", "custom-stdout-smoke"])
+        .scenarioId,
+    ).toBe("custom-stdout-smoke");
   });
 
   it("parses body-size limit env values as strict positive integers", () => {
@@ -276,6 +306,7 @@ describe("qa-otel-smoke receiver bounds", () => {
       bodyText: {},
       childExitCode: 0,
       disallowedBodyNeedles: [],
+      logsExporter: "otlp",
       logRecords: [],
       metrics: [],
       requests: [
@@ -290,6 +321,8 @@ describe("qa-otel-smoke receiver bounds", () => {
           logCount: 0,
         },
       ],
+      stdoutLogLines: [],
+      stdoutLogRecords: [],
       spans: [],
     });
 
@@ -304,6 +337,77 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(assertion.failures).toEqual([]);
   });
 
+  it("allows stdout diagnostic logs without OTLP log requests", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.logsExporter = "stdout";
+    input.bodyText = {};
+    input.logRecords = [];
+    input.requests = input.requests.filter((request) => request.signal !== "logs");
+    input.stdoutLogRecords = [
+      {
+        ts: "2026-06-18T00:00:00.000Z",
+        signal: "openclaw.diagnostic.log",
+        "service.name": "openclaw-qa-lab-otel-smoke",
+        severityText: "INFO",
+        severityNumber: 9,
+        body: "log",
+        attributes: {
+          "openclaw.log.level": "INFO",
+        },
+      },
+    ];
+    input.stdoutLogLines = [JSON.stringify(input.stdoutLogRecords[0])];
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(true);
+    expect(assertion.failures).toEqual([]);
+    expect(assertion.signalRequestCounts.logs).toBe(0);
+    expect(assertion.stdoutLogRecordCount).toBe(1);
+  });
+
+  it("fails stdout diagnostic mode when no stdout log records are captured", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.logsExporter = "stdout";
+    input.bodyText = {};
+    input.logRecords = [];
+    input.requests = input.requests.filter((request) => request.signal !== "logs");
+    input.stdoutLogRecords = [];
+    input.stdoutLogLines = [];
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain("no stdout diagnostic log records were captured");
+    expect(assertion.signalRequestCounts.logs).toBe(0);
+    expect(assertion.stdoutLogRecordCount).toBe(0);
+  });
+
+  it("fails stdout diagnostic mode when OTLP log requests are still emitted", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.logsExporter = "stdout";
+    input.logRecords = [];
+    input.stdoutLogRecords = [
+      {
+        ts: "2026-06-18T00:00:00.000Z",
+        signal: "openclaw.diagnostic.log",
+        "service.name": "openclaw-qa-lab-otel-smoke",
+        severityText: "INFO",
+        severityNumber: 9,
+        body: "log",
+        attributes: {},
+      },
+    ];
+    input.stdoutLogLines = [JSON.stringify(input.stdoutLogRecords[0])];
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain(
+      "OTLP logs requests were received for stdout logs exporter",
+    );
+  });
+
   it("still fails when OTLP log payload text leaks scenario content", () => {
     const input = makePassingSmokeAssertionInput();
     input.bodyText = {
@@ -314,6 +418,39 @@ describe("qa-otel-smoke receiver bounds", () => {
 
     expect(assertion.passed).toBe(false);
     expect(assertion.failures).toContain("OTLP logs payload leaked content: OTEL-QA-SECRET");
+    expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
+  });
+
+  it("still fails when stdout diagnostic log payload text leaks scenario content", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.logsExporter = "stdout";
+    input.bodyText = {};
+    input.logRecords = [];
+    input.requests = input.requests.filter((request) => request.signal !== "logs");
+    input.stdoutLogRecords = [
+      {
+        ts: "2026-06-18T00:00:00.000Z",
+        signal: "openclaw.diagnostic.log",
+        "service.name": "openclaw-qa-lab-otel-smoke",
+        severityText: "INFO",
+        severityNumber: 9,
+        body: "log",
+        attributes: {},
+      },
+    ];
+    input.stdoutLogLines = [
+      JSON.stringify({
+        ...input.stdoutLogRecords[0],
+        body: "diagnostics-otel: log payload contains OTEL-QA-SECRET",
+      }),
+    ];
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain(
+      "stdout diagnostic log payload leaked content: OTEL-QA-SECRET",
+    );
     expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
   });
 
@@ -362,6 +499,65 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(output.text()).toContain("COLLECTOR_TAIL_MARKER");
     expect(output.text()).toContain("...");
     expect(output.text()).not.toContain("DO_NOT_RETAIN_COLLECTOR_PREFIX");
+  });
+
+  it("streams gateway stdout artifact records without requiring them in the tail", async () => {
+    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-stdout-stream-"));
+    const logPath = path.join(tempRoot, "gateway.stdout.log");
+    const capture = testing.createStdoutDiagnosticLogCapture();
+    const record = {
+      signal: "openclaw.diagnostic.log",
+      ts: "2026-06-18T00:00:00.000Z",
+      "service.name": "openclaw-qa-lab-otel-smoke",
+      severityText: "INFO",
+      severityNumber: 9,
+      body: "early log",
+      attributes: {},
+    };
+    try {
+      writeFileSync(
+        logPath,
+        `${JSON.stringify(record)}\n${"x".repeat(256 * 1024)}\nGATEWAY_STDOUT_TAIL\n`,
+      );
+
+      await testing.appendUtf8FileToStdoutDiagnosticCapture(logPath, capture);
+      capture.flush();
+
+      expect(capture.records).toEqual([record]);
+      expect(capture.lines).toHaveLength(1);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps gateway stdout artifact fallback parsing bounded", async () => {
+    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-stdout-artifact-"));
+    const outputDir = path.join(tempRoot, "output");
+    const artifactDir = path.join(outputDir, "artifacts", "gateway-runtime");
+    const record = {
+      signal: "openclaw.diagnostic.log",
+      ts: "2026-06-18T00:00:00.000Z",
+      "service.name": "openclaw-qa-lab-otel-smoke",
+      severityText: "INFO",
+      severityNumber: 9,
+      body: "tail log",
+      attributes: {},
+    };
+    try {
+      mkdirSync(artifactDir, { recursive: true });
+      writeFileSync(
+        path.join(artifactDir, "gateway.stdout.log"),
+        `${JSON.stringify(record)}\n${"x".repeat(256 * 1024)}\n`,
+      );
+      const capture = testing.createStdoutDiagnosticLogCapture();
+
+      await testing.appendGatewayStdoutArtifactLogs({ capture, outputDir });
+
+      expect(capture.records).toEqual([record]);
+      expect(capture.lines).toHaveLength(1);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
   });
 
   it("times out and kills a wedged QA suite child with a detached gateway", async () => {

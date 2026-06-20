@@ -904,7 +904,6 @@ export const MemorySearchSchema = z
     store: z
       .object({
         driver: z.literal("sqlite").optional(),
-        path: z.string().optional(),
         fts: z
           .object({
             tokenizer: z.union([z.literal("unicode61"), z.literal("trigram")]).optional(),
@@ -1013,13 +1012,6 @@ const AgentRuntimeSchema = z
       })
       .strict(),
   ])
-  .optional();
-
-export const AgentEmbeddedHarnessSchema = z
-  .object({
-    runtime: z.string().optional(),
-  })
-  .strict()
   .optional();
 
 export const AgentRuntimePolicySchema = z

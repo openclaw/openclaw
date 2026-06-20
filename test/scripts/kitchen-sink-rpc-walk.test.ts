@@ -55,6 +55,7 @@ import {
   tailFile,
   unwrapRpcPayload,
   usesBuiltOpenClawEntry,
+  validateCliArgs,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
@@ -116,6 +117,23 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(shouldPrintHelp([])).toBe(false);
   });
 
+  it("rejects unknown CLI args before creating temp state", async () => {
+    expect(() => validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
+
+    const error = await runCommand(process.execPath, [
+      "scripts/e2e/kitchen-sink-rpc-walk.mjs",
+      "--wat",
+    ]).then(
+      () => undefined,
+      (caught: unknown) => caught as Error & { stderr?: string; stdout?: string },
+    );
+
+    expect(error).toBeDefined();
+    expect(error?.stdout).toBe("");
+    expect(error?.stderr?.trim()).toBe("Unknown argument: --wat");
+    expect(error?.stderr).not.toContain("temp root preserved");
+  });
+
   it("rejects loose numeric env values before they bypass runtime guardrails", () => {
     expect(readPositiveInt(undefined, 60_000)).toBe(60_000);
     expect(readPositiveInt("", 60_000)).toBe(60_000);
@@ -136,6 +154,14 @@ describe("kitchen-sink RPC isolated state", () => {
     await expect(
       resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "19080" }),
     ).resolves.toBe(19080);
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "65535" }),
+    ).resolves.toBe(65535);
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "65536" }),
+    ).rejects.toThrow(
+      'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a TCP port from 1 to 65535. Got: "65536"',
+    );
     await expect(
       resolveKitchenSinkRpcPort({}, { findAvailablePort: async () => 45678 }),
     ).resolves.toBe(45678);
@@ -834,6 +860,31 @@ describe("kitchen-sink RPC payload unwrapping", () => {
     });
   });
 
+  it("preserves gateway request error metadata from built RPC calls", () => {
+    const error = captureSyncError(() =>
+      unwrapRpcPayload({
+        ok: false,
+        error: {
+          type: "gateway_request_error",
+          code: "INVALID_REQUEST",
+          message: "unauthorized role: operator",
+          details: { method: "skills.bins" },
+          retryable: false,
+          retryAfterMs: 250,
+        },
+      }),
+    );
+
+    expect(error).toMatchObject({
+      name: "GatewayClientRequestError",
+      message: "unauthorized role: operator",
+      gatewayCode: "INVALID_REQUEST",
+      details: { method: "skills.bins" },
+      retryable: false,
+      retryAfterMs: 250,
+    });
+  });
+
   it("bounds failed RPC payload diagnostics", () => {
     const error = captureSyncError(() =>
       unwrapRpcPayload({
@@ -956,6 +1007,19 @@ describe("kitchen-sink RPC command catalog assertions", () => {
           gatewayCode: "INVALID_REQUEST",
         });
       }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () =>
+        unwrapRpcPayload({
+          ok: false,
+          error: {
+            type: "gateway_request_error",
+            code: "INVALID_REQUEST",
+            message: "unauthorized role: operator",
+            retryable: false,
+          },
+        }),
+      ),
     ).resolves.toBeUndefined();
     await expect(
       assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => {
@@ -1731,6 +1795,25 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+  it("samples the POSIX gateway root when command-line needles match", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "darwin",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout:
+          " 4321     1  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback\n",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: 12.5,
+      processId: 4321,
+      rssMiB: 256,
+    });
+  });
+
   it("falls back to the POSIX gateway process title when the port arg is rewritten", async () => {
     const sample = await sampleProcess(4321, {
       platform: "darwin",
@@ -1807,6 +1890,30 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("aborts HTTP probe retry backoff when the external signal fires", async () => {
+    const controller = new AbortController();
+    const reset = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    });
+    const fetchImpl = vi.fn().mockRejectedValue(reset);
+    const startedAt = Date.now();
+
+    setTimeout(() => {
+      controller.abort(new Error("gateway exited before ready"));
+    }, 25);
+
+    await expect(
+      fetchJson("http://127.0.0.1:19680/healthz", {
+        attempts: 2,
+        fetchImpl,
+        retryDelayMs: 5_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("gateway exited before ready");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
   it("bounds HTTP probe response bodies", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("x".repeat(1025), { status: 200 }));
 
@@ -1872,10 +1979,141 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(response.text).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe decimal HTTP content lengths before reading", async () => {
+    const response = {
+      headers: new Headers({
+        "content-length": "9007199254740992",
+      }),
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
+  it("streams HTTP probe responses with non-decimal content-length values", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const response = {
+      headers: new Headers({
+        "content-length": "1e3",
+      }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              readStarted = true;
+              return { done: false, value: new Uint8Array(1025) };
+            },
+            async cancel() {
+              canceled = true;
+            },
+          };
+        },
+      },
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(readStarted).toBe(true);
+    expect(canceled).toBe(true);
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
   it("reads bounded response streams", async () => {
     await expect(readBoundedResponseText(new Response('{"status":"live"}'), 1024)).resolves.toBe(
       '{"status":"live"}',
     );
+  });
+
+  it("releases HTTP probe response stream readers after bounded reads", async () => {
+    const releaseLock = vi.fn();
+    const response = {
+      headers: new Headers(),
+      body: {
+        getReader() {
+          return {
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("ok") })
+              .mockResolvedValueOnce({ done: true }),
+            releaseLock,
+          };
+        },
+      },
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).resolves.toBe("ok");
+
+    expect(releaseLock).toHaveBeenCalledOnce();
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
+  it("cancels stalled HTTP probe response streams when the timeout wins", async () => {
+    let canceled = false;
+    const timeoutError = Object.assign(new Error("fetch probe timed out"), {
+      code: "ETIMEDOUT",
+    });
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { headers: new Headers() },
+    );
+
+    await expect(
+      readBoundedResponseText(response, 1024, Promise.reject(timeoutError)),
+    ).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: "fetch probe timed out",
+    });
+    expect(canceled).toBe(true);
+  });
+
+  it("cancels stalled HTTP probe response streams when the external signal fires", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const controller = new AbortController();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          pull() {
+            readStarted = true;
+            return new Promise(() => {});
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = fetchJson("http://127.0.0.1:19680/readyz", {
+      attempts: 1,
+      fetchImpl,
+      signal: controller.signal,
+      timeoutMs: 30_000,
+    });
+    const rejection = expect(result).rejects.toThrow("gateway exited before ready");
+
+    await waitFor(() => readStarted);
+    controller.abort(new Error("gateway exited before ready"));
+
+    await rejection;
+    await waitFor(() => canceled);
   });
 
   it("times out stalled HTTP probe response bodies", async () => {

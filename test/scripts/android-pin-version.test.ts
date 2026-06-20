@@ -34,6 +34,22 @@ describe("parseArgs", () => {
       );
     }
   });
+
+  it("rejects flags where option values are required", () => {
+    for (const { args, message } of [
+      { args: ["--version", "--no-sync"], message: "Missing value for --version." },
+      {
+        args: ["--version", "2026.6.5", "--version-code", "--no-sync"],
+        message: "Missing value for --version-code.",
+      },
+      {
+        args: ["--version", "2026.6.5", "--root", "--no-sync"],
+        message: "Missing value for --root.",
+      },
+    ]) {
+      expect(() => parseArgs(args)).toThrow(message);
+    }
+  });
 });
 
 describe("pinAndroidVersion", () => {

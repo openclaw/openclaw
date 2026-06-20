@@ -320,23 +320,6 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
   );
 }
 
-export function collectArtifactsFromMessages(params: {
-  messages: unknown[];
-  sessionKey: string;
-  runId?: string;
-  taskId?: string;
-  includeDownloadData?: boolean;
-  downloadArtifactId?: string;
-}): ArtifactRecord[] {
-  const artifacts: ArtifactRecord[] = [];
-  let messageFallbackSeq = 0;
-  for (const message of params.messages) {
-    messageFallbackSeq += 1;
-    collectArtifactsFromMessage({ ...params, message, messageFallbackSeq, artifacts });
-  }
-  return artifacts;
-}
-
 function collectArtifactsFromMessage(params: {
   message: unknown;
   messageFallbackSeq: number;
@@ -484,8 +467,9 @@ async function loadArtifacts(
   await visitSessionMessagesAsync(
     {
       agentId: resolved.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
-      sessionFile: entry?.sessionFile,
+      sessionEntry: entry,
       sessionId,
+      sessionKey,
       storePath,
     },
     (message, seq) => {

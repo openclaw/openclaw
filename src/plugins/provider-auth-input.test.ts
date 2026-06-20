@@ -5,6 +5,7 @@ import {
   ensureApiKeyFromEnvOrPrompt,
   ensureApiKeyFromOptionEnvOrPrompt,
   maybeApplyApiKeyFromOption,
+  normalizeApiKeyInput,
   normalizeTokenProviderInput,
 } from "./provider-auth-input.js";
 
@@ -226,6 +227,16 @@ describe("normalizeTokenProviderInput", () => {
   it("trims and lowercases non-empty values", () => {
     expect(normalizeTokenProviderInput("  DeMo-PrOvIdEr  ")).toBe("demo-provider");
     expect(normalizeTokenProviderInput("")).toBeUndefined();
+  });
+});
+
+describe("normalizeApiKeyInput", () => {
+  it("strips shell syntax, pasted line breaks, and non-header-safe artifacts", () => {
+    expect(normalizeApiKeyInput("export OPENAI_API_KEY='sk-\r\nabc│';")).toBe("sk-abc");
+  });
+
+  it("preserves ordinary interior spaces in bearer-style values", () => {
+    expect(normalizeApiKeyInput('TOKEN="Bearer demo token"')).toBe("Bearer demo token");
   });
 });
 

@@ -1,6 +1,6 @@
 // Bench Cli Startup script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -61,8 +61,36 @@ type SuiteResult = {
   }>;
 };
 
+type BenchmarkReport = {
+  primary: SuiteResult;
+  secondary?: SuiteResult | null;
+};
+
+type CaseDelta = {
+  id: string;
+  name: string;
+  durationAvgDeltaMs: number;
+  durationAvgDeltaPct: number;
+  maxRssAvgDeltaMb: number | null;
+  maxRssAvgDeltaPct: number | null;
+};
+
+type BenchmarkComparison = {
+  baseline: string;
+  candidate: string;
+  deltas: CaseDelta[];
+};
+
+type BenchmarkComparisonResult = {
+  baseline: SuiteResult;
+  candidate: SuiteResult;
+  comparison: BenchmarkComparison;
+};
+
 type CliOptions = {
   cases: CommandCase[];
+  compareBaseline?: string;
+  compareCandidate?: string;
   entryPrimary: string;
   entrySecondary?: string;
   runs: number;
@@ -79,6 +107,22 @@ const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--compare-baseline",
+  "--compare-candidate",
+  "--cpu-prof-dir",
+  "--entry",
+  "--entry-primary",
+  "--entry-secondary",
+  "--heap-prof-dir",
+  "--output",
+  "--preset",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+const BOOLEAN_FLAGS = new Set(["--help", "--json"]);
 
 const COMMAND_CASES: readonly CommandCase[] = [
   {
@@ -421,6 +465,24 @@ function parseRepeatableFlag(flag: string): string[] {
     }
   }
   return values;
+}
+
+function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (VALUE_FLAGS.has(arg)) {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error(`${arg} requires a value`);
+      }
+      index += 1;
+      continue;
+    }
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
@@ -797,8 +859,26 @@ function printSuite(result: SuiteResult): void {
 }
 
 function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
-  const primaryById = new Map(primary.cases.map((commandCase) => [commandCase.id, commandCase]));
+  const deltas = buildCaseDeltas(primary, secondary);
   console.log("Delta (secondary - primary, avg)");
+  for (const delta of deltas) {
+    const durationDelta = delta.durationAvgDeltaMs;
+    const durationPct = delta.durationAvgDeltaPct;
+    const durationSign = durationDelta > 0 ? "+" : "";
+    let line = `${delta.name.padEnd(24)} ${durationSign}${formatMs(durationDelta)} (${durationSign}${durationPct.toFixed(1)}%)`;
+    if (delta.maxRssAvgDeltaMb != null && delta.maxRssAvgDeltaPct != null) {
+      const rssDelta = delta.maxRssAvgDeltaMb;
+      const rssPct = delta.maxRssAvgDeltaPct;
+      const rssSign = rssDelta > 0 ? "+" : "";
+      line += ` rss ${rssSign}${formatMb(rssDelta)} (${rssSign}${rssPct.toFixed(1)}%)`;
+    }
+    console.log(line);
+  }
+}
+
+function buildCaseDeltas(primary: SuiteResult, secondary: SuiteResult): CaseDelta[] {
+  const primaryById = new Map(primary.cases.map((commandCase) => [commandCase.id, commandCase]));
+  const deltas: CaseDelta[] = [];
   for (const commandCase of secondary.cases) {
     const baseline = primaryById.get(commandCase.id);
     if (!baseline) {
@@ -809,17 +889,24 @@ function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
       baseline.summary.durationMs.avg > 0
         ? (durationDelta / baseline.summary.durationMs.avg) * 100
         : 0;
-    const durationSign = durationDelta > 0 ? "+" : "";
-    let line = `${commandCase.name.padEnd(24)} ${durationSign}${formatMs(durationDelta)} (${durationSign}${durationPct.toFixed(1)}%)`;
-    if (baseline.summary.maxRssMb && commandCase.summary.maxRssMb) {
-      const rssDelta = commandCase.summary.maxRssMb.avg - baseline.summary.maxRssMb.avg;
-      const rssPct =
-        baseline.summary.maxRssMb.avg > 0 ? (rssDelta / baseline.summary.maxRssMb.avg) * 100 : 0;
-      const rssSign = rssDelta > 0 ? "+" : "";
-      line += ` rss ${rssSign}${formatMb(rssDelta)} (${rssSign}${rssPct.toFixed(1)}%)`;
-    }
-    console.log(line);
+    const rssDelta =
+      baseline.summary.maxRssMb && commandCase.summary.maxRssMb
+        ? commandCase.summary.maxRssMb.avg - baseline.summary.maxRssMb.avg
+        : null;
+    const rssPct =
+      rssDelta != null && baseline.summary.maxRssMb && baseline.summary.maxRssMb.avg > 0
+        ? (rssDelta / baseline.summary.maxRssMb.avg) * 100
+        : null;
+    deltas.push({
+      id: commandCase.id,
+      name: commandCase.name,
+      durationAvgDeltaMs: durationDelta,
+      durationAvgDeltaPct: durationPct,
+      maxRssAvgDeltaMb: rssDelta,
+      maxRssAvgDeltaPct: rssPct,
+    });
   }
+  return deltas;
 }
 
 export function collectFailedSamples(result: SuiteResult): string[] {
@@ -910,6 +997,8 @@ function parseOptions(): CliOptions {
   });
   return {
     cases,
+    compareBaseline: parseFlagValue("--compare-baseline"),
+    compareCandidate: parseFlagValue("--compare-candidate"),
     entryPrimary: parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY,
     entrySecondary: parseFlagValue("--entry-secondary"),
     runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
@@ -938,6 +1027,8 @@ Options:
   --warmup <n>                 Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>            Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --output <path>              Write machine-readable JSON to a file
+  --compare-baseline <path>    Read a saved JSON report as the baseline
+  --compare-candidate <path>   Read a saved JSON report as the candidate and print deltas
   --cpu-prof-dir <dir>         Write V8 CPU profiles for each run
   --heap-prof-dir <dir>        Write V8 heap profiles for each run
   --json                       Emit machine-readable JSON
@@ -948,13 +1039,65 @@ Case ids:
 `);
 }
 
+function readBenchmarkReport(filePath: string): BenchmarkReport {
+  return JSON.parse(readFileSync(filePath, "utf8")) as BenchmarkReport;
+}
+
+function writeJsonOutput(filePath: string, value: unknown): void {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function readBenchmarkComparison(
+  baselinePath: string,
+  candidatePath: string,
+): BenchmarkComparisonResult {
+  const baseline = readBenchmarkReport(baselinePath);
+  const candidate = readBenchmarkReport(candidatePath);
+  return {
+    baseline: baseline.primary,
+    candidate: candidate.primary,
+    comparison: {
+      baseline: baselinePath,
+      candidate: candidatePath,
+      deltas: buildCaseDeltas(baseline.primary, candidate.primary),
+    },
+  };
+}
+
+function readBenchmarkComparisonForTesting(
+  baselinePath: string,
+  candidatePath: string,
+): { comparison: unknown } {
+  return readBenchmarkComparison(baselinePath, candidatePath);
+}
+
 async function main(): Promise<void> {
   if (hasFlag("--help")) {
     printUsage();
     return;
   }
 
+  validateCliArgs();
   const options = parseOptions();
+  if (options.compareBaseline || options.compareCandidate) {
+    if (!options.compareBaseline || !options.compareCandidate) {
+      throw new Error("--compare-baseline and --compare-candidate must be provided together");
+    }
+    const { baseline, candidate, comparison } = readBenchmarkComparison(
+      options.compareBaseline,
+      options.compareCandidate,
+    );
+    if (options.output) {
+      writeJsonOutput(options.output, comparison);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(comparison, null, 2));
+      return;
+    }
+    printDelta(baseline, candidate);
+    return;
+  }
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-"));
   const rssHookPath = buildRssHook(tmpDir);
   try {
@@ -987,8 +1130,7 @@ async function main(): Promise<void> {
     ];
 
     if (options.output) {
-      mkdirSync(path.dirname(options.output), { recursive: true });
-      writeFileSync(options.output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+      writeJsonOutput(options.output, report);
     }
 
     if (options.json) {
@@ -1040,11 +1182,14 @@ export const testing = {
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,
+  readBenchmarkComparison: readBenchmarkComparisonForTesting,
+  validateCliArgs,
+  writeJsonOutput,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   await main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.stack : String(error));
+    console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
 }

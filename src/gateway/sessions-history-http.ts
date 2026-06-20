@@ -149,8 +149,9 @@ export async function handleSessionHistoryHttpRequest(
       ? await readRecentSessionMessagesWithStatsAsync(
           {
             agentId: target.agentId,
-            sessionFile: entry.sessionFile,
+            sessionEntry: entry,
             sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
             storePath: target.storePath,
           },
           {
@@ -166,8 +167,9 @@ export async function handleSessionHistoryHttpRequest(
       ? await readSessionMessagesWithSourceAsync(
           {
             agentId: target.agentId,
-            sessionFile: entry.sessionFile,
+            sessionEntry: entry,
             sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
             storePath: target.storePath,
           },
           {
@@ -213,9 +215,10 @@ export async function handleSessionHistoryHttpRequest(
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
       agentId: target.agentId,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: target.canonicalKey,
       storePath: target.storePath,
-      sessionFile: entry.sessionFile,
     },
     rawMessages: rawSnapshot,
     rawTranscriptSeq: boundedSnapshot?.totalMessages,

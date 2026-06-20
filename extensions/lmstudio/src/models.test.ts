@@ -44,6 +44,27 @@ describe("lmstudio-models", () => {
     }
     return JSON.parse(init.body) as unknown;
   };
+  const cancelTrackedResponse = (
+    text: string,
+    init: ResponseInit,
+  ): {
+    response: Response;
+    wasCanceled: () => boolean;
+  } => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    return {
+      response: new Response(stream, init),
+      wasCanceled: () => canceled,
+    };
+  };
   const createModelLoadFetchMock = (params?: {
     loadedContextLength?: number;
     maxContextLength?: number;
@@ -484,6 +505,39 @@ describe("lmstudio-models", () => {
         modelKey: "qwen3-8b-instruct",
       }),
     ).rejects.toThrow("LM Studio model load returned malformed JSON");
+  });
+
+  it("bounds model load error bodies", async () => {
+    const body = `${"lmstudio load unavailable ".repeat(512)}tail`;
+    const tracked = cancelTrackedResponse(body, { status: 503 });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+          }),
+        };
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return tracked.response;
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    const error = await ensureLmstudioModelLoaded({
+      baseUrl: "http://localhost:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(
+      /LM Studio model load failed \(503\): lmstudio load unavailable/,
+    );
+    expect((error as Error).message).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("reloads model to the clamped default target when already loaded below the default window", async () => {

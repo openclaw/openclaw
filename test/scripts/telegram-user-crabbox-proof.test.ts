@@ -1,4 +1,5 @@
 // Telegram User Crabbox Proof tests cover telegram user crabbox proof script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -37,6 +38,22 @@ function isProcessAlive(pid: number): boolean {
 
 function writeExecutable(pathname: string, content: string): void {
   fs.writeFileSync(pathname, content, { mode: 0o755 });
+}
+
+function runProofCli(args: string[]) {
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/e2e/telegram-user-crabbox-proof.ts", ...args],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    },
+  );
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
@@ -99,6 +116,20 @@ describe("telegram user Crabbox proof log polling", () => {
         OPENCLAW_TELEGRAM_USER_PROOF_LOG_TAIL_BYTES: "4096",
       }),
     ).toBe(4096);
+  });
+
+  it("rejects loose and out-of-range proof ports before remote setup", () => {
+    const looseGatewayPort = runProofCli(["--gateway-port", "1e3", "--dry-run"]);
+    expect(looseGatewayPort.status).toBe(1);
+    expect(looseGatewayPort.stderr).toContain("--gateway-port must be a positive integer.");
+
+    const highGatewayPort = runProofCli(["--gateway-port", "65536", "--dry-run"]);
+    expect(highGatewayPort.status).toBe(1);
+    expect(highGatewayPort.stderr).toContain("--gateway-port must be a TCP port from 1 to 65535.");
+
+    const highMockPort = runProofCli(["--mock-port", "65536", "--dry-run"]);
+    expect(highMockPort.status).toBe(1);
+    expect(highMockPort.stderr).toContain("--mock-port must be a TCP port from 1 to 65535.");
   });
 
   it("reads only the requested log tail", () => {

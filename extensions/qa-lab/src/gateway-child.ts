@@ -25,7 +25,7 @@ import {
   resolveQaRuntimeHostVersion,
 } from "./bundled-plugin-staging.js";
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
-import { QaSuiteInfraError } from "./errors.js";
+import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
@@ -810,7 +810,7 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw toLintErrorObject(
+            throw toQaErrorObject(
               lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
               "Non-Error thrown",
             );
@@ -913,7 +913,7 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw toLintErrorObject(
+            throw toQaErrorObject(
               lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
               "Non-Error thrown",
             );
@@ -1067,17 +1067,3 @@ export async function startQaGatewayChild(params: {
   }
 }
 export { testing as __testing };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

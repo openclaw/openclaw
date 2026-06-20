@@ -397,7 +397,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         name: "kitchen-sink-rpc",
         resources: ["docker", "service", "npm"],
         stateScenario: "empty",
-        timeoutMs: 900_000,
+        timeoutMs: 1_500_000,
         weight: 3,
       },
       {

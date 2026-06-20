@@ -3,9 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildMistralCatalogModels,
   buildMistralModelDefinition,
-  MISTRAL_DEFAULT_CONTEXT_WINDOW,
-  MISTRAL_DEFAULT_COST,
-  MISTRAL_DEFAULT_MAX_TOKENS,
   MISTRAL_DEFAULT_MODEL_ID,
 } from "./model-definitions.js";
 
@@ -21,11 +18,9 @@ describe("mistral model definitions", () => {
   it("uses current OpenClaw pricing for the bundled default model", () => {
     const model = buildMistralModelDefinition();
     expect(model.id).toBe(MISTRAL_DEFAULT_MODEL_ID);
-    expect(model.contextWindow).toBe(MISTRAL_DEFAULT_CONTEXT_WINDOW);
-    expect(model.maxTokens).toBe(MISTRAL_DEFAULT_MAX_TOKENS);
-    expect(model.cost).toEqual(MISTRAL_DEFAULT_COST);
-
-    expect(MISTRAL_DEFAULT_COST).toEqual({
+    expect(model.contextWindow).toBe(262144);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({
       input: 0.5,
       output: 1.5,
       cacheRead: 0.05,

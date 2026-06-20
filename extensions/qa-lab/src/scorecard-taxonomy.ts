@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
@@ -11,7 +12,14 @@ const qaScorecardIdSchema = z
   .string()
   .trim()
   .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
-    message: "scorecard and coverage ids must use lowercase dotted or dashed tokens",
+    message: "scorecard ids must use lowercase dotted or dashed tokens",
+  });
+
+const qaCoverageIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
+    message: "coverage ids must use lowercase dotted tokens",
   });
 
 function isRepoRootRelativeRef(value: string) {
@@ -31,7 +39,7 @@ const qaScorecardProfileSchema = z.object({
 
 const qaMaturityFeatureSchema = z.object({
   name: z.string().trim().min(1),
-  coverageIds: z.array(qaScorecardIdSchema).default([]),
+  coverageIds: z.array(qaCoverageIdSchema).default([]),
   description: z.string().trim().min(1).optional(),
 });
 
@@ -184,31 +192,8 @@ type MaturityCoverageRef = {
   surfaceId: string;
 };
 
-function walkUpDirectories(start: string): string[] {
-  const roots: string[] = [];
-  let current = path.resolve(start);
-  while (true) {
-    roots.push(current);
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return roots;
-    }
-    current = parent;
-  }
-}
-
-function resolveRepoPath(relativePath: string, kind: "file" | "directory" = "file") {
-  for (const dir of walkUpDirectories(import.meta.dirname)) {
-    const candidate = path.join(dir, relativePath);
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    const stat = fs.statSync(candidate);
-    if ((kind === "file" && stat.isFile()) || (kind === "directory" && stat.isDirectory())) {
-      return candidate;
-    }
-  }
-  return null;
+function resolveRepoPath(relativePath: string, kind: QaRepoPathKind = "file") {
+  return resolveQaRepoPath(import.meta.dirname, relativePath, kind);
 }
 
 function repoRootFromPath(filePath: string) {

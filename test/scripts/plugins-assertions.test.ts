@@ -171,6 +171,15 @@ describe("plugins Docker assertions", () => {
     );
   });
 
+  it("passes ClawHub preflight body timeouts into the bounded reader", () => {
+    const script = readFileSync(ASSERTIONS_SCRIPT, "utf8");
+
+    expect(script).toContain("run(controller.signal, timeoutPromise)");
+    expect(
+      script.match(/readBoundedResponseText\([\s\S]*?limits\.bodyMaxBytes,\n\s+timeoutPromise,/gu),
+    ).toHaveLength(2);
+  });
+
   it("keeps sweep artifact paths aligned with the assertion scratch root", () => {
     const scripts = [
       "scripts/e2e/lib/plugins/sweep.sh",
@@ -390,6 +399,73 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+  it("rejects invalid fixture stop attempts before cleanup polling", () => {
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "openclaw_plugins_signal_fixture_process() { echo signal; }",
+          "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
+          "set +e",
+          "openclaw_plugins_stop_fixture_process 12345",
+          'status="$?"',
+          "set -e",
+          'exit "$status"',
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2x",
+        },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("invalid OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: 2x");
+    expect(result.stdout).not.toContain("signal");
+    expect(result.stdout).not.toContain("probe");
+  });
+
+  it("rejects invalid fixture stop intervals before cleanup polling", () => {
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "openclaw_plugins_signal_fixture_process() { echo signal; }",
+          "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
+          "set +e",
+          "openclaw_plugins_stop_fixture_process 12345",
+          'status="$?"',
+          "set -e",
+          'exit "$status"',
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
+          OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "soon",
+        },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("invalid OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: soon");
+    expect(result.stdout).not.toContain("signal");
+    expect(result.stdout).not.toContain("probe");
+  });
+
   it("bounds npm fixture registry logs when readiness fails", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-log-"));
     try {
@@ -428,6 +504,52 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       expect(result.stdout).toContain("truncated: showing last 80");
       expect(result.stdout).toContain("PLUGIN_FIXTURE_TAIL_MARKER");
       expect(result.stdout).not.toContain("DO_NOT_DUMP_PLUGIN_FIXTURE_PREFIX");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects invalid plugin fixture log byte limits before npm fixture setup", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-log-invalid-"));
+    try {
+      const binDir = path.join(root, "bin");
+      const fixtureDir = path.join(root, "fixture");
+      mkdirSync(binDir, { recursive: true });
+      mkdirSync(fixtureDir);
+      writeFileSync(
+        path.join(binDir, "node"),
+        "#!/bin/bash\necho node should not run >&2\nexit 1\n",
+      );
+      chmodSync(path.join(binDir, "node"), 0o755);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            "source scripts/e2e/lib/plugins/fixtures.sh",
+            "set +e",
+            `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
+            'status="$?"',
+            "set -e",
+            'exit "$status"',
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
+            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
+          },
+        },
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("invalid OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: 64kb");
+      expect(result.stderr).not.toContain("node should not run");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -476,6 +598,55 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       expect(Number.isInteger(pid)).toBe(true);
       waitForDead(pid);
       expect(readFileSync(cleanupPath, "utf8")).toBe("caller-cleanup");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects invalid plugin fixture log byte limits before ClawHub fixture setup", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-clawhub-fixture-log-invalid-"));
+    try {
+      const binDir = path.join(root, "bin");
+      const tmpDir = path.join(root, "scratch");
+      mkdirSync(binDir, { recursive: true });
+      mkdirSync(tmpDir);
+      writeFileSync(
+        path.join(binDir, "node"),
+        "#!/bin/bash\necho node should not run >&2\nexit 1\n",
+      );
+      chmodSync(path.join(binDir, "node"), 0o755);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            "source scripts/e2e/lib/plugins/fixtures.sh",
+            "source scripts/e2e/lib/plugins/clawhub.sh",
+            "set +e",
+            "run_plugins_clawhub_scenario",
+            'status="$?"',
+            "set -e",
+            'exit "$status"',
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
+            OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
+            OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
+            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
+          },
+        },
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("invalid OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: 64kb");
+      expect(result.stderr).not.toContain("node should not run");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

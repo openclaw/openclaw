@@ -36,6 +36,7 @@ import {
   validateSnapshotRestoreMode,
   withProgressOnStderr,
 } from "../../scripts/e2e/parallels/common.ts";
+import { LinuxGuest, MacosGuest } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
 import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-server.ts";
 import { parseArgs as parseLinuxSmokeArgs } from "../../scripts/e2e/parallels/linux-smoke.ts";
@@ -130,6 +131,23 @@ class FakeHostServerChild extends EventEmitter {
   }
 }
 
+class ExhaustedCleanupPhaseRunner {
+  output = "";
+  remainingTimeoutCalls = 0;
+
+  append(text: string): void {
+    this.output += text;
+  }
+
+  remainingTimeoutMs(fallbackMs?: number): number {
+    this.remainingTimeoutCalls += 1;
+    if (this.remainingTimeoutCalls > 2) {
+      throw new Error("phase deadline exceeded before starting guest command");
+    }
+    return fallbackMs ?? 30_000;
+  }
+}
+
 async function unusedLoopbackPort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => {
@@ -172,6 +190,9 @@ describe("Parallels smoke model selection", () => {
   let invalidHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidLinuxHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidMacosHostPortRangeResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidLinuxHostPortRangeResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsHostPortRangeResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
@@ -218,6 +239,18 @@ describe("Parallels smoke model selection", () => {
       `process.argv = ["node", "${TS_PATHS.windows}", "--host-port", "0x4800"]; await import("./${TS_PATHS.windows}");`,
       { env: process.env, imports: ["tsx"] },
     );
+    invalidMacosHostPortRangeResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "65536"]; await import("./${TS_PATHS.macos}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidLinuxHostPortRangeResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.linux}", "--host-port", "65536"]; await import("./${TS_PATHS.linux}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsHostPortRangeResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.windows}", "--host-port", "65536"]; await import("./${TS_PATHS.windows}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
     invalidLinuxAgentTimeoutResult = spawnNodeEvalSync(
       `process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S = "1e3"; process.argv = ["node", "${TS_PATHS.linux}"]; await import("./${TS_PATHS.linux}");`,
       { env: process.env, imports: ["tsx"] },
@@ -241,9 +274,9 @@ describe("Parallels smoke model selection", () => {
           : TS_PATHS[platform as "linux" | "macos" | "windows"];
 
       expect(wrapper, wrapperPath).toContain('cd "$ROOT_DIR"');
-      expect(wrapper, wrapperPath).toContain(`exec pnpm exec tsx ${scriptPath}`);
       expect(wrapper, wrapperPath).toContain(`exec node --import tsx ${scriptPath}`);
-      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(9);
+      expect(wrapper, wrapperPath).not.toContain("pnpm exec tsx");
+      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(6);
     }
   });
 
@@ -254,6 +287,9 @@ describe("Parallels smoke model selection", () => {
     expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
     expect(parseMacosSmokeArgs([]).vmNameExplicit).toBe(false);
     expect(parseMacosSmokeArgs(["--vm", "macOS"]).vmNameExplicit).toBe(true);
+    expect(parseMacosSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    expect(parseLinuxSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    expect(parseWindowsSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseNpmUpdateSmokeArgs(["--", "--package-spec", "openclaw@2026.5.1"]).packageSpec).toBe(
       "openclaw@2026.5.1",
     );
@@ -1000,6 +1036,72 @@ if (isPrlctl) {
     expect(macos).toContain("timeoutMs: this.remainingPhaseTimeoutMs(360_000)");
   });
 
+  it("cleans POSIX guest scripts after the phase deadline is exhausted", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-posix-cleanup-"));
+    const logPath = join(tempDir, "prlctl.log");
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+log_path=${JSON.stringify(logPath)}
+printf '%s\\n' "$*" >>"$log_path"
+args=" $* "
+if [[ "$args" == *" dd of=/tmp/openclaw-parallels-"* || "$args" == *" /bin/dd of=/tmp/openclaw-parallels-"* ]]; then
+  cat >/dev/null
+  exit 0
+fi
+if [[ "$args" == *" bash /tmp/openclaw-parallels-"* || "$args" == *" /bin/bash /tmp/openclaw-parallels-"* ]]; then
+  exit 1
+fi
+if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-"* ]]; then
+  printf 'cleanup\\n' >>"$log_path"
+  exit 0
+fi
+exit 0
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      withEnv(fakePrlctlEnv(tempDir), () => {
+        const linuxPhases = new ExhaustedCleanupPhaseRunner();
+        const linux = new LinuxGuest("Linux VM", linuxPhases as unknown as PhaseRunner);
+
+        expect(() => linux.bash("echo linux")).toThrow(
+          "Linux guest command failed with exit code 1",
+        );
+        expect(linuxPhases.remainingTimeoutCalls).toBe(2);
+
+        const macosPhases = new ExhaustedCleanupPhaseRunner();
+        const macos = new MacosGuest(
+          {
+            getTransport: () => "current-user",
+            getUser: () => "runner",
+            path: "/usr/bin:/bin",
+            resolveDesktopHome: () => "/Users/runner",
+            vmName: "macOS VM",
+          },
+          macosPhases as unknown as PhaseRunner,
+        );
+
+        expect(() => macos.sh("echo macos")).toThrow("macOS guest command failed with exit code 1");
+        expect(macosPhases.remainingTimeoutCalls).toBe(2);
+      });
+
+      const log = readFileSync(logPath, "utf8");
+      expect(log.match(/^cleanup$/gm)).toHaveLength(2);
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("streams full phase logs to disk while bounding the failure tail", async () => {
     const runDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-phase-"));
     const phaseRunner = new PhaseRunner(runDir, 128);
@@ -1307,6 +1409,21 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("clears streaming host command timers when spawn fails", async () => {
+    vi.useFakeTimers();
+    try {
+      await expect(
+        runStreaming("openclaw-definitely-missing-host-command", [], {
+          quiet: true,
+          timeoutMs: 60 * 60 * 1000,
+        }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("streams host command logs instead of retaining them in memory", async () => {
     const source = readFileSync(TS_PATHS.hostCommand, "utf8");
     const runStreamingBlock = source.slice(source.indexOf("export async function runStreaming"));
@@ -1495,6 +1612,15 @@ setInterval(() => {}, 1000);
 
     expect(invalidWindowsHostPortResult.status).toBe(1);
     expect(invalidWindowsHostPortResult.stderr).toContain("invalid --host-port: 0x4800");
+
+    expect(invalidMacosHostPortRangeResult.status).toBe(1);
+    expect(invalidMacosHostPortRangeResult.stderr).toContain("invalid --host-port: 65536");
+
+    expect(invalidLinuxHostPortRangeResult.status).toBe(1);
+    expect(invalidLinuxHostPortRangeResult.stderr).toContain("invalid --host-port: 65536");
+
+    expect(invalidWindowsHostPortRangeResult.status).toBe(1);
+    expect(invalidWindowsHostPortRangeResult.stderr).toContain("invalid --host-port: 65536");
 
     expect(invalidLinuxAgentTimeoutResult.status).toBe(1);
     expect(invalidLinuxAgentTimeoutResult.stderr).toContain(

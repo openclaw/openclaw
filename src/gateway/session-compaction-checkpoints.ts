@@ -19,10 +19,6 @@ import {
   isCompactionCheckpointTranscriptFileName,
   parseCompactionCheckpointTranscriptFileName,
 } from "../config/sessions/artifacts.js";
-import {
-  resolveSessionTranscriptRuntimeReadTarget,
-  type SessionTranscriptRuntimeScope,
-} from "../config/sessions/session-accessor.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -383,17 +379,6 @@ export async function readSessionLeafIdFromTranscriptAsync(
   return (await readSessionLeafStateFromTranscriptAsync(sessionFile, maxBytes))?.leafId ?? null;
 }
 
-/**
- * Reads the latest leaf id for a runtime transcript scope.
- */
-export async function readRuntimeSessionLeafIdFromTranscriptAsync(
-  scope: SessionTranscriptRuntimeScope,
-  maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
-): Promise<string | null> {
-  const target = await resolveSessionTranscriptRuntimeReadTarget(scope);
-  return await readSessionLeafIdFromTranscriptAsync(target.sessionFile, maxBytes);
-}
-
 export async function forkCompactionCheckpointTranscriptAsync(params: {
   sourceFile: string;
   sourceLeafId?: string;
@@ -494,22 +479,6 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     leafId,
     ...(position.entryId ? { entryId: position.entryId } : {}),
   };
-}
-
-/**
- * Captures checkpoint metadata for a runtime transcript scope.
- */
-export async function captureRuntimeCompactionCheckpointSnapshotAsync(params: {
-  sessionManager?: Pick<SessionManager, "getLeafId">;
-  scope: SessionTranscriptRuntimeScope;
-  maxBytes?: number;
-}): Promise<CapturedCompactionCheckpointSnapshot | null> {
-  const target = await resolveSessionTranscriptRuntimeReadTarget(params.scope);
-  return await captureCompactionCheckpointSnapshotAsync({
-    sessionManager: params.sessionManager,
-    sessionFile: target.sessionFile,
-    maxBytes: params.maxBytes,
-  });
 }
 
 export async function cleanupCompactionCheckpointSnapshot(

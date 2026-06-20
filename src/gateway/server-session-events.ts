@@ -185,8 +185,9 @@ async function handleTranscriptUpdateBroadcast(
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync({
             agentId: visibleAgentId,
-            sessionFile: entry.sessionFile,
+            sessionEntry: entry,
             sessionId: entry.sessionId,
+            sessionKey,
             storePath,
           }),
         )

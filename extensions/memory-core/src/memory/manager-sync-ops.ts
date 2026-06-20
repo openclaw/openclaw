@@ -29,6 +29,9 @@ import {
   isFileMissingError,
   listMemoryFiles,
   loadSqliteVecExtension,
+  MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
   normalizeExtraMemoryPaths,
   retryTransientMemoryRead,
   runWithConcurrency,
@@ -46,14 +49,13 @@ import {
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { removeMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
 import {
   cleanupAgedMemoryReindexTempFiles,
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
-  openMemoryReindexTempDatabaseAtPath,
-  releaseMemoryDatabaseSwapLock,
-  restoreMemoryDatabaseSwapLock,
+  publishMemoryDatabaseTables,
+  readMemoryDatabaseRevision,
+  removeMemoryDatabaseFiles,
 } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
@@ -142,9 +144,10 @@ type MemoryReindexRetryState = {
 };
 
 const META_KEY = "memory_index_meta_v1";
-const VECTOR_TABLE = "chunks_vec";
-const FTS_TABLE = "chunks_fts";
-const EMBEDDING_CACHE_TABLE = "embedding_cache";
+const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
+const LEGACY_VECTOR_TABLE = "chunks_vec";
+const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
+const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const SESSION_SYNC_YIELD_EVERY = 10;
@@ -164,6 +167,12 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 const log = createSubsystemLogger("memory");
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+
+function memoryTableExists(db: DatabaseSync, tableName: string): boolean {
+  return Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName),
+  );
+}
 
 type NativeMemoryWatchPair = {
   dir: string;
@@ -301,7 +310,6 @@ export abstract class MemoryManagerSyncOps {
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<string, MemorySessionDeltaState>();
   protected vectorDegradedWriteWarningShown = false;
-  protected embeddingCacheMirrorDb: DatabaseSync | null = null;
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
@@ -479,7 +487,7 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected hasIndexedChunks(): boolean {
-    const row = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
+    const row = this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() as
       | { found?: number }
       | undefined;
     return row?.found === 1;
@@ -487,7 +495,7 @@ export abstract class MemoryManagerSyncOps {
 
   protected hasSemanticChunks(): boolean {
     const row = this.db
-      .prepare(`SELECT 1 as found FROM chunks WHERE model != 'fts-only' LIMIT 1`)
+      .prepare(`SELECT 1 as found FROM memory_index_chunks WHERE model != 'fts-only' LIMIT 1`)
       .get() as { found?: number } | undefined;
     return row?.found === 1;
   }
@@ -612,6 +620,12 @@ export abstract class MemoryManagerSyncOps {
       return false;
     }
     if (ready && typeof dimensions === "number" && dimensions > 0) {
+      // Another process may have published a vectorless index while this
+      // connection retained the previous dimensions in memory.
+      const persistedMeta = this.readMeta();
+      if (persistedMeta && persistedMeta.vectorDims !== this.vector.dims) {
+        this.vector.dims = persistedMeta.vectorDims;
+      }
       this.ensureVectorTable(dimensions);
     }
     return ready;
@@ -635,6 +649,12 @@ export abstract class MemoryManagerSyncOps {
       }
       this.vector.extensionPath = loaded.extensionPath;
       this.vector.available = true;
+      if (this.dropLegacyVectorTable()) {
+        // A broad dirty sync can skip unchanged files whose source hashes were
+        // migrated. Force the next sync to republish the derived vector rows.
+        this.dirty = true;
+        this.memoryFullRetryDirty = true;
+      }
       return true;
     } catch (err) {
       const message = formatErrorMessage(err);
@@ -646,11 +666,11 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private ensureVectorTable(dimensions: number): void {
-    if (this.vector.dims === dimensions) {
+    if (this.vector.dims === dimensions && memoryTableExists(this.db, VECTOR_TABLE)) {
       return;
     }
-    if (this.vector.dims && this.vector.dims !== dimensions) {
-      this.dropVectorTable();
+    if (!this.dropVectorTable()) {
+      throw new Error(`Failed to reset ${VECTOR_TABLE} before rebuilding vector dimensions`);
     }
     this.db.exec(
       `CREATE VIRTUAL TABLE IF NOT EXISTS ${VECTOR_TABLE} USING vec0(\n` +
@@ -661,12 +681,27 @@ export abstract class MemoryManagerSyncOps {
     this.vector.dims = dimensions;
   }
 
-  private dropVectorTable(): void {
+  private dropLegacyVectorTable(): boolean {
+    if (!memoryTableExists(this.db, LEGACY_VECTOR_TABLE)) {
+      return false;
+    }
+    try {
+      this.db.exec(`DROP TABLE ${LEGACY_VECTOR_TABLE}`);
+      return true;
+    } catch (err) {
+      log.debug(`Failed to drop ${LEGACY_VECTOR_TABLE}: ${formatErrorMessage(err)}`);
+      return false;
+    }
+  }
+
+  private dropVectorTable(): boolean {
     try {
       this.db.exec(`DROP TABLE IF EXISTS ${VECTOR_TABLE}`);
+      return true;
     } catch (err) {
       const message = formatErrorMessage(err);
       log.debug(`Failed to drop ${VECTOR_TABLE}: ${message}`);
+      return false;
     }
   }
 
@@ -684,8 +719,8 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected openDatabase(): DatabaseSync {
-    const dbPath = resolveUserPath(this.settings.store.path);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+    const dbPath = resolveUserPath(this.settings.store.databasePath);
+    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
   }
 
   private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
@@ -707,8 +742,6 @@ export abstract class MemoryManagerSyncOps {
         dims: number | null;
         updated_at: number;
       }>;
-      // Keep gateway health probes responsive while rebuilding large caches.
-      const SEED_EMBEDDING_YIELD_EVERY = 1000;
       let rowCount = 0;
       let insert: ReturnType<DatabaseSync["prepare"]> | null = null;
       for (const row of rows) {
@@ -734,7 +767,7 @@ export abstract class MemoryManagerSyncOps {
           row.updated_at,
         );
         rowCount += 1;
-        if (rowCount % SEED_EMBEDDING_YIELD_EVERY === 0) {
+        if (rowCount % 1000 === 0) {
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });
@@ -756,9 +789,7 @@ export abstract class MemoryManagerSyncOps {
   protected ensureSchema() {
     const result = ensureMemoryIndexSchema({
       db: this.db,
-      embeddingCacheTable: EMBEDDING_CACHE_TABLE,
       cacheEnabled: this.cache.enabled,
-      ftsTable: FTS_TABLE,
       ftsEnabled: this.fts.enabled,
       ftsTokenizer: this.settings.store.fts.tokenizer,
     });
@@ -1739,15 +1770,15 @@ export abstract class MemoryManagerSyncOps {
     deferIndex?: boolean;
   }): Promise<MemorySourceSyncPlan> {
     const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM files WHERE path = ? AND source = ?`,
+      `DELETE FROM memory_index_sources WHERE path = ? AND source = ?`,
     );
     const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM chunks WHERE path = ? AND source = ?`,
+      `DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`,
     );
     const deleteVectorRowsByPathAndSource =
       this.vector.enabled && this.vector.available
         ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
           )
         : null;
     const deleteFtsRowsByPathAndSource =
@@ -1869,15 +1900,15 @@ export abstract class MemoryManagerSyncOps {
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<MemorySourceSyncPlan> {
     const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM files WHERE path = ? AND source = ?`,
+      `DELETE FROM memory_index_sources WHERE path = ? AND source = ?`,
     );
     const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM chunks WHERE path = ? AND source = ?`,
+      `DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`,
     );
     const deleteVectorRowsByPathAndSource =
       this.vector.enabled && this.vector.available
         ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
           )
         : null;
     const deleteFtsRowsByPathAndSource =
@@ -2266,22 +2297,11 @@ export abstract class MemoryManagerSyncOps {
     }
     try {
       if (needsFullReindex) {
-        if (
-          process.env.OPENCLAW_TEST_FAST === "1" &&
-          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"
-        ) {
-          await this.runUnsafeReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
-        } else {
-          await this.runSafeReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
-        }
+        await this.runInPlaceReindex({
+          reason: params?.reason,
+          force: params?.force,
+          progress: progress ?? undefined,
+        });
         return;
       }
 
@@ -2330,7 +2350,7 @@ export abstract class MemoryManagerSyncOps {
         this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
         if (needsFullReindex && !hasTargetSessionFiles) {
-          await this.runSafeReindex({
+          await this.runInPlaceReindex({
             reason: params?.reason ?? "fallback",
             force: true,
             progress: progress ?? undefined,
@@ -2418,22 +2438,19 @@ export abstract class MemoryManagerSyncOps {
     return true;
   }
 
-  protected async runSafeReindex(params: {
+  private async runInPlaceReindex(params: {
     reason?: string;
     force?: boolean;
     progress?: MemorySyncProgressState;
   }): Promise<void> {
-    this.assertFtsOnlySyncAllowed();
-
-    const dbPath = resolveUserPath(this.settings.store.path);
-    const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
-
+    // Build outside the shared agent DB, then publish only memory-owned tables
+    // in one short transaction so failed rebuilds leave the current index usable.
+    const dbPath = resolveUserPath(this.settings.store.databasePath);
+    const tempDbPath = `${dbPath}.memory-reindex-${randomUUID()}`;
     const originalDb = this.db;
     let reindexLock: MemoryReindexLockHandle | undefined;
     let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
-    let originalDbClosed = false;
-    let originalDbSwapLockReleased = false;
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
@@ -2443,186 +2460,36 @@ export abstract class MemoryManagerSyncOps {
     const originalState = {
       ftsAvailable: this.fts.available,
       ftsError: this.fts.loadError,
+      lastMetaSerialized: this.lastMetaSerialized,
       vectorAvailable: this.vector.available,
       vectorLoadError: this.vector.loadError,
       vectorDims: this.vector.dims,
       vectorDegradedWriteWarningShown: this.vectorDegradedWriteWarningShown,
       vectorReady: this.vectorReady,
     };
-
     const restoreOriginalState = () => {
-      if (originalDbClosed) {
-        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
-      } else {
-        if (originalDbSwapLockReleased) {
-          restoreMemoryDatabaseSwapLock(originalDb, dbPath);
-          originalDbSwapLockReleased = false;
-        }
-        this.db = originalDb;
-      }
+      this.db = originalDb;
       this.fts.available = originalState.ftsAvailable;
       this.fts.loadError = originalState.ftsError;
-      this.vector.available = originalDbClosed ? null : originalState.vectorAvailable;
+      this.lastMetaSerialized = originalState.lastMetaSerialized;
+      this.vector.available = originalState.vectorAvailable;
       this.vector.loadError = originalState.vectorLoadError;
       this.vector.dims = originalState.vectorDims;
       this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
-      this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
+      this.vectorReady = originalState.vectorReady;
     };
-
-    let publishedIndex = false;
-
     try {
       cleanupAgedMemoryReindexTempFiles(dbPath);
       reindexLock = acquireMemoryReindexLock(dbPath);
-      tempDb = openMemoryReindexTempDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
-      const openedTempDb = tempDb;
-      this.db = openedTempDb;
-      this.embeddingCacheMirrorDb = originalDb;
+      const originalRevision = readMemoryDatabaseRevision(originalDb);
+      tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
+      this.db = tempDb;
       this.lastMetaSerialized = null;
       this.resetVectorState();
       this.fts.available = false;
       this.fts.loadError = undefined;
       this.ensureSchema();
-
-      originalDbSwapLockReleased = true;
-      releaseMemoryDatabaseSwapLock(originalDb);
-      const nextMeta = await runMemoryAtomicReindex({
-        targetPath: dbPath,
-        tempPath: tempDbPath,
-        beforeTempCleanup: () => {
-          if (!tempDbClosed) {
-            closeMemoryDatabase(openedTempDb);
-            tempDbClosed = true;
-          }
-        },
-        afterPublish: () => {
-          publishedIndex = true;
-        },
-        build: async () => {
-          await this.seedEmbeddingCache(originalDb);
-          const shouldSyncMemory = shouldRetryMemoryOnFailure;
-          const shouldSyncSessions = shouldRetrySessionsOnFailure;
-
-          if (this.shouldDeferSourceWideBatch()) {
-            await this.executeSourceWideSync({
-              shouldSyncMemory,
-              shouldSyncSessions,
-              needsFullReindex: true,
-              progress: params.progress,
-            });
-            if (shouldSyncMemory) {
-              this.clearMemoryRetryState();
-            }
-            if (shouldSyncSessions) {
-              this.clearSessionRetryState();
-            } else {
-              this.refreshSessionDirtyFlag();
-            }
-          } else {
-            if (shouldSyncMemory) {
-              await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-              this.clearMemoryRetryState();
-            }
-
-            if (shouldSyncSessions) {
-              await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
-              this.clearSessionRetryState();
-            } else {
-              this.refreshSessionDirtyFlag();
-            }
-          }
-          if (!shouldSyncMemory) {
-            this.dirty = false;
-          }
-
-          const meta: MemoryIndexMeta = {
-            model: this.provider?.model ?? "fts-only",
-            provider: this.provider?.id ?? "none",
-            providerKey: this.providerKey!,
-            sources: resolveConfiguredSourcesForMeta(this.sources),
-            scopeHash: resolveConfiguredScopeHash({
-              workspaceDir: this.workspaceDir,
-              extraPaths: this.settings.extraPaths,
-              multimodal: {
-                enabled: this.settings.multimodal.enabled,
-                modalities: this.settings.multimodal.modalities,
-                maxFileBytes: this.settings.multimodal.maxFileBytes,
-              },
-            }),
-            chunkTokens: this.settings.chunking.tokens,
-            chunkOverlap: this.settings.chunking.overlap,
-            ftsTokenizer: this.settings.store.fts.tokenizer,
-          };
-
-          if (this.vector.available && this.vector.dims) {
-            meta.vectorDims = this.vector.dims;
-          }
-
-          this.writeMeta(meta);
-          this.pruneEmbeddingCacheIfNeeded?.();
-
-          closeMemoryDatabase(openedTempDb);
-          tempDbClosed = true;
-          closeMemoryDatabase(originalDb);
-          originalDbClosed = true;
-          return meta;
-        },
-      });
-
-      this.embeddingCacheMirrorDb = null;
-      this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
-      this.resetVectorState();
-      this.ensureSchema();
-      this.vector.dims = nextMeta?.vectorDims;
-    } catch (err) {
-      this.embeddingCacheMirrorDb = null;
-      try {
-        if (tempDb && !tempDbClosed && this.db === tempDb) {
-          closeMemoryDatabase(tempDb);
-          tempDbClosed = true;
-        }
-      } catch {}
-      if (publishedIndex) {
-        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
-        this.resetVectorState();
-        this.ensureSchema();
-        this.vector.dims = this.readMeta()?.vectorDims;
-        throw err;
-      }
-      try {
-        await removeMemoryIndexFiles(tempDbPath);
-      } catch {}
-      restoreOriginalState();
-      this.restoreReindexRetryState(originalRetryState);
-      this.markFailedFullReindexRetry({
-        memory: shouldRetryMemoryOnFailure,
-        sessions: shouldRetrySessionsOnFailure,
-      });
-      throw err;
-    } finally {
-      try {
-        reindexLock?.release();
-      } catch (err) {
-        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
-      }
-    }
-  }
-
-  private async runUnsafeReindex(params: {
-    reason?: string;
-    force?: boolean;
-    progress?: MemorySyncProgressState;
-  }): Promise<void> {
-    // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
-    // under the per-test HOME anyway, and this cuts substantial fs+sqlite churn.
-    const originalRetryState = this.snapshotReindexRetryState();
-    const shouldRetryMemoryOnFailure = this.sources.has("memory");
-    const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
-      { reason: params.reason, force: params.force },
-      true,
-    );
-    try {
-      this.resetIndex();
+      await this.seedEmbeddingCache(originalDb);
 
       const shouldSyncMemory = shouldRetryMemoryOnFailure;
       const shouldSyncSessions = shouldRetrySessionsOnFailure;
@@ -2683,45 +2550,63 @@ export abstract class MemoryManagerSyncOps {
 
       this.writeMeta(nextMeta);
       this.pruneEmbeddingCacheIfNeeded?.();
+      const nextFtsState = {
+        available: this.fts.available,
+        loadError: this.fts.loadError,
+      };
+
+      closeMemoryDatabase(tempDb);
+      tempDbClosed = true;
+      await publishMemoryDatabaseTables({
+        targetDb: originalDb,
+        sourcePath: tempDbPath,
+        metaKey: META_KEY,
+        expectedRevision: originalRevision,
+        vectorExtensionPath: this.vector.extensionPath,
+      });
+
+      this.db = originalDb;
+      this.resetVectorState();
+      this.fts.available = nextFtsState.available;
+      this.fts.loadError = nextFtsState.loadError;
+      this.vector.dims = nextMeta.vectorDims;
     } catch (err) {
+      if (tempDb && !tempDbClosed) {
+        try {
+          closeMemoryDatabase(tempDb);
+          tempDbClosed = true;
+        } catch {}
+      }
+      restoreOriginalState();
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
         memory: shouldRetryMemoryOnFailure,
         sessions: shouldRetrySessionsOnFailure,
       });
       throw err;
-    }
-  }
-
-  private resetIndex() {
-    this.db.exec(`DELETE FROM files`);
-    this.db.exec(`DELETE FROM chunks`);
-    if (this.fts.enabled && this.fts.available) {
-      try {
-        this.db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);
-      } catch {}
-    }
-    this.ensureSchema();
-    if (this.vector.enabled && this.vector.available) {
-      try {
-        this.db.exec(`DELETE FROM ${VECTOR_TABLE}`);
-      } catch {
-        this.dropVectorTable();
-        this.vector.dims = undefined;
-        this.vector.available = null;
-        this.vectorReady = null;
+    } finally {
+      if (tempDb && !tempDbClosed) {
+        try {
+          closeMemoryDatabase(tempDb);
+        } catch {}
       }
-    } else {
-      this.dropVectorTable();
-      this.vector.dims = undefined;
+      try {
+        removeMemoryDatabaseFiles(tempDbPath);
+      } catch (err) {
+        log.warn(`failed to remove memory reindex shadow database: ${formatErrorMessage(err)}`);
+      }
+      try {
+        reindexLock?.release();
+      } catch (err) {
+        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
+      }
     }
-    this.sessionsDirtyFiles.clear();
   }
 
   protected readMeta(): MemoryIndexMeta | null {
-    const row = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(META_KEY) as
-      | { value: string }
-      | undefined;
+    const row = this.db
+      .prepare(`SELECT value FROM memory_index_meta WHERE key = ?`)
+      .get(META_KEY) as { value: string } | undefined;
     if (!row?.value) {
       this.lastMetaSerialized = null;
       return null;
@@ -2743,7 +2628,7 @@ export abstract class MemoryManagerSyncOps {
     }
     this.db
       .prepare(
-        `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+        `INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       )
       .run(META_KEY, value);
     this.lastMetaSerialized = value;

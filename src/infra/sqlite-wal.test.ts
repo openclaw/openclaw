@@ -62,7 +62,7 @@ describe("sqlite WAL maintenance", () => {
         databasePath: path.join(tempDir, "missing", "openclaw.sqlite"),
       });
 
-      expect(statfs).toHaveBeenCalledWith(tempDir);
+      expect(statfs).toHaveBeenCalledWith(fs.realpathSync(tempDir));
       expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
       expect(db["exec"]).not.toHaveBeenCalled();
       expect(maintenance.checkpoint()).toBe(true);
@@ -238,9 +238,10 @@ describe("sqlite WAL maintenance", () => {
     try {
       fs.mkdirSync(mountDir);
       fs.symlinkSync(mountDir, linkedDir);
+      const canonicalMountDir = fs.realpathSync(mountDir);
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
       vi.spyOn(fs, "readFileSync").mockReturnValue(
-        `42 12 0:41 / ${mountDir} rw,relatime - fuse.sshfs user@host:/share rw\n`,
+        `42 12 0:41 / ${canonicalMountDir} rw,relatime - fuse.sshfs user@host:/share rw\n`,
       );
 
       expect(() =>

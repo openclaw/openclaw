@@ -292,8 +292,12 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
       {
         agentId: undefined,
-        sessionFile: "session.jsonl",
+        sessionEntry: {
+          sessionFile: "session.jsonl",
+          sessionId: "sess-1",
+        },
         sessionId: "sess-1",
+        sessionKey: "agent:main:main",
         storePath: path.join(stateDir, "gateway-sessions.json"),
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
@@ -1064,8 +1068,12 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
       {
         agentId: undefined,
-        sessionFile: "/tmp/sess-main.jsonl",
+        sessionEntry: {
+          sessionFile: "/tmp/sess-main.jsonl",
+          sessionId: "sess-main",
+        },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: path.join(stateDir, "gateway-sessions.json"),
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),

@@ -646,10 +646,6 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   await scheduleRestartSentinelWakeAttempt({ ...params, attempt: 0 });
 }
 
-export function shouldWakeFromRestartSentinel() {
-  return !process.env.VITEST && process.env.NODE_ENV !== "test";
-}
-
 export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSentinelPayload | null> {
   const current = await readRestartSentinel();
   if (

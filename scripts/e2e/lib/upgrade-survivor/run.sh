@@ -1189,7 +1189,8 @@ probe_gateway_endpoint() {
 
 start_gateway() {
   local port=18789
-  local budget="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}"
+  local budget
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)"
   local start_epoch
   local ready_epoch
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
@@ -1222,7 +1223,8 @@ check_gateway_probes() {
 
 check_gateway_status() {
   local port=18789
-  local budget="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}"
+  local budget
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"
   local status_start
   local status_end
   status_start="$(node -e "process.stdout.write(String(Date.now()))")"

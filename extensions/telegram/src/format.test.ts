@@ -103,6 +103,37 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml(input)).toBe(input);
   });
 
+  it("converts raw HTML tables to code fallbacks in legacy HTML mode", () => {
+    const input = [
+      "<table>",
+      "<thead><tr><th>Name</th><th>Age</th></tr></thead>",
+      "<tbody><tr><td>Ada</td><td>37</td></tr></tbody>",
+      "</table>",
+    ].join("");
+
+    const html = renderTelegramHtmlText(input, { textMode: "html" });
+
+    expect(html).toBe("<pre><code>| Name | Age |\n| Ada  | 37  |</code></pre>\n\n");
+    expect(html).not.toContain("&lt;table");
+  });
+
+  it("keeps raw HTML tables escaped inside legacy HTML code blocks", () => {
+    expect(
+      renderTelegramHtmlText("<pre><code><table><tr><td>A</td></tr></table></code></pre>", {
+        textMode: "html",
+      }),
+    ).toBe(
+      "<pre><code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;A&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</code></pre>",
+    );
+  });
+
+  it("preserves supported raw rich HTML tables during sanitization", () => {
+    const input =
+      '<table bordered><caption>Scores</caption><tbody><tr><td>A</td><td align="right">1</td></tr></tbody></table>';
+
+    expect(sanitizeTelegramRichHtml(input)).toBe(input);
+  });
+
   it("isolates rich media tags as blocks", () => {
     const html = markdownToTelegramRichHtml(
       'One <img src="https://example.com/a.jpg" alt="A"> two https://example.com/page',
@@ -204,6 +235,28 @@ describe("markdownToTelegramHtml", () => {
     expect(
       markdownToTelegramRichHtml("[docs](https://example.com)", { skipEntityDetection: true }),
     ).toBe('<a href="https://example.com">docs</a>');
+  });
+
+  it("keeps unsupported markdown link hrefs as visible text in rich HTML", () => {
+    expect(
+      markdownToTelegramRichHtml(
+        "[scripts/yougile.py](/home/dankar/.openclaw/workspace-yougile/scripts/yougile.py#L41)",
+      ),
+    ).toBe("<code>scripts/yougile.py</code>");
+    expect(markdownToTelegramRichHtml("[config](./openclaw.json)")).toBe("config");
+    expect(markdownToTelegramRichHtml("[docs](https://example.com/docs)")).toBe(
+      '<a href="https://example.com/docs">docs</a>',
+    );
+    expect(markdownToTelegramRichHtml("[user](tg://user?id=123)")).toBe(
+      '<a href="tg://user?id=123">user</a>',
+    );
+    expect(markdownToTelegramRichHtml("[support](mailto:user@example.com)")).toBe(
+      '<a href="mailto:user@example.com">support</a>',
+    );
+    expect(markdownToTelegramRichHtml("[call](tel:+123456789)")).toBe(
+      '<a href="tel:+123456789">call</a>',
+    );
+    expect(markdownToTelegramRichHtml("[back](#top)")).toBe('<a href="#top">back</a>');
   });
 
   it("preserves Markdown heading levels in rich HTML", () => {

@@ -836,6 +836,83 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("fails once when skip-prebuild leaves plugin lifecycle probes without a built entry", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-qa",
+        "--plugin",
+        "acpx",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("Cannot find module");
+    expect(result.stderr).not.toContain("[plugin-gauntlet] acpx install");
+    expect(result.stdout).toContain("failure missing-built-entry");
+
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.rows).toEqual([]);
+    expect(summary.failures).toEqual([]);
+    expect(summary.guardFailures).toEqual([
+      {
+        kind: "missing-built-entry",
+        message:
+          "dist/entry.js is missing; run without --skip-prebuild or build the gauntlet runtime first.",
+      },
+    ]);
+  });
+
+  it("allows skip-prebuild slash-only dry runs when selected plugins have no slash probes", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-qa",
+        "--allow-empty",
+        "--plugin",
+        "acpx",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("missing-built-entry");
+
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.rows).toEqual([]);
+    expect(summary.guardFailures).toEqual([]);
+  });
+
   it("parses observation failure mode from CLI and env", () => {
     expect(parseArgs(["--fail-on-observation", "--allow-empty"])).toMatchObject({
       allowEmpty: true,
