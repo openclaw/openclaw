@@ -290,20 +290,21 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: { [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1, label: "my-label" } },
     });
-    hoisted.listSessionsFromStoreMock.mockReturnValue({
-      sessions: [{ key: deletedAgentKey, sessionId: "sess-orphan", label: "my-label" }],
+    hoisted.listSessionsFromStoreMock.mockImplementation(() => {
+      throw new Error("session rows should not be materialized for label lookup");
     });
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 
     const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
       cfg,
-      p: { label: "my-label", agentId: "main" },
+      p: { label: "my-label" },
     });
 
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
+      agentId: undefined,
     });
+    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       ok: false,
       error: {

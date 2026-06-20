@@ -112,16 +112,17 @@ describe("name command", () => {
 
   it("clears title and legacy label together", async () => {
     const storePath = await createStorePath();
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = {
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
         sessionId: "sess-main",
         updatedAt: 1,
         totalTokens: 0,
         totalTokensFresh: true,
         title: "Billing rework",
         label: "Billing rework",
-      } as typeof store[typeof sessionKey] & NamingFields;
-      return null;
+      },
     });
 
     const params = buildNameParams("/name --clear", storePath);
@@ -156,7 +157,7 @@ describe("name command", () => {
         totalTokensFresh: true,
         title: "Taken",
         label: "Taken",
-      } as typeof store[typeof sessionKey] & NamingFields;
+      } as (typeof store)[typeof sessionKey] & NamingFields;
       return null;
     });
 

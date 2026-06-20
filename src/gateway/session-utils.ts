@@ -83,6 +83,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { getSessionTitleFromEntry, sessionTitlesEqual } from "../sessions/session-label.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -1930,6 +1931,7 @@ export function buildGatewaySessionRow(params: {
   const id = parsed?.id;
   const origin = entry?.origin;
   const originLabel = origin?.label;
+  const title = getSessionTitleFromEntry(entry);
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   const displayName =
     entry?.displayName ??
@@ -2208,6 +2210,7 @@ export function buildGatewaySessionRow(params: {
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     kind: classifySessionKey(key, entry),
+    title,
     label: entry?.label,
     displayName,
     derivedTitle,
@@ -2545,6 +2548,7 @@ function filterSessionEntries(params: {
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
+  const title = normalizeOptionalString(opts.title) ?? "";
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
@@ -2613,16 +2617,17 @@ function filterSessionEntries(params: {
       );
     })
     .filter(([, entry]) => {
-      if (!label) {
-        return true;
+      if (title && !sessionTitlesEqual(getSessionTitleFromEntry(entry), title)) {
+        return false;
       }
-      return entry?.label === label;
+      return !label || entry?.label === label;
     });
 
   if (search) {
     entries = entries.filter(([key, entry]) => {
       const cheapFields = [
         resolveSessionListSearchDisplayName(key, entry),
+        getSessionTitleFromEntry(entry),
         entry?.label,
         entry?.subject,
         entry?.sessionId,
