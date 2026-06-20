@@ -1,10 +1,4 @@
-import type { PageDefinition, RouteState } from "../router/types.ts";
-
-type RouterOutletSource<TRouteId extends string, TLoadContext, TModule> = {
-  getState: () => RouteState<TRouteId, unknown>;
-  getRoute: (routeId: TRouteId) => PageDefinition<TRouteId, TLoadContext, TModule, unknown> | null;
-  getLoadedModule: (routeId: TRouteId) => TModule | undefined;
-};
+import type { RouteState, Router } from "../router/types.ts";
 
 type RenderableModule<TContext, TData> = {
   render: (context: TContext, data: TData | undefined) => unknown;
@@ -13,7 +7,7 @@ type RenderableModule<TContext, TData> = {
 export type RouterOutletOptions<TRouteId extends string> = {
   fallbackRouteId?: TRouteId;
   pending?: (state: RouteState<TRouteId>) => unknown;
-  error?: (error: unknown, state: RouteState<TRouteId>) => unknown;
+  error?: (error: unknown, state: RouteState<TRouteId>, render?: () => unknown) => unknown;
   onRender?: (routeId: TRouteId, state: RouteState<TRouteId>, render: () => unknown) => unknown;
 };
 
@@ -29,7 +23,7 @@ function isRenderableModule<TContext, TData>(
 }
 
 export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TContext>(
-  router: RouterOutletSource<TRouteId, TLoadContext, TModule>,
+  router: Router<TRouteId, TLoadContext, TModule, unknown>,
   context: TContext,
   options: RouterOutletOptions<TRouteId> = {},
 ): unknown {
@@ -50,10 +44,13 @@ export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModul
     return options.pending?.(state) ?? null;
   }
   if (!isRenderableModule<TContext, unknown>(module)) {
-    return null;
+    return state.status === "error" ? (options.error?.(state.error, state) ?? null) : null;
   }
-  if (options.onRender) {
-    return options.onRender(routeId, state, () => module.render(context, state.resolvedData));
-  }
-  return module.render(context, state.resolvedData);
+  const renderPage = () => module.render(context, state.resolvedData);
+  const renderedPage = options.onRender
+    ? () => options.onRender?.(routeId, state, renderPage)
+    : renderPage;
+  return state.status === "error"
+    ? (options.error?.(state.error, state, renderedPage) ?? renderedPage())
+    : renderedPage();
 }

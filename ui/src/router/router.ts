@@ -5,21 +5,11 @@ import type {
   RouteLocation,
   RouteLoadCause,
   RouteState,
+  Router,
+  RouterNavigationOptions,
+  RouterOptions,
   RouterHistory,
 } from "./types.ts";
-
-type RouterOptions<TRouteId extends string, TLoadContext, TModule, TData> = {
-  routes: readonly PageDefinition<TRouteId, TLoadContext, TModule, TData>[];
-  defaultRouteId?: TRouteId;
-  staleTime?: number;
-  preloadStaleTime?: number;
-  gcTime?: number;
-};
-
-type NavigationOptions = {
-  history?: "none" | "push" | "replace";
-  revalidate?: boolean;
-};
 
 type CompiledRoutes<TRouteId extends string, TLoadContext, TModule, TData> = {
   byId: Map<TRouteId, PageDefinition<TRouteId, TLoadContext, TModule, TData>>;
@@ -176,7 +166,9 @@ export function createRouter<
   TLoadContext = unknown,
   TModule = unknown,
   TData = unknown,
->(options: RouterOptions<TRouteId, TLoadContext, TModule, TData>) {
+>(
+  options: RouterOptions<TRouteId, TLoadContext, TModule, TData>,
+): Router<TRouteId, TLoadContext, TModule, TData> {
   const defaultRouteId = options.defaultRouteId ?? null;
   const compiled = compileRoutes(options.routes, defaultRouteId);
   const staleTime = options.staleTime ?? DEFAULT_STALE_TIME;
@@ -351,7 +343,7 @@ export function createRouter<
   const navigate = async (
     routeId: TRouteId,
     context: TLoadContext,
-    navigationOptions: NavigationOptions = {},
+    navigationOptions: RouterNavigationOptions = {},
     requestedLocation = locationForPath(compiled.pathForRoute(routeId, basePath)),
   ): Promise<void> => {
     const route = compiled.byId.get(routeId);
