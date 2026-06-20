@@ -605,7 +605,11 @@ export function createMemorySearchTool(options: {
                   if (pausedIndexIdentityReason) {
                     return;
                   }
-                  if (rawResults.length === 0 && activeMemory.manager.sync) {
+                  if (
+                    rawResults.length === 0 &&
+                    activeMemory.manager.sync &&
+                    memoryManagerPurpose !== "cli"
+                  ) {
                     // A zero-hit query against a populated index triggers a
                     // one-shot forced refresh in case the index is stale. Bound
                     // that refresh so a slow/degraded sync cannot consume the
@@ -613,6 +617,13 @@ export function createMemorySearchTool(options: {
                     // provider-error cooldown). If the sync outruns its budget
                     // we keep our current results and let the background sync
                     // already scheduled by search() catch up the next call.
+                    //
+                    // One-shot CLI managers are intentionally excluded: they are
+                    // torn down in the `finally` below, and close() awaits any
+                    // in-flight sync *unbounded* — which would re-introduce the
+                    // exact hang this bound prevents, just relocated to cleanup.
+                    // A one-shot run also has no "next call" to benefit from a
+                    // warmed index, so skipping the optional refresh is a pure win.
                     const forcedSync = activeMemory.manager.sync({
                       reason: "search",
                       force: true,

@@ -399,6 +399,41 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("skips the zero-hit forced sync for one-shot CLI runs so cleanup cannot hang", async () => {
+    // Regression: bounding the forced-sync wait in the tool body is not enough
+    // for one-shot CLI runs, because the `finally` tears the manager down and
+    // close() awaits any in-flight sync UNBOUNDED — relocating the hang to
+    // cleanup. The fix skips the optional forced sync entirely for purpose=cli,
+    // so a slow/stuck sync is never even started on that path.
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      return [];
+    });
+    // If this sync were ever awaited (directly or via close()), the test would
+    // hang forever rather than fail — which is exactly the bug under guard.
+    setMemorySyncImpl(() => new Promise<void>(() => {}));
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+      oneShotCliRun: true,
+    });
+    const result = await tool.execute("one-shot-zero-hit", { query: "hidden thread codename" });
+
+    // Available, empty result — NOT an unavailable/timeout payload.
+    const details = result.details as { results?: unknown[]; disabled?: boolean };
+    expect(details.disabled).toBeUndefined();
+    expect(details.results).toEqual([]);
+    // The optional forced sync was skipped (never started) and only the initial
+    // search ran; the one-shot manager was still closed exactly once.
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+    expect(getMemoryCloseMockCalls()).toBe(1);
+  });
+
   it("surfaces an honest timeout message instead of blaming the embedding provider", async () => {
     vi.useFakeTimers();
     try {
