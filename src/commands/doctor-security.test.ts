@@ -386,7 +386,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("models.providers.openai.headers.X-Proxy-Region");
   });
 
-  it("keeps request headers aligned with secrets audit plaintext checks", async () => {
+  it("does not warn when non-sensitive model provider request headers are stored as plaintext in config", async () => {
     await noteSecurityWarnings({
       models: {
         providers: {
@@ -402,8 +402,48 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } as unknown as OpenClawConfig);
 
     const message = lastMessage();
+    expect(message).not.toContain("plaintext secret-bearing config fields");
+    expect(message).not.toContain("models.providers.openai.request.headers.X-Proxy-Region");
+  });
+
+  it("warns when sensitive model provider request headers are stored as plaintext in config", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          openai: {
+            request: {
+              headers: {
+                Authorization: "Bearer test-token",
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
     expect(message).toContain("plaintext secret-bearing config fields");
-    expect(message).toContain("models.providers.openai.request.headers.X-Proxy-Region");
+    expect(message).toContain("models.providers.openai.request.headers.Authorization");
+  });
+
+  it("does not warn when static model provider request headers are stored as plaintext in config", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          "wafer-zdr": {
+            request: {
+              headers: {
+                "Wafer-ZDR": "required",
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).not.toContain("plaintext secret-bearing config fields");
+    expect(message).not.toContain("models.providers.wafer-zdr.request.headers.Wafer-ZDR");
   });
 
   it("does not warn when model provider API keys are stored as SecretRefs", async () => {

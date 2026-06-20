@@ -206,6 +206,12 @@ function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): string[] {
     ) {
       continue;
     }
+    if (
+      target.entry.id === "models.providers.*.request.headers.*" &&
+      !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+    ) {
+      continue;
+    }
     const { ref } = resolveSecretInputRef({
       value: target.value,
       refValue: target.refValue,
