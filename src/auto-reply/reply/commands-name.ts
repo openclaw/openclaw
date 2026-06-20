@@ -19,6 +19,7 @@ import type {
 } from "./commands-types.js";
 
 const NAME_COMMAND_PREFIX = "/name";
+const NAME_CLEAR_FLAG = "--clear";
 
 export function parseNameCommand(raw: string): { title: string } | null {
   const trimmed = raw.trim();
@@ -50,10 +51,11 @@ function syncNameSessionEntry(params: HandleCommandsParams): void {
 type NameWriteResult =
   | {
       ok: true;
-      label: string;
+      label: string | undefined;
       sessionKey: string;
       entry: SessionEntry;
       hadLegacyAliases: boolean;
+      cleared: boolean;
     }
   | { ok: false; error: string };
 
@@ -91,12 +93,13 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
     if (suggestion && suggestion !== current) {
       lines.push(`Suggested name: ${suggestion}`);
     }
-    lines.push("Use /name <title> to set a name (mirrors the session manager).");
+    lines.push("Use /name <title> to set a name, or /name --clear to remove it.");
     return nameReply(lines.join("\n"));
   }
 
   const storePath = params.storePath;
   const sessionKey = params.sessionKey;
+  const shouldClear = title === NAME_CLEAR_FLAG;
   // Reuse the canonical label validation (`parseSessionLabel`) and the same
   // cross-store uniqueness rule enforced by the web/admin `sessions.patch`
   // path so chat naming behaves identically to the session manager. Resolve the
@@ -114,17 +117,21 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
       if (!entry) {
         return { ok: false, error: "no active session to name" };
       }
-      const validated = parseSessionLabel(title);
-      if (!validated.ok) {
-        return { ok: false, error: validated.error };
-      }
       const aliasKeys = new Set<string>([resolved.normalizedKey, ...resolved.legacyKeys]);
-      for (const [key, other] of Object.entries(store)) {
-        if (!aliasKeys.has(key) && other?.label === validated.label) {
-          return { ok: false, error: `label already in use: ${validated.label}` };
+      if (shouldClear) {
+        delete entry.label;
+      } else {
+        const validated = parseSessionLabel(title);
+        if (!validated.ok) {
+          return { ok: false, error: validated.error };
         }
+        for (const [key, other] of Object.entries(store)) {
+          if (!aliasKeys.has(key) && other?.label === validated.label) {
+            return { ok: false, error: `label already in use: ${validated.label}` };
+          }
+        }
+        entry.label = validated.label;
       }
-      entry.label = validated.label;
       entry.updatedAt = Math.max(entry.updatedAt ?? 0, Date.now());
       // Persist through the canonical key and drop any legacy/case-folded
       // aliases, mirroring `persistResolvedSessionEntry`.
@@ -134,10 +141,11 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
       }
       return {
         ok: true,
-        label: validated.label,
+        label: entry.label,
         sessionKey: resolved.normalizedKey,
         entry,
         hadLegacyAliases: resolved.legacyKeys.length > 0,
+        cleared: shouldClear,
       };
     },
     {
@@ -154,5 +162,8 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
   }
   syncNameSessionEntry(params);
   markCommandSessionMetadataChanged(params);
+  if (result.cleared) {
+    return nameReply("Session name cleared.");
+  }
   return nameReply(`✅ Session renamed to “${result.label}”.`);
 };
