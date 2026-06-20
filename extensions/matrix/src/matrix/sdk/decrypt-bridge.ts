@@ -11,6 +11,16 @@ type MatrixDecryptIfNeededClient = {
       isRetry?: boolean;
     },
   ) => Promise<void>;
+  getCrypto?: () => unknown;
+};
+
+type MatrixDecryptRetryEvent = MatrixEvent & {
+  attemptDecryption?: (
+    crypto: unknown,
+    opts?: {
+      isRetry?: boolean;
+    },
+  ) => Promise<void>;
 };
 
 type MatrixDecryptRetryState = {
@@ -334,7 +344,14 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     state.inFlight = true;
     state.timer = null;
     this.activeRetryRuns += 1;
-    const canDecrypt = typeof this.deps.client.decryptEventIfNeeded === "function";
+    const retryEvent = state.event as MatrixDecryptRetryEvent;
+    const retryCrypto = this.deps.client.getCrypto?.();
+    const canAttemptDecryption =
+      retryCrypto !== undefined &&
+      retryCrypto !== null &&
+      typeof retryEvent.attemptDecryption === "function";
+    const canDecrypt =
+      canAttemptDecryption || typeof this.deps.client.decryptEventIfNeeded === "function";
     if (!canDecrypt) {
       this.clearDecryptRetry(retryKey);
       this.activeRetryRuns = Math.max(0, this.activeRetryRuns - 1);
@@ -343,9 +360,15 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
 
     try {
-      await this.deps.client.decryptEventIfNeeded?.(state.event, {
-        isRetry: true,
-      });
+      if (canAttemptDecryption) {
+        await retryEvent.attemptDecryption?.(retryCrypto, {
+          isRetry: true,
+        });
+      } else {
+        await this.deps.client.decryptEventIfNeeded?.(state.event, {
+          isRetry: true,
+        });
+      }
     } catch {
       // Retry with backoff until we hit the configured retry cap.
     } finally {
