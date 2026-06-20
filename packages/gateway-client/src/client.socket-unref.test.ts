@@ -1,74 +1,113 @@
 /**
  * Regression test for issue #88230.
  *
- * The CLI path `openclaw message send` calls `client.stop()` after delivery
- * and relies on a natural process exit. If the WebSocket's underlying
+ * The CLI path `openclaw message send` tears the gateway client down after
+ * delivery and relies on a natural process exit. If the WebSocket's underlying
  * `_socket` file descriptor stays ref'd in the Node event loop, the process
  * hangs indefinitely even though the close handshake has been initiated.
  *
- * `beginStop()` must call `_socket.unref()` immediately after `ws.close()`
- * so the open socket cannot block a natural exit. This test pins that
- * behavior.
+ * Two teardown contracts share `beginStop()` and must both end with the socket
+ * unref'd, but with different *timing*:
+ *
+ *  - `stop()` is fire-and-forget (the CLI `message send` path). Nobody awaits
+ *    it, so it must unref the socket immediately after `ws.close()`.
+ *  - `stopAndWait()` is awaited (e.g. `openclaw message send --json`, which
+ *    writes its JSON result only after teardown settles). It must keep the
+ *    socket ref'd until its promise settles, then unref — otherwise unrefing
+ *    the last handle up-front lets the process exit mid-await, before the
+ *    result is written (ClawSweeper review P1, confidence 0.86).
+ *
+ * These tests pin both behaviors.
  */
 
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GatewayClient } from "./client.js";
 
-describe("GatewayClient socket unref (issue #88230)", () => {
-  test("unrefs the underlying socket on stop() so the event loop can drain", () => {
-    const client = new GatewayClient({ requestTimeoutMs: 1000 });
+type FakeSocket = { unref: () => void };
 
+// The terminate-grace fallback (FORCE_STOP_TERMINATE_GRACE_MS) is 250ms; a fake
+// ws emits no real close event, so awaited teardown settles via that fallback.
+// Keep stopAndWait timeouts comfortably above it so the race doesn't time out.
+const SETTLE_TIMEOUT_MS = 1000;
+
+function attachFakeWs(
+  client: GatewayClient,
+  { unref, close }: { unref?: () => void; close: () => void },
+): void {
+  const ws: Record<string, unknown> = {
+    readyState: WebSocket.OPEN,
+    send: vi.fn(),
+    close,
+    // beginStop()'s fallback calls ws.terminate() after the grace period to
+    // resolve the pending stop when no real close handshake arrives.
+    terminate: vi.fn(),
+  };
+  if (unref) {
+    (ws as { _socket: FakeSocket })._socket = { unref };
+  }
+  (client as unknown as { ws: unknown }).ws = ws;
+}
+
+describe("GatewayClient socket unref (issue #88230)", () => {
+  test("stop() unrefs the underlying socket immediately (fire-and-forget)", () => {
+    const client = new GatewayClient({ requestTimeoutMs: 1000 });
     const unref = vi.fn();
     const close = vi.fn();
-
-    // Inject a minimal fake ws with the internal `_socket.unref()` the
-    // `ws` package exposes. This matches the technique used by the existing
-    // `closes on missing ticks` watchdog tests in this package.
-    (
-      client as unknown as {
-        ws: {
-          readyState: number;
-          send: () => void;
-          close: () => void;
-          _socket: { unref: () => void };
-        };
-      }
-    ).ws = {
-      readyState: WebSocket.OPEN,
-      send: vi.fn(),
-      close,
-      _socket: { unref },
-    };
+    attachFakeWs(client, { unref, close });
 
     expect(unref).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
 
     client.stop();
 
+    // Fire-and-forget: close THEN unref, synchronously, with no await in between.
     expect(close).toHaveBeenCalledTimes(1);
     expect(unref).toHaveBeenCalledTimes(1);
   });
 
-  test("tolerates a ws without an internal _socket (defensive contract)", () => {
+  test("stop() tolerates a ws without an internal _socket (defensive contract)", () => {
     // `_socket` is an internal property of the `ws` package with no public
     // contract; the production code wraps the unref in try/catch. Verify
     // stop() does not throw when _socket is absent.
     const client = new GatewayClient({ requestTimeoutMs: 1000 });
-
     const close = vi.fn();
-
-    (
-      client as unknown as {
-        ws: { readyState: number; send: () => void; close: () => void };
-      }
-    ).ws = {
-      readyState: WebSocket.OPEN,
-      send: vi.fn(),
-      close,
-    };
+    attachFakeWs(client, { close });
 
     expect(() => client.stop()).not.toThrow();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  test("stopAndWait() does NOT unref until its promise settles", async () => {
+    // The core #88230 review fix: unrefing the socket up-front inside the
+    // shared beginStop() would drop the last ref'd handle before the awaited
+    // teardown settles, letting `openclaw message send --json` exit before its
+    // JSON result is written. The unref must happen only after settlement.
+    const client = new GatewayClient({ requestTimeoutMs: 1000 });
+    const unref = vi.fn();
+    const close = vi.fn();
+    attachFakeWs(client, { unref, close });
+
+    const waitPromise = client.stopAndWait({ timeoutMs: SETTLE_TIMEOUT_MS });
+
+    // Synchronously after the call, close has fired but the socket is still
+    // ref'd — the awaited result must be allowed to settle first.
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(unref).not.toHaveBeenCalled();
+
+    await waitPromise;
+
+    // Once teardown settles (here via the terminate/timeout fallback), the
+    // socket is released so a natural exit isn't blocked by the open FD.
+    expect(unref).toHaveBeenCalledTimes(1);
+  });
+
+  test("stopAndWait() tolerates a ws without an internal _socket", async () => {
+    const client = new GatewayClient({ requestTimeoutMs: 1000 });
+    const close = vi.fn();
+    attachFakeWs(client, { close });
+
+    await expect(client.stopAndWait({ timeoutMs: SETTLE_TIMEOUT_MS })).resolves.toBeUndefined();
     expect(close).toHaveBeenCalledTimes(1);
   });
 });
