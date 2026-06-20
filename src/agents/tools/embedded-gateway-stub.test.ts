@@ -170,7 +170,9 @@ describe("embedded gateway stub", () => {
   });
 
   it("reads embedded chat history from reset ancestor transcripts when includeFamily is set", async () => {
-    const sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-"));
+    const sessionsDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-")),
+    );
     const storePath = path.join(sessionsDir, "sessions.json");
     const ancestorActive = path.join(sessionsDir, "ancestor-session.jsonl");
     const ancestorArchive = path.join(
@@ -279,7 +281,9 @@ describe("embedded gateway stub", () => {
   });
 
   it("keeps embedded current chat history when family targets hit the cap", async () => {
-    const sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-cap-"));
+    const sessionsDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-cap-")),
+    );
     const storePath = path.join(sessionsDir, "sessions.json");
     const currentSessionId = "current-cap-session";
     const currentActive = path.join(sessionsDir, `${currentSessionId}.jsonl`);
