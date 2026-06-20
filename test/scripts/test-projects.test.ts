@@ -1337,6 +1337,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/deprecated-plugin-sdk-usage.mjs",
         ["test/scripts/check-deprecated-api-usage.test.ts"],
       ],
+      ["scripts/lib/direct-run.mjs", ["test/scripts/changed-lanes.test.ts"]],
       ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
       [
         "scripts/lib/plugin-npm-runtime-build.mjs",

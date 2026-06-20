@@ -744,6 +744,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/lib/deprecated-plugin-sdk-usage.mjs",
     ["test/scripts/check-deprecated-api-usage.test.ts"],
   ],
+  ["scripts/lib/direct-run.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/docker/cleanup-smoke/run.sh", ["test/scripts/docker-build-helper.test.ts"]],
   [
     "scripts/docker/install-sh-e2e/run.sh",
