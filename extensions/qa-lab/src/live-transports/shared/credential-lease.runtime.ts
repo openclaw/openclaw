@@ -17,6 +17,10 @@ const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
+const DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
+const DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS = 4096;
+const CHUNKED_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
+const CHUNKED_PAYLOAD_MAX_CHUNKS_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS";
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000] as const;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
@@ -55,6 +59,8 @@ type ConvexCredentialBrokerConfig = {
   httpTimeoutMs: number;
   leaseTtlMs: number;
   ownerId: string;
+  payloadMaxBytes: number;
+  payloadMaxChunks: number;
   payloadChunkUrl: string;
   releaseUrl: string;
   role: QaCredentialRole;
@@ -203,6 +209,16 @@ function resolveConvexCredentialBrokerConfig(params: {
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     ),
+    payloadMaxBytes: parsePositiveIntegerEnv(
+      params.env,
+      CHUNKED_PAYLOAD_MAX_BYTES_ENV,
+      DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES,
+    ),
+    payloadMaxChunks: parsePositiveIntegerEnv(
+      params.env,
+      CHUNKED_PAYLOAD_MAX_CHUNKS_ENV,
+      DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS,
+    ),
     acquireUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "acquire"),
     heartbeatUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "heartbeat"),
     payloadChunkUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "payload-chunk"),
@@ -210,7 +226,10 @@ function resolveConvexCredentialBrokerConfig(params: {
   };
 }
 
-function parseChunkedPayloadMarker(payload: unknown) {
+function parseChunkedPayloadMarker(
+  payload: unknown,
+  limits: { maxBytes: number; maxChunks: number },
+) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
@@ -225,12 +244,18 @@ function parseChunkedPayloadMarker(payload: unknown) {
   ) {
     throw new Error("Chunked credential payload marker has an invalid chunkCount.");
   }
+  if (record.chunkCount > limits.maxChunks) {
+    throw new Error(`Chunked credential payload marker exceeds ${limits.maxChunks} chunks.`);
+  }
   if (
     typeof record.byteLength !== "number" ||
     !Number.isInteger(record.byteLength) ||
     record.byteLength < 0
   ) {
     throw new Error("Chunked credential payload marker has an invalid byteLength.");
+  }
+  if (record.byteLength > limits.maxBytes) {
+    throw new Error(`Chunked credential payload marker exceeds ${limits.maxBytes} bytes.`);
   }
   return {
     chunkCount: record.chunkCount,
@@ -304,11 +329,15 @@ async function resolveConvexCredentialPayload(params: {
   fetchImpl: typeof fetch;
   kind: string;
 }) {
-  const marker = parseChunkedPayloadMarker(params.acquired.payload);
+  const marker = parseChunkedPayloadMarker(params.acquired.payload, {
+    maxBytes: params.config.payloadMaxBytes,
+    maxChunks: params.config.payloadMaxChunks,
+  });
   if (!marker) {
     return params.acquired.payload;
   }
   const chunks: string[] = [];
+  let serializedBytes = 0;
   for (let index = 0; index < marker.chunkCount; index += 1) {
     const payload = await postConvexBroker({
       fetchImpl: params.fetchImpl,
@@ -325,10 +354,14 @@ async function resolveConvexCredentialPayload(params: {
       },
     });
     const parsed = convexPayloadChunkSuccessSchema.parse(payload);
+    serializedBytes += Buffer.byteLength(parsed.data, "utf8");
+    if (serializedBytes > marker.byteLength) {
+      throw new Error("Chunked credential payload exceeded declared byteLength.");
+    }
     chunks.push(parsed.data);
   }
   const serialized = chunks.join("");
-  if (Buffer.byteLength(serialized, "utf8") !== marker.byteLength) {
+  if (serializedBytes !== marker.byteLength) {
     throw new Error("Chunked credential payload length mismatch.");
   }
   return JSON.parse(serialized) as unknown;
