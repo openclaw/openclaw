@@ -353,7 +353,11 @@ export function recordAdjustedParamsForToolCall(
     return;
   }
   const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  adjustedParamsByToolCallId.set(adjustedParamsKey, structuredClone(params));
+  try {
+    adjustedParamsByToolCallId.set(adjustedParamsKey, structuredClone(params));
+  } catch {
+    adjustedParamsByToolCallId.set(adjustedParamsKey, params);
+  }
   if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
     const oldest = adjustedParamsByToolCallId.keys().next().value;
     if (oldest) {
