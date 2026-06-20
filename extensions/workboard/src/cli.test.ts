@@ -87,6 +87,39 @@ describe("registerWorkboardCli", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
+  it("excludes archived cards by default", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const active = await store.create({ title: "Active card", status: "todo" });
+    const archived = await store.create({ title: "Archived card", status: "done" });
+    await store.archive(archived.id);
+    const program = createProgram(store);
+
+    const listOutput = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--json"], { from: "user" });
+    });
+    const parsed = JSON.parse(listOutput);
+
+    expect(parsed.cards).toHaveLength(1);
+    expect(parsed.cards[0].id).toBe(active.id);
+  });
+
+  it("includes archived cards with --include-archived", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.create({ title: "Active card", status: "todo" });
+    const archived = await store.create({ title: "Archived card", status: "done" });
+    await store.archive(archived.id);
+    const program = createProgram(store);
+
+    const listOutput = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--include-archived", "--json"], {
+        from: "user",
+      });
+    });
+    const parsed = JSON.parse(listOutput);
+
+    expect(parsed.cards).toHaveLength(2);
+  });
+
   it("redacts claim tokens from card JSON output", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Claimed worker", status: "running" });
