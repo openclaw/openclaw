@@ -503,6 +503,7 @@ const APP_EXCLUDED_BOOTSTRAP: ReadonlySet<string> = new Set<string>([
 export async function applyAppBootstrapVariants(
   files: WorkspaceBootstrapFile[],
   workspaceDir: string,
+  warn?: (message: string) => void,
 ): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(workspaceDir);
   const result: WorkspaceBootstrapFile[] = [];
@@ -516,8 +517,19 @@ export async function applyAppBootstrapVariants(
         const content = await fs.readFile(path.join(resolvedDir, variantName), "utf8");
         result.push({ ...file, content, missing: false });
         continue;
-      } catch {
-        // No variant on disk → keep the canonical file as-is.
+      } catch (err) {
+        // Only TRUE absence (ENOENT/ENOTDIR) is a valid "no variant → use canonical" fallback.
+        // Any other error (EACCES/EISDIR/ELOOP/TOCTOU/broken deploy) means the app-safe variant
+        // EXISTS but is unusable — do NOT silently serve the full canonical file to an app
+        // session (it can re-expand/disclose prompt context). Surface it loudly (codex #82 P1).
+        const code = (err as NodeJS.ErrnoException | undefined)?.code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") {
+          warn?.(
+            `app bootstrap variant ${variantName} exists but is unreadable (${code ?? "unknown"}); ` +
+              `falling back to full ${file.name} for this app session — fix the deploy`,
+          );
+        }
+        // fall through → keep the canonical file
       }
     }
     result.push(file);

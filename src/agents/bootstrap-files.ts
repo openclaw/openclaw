@@ -31,17 +31,13 @@ export async function resolveBootstrapFilesForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  warn?: (message: string) => void;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
-  let bootstrapFiles = filterBootstrapFilesForSession(
+  const bootstrapFiles = filterBootstrapFilesForSession(
     await loadWorkspaceBootstrapFiles(params.workspaceDir),
     sessionKey,
   );
-  // App-user sessions only: drop boilerplate files and prefer lean `<name>.app.md` variants.
-  // Telegram/owner sessions skip this entirely → their assembled prompt is byte-identical.
-  if (isAppUserSession(sessionKey)) {
-    bootstrapFiles = await applyAppBootstrapVariants(bootstrapFiles, params.workspaceDir);
-  }
 
   const withHooks = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
@@ -51,10 +47,20 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
-  // Phase 3: inject the per-user app_profile as a synthetic APP_PROFILE.md context
-  // file for app-user sessions (no-op otherwise). After hooks so it can't be
-  // stripped; before the buildBootstrapContextFiles clamp so it is budgeted too.
-  return appendAppProfileBootstrapFile(withHooks, {
+
+  // App-user sessions only: drop boilerplate files and prefer lean `<name>.app.md` variants.
+  // Runs AFTER hooks so a bootstrap hook (e.g. the bundled bootstrap-extra-files hook) cannot
+  // re-introduce an excluded file (TOOLS/MEMORY/USER/IDENTITY/HEARTBEAT) or revert the `.app.md`
+  // swap into an app prompt — preserving the app privacy/slimming guarantee (codex #82 P2).
+  // Telegram/owner sessions skip this entirely → their assembled prompt is byte-identical.
+  const shaped = isAppUserSession(sessionKey)
+    ? await applyAppBootstrapVariants(withHooks, params.workspaceDir, params.warn)
+    : withHooks;
+
+  // Phase 3: inject the per-user app_profile as a synthetic APP_PROFILE.md context file for
+  // app-user sessions (no-op otherwise). After shaping so it is neither excluded nor swapped;
+  // before the buildBootstrapContextFiles clamp so it is budgeted too.
+  return appendAppProfileBootstrapFile(shaped, {
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
   });
