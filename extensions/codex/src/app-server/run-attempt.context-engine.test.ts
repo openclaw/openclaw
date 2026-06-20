@@ -9,9 +9,15 @@ import {
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
+import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import {
@@ -71,9 +77,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
-function writeCodexAppServerBinding(
-  ...args: Parameters<typeof writeRawCodexAppServerBinding>
-) {
+function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -349,6 +353,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
   afterEach(async () => {
     resetCodexAppServerClientFactoryForTest();
+    resetGlobalHookRunner();
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -488,6 +493,44 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(inputText.length).toBeGreaterThan(30_000);
     expect(inputText).toContain("LARGE_CONTEXT_END");
     expect(inputText).not.toContain("[truncated ");
+
+    await harness.completeTurn();
+    await run;
+  });
+
+  it("bounds active context-engine projections when prompt hooks append context", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: async () => ({ appendContext: "hook tail" }) },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async () => ({
+        messages: [
+          assistantMessage(
+            `older context ${"x".repeat(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS)} recent anchor`,
+            10,
+          ),
+        ],
+        estimatedTokens: 300_000,
+      })),
+    });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 300_000;
+    params.prompt = "current prompt survives";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const inputText = getRequestInputText(harness);
+    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText).toContain("recent anchor");
+    expect(inputText).toContain("current prompt survives");
+    expect(inputText).toContain("hook tail");
 
     await harness.completeTurn();
     await run;

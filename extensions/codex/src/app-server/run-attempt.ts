@@ -1028,10 +1028,15 @@ export async function runCodexAppServerAttempt(
     prompt: string,
     turnPromptText: string,
   ): CodexProjectedContextRange | undefined => {
-    if (!promptContextRange || !prompt.endsWith(promptText) || !turnPromptText.endsWith(prompt)) {
+    if (!promptContextRange || !turnPromptText.endsWith(prompt)) {
       return undefined;
     }
-    const promptTextOffset = prompt.length - promptText.length;
+    // Prompt-build hooks can append context after the projected prompt, so it
+    // is no longer necessarily the suffix of the assembled prompt.
+    const promptTextOffset = prompt.lastIndexOf(promptText);
+    if (promptTextOffset === -1) {
+      return undefined;
+    }
     const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;
     return {
       start: turnPromptOffset + promptContextRange.start,
