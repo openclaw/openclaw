@@ -21,7 +21,7 @@ function macosVersion(): string {
 /** Resolves a compact OS label for diagnostics, logs, and environment summaries. */
 export function resolveOsSummary(): OsSummary {
   const platform = os.platform();
-  const release = os.release();
+  const release = platform === "darwin" ? macosVersion() : os.release();
   const arch = os.arch();
   const cacheKey = `${platform}\0${release}\0${arch}`;
   // Cache by stable os.* facts; darwin's sw_vers lookup is comparatively slow
