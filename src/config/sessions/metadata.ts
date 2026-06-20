@@ -12,14 +12,24 @@ import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
 // Origin updates merge sparse channel metadata without deleting previously known fields.
-const mergeOrigin = (
+// When provider changes, provider-specific fields are cleared because they are no longer valid.
+export function mergeOrigin(
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
-): SessionOrigin | undefined => {
+): SessionOrigin | undefined {
   if (!existing && !next) {
     return undefined;
   }
   const merged: SessionOrigin = existing ? { ...existing } : {};
+  // Determine if provider is changing. Provider change requires clearing provider-specific fields.
+  const providerChanged = existing?.provider !== next?.provider;
+  if (providerChanged) {
+    // These fields are provider-specific and should be cleared when switching providers.
+    delete merged.nativeChannelId;
+    delete merged.nativeDirectUserId;
+    delete merged.accountId;
+    delete merged.threadId;
+  }
   if (next?.label) {
     merged.label = next.label;
   }
@@ -51,7 +61,7 @@ const mergeOrigin = (
     merged.threadId = next.threadId;
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
-};
+}
 
 /** Derives session origin metadata from an inbound message context. */
 export function deriveSessionOrigin(
