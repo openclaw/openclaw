@@ -289,6 +289,33 @@ Use one TLS termination point and apply HSTS there.
     }
     ```
 
+    **Static files whitelist configuration**:
+
+    When deploying OpenClaw behind oauth2-proxy, you need to configure oauth2-proxy to skip authentication for static assets like `manifest.webmanifest`, favicons, and other public resources that browsers request without credentials.
+
+    Add the following to your oauth2-proxy configuration (command-line flags or config file):
+
+    ```yaml
+    # oauth2-proxy configuration
+    skipAuthRoutes:
+      - /manifest.webmanifest
+      - /favicon.ico
+      - /favicon.svg
+      - /apple-touch-icon.png
+      - /assets/*  # Optional: skip all static assets under /assets/
+    ```
+
+    Or using regex patterns:
+
+    ```yaml
+    skipAuthRegex:
+      - "^/.*\\.(webmanifest|ico|svg|png|css|js)$"
+    ```
+
+    **Why this is needed**: The Web App Manifest (`manifest.webmanifest`) is a standard PWA component that browsers automatically fetch to enable "Add to Home Screen" functionality. Browsers expect to retrieve this file without authentication. If oauth2-proxy intercepts the request, it returns 403 Forbidden because the browser cannot provide OAuth credentials.
+
+    **Troubleshooting**: If you see 403 errors for `manifest.webmanifest` or other static files in your browser's developer tools Network tab, check your oauth2-proxy configuration and ensure these paths are in the skip-auth list.
+
   </Accordion>
   <Accordion title="Traefik with forward auth">
     ```json5
