@@ -42,9 +42,18 @@ type PendingMessageToolVisibleReply = {
 };
 
 /** Resolve the text cap used when projecting chat history for display. */
-export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
+export function resolveEffectiveChatHistoryMaxChars(cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
+  }
+  if (cfg && typeof cfg === "object") {
+    const gateway = (cfg as Record<string, unknown>).gateway as Record<string, unknown> | undefined;
+    if (
+      gateway?.chatHistoryTextMaxChars != null &&
+      typeof gateway.chatHistoryTextMaxChars === "number"
+    ) {
+      return gateway.chatHistoryTextMaxChars;
+    }
   }
   return DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
 }

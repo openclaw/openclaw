@@ -2488,6 +2488,25 @@ describe("resolveEffectiveChatHistoryMaxChars", () => {
       DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
     );
   });
+
+  it("reads from gateway.chatHistoryTextMaxChars when no RPC override", () => {
+    const cfg = { gateway: { chatHistoryTextMaxChars: 16_384 } };
+    expect(resolveEffectiveChatHistoryMaxChars(cfg, undefined)).toBe(16_384);
+  });
+
+  it("ignores non-number chatHistoryTextMaxChars config values", () => {
+    const cfg = { gateway: { chatHistoryTextMaxChars: "32768" } };
+    expect(resolveEffectiveChatHistoryMaxChars(cfg, undefined)).toBe(
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    );
+  });
+
+  it("ignores chatHistoryTextMaxChars when gateway config is missing", () => {
+    const cfg = { chatHistoryTextMaxChars: 16_384 };
+    expect(resolveEffectiveChatHistoryMaxChars(cfg, undefined)).toBe(
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    );
+  });
 });
 
 describe("timestampOptsFromConfig", () => {

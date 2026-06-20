@@ -556,4 +556,10 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * Maximum characters to display per assistant message in WebChat/Control UI
+   * chat history. Messages longer than this are truncated with "...(truncated)...".
+   * Default: 8000. Set to a higher value (e.g. 32768) for long reports.
+   */
+  chatHistoryTextMaxChars?: number;
 };
