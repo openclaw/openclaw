@@ -1,12 +1,12 @@
 // Memory Wiki plugin module implements status behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listActiveMemoryPublicArtifacts } from "openclaw/plugin-sdk/memory-host-core";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { inferWikiPageKind, toWikiPageSummary, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
+import { resolveBridgePublicArtifacts } from "./bridge.js";
 
 type MemoryWikiStatusWarning = {
   code:
@@ -63,7 +63,7 @@ export type MemoryWikiDoctorReport = {
 type ResolveMemoryWikiStatusDeps = {
   appConfig?: OpenClawConfig;
   pathExists?: (inputPath: string) => Promise<boolean>;
-  listPublicArtifacts?: typeof listActiveMemoryPublicArtifacts;
+  listPublicArtifacts?: typeof resolveBridgePublicArtifacts;
   resolveCommand?: (command: string) => Promise<string | null>;
 };
 
@@ -213,7 +213,7 @@ export async function resolveMemoryWikiStatus(
   const bridgePublicArtifactCount =
     deps?.appConfig && config.vaultMode === "bridge" && config.bridge.enabled
       ? (
-          await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
+          await (deps.listPublicArtifacts ?? resolveBridgePublicArtifacts)({
             cfg: deps.appConfig,
           })
         ).length
