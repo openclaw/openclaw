@@ -293,7 +293,7 @@ export function renderApp(state: AppViewState) {
 
   const routeState = appRouter.getState();
   const activeMatch = routeState.matches[0];
-  const renderedRouteId = state.routeId ?? activeMatch?.routeId;
+  const renderedRouteId = activeMatch?.routeId ?? state.routeId;
   const activeRouteModule = activeMatch?.module;
   const isChat =
     renderedRouteId === "chat" ||
@@ -512,7 +512,10 @@ export function renderApp(state: AppViewState) {
                         : nothing}
                       <div class="nav-section__items">
                         ${group.routes.map((routeId) =>
-                          renderRouteNavItem(state, routeId, { collapsed: navCollapsed }),
+                          renderRouteNavItem(state, routeId, {
+                            activeRouteId: renderedRouteId,
+                            collapsed: navCollapsed,
+                          }),
                         )}
                       </div>
                     </section>

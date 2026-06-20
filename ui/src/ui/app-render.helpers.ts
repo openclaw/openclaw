@@ -155,11 +155,12 @@ const NEW_CHAT_CREATE_FAILED_MESSAGE =
 export function renderRouteNavItem(
   state: AppViewState,
   routeId: RouteId,
-  opts?: { collapsed?: boolean },
+  opts?: { activeRouteId?: RouteId; collapsed?: boolean },
 ) {
   const href = pathForRoute(routeId, state.basePath);
+  const activeRouteId = opts?.activeRouteId ?? state.routeId;
   const isActive =
-    routeId === "config" ? isSettingsNavigationRoute(state.routeId) : state.routeId === routeId;
+    routeId === "config" ? isSettingsNavigationRoute(activeRouteId) : activeRouteId === routeId;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   return html`
     <a
