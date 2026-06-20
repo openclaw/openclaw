@@ -188,13 +188,15 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
   if (opts.force) {
     throw new Error("--safe cannot be combined with --force; omit --safe to force restart now");
   }
-  if (opts.wait !== undefined) {
-    throw new Error("--safe cannot be combined with --wait; safe restart uses gateway deferral");
-  }
   const skipDeferral = opts.skipDeferral === true;
-  const params: { reason: string; skipDeferral?: true } = { reason: "gateway.restart.safe" };
+  const params: { reason: string; skipDeferral?: true; deferralTimeoutMs?: number } = {
+    reason: "gateway.restart.safe",
+  };
   if (skipDeferral) {
     params.skipDeferral = true;
+  }
+  if (opts.wait !== undefined) {
+    params.deferralTimeoutMs = parseDurationMs(opts.wait);
   }
   const result = await callGatewayCli<SafeGatewayRestartRequestResult>({
     method: "gateway.restart.request",

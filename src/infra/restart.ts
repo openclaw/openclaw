@@ -49,6 +49,7 @@ let pendingRestartReason: string | undefined;
 let pendingRestartEmitHooks: RestartEmitHooks | undefined;
 let pendingRestartSessionKey: string | undefined;
 let pendingRestartSkipDeferral = false;
+let pendingRestartDeferralTimeoutMs: number | undefined;
 let pendingRestartPreparing = false;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
@@ -70,6 +71,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartEmitHooks = undefined;
   pendingRestartSessionKey = undefined;
   pendingRestartSkipDeferral = false;
+  pendingRestartDeferralTimeoutMs = undefined;
   pendingRestartPreparing = false;
 }
 
@@ -78,10 +80,12 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
     () => {
       const scheduledReason = pendingRestartReason;
       const scheduledSkipDeferral = pendingRestartSkipDeferral;
+      const scheduledDeferralTimeoutMs = pendingRestartDeferralTimeoutMs;
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
       pendingRestartSkipDeferral = false;
+      pendingRestartDeferralTimeoutMs = undefined;
       pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
       if (scheduledSkipDeferral || !pendingCheck) {
@@ -89,9 +93,10 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
         return;
       }
       const cfg = getRuntimeConfig();
-      const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
-        cfg.gateway?.reload?.deferralTimeoutMs,
-      );
+      const deferralTimeoutMs =
+        scheduledDeferralTimeoutMs !== undefined
+          ? resolveGatewayRestartDeferralTimeoutMs(scheduledDeferralTimeoutMs)
+          : resolveGatewayRestartDeferralTimeoutMs(cfg.gateway?.reload?.deferralTimeoutMs);
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
         maxWaitMs: deferralTimeoutMs,
@@ -794,6 +799,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   sessionKey?: string;
   skipDeferral?: boolean;
   skipCooldown?: boolean;
+  deferralTimeoutMs?: number;
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -895,6 +901,9 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         pendingRestartDueAt = requestedDueAt;
         pendingRestartReason = reason;
         pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
+        if (opts?.deferralTimeoutMs !== undefined) {
+          pendingRestartDeferralTimeoutMs = opts.deferralTimeoutMs;
+        }
         armPendingRestartTimer(requestedDueAt, nowMs);
         return {
           ok: true,
@@ -951,6 +960,9 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   pendingRestartEmitHooks = nextPendingEmitHooks;
   pendingRestartSessionKey = nextPendingSessionKey;
   pendingRestartSkipDeferral = skipDeferral;
+  if (opts?.deferralTimeoutMs !== undefined) {
+    pendingRestartDeferralTimeoutMs = opts.deferralTimeoutMs;
+  }
   armPendingRestartTimer(requestedDueAt, nowMs);
   return {
     ok: true,

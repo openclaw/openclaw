@@ -18,12 +18,20 @@ function normalizeSkipDeferral(value: unknown): boolean {
 }
 
 /** Gateway request handlers for safe restart coordination. */
+function normalizeDeferralTimeoutMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value <= 0 ? 0 : Math.floor(value);
+  }
+  return undefined;
+}
+
 export const restartHandlers: GatewayRequestHandlers = {
   "gateway.restart.request": async ({ respond, params }) => {
     const result = requestSafeGatewayRestart({
       reason: normalizeReason(params.reason),
       delayMs: 0,
       skipDeferral: normalizeSkipDeferral(params.skipDeferral),
+      deferralTimeoutMs: normalizeDeferralTimeoutMs(params.deferralTimeoutMs),
     });
     respond(true, result);
   },
