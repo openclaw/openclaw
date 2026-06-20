@@ -1,4 +1,5 @@
 // Measure Rpc Rtt tests cover measure rpc rtt script behavior.
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -132,6 +133,20 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     for (const flag of ["--output-dir", "--repo-root", "--iterations", "--methods"]) {
       expect(() => parseArgs([flag, "--methods", "health"])).toThrow(`${flag} requires a value.`);
     }
+  });
+
+  it("prints usage for help without requiring an output directory", () => {
+    expect(parseArgs(["--help"])).toMatchObject({ help: true });
+    expect(parseArgs(["-h"])).toMatchObject({ help: true });
+
+    const result = spawnSync(process.execPath, ["scripts/measure-rpc-rtt.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/measure-rpc-rtt.mjs");
+    expect(result.stderr).toBe("");
   });
 
   it("does not publish zero-millisecond RPC RTT summaries", () => {

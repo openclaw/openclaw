@@ -8,6 +8,8 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
+import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
   type CommandRunner,
   type CrabboxInspect,
@@ -20,7 +22,6 @@ import {
   stopCrabbox,
   warmupCrabbox,
 } from "./crabbox-runtime.js";
-import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 
 export type MantisSlackDesktopSmokeOptions = {
   alternateModel?: string;
@@ -152,16 +153,6 @@ const CRABBOX_TTL_ENV = "OPENCLAW_MANTIS_CRABBOX_TTL";
 const HYDRATE_MODE_ENV = "OPENCLAW_MANTIS_HYDRATE_MODE";
 const SLACK_URL_ENV = "OPENCLAW_MANTIS_SLACK_URL";
 const SLACK_CHANNEL_ID_ENV = "OPENCLAW_MANTIS_SLACK_CHANNEL_ID";
-
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
 
 function normalizeHydrateMode(
   value: string | undefined,

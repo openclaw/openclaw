@@ -495,44 +495,85 @@ export async function runChecks(
   return failures;
 }
 
-function resolveCliShardSpec(args, env) {
-  const shardIndex = args.indexOf("--shard");
-  if (shardIndex !== -1) {
-    return args[shardIndex + 1] ?? "";
+function usage() {
+  return `Usage: node scripts/run-additional-boundary-checks.mjs [--shard <N/TOTAL>[,<N/TOTAL>]]
+
+Runs supplemental architecture and boundary checks with bounded concurrency.
+
+Options:
+  --shard <spec>    Run only checks selected by one or more N/TOTAL shard specs
+  -h, --help        Show this help
+`;
+}
+
+export function parseCliArgs(args, env = process.env) {
+  let shardSpec = env.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "";
+  let help = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "-h" || arg === "--help") {
+      help = true;
+      continue;
+    }
+    if (arg === "--shard") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error("--shard requires a value");
+      }
+      shardSpec = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--shard=")) {
+      const value = arg.slice("--shard=".length);
+      if (!value) {
+        throw new Error("--shard requires a value");
+      }
+      shardSpec = value;
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
   }
-  const inlineShard = args.find((arg) => arg.startsWith("--shard="));
-  if (inlineShard) {
-    return inlineShard.slice("--shard=".length);
-  }
-  return env.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "";
+  return { help, shardSpec };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const concurrencyRaw =
-    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
-    process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY;
-  const concurrencyLabel =
-    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY === undefined
-      ? "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"
-      : "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY";
-  const concurrency = resolveConcurrency(concurrencyRaw, 4, concurrencyLabel);
-  const checkTimeoutMs = resolvePositiveInteger(
-    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS,
-    DEFAULT_CHECK_TIMEOUT_MS,
-    "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS",
-  );
-  const outputMaxBytes = resolvePositiveInteger(
-    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES,
-    DEFAULT_OUTPUT_MAX_BYTES,
-    "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
-  );
-  const shards = parseShardSelection(resolveCliShardSpec(process.argv.slice(2), process.env));
-  const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
-  if (shards) {
-    process.stdout.write(
-      `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,
-    );
+  try {
+    const cliArgs = parseCliArgs(process.argv.slice(2), process.env);
+    if (cliArgs.help) {
+      process.stdout.write(usage());
+      process.exitCode = 0;
+    } else {
+      const concurrencyRaw =
+        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
+        process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY;
+      const concurrencyLabel =
+        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY === undefined
+          ? "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"
+          : "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY";
+      const concurrency = resolveConcurrency(concurrencyRaw, 4, concurrencyLabel);
+      const checkTimeoutMs = resolvePositiveInteger(
+        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS,
+        DEFAULT_CHECK_TIMEOUT_MS,
+        "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS",
+      );
+      const outputMaxBytes = resolvePositiveInteger(
+        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES,
+        DEFAULT_OUTPUT_MAX_BYTES,
+        "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
+      );
+      const shards = parseShardSelection(cliArgs.shardSpec);
+      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
+      if (shards) {
+        process.stdout.write(
+          `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,
+        );
+      }
+      const failures = await runChecks(checks, { checkTimeoutMs, concurrency, outputMaxBytes });
+      process.exitCode = failures === 0 ? 0 : 1;
+    }
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n\n${usage()}`);
+    process.exitCode = 1;
   }
-  const failures = await runChecks(checks, { checkTimeoutMs, concurrency, outputMaxBytes });
-  process.exitCode = failures === 0 ? 0 : 1;
 }

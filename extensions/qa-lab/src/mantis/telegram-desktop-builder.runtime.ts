@@ -8,6 +8,8 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
+import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
   type CommandRunner,
   type CrabboxInspect,
@@ -20,7 +22,6 @@ import {
   stopCrabbox,
   warmupCrabbox,
 } from "./crabbox-runtime.js";
-import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 
 export type MantisTelegramDesktopBuilderOptions = {
   commandRunner?: CommandRunner;
@@ -125,16 +126,6 @@ const TELEGRAM_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_T
 const TELEGRAM_PROFILE_ARCHIVE_ENV_NAME_ENV =
   "OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_ARCHIVE_ENV";
 const TELEGRAM_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_DIR";
-
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
 
 function normalizeHydrateMode(
   value: string | undefined,
