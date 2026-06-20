@@ -2,6 +2,8 @@
  * Shared validation for model-supplied tool parameters.
  * Converts malformed file-tool arguments into retryable errors and fixes the
  * specific XML suffix corruption seen in path arguments.
+ * Also corrects hallucinated document extensions (e.g. .docodex → .docx)
+ * produced by models conflating Office extensions with "codex" tokens.
  */
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
@@ -110,6 +112,39 @@ export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
+/**
+ * Known hallucinated document-extension suffixes that models produce by
+ * conflating Office file extensions with the "codex" token (e.g. .docodex,
+ * .pptcodex, .xlscodex).  Maps each hallucinated suffix to the correct one.
+ */
+const HALLUCINATED_DOC_EXTENSIONS: ReadonlyMap<string, string> = new Map([
+  [".docodex", ".docx"],
+  [".pptcodex", ".pptx"],
+  [".xlscodex", ".xlsx"],
+]);
+
+const HALLUCINATED_DOC_EXTENSIONS_RE =
+  /\.(docodex|pptcodex|xlscodex)$/i;
+
+/**
+ * Correct hallucinated document extensions in a file path.
+ * Models sometimes rewrite .docx/.pptx/.xlsx as .docodex/.pptcodex/.xlscodex
+ * by conflating the Office extension with the "codex" token.  This function
+ * detects and auto-corrects those patterns while leaving all other paths
+ * unchanged.
+ *
+ * @returns The corrected path, or the original if no hallucinated extension
+ *          was found.
+ */
+export function normalizeHallucinatedDocumentExtension(filePath: string): string {
+  const match = filePath.match(HALLUCINATED_DOC_EXTENSIONS_RE);
+  if (!match) return filePath;
+  const hallucinated = match[1].toLowerCase();
+  const corrected = HALLUCINATED_DOC_EXTENSIONS.get(`.${hallucinated}`);
+  if (!corrected) return filePath;
+  return filePath.slice(0, match.index!) + corrected;
+}
+
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,
@@ -196,10 +231,26 @@ export function wrapToolParamValidation(
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
       const pathKeys = resolveMalformedXmlArgValuePathKeys(requiredParamGroups);
-      const normalizedParams =
+      let normalizedParams =
         record && pathKeys.length > 0
           ? stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys)
           : params;
+      // Correct hallucinated document extensions (e.g. .docodex → .docx)
+      // on the same path keys that receive XML suffix stripping.
+      if (pathKeys.length > 0) {
+        const normRecord = getToolParamsRecord(normalizedParams);
+        if (normRecord) {
+          for (const key of pathKeys) {
+            const value = normRecord[key];
+            if (typeof value !== "string") continue;
+            const corrected = normalizeHallucinatedDocumentExtension(value);
+            if (corrected !== value) {
+              if (normalizedParams === params) normalizedParams = { ...normRecord };
+              (normalizedParams as Record<string, unknown>)[key] = corrected;
+            }
+          }
+        }
+      }
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
       }
