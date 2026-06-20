@@ -401,6 +401,30 @@ describe("session family carryover", () => {
     ]);
   });
 
+  it("keeps transformed context when carryover resolution fails", async () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "current ask" }], timestamp: 1 },
+    ];
+    const transformedMessages: AgentMessage[] = [
+      { role: "assistant", content: [{ type: "text", text: "prepared context" }], timestamp: 2 },
+    ];
+    let transformContext:
+      | ((messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>)
+      | undefined;
+    installSessionFamilyCarryoverContextTransform({
+      messages,
+      getTransformContext: () => async () => transformedMessages,
+      setTransformContext: (transform) => {
+        transformContext = transform;
+      },
+      resolveCarryover: async () => {
+        throw new Error("lookup failed");
+      },
+    });
+
+    await expect(transformContext?.(messages)).resolves.toBe(transformedMessages);
+  });
+
   it("keeps reset-family carryover out of raw model runs", () => {
     expect(shouldInstallSessionFamilyCarryoverContextTransform({ isRawModelRun: true })).toBe(
       false,

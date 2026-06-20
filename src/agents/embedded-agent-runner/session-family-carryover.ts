@@ -203,7 +203,7 @@ export function installSessionFamilyCarryoverContextTransform(params: {
     if (signal?.aborted) {
       return transformed;
     }
-    carryoverPromise ??= params.resolveCarryover();
+    carryoverPromise ??= params.resolveCarryover().catch(() => undefined);
     const carryover = await carryoverPromise;
     if (!carryover || hasCompactionSummary(transformed)) {
       return transformed;
