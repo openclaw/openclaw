@@ -171,6 +171,12 @@ export type TelegramAccountConfig = {
    * Default: false.
    */
   richMessages?: boolean;
+  /**
+   * Message rendering mode:
+   * - "auto" (default): render markdown as rich HTML
+   * - "raw": send plain text without HTML formatting (works around macOS rendering bugs)
+   */
+  renderMode?: "auto" | "raw";
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: TelegramPreviewStreamingConfig;
   mediaMaxMb?: number;
