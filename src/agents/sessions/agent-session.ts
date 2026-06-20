@@ -15,6 +15,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
+import { readSessionEntry } from "../../config/sessions/store-load.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   clampThinkingLevel,
@@ -250,6 +251,15 @@ export interface AgentSessionConfig {
   sessionStartEvent?: SessionStartEvent;
   /** Optional lock used by embedded runs before session-file writes or write-capable hooks. */
   withSessionWriteLock?: AgentSessionWriteLockRunner;
+  /**
+   * Path to the JSON session store for the agent. Used by
+   * `syncModelFromStoreEntry` to read providerOverride/modelOverride persisted
+   * by `/model`. Distinct from `sessionManager.getSessionFile()` which returns
+   * the JSONL transcript path.
+   */
+  storePath?: string;
+  /** Session key for the JSON session store entry lookup. */
+  sessionKey?: string;
 }
 
 export interface ExtensionBindings {
@@ -381,6 +391,8 @@ export class AgentSession {
   private baseToolsOverride?: Record<string, AgentTool>;
   private sessionStartEvent: SessionStartEvent;
   private withExternalSessionWriteLock?: AgentSessionWriteLockRunner;
+  private storePath?: string;
+  private sessionKey?: string;
   private extensionUIContext?: ExtensionUIContext;
   private extensionCommandContextActions?: ExtensionCommandContextActions;
   private extensionAbortHandler?: () => void;
@@ -421,6 +433,8 @@ export class AgentSession {
       reason: "startup",
     };
     this.withExternalSessionWriteLock = config.withSessionWriteLock;
+    this.storePath = config.storePath;
+    this.sessionKey = config.sessionKey;
 
     // Always subscribe to agent events for internal handling
     // (session persistence, extensions, auto-compaction, retry logic)
@@ -2292,6 +2306,42 @@ export class AgentSession {
     this.agent.state.model = refreshedModel;
   }
 
+  // View-only refresh of an override persisted in the session entry by another
+  // process (e.g. `/model` command before AgentSession restart). Not a user
+  // switch — setModel() owns appendModelChange + setDefaultModelProvider side effects.
+  // `storePath` is the JSON session store (sessions.json), distinct from the
+  // JSONL transcript path returned by `sessionFile`.
+  private syncModelFromStoreEntry(): void {
+    const storePath = this.storePath;
+    const sessionKey = this.sessionKey ?? this.sessionId;
+    if (!storePath) {
+      return;
+    }
+    const entry = readSessionEntry(storePath, sessionKey);
+    if (!entry) {
+      return;
+    }
+    const overrideProvider = entry.providerOverride;
+    const overrideModel = entry.modelOverride;
+    if (!overrideProvider || !overrideModel) {
+      return;
+    }
+    const current = this.model;
+    if (current && current.provider === overrideProvider && current.id === overrideModel) {
+      return;
+    }
+    const target = this.sessionModelRegistry.find(overrideProvider, overrideModel);
+    if (!target) {
+      return;
+    }
+    if (!this.sessionModelRegistry.hasConfiguredAuth(target)) {
+      return;
+    }
+    const previous = this.model;
+    this.agent.state.model = target;
+    void this.emitModelSelect(target, previous, "set").catch(() => {});
+  }
+
   private bindExtensionCore(runner: ExtensionRunner): void {
     const getCommands = (): SlashCommandInfo[] => {
       const extensionCommands: SlashCommandInfo[] = runner
@@ -2931,6 +2981,7 @@ export class AgentSession {
       let summaryText: string | undefined;
       let summaryDetails: unknown;
       if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
+        this.syncModelFromStoreEntry();
         const model = this.model!;
         const { apiKey, headers } = await this.getRequiredRequestAuth(model);
         const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
@@ -3122,6 +3173,7 @@ export class AgentSession {
   }
 
   getContextUsage(): ContextUsage | undefined {
+    this.syncModelFromStoreEntry();
     const model = this.model;
     if (!model) {
       return undefined;
