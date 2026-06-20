@@ -20,6 +20,8 @@ import {
 } from "../../scripts/run-oxlint-shards.mjs";
 import {
   filterSparseMissingOxlintTargets,
+  parseOpenClawOxlintArgs,
+  shouldSkipOxlintLock,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -49,6 +51,41 @@ function isProcessAlive(pid: number): boolean {
 }
 
 describe("run-oxlint", () => {
+  it("strips wrapper-only focused config args before oxlint runs", () => {
+    expect(
+      parseOpenClawOxlintArgs([
+        "--openclaw-focused-config",
+        "--config",
+        "config/oxlint/no-raw-window-open.json",
+        "ui/src/ui",
+      ]),
+    ).toEqual({
+      focusedConfig: true,
+      args: ["--config", "config/oxlint/no-raw-window-open.json", "ui/src/ui"],
+    });
+  });
+
+  it("routes focused boundary guard package scripts through the oxlint wrapper", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(packageJson.scripts["lint:plugins:no-register-http-handler"]).toBe(
+      "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/no-register-http-handler.json src extensions",
+    );
+    expect(packageJson.scripts["lint:ui:no-raw-window-open"]).toBe(
+      "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/no-raw-window-open.json ui/src/ui",
+    );
+  });
+
+  it("treats focused config guards as narrow enough to skip the heavy-check lock", () => {
+    expect(shouldSkipOxlintLock({ focusedConfig: true, env: {} })).toBe(true);
+    expect(shouldSkipOxlintLock({ focusedConfig: false, env: {} })).toBe(false);
+    expect(
+      shouldSkipOxlintLock({ focusedConfig: false, env: { OPENCLAW_OXLINT_SKIP_LOCK: "1" } }),
+    ).toBe(true);
+  });
+
   it("prepares extension package boundary artifacts for normal lint runs", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);

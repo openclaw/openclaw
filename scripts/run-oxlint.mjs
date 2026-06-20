@@ -39,6 +39,7 @@ const OXLINT_VALUE_FLAGS = new Set([
   "--tsconfig",
   "--warn",
 ]);
+const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
 
 function hasOxlintFormatArg(args) {
   return args.some(
@@ -55,6 +56,20 @@ function addOxlintFormatArg(args, value) {
   const separatorIndex = args.indexOf("--");
   const insertIndex = separatorIndex === -1 ? args.length : separatorIndex;
   args.splice(insertIndex, 0, "--format", value);
+}
+
+/**
+ * Parses wrapper-only args before invoking oxlint.
+ */
+export function parseOpenClawOxlintArgs(argv) {
+  return {
+    focusedConfig: argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG),
+    args: argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG),
+  };
+}
+
+export function shouldSkipOxlintLock({ focusedConfig, env }) {
+  return focusedConfig || env.OPENCLAW_OXLINT_SKIP_LOCK === "1";
 }
 
 /**
@@ -223,10 +238,13 @@ async function prepareExtensionPackageBoundaryArtifacts(env) {
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
 export async function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
-  const { args: policyArgs, env } = applyLocalOxlintPolicy(
-    argv,
-    resolveLocalHeavyCheckEnv(runtimeEnv),
-  );
+  const openClawArgs = parseOpenClawOxlintArgs(argv);
+  const localEnv = resolveLocalHeavyCheckEnv(runtimeEnv);
+  // Focused config guards are single-rule package checks. Keep wrapper-owned
+  // sparse filtering and process handling without broad type-aware policy.
+  const { args: policyArgs, env } = openClawArgs.focusedConfig
+    ? { args: openClawArgs.args, env: localEnv }
+    : applyLocalOxlintPolicy(openClawArgs.args, localEnv);
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
   const finalArgs = sparseTargets.args;
   if (env.GITHUB_ACTIONS === "true" && !hasOxlintFormatArg(finalArgs)) {
@@ -248,22 +266,22 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
     return;
   }
 
-  const releaseLock =
-    env.OPENCLAW_OXLINT_SKIP_LOCK === "1"
-      ? () => {}
-      : shouldAcquireLocalHeavyCheckLockForOxlint(finalArgs, {
-            cwd: process.cwd(),
-            env,
-          })
-        ? acquireLocalHeavyCheckLockSync({
-            cwd: process.cwd(),
-            env,
-            toolName: "oxlint",
-          })
-        : () => {};
+  const releaseLock = shouldSkipOxlintLock({ focusedConfig: openClawArgs.focusedConfig, env })
+    ? () => {}
+    : shouldAcquireLocalHeavyCheckLockForOxlint(finalArgs, {
+          cwd: process.cwd(),
+          env,
+        })
+      ? acquireLocalHeavyCheckLockSync({
+          cwd: process.cwd(),
+          env,
+          toolName: "oxlint",
+        })
+      : () => {};
 
   try {
     if (
+      !openClawArgs.focusedConfig &&
       env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
       shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs)
     ) {
