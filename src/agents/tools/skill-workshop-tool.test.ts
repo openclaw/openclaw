@@ -283,10 +283,10 @@ describe("skill_workshop tool", () => {
         description: "Improve existing skills",
         proposal_content:
           "# Foo hardening\n\n" +
-          "| Target | Change |\n" +
-          "| --- | --- |\n" +
-          "| `skills/foo/SKILL.md` | Add stronger preflight rules. |\n" +
-          "| `skills/bar/scripts/new-helper.js` | Add a helper script. |\n",
+          "diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md\n" +
+          "--- a/skills/foo/SKILL.md\n" +
+          "+++ b/skills/foo/SKILL.md\n" +
+          "diff --git a/skills/bar/scripts/new-helper.js b/skills/bar/scripts/new-helper.js\n",
       }),
     ).rejects.toThrow(
       "action=create cannot propose changes to existing workspace skills: skills/bar/, skills/foo/",
@@ -304,7 +304,9 @@ describe("skill_workshop tool", () => {
         action: "revise",
         proposal_id: (proposal.details as { id: string }).id,
         proposal_content:
-          "Patch the existing `skills/foo/SKILL.md` instead of creating a sibling.\n",
+          "diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md\n" +
+          "--- a/skills/foo/SKILL.md\n" +
+          "+++ b/skills/foo/SKILL.md\n",
       }),
     ).rejects.toThrow(
       "action=create cannot propose changes to existing workspace skills: skills/foo/",

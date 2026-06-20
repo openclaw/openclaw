@@ -56,6 +56,13 @@ describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
       "`skills/Foo_Bar/SKILL.md` and `skills/foo-bar/scripts/a.js`",
       "skills/foo-bar/",
     ],
+    [
+      "unified diff paths",
+      "diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md\n" +
+        "--- a/skills/foo/SKILL.md\n" +
+        "+++ b/skills/foo/SKILL.md\n",
+      "skills/foo/",
+    ],
   ])("rejects existing workspace skill refs in %s", async (_label, content, expectedRef) => {
     const workspaceDir = await makeWorkspaceWithSkills(workspaceSkills);
 

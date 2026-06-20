@@ -6,7 +6,7 @@ import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 // Create proposals are for new skills; existing workspace skill paths must be
 // updated through action=update so the live target hash/rollback guard applies.
 const WORKSPACE_SKILL_PATH_REFERENCE_PATTERN =
-  /(?:^|[\s"'`([{|<])((?:\.\/)?skills\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
+  /(?:^|[\s"'`([{|<])((?:(?:\.\/|[ab]\/)?skills)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g;
 
 export function assertCreateProposalDoesNotPatchExistingSkills(params: {
   workspaceDir: string;
@@ -60,7 +60,7 @@ function collectWorkspaceSkillPathReferences(content: string, workspaceDir: stri
 }
 
 function resolveWorkspacePathReference(workspaceDir: string, rawReference: string): string | null {
-  const reference = rawReference.startsWith("./") ? rawReference.slice(2) : rawReference;
+  const reference = rawReference.replace(/^(?:\.\/|[ab]\/)/, "");
   const parts = reference.split("/");
   if (parts[0] !== "skills" || parts.length < 3) {
     return null;
