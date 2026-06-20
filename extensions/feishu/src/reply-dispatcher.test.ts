@@ -1565,6 +1565,24 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("omits replyToMessageId in streaming.start() when skipReplyToInMessages is true", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "om_msg",
+      replyInThread: true,
+      skipReplyToInMessages: true,
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expectStreamingStartOptions(0, {
+      replyToMessageId: undefined,
+      replyInThread: true,
+      header: { title: "agent", template: "blue" },
+      note: "Agent: agent",
+    });
+  });
+
   it("uses streaming cards for thread replies and keeps topic metadata", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
