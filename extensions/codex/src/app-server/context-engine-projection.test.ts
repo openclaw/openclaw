@@ -279,6 +279,22 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(fitted).not.toContain("hook context");
   });
 
+  it("keeps the original input when a hook appends context without a projection", () => {
+    const prompt = "current prompt survives";
+    const hookAppend = `\n\nhook context ${"h".repeat(800)}`;
+    const maxChars = 420;
+
+    const fitted = fitCodexProjectedContextForTurnStart({
+      promptText: `${prompt}${hookAppend}`,
+      preservedRange: { start: 0, end: prompt.length },
+      maxChars,
+    });
+
+    expect(fitted.length).toBeLessThanOrEqual(maxChars);
+    expect(fitted).toContain(prompt);
+    expect(fitted).not.toContain("hook context");
+  });
+
   it("bounds output for a large request under the default Codex turn limit", () => {
     const maxChars = CODEX_TURN_START_TEXT_INPUT_MAX_CHARS;
     // A large assembled header prefix already over the cap forces the

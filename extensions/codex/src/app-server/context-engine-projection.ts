@@ -122,6 +122,7 @@ export function fitCodexProjectedContextForTurnStart(params: {
   promptText: string;
   contextRange?: CodexProjectedContextRange;
   requestRange?: CodexProjectedContextRange;
+  preservedRange?: CodexProjectedContextRange;
   maxChars?: number;
 }): string {
   const maxChars =
@@ -133,7 +134,19 @@ export function fitCodexProjectedContextForTurnStart(params: {
   }
   const range = normalizeProjectedContextRange(params.contextRange, params.promptText.length);
   if (!range) {
-    return params.promptText;
+    const preservedRange = normalizeProjectedContextRange(
+      params.preservedRange,
+      params.promptText.length,
+    );
+    if (!preservedRange) {
+      return params.promptText;
+    }
+    const preservedText = params.promptText.slice(preservedRange.start, preservedRange.end);
+    if (preservedText.length >= maxChars) {
+      return truncateOlderContext(preservedText, maxChars);
+    }
+    const beforeRange = params.promptText.slice(0, preservedRange.start);
+    return `${truncateOlderContext(beforeRange, maxChars - preservedText.length)}${preservedText}`;
   }
 
   const beforeContext = params.promptText.slice(0, range.start);

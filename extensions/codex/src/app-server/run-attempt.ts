@@ -1028,6 +1028,26 @@ export async function runCodexAppServerAttempt(
         ? { beforeAgentStartResult: params.beforeAgentStartResult }
         : {}),
     });
+  const resolveShiftedPromptInputRange = (
+    prompt: string,
+    promptInputRange: { start: number; end: number } | undefined,
+    turnPromptText: string,
+  ): CodexProjectedContextRange | undefined => {
+    if (
+      !promptInputRange ||
+      promptInputRange.start < 0 ||
+      promptInputRange.end < promptInputRange.start ||
+      promptInputRange.end > prompt.length ||
+      !turnPromptText.endsWith(prompt)
+    ) {
+      return undefined;
+    }
+    const turnPromptOffset = turnPromptText.length - prompt.length;
+    return {
+      start: turnPromptOffset + promptInputRange.start,
+      end: turnPromptOffset + promptInputRange.end,
+    };
+  };
   const resolveShiftedPromptContextRange = (
     prompt: string,
     promptInputRange: { start: number; end: number } | undefined,
@@ -1095,10 +1115,16 @@ export async function runCodexAppServerAttempt(
       promptBuild.promptInputRange,
       turnPromptText,
     );
+    const preservedRange = resolveShiftedPromptInputRange(
+      promptBuild.prompt,
+      promptBuild.promptInputRange,
+      turnPromptText,
+    );
     return fitCodexProjectedContextForTurnStart({
       promptText: turnPromptText,
       contextRange: projectedRanges?.contextRange,
       requestRange: projectedRanges?.requestRange,
+      preservedRange,
     });
   };
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
