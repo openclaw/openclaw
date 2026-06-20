@@ -13,8 +13,9 @@ has many available tools but the model is likely to need only a few of them.
 
 This page documents OpenClaw Tool Search. It is not the Codex-native tool
 search or dynamic-tools surface. Codex-native code mode, tool search, deferred
-dynamic tools, and nested tool calls are stable Codex harness surfaces and do
-not depend on `tools.toolSearch`.
+dynamic tools, and nested tool calls are Codex-owned harness surfaces that
+upstream Codex marks as under development, and they do not depend on
+`tools.toolSearch`.
 
 When enabled for OpenClaw runs, the model receives one `tool_search_code` tool
 by default. That tool runs a short JavaScript body in an isolated Node
@@ -36,7 +37,7 @@ needs the exact schema, and calls that tool through OpenClaw.
 
 Codex harness runs do not receive these experimental OpenClaw Tool Search
 controls. OpenClaw passes product capabilities to Codex as dynamic tools, and
-Codex owns the stable native code mode, native tool search, deferred dynamic
+Codex owns the native code mode, native tool search, deferred dynamic
 tools, and nested tool calls.
 
 ## How a turn runs
@@ -79,7 +80,7 @@ compacted behind the directory catalog. A direct call to an exact hidden
 directory name is hydrated from that same authorized catalog before execution.
 
 All modes are experimental. Prefer direct tool exposure for small OpenClaw tool
-catalogs, and prefer the Codex-native stable surfaces for Codex harness runs.
+catalogs, and prefer the Codex-native surfaces for Codex harness runs.
 
 There is no separate source-selection config. When Tool Search is enabled, the
 catalog includes eligible OpenClaw, MCP, and client tools after normal policy
