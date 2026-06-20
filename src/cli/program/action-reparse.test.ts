@@ -20,6 +20,10 @@ function setRawArgs(command: Command, rawArgs: string[]): void {
   (command as Command & { rawArgs: string[] }).rawArgs = rawArgs;
 }
 
+function deleteRawArgs(command: Command): void {
+  delete (command as Command & { rawArgs?: string[] }).rawArgs;
+}
+
 describe("reparseProgramFromActionArgs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -125,18 +129,16 @@ describe("reparseProgramFromActionArgs", () => {
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
 
-  it("falls back to fallbackArgv when Commander rawArgs is missing from parent command", async () => {
-    // #83893: rawArgs is accessed via unsafe cast — if Commander removes it,
-    // the cast returns undefined and parseArgv must fall back cleanly.
-    const program = new Command().name("openclaw");
-    const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
-    const actionCommand = {
-      name: () => "config",
-      parent: {} as Command,
-    } as unknown as Command;
+  it("falls back to fallbackArgv when Commander rawArgs is missing from the root command", async () => {
+    // #83893: rawArgs is a Commander runtime field, so the root command must
+    // still reparse from reconstructed argv if Commander stops exposing it.
+    const root = new Command().name("openclaw");
+    const configCommand = root.command("config");
+    deleteRawArgs(root);
+    const parseAsync = vi.spyOn(root, "parseAsync").mockResolvedValue(root);
     resolveActionArgsMock.mockReturnValue(["set", "key", "value"]);
 
-    await reparseProgramFromActionArgs(program, [actionCommand]);
+    await reparseProgramFromActionArgs(root, [configCommand]);
 
     expect(buildParseArgvMock).toHaveBeenCalledWith({
       programName: "openclaw",
