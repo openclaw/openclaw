@@ -26,7 +26,14 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
     paths-ignore:
+      # Root-level Markdown-only docs changes should not trigger Blacksmith CI
+      # This avoids queuing preflight/security-fast on blacksmith runners for trivial docs PRs
       - "CHANGELOG.md"
+      - "CONTRIBUTING.md"
+      - "README.md"
+      - "SECURITY.md"
+      - "VISION.md"
+      - "THIRD_PARTY_NOTICES.md"
 
 permissions:
   contents: read
