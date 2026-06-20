@@ -768,9 +768,10 @@ describe("OpenClaw SDK", () => {
     const oc = new OpenClaw({ transport });
 
     await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
-    await expect(
-      oc.approvals.respond("approval-123", { id: "stale-approval", decision: "allow-once" }),
-    ).resolves.toEqual({ ok: true });
+    const staleDecision = { id: "stale-approval", decision: "allow-once" as const };
+    await expect(oc.approvals.respond("approval-123", staleDecision)).resolves.toEqual({
+      ok: true,
+    });
 
     expect(transport.calls).toEqual([
       {

@@ -21,6 +21,7 @@ export { normalizeGatewayEvent } from "./normalize.js";
 export { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 export type {
   AgentRunParams,
+  ApprovalDecisionParams,
   ApprovalMode,
   ArtifactQuery,
   ArtifactSummary,

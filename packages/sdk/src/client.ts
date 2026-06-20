@@ -5,6 +5,7 @@ import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
   AgentRunParams,
+  ApprovalDecisionParams,
   ArtifactQuery,
   ArtifactsDownloadResult,
   ArtifactsGetResult,
@@ -906,8 +907,11 @@ export class ApprovalsNamespace {
     return await this.client.request("exec.approval.list", params === undefined ? {} : params);
   }
 
-  async respond(approvalId: string, decision: Record<string, unknown>): Promise<unknown> {
-    return await this.client.request("exec.approval.resolve", { ...decision, id: approvalId });
+  async respond(approvalId: string, params: ApprovalDecisionParams): Promise<unknown> {
+    return await this.client.request("exec.approval.resolve", {
+      id: approvalId,
+      decision: params.decision,
+    });
   }
 }
 
