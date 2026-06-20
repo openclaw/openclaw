@@ -42,6 +42,7 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import { channelSupportsReasoningPayloads } from "../../channels/plugins/reasoning-capabilities.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -2867,8 +2868,12 @@ export async function dispatchReplyFromConfig(
       params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
     );
     recordAgentDispatchStarted();
+    // Deliver durable reasoning to channels that advertise a reasoning lane;
+    // suppress it for the rest (WhatsApp/web have no lane). Capability-driven so
+    // new reasoning-capable channels opt in by declaring it, not by being named.
+    const deliveryChannelRendersReasoning = channelSupportsReasoningPayloads(deliveryChannel);
     const shouldSuppressReasoningPayloadForDelivery = (payload: ReplyPayload) =>
-      payload.isReasoning === true && deliveryChannel !== "telegram";
+      payload.isReasoning === true && !deliveryChannelRendersReasoning;
 
     const replyResult = await runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
       traceReplyPhase("reply.run_reply_resolver", () =>
@@ -3104,8 +3109,9 @@ export async function dispatchReplyFromConfig(
                 if (suppressDelivery) {
                   return;
                 }
-                // Telegram owns a durable reasoning lane and strips the marker
-                // before outbound normalization; generic channels keep suppression.
+                // Channels advertising a reasoning lane render the marker and
+                // strip it before outbound normalization; generic channels keep
+                // suppression (see deliveryChannelRendersReasoning).
                 if (shouldSuppressReasoningPayloadForDelivery(payload)) {
                   return;
                 }
@@ -3276,8 +3282,9 @@ export async function dispatchReplyFromConfig(
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
-      // Telegram owns a durable reasoning lane and strips the marker before
-      // outbound normalization; generic channels keep suppression.
+      // Channels advertising a reasoning lane render the marker and strip it
+      // before outbound normalization; generic channels keep suppression
+      // (see deliveryChannelRendersReasoning).
       if (shouldSuppressReasoningPayloadForDelivery(reply)) {
         continue;
       }

@@ -989,7 +989,14 @@ describe("dispatchReplyFromConfig", () => {
       "mattermost",
       "imessage",
     ].map((id) => {
-      const plugin = createChannelTestPluginBase({ id });
+      // Telegram advertises a reasoning lane; core dispatch gates durable
+      // reasoning delivery on that capability (channelSupportsReasoningPayloads).
+      const plugin = createChannelTestPluginBase({
+        id,
+        ...(id === "telegram"
+          ? { capabilities: { chatTypes: ["direct"], reasoningPayloads: true } }
+          : {}),
+      });
       return {
         pluginId: id,
         source: "test" as const,

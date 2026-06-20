@@ -316,6 +316,10 @@ export type ChannelCapabilities = {
   };
   nativeCommands?: boolean;
   blockStreaming?: boolean;
+  // Channel renders reasoning (`isReasoning`) payloads on a dedicated thinking
+  // lane. Core's reply dispatch delivers durable reasoning to channels that
+  // declare this and suppresses it for the rest (WhatsApp/web have no lane).
+  reasoningPayloads?: boolean;
 };
 
 export type ChannelSecurityDmPolicy = {
