@@ -684,6 +684,21 @@ describe("attachEventBridge", () => {
     expect(bridge.isCompacting()).toBe(false);
   });
 
+  it("settles an active compaction wait before terminal teardown", async () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    const completion = bridge.awaitCompactionCompletion();
+    bridge.settleCompactionWait();
+
+    await completion;
+    expect(bridge.isCompacting()).toBe(false);
+  });
+
   it("ignores subagent compaction events when tracking the root session", async () => {
     const session = createFakeSession();
     const onCompactionStart = vi.fn();

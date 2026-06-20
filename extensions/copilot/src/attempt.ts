@@ -231,12 +231,13 @@ function deferBackgroundCompactionCleanup(params: {
         bridge: params.bridge,
         timeoutMs: params.timeoutMs,
       });
-      if (outcome !== "completed") {
-        await cancelBackgroundCompactionBeforeTeardown(params.session);
-      }
     } catch {
       // Event callbacks are best-effort; cleanup still releases the retained session.
     } finally {
+      if (outcome !== "completed") {
+        await cancelBackgroundCompactionBeforeTeardown(params.session);
+        params.bridge.settleCompactionWait();
+      }
       params.bridge.detach();
       try {
         await params.session.disconnect();

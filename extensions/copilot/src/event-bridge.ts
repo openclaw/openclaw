@@ -69,6 +69,7 @@ export interface EventBridgeController {
   recordSendResult(result: SessionEvent | undefined): boolean;
   awaitCompactionChain(): Promise<void>;
   awaitCompactionCompletion(): Promise<void>;
+  settleCompactionWait(): void;
   awaitDeltaChain(): Promise<void>;
   hasObservedCompaction(): boolean;
   isCompacting(): boolean;
@@ -252,6 +253,11 @@ export function attachEventBridge(
         await compactionIdle;
       }
       await compactionChain;
+    },
+    settleCompactionWait() {
+      activeCompactionCount = 0;
+      resolveCompactionIdle?.();
+      resolveCompactionIdle = undefined;
     },
     awaitDeltaChain() {
       return deltaChain;
