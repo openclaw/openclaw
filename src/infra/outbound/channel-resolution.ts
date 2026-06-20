@@ -276,45 +276,39 @@ export function resolveOutboundChannelPluginForDelivery(params: {
   cfg?: OpenClawConfig;
   allowBootstrap?: boolean;
 }): ChannelPlugin | undefined {
-  const normalized = normalizeDeliverableOutboundChannel(params.channel);
+  // Reuse the shared normalize-with-bootstrap path so external channel
+  // ids/aliases whose runtime is not yet registered resolve the same way as the
+  // other resolvers; without it a raw external id would be rejected before
+  // bootstrap and existing sends would fail with "Unknown channel".
+  const { channel: normalized, didBootstrap } = normalizeOutboundChannelForResolution(params);
   if (!normalized) {
     return undefined;
   }
 
-  const resolveLoaded = () => getLoadedChannelPlugin(normalized);
-  const resolve = () => getChannelPlugin(normalized);
-  const current = resolveLoaded();
-  if (channelPluginCanSend(current)) {
+  // The send-capability gate stays here so a setup-only shell can never shadow
+  // the real runtime sender on the hot send path.
+  const resolveCurrent = () => {
+    const loaded = getLoadedChannelPlugin(normalized);
+    if (channelPluginCanSend(loaded)) {
+      return loaded;
+    }
+    const runtime = resolveSendCapablePluginFromRuntimeRegistries(normalized);
+    if (runtime) {
+      return runtime;
+    }
+    const bundled = getChannelPlugin(normalized);
+    return channelPluginCanSend(bundled) ? bundled : undefined;
+  };
+
+  const current = resolveCurrent();
+  // `|| didBootstrap` avoids a second bootstrap when the shared normalize path
+  // already bootstrapped this channel.
+  if (current || params.allowBootstrap !== true || didBootstrap) {
     return current;
-  }
-  const runtimeCurrent = resolveSendCapablePluginFromRuntimeRegistries(normalized);
-  if (runtimeCurrent) {
-    return runtimeCurrent;
-  }
-
-  const bundledCurrent = resolve();
-  if (channelPluginCanSend(bundledCurrent)) {
-    return bundledCurrent;
-  }
-
-  if (params.allowBootstrap !== true) {
-    return undefined;
   }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  const bootstrappedLoaded = resolveLoaded();
-  if (channelPluginCanSend(bootstrappedLoaded)) {
-    return bootstrappedLoaded;
-  }
-  const bootstrappedRuntime = resolveSendCapablePluginFromRuntimeRegistries(normalized);
-  if (bootstrappedRuntime) {
-    return bootstrappedRuntime;
-  }
-  const bootstrappedBundled = resolve();
-  if (channelPluginCanSend(bootstrappedBundled)) {
-    return bootstrappedBundled;
-  }
-  return undefined;
+  return resolveCurrent();
 }
 
 /** Resolves the message adapter for a deliverable outbound channel. */

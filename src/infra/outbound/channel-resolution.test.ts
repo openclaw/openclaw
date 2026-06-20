@@ -791,4 +791,54 @@ describe("outbound channel resolution", () => {
       }),
     ).toBe(plugin);
   });
+
+  it("delivery resolver resolves an external channel from the active registry when the pin is stale without bootstrapping", async () => {
+    // External id is not statically deliverable and is missing from the pinned
+    // channel registry, but its send-capable runtime is live in the active
+    // registry; the delivery resolver must find it without a second bootstrap.
+    const plugin = { id: "external-channel", outbound: { sendText: vi.fn() } };
+    isDeliverableMessageChannelMock.mockReturnValue(false);
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginChannelRegistryMock.mockReturnValue({
+      channels: [{ plugin: { id: "other-channel" } }],
+    });
+    getActivePluginRegistryMock.mockReturnValue({ channels: [{ plugin }] });
+    const channelResolution = await importChannelResolution("delivery-external-active-registry");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "external-channel",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(plugin);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("delivery resolver bootstraps an external channel exactly once before resolving its sender", async () => {
+    // The external id only becomes resolvable after bootstrap; the shared
+    // normalize path bootstraps it, and the `|| didBootstrap` guard must stop
+    // the delivery resolver from bootstrapping a second time.
+    const plugin = { id: "external-channel", outbound: { sendText: vi.fn() } };
+    isDeliverableMessageChannelMock.mockReturnValue(false);
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginChannelRegistryMock.mockReturnValue({ channels: [] });
+    getActivePluginRegistryMock.mockImplementation(() =>
+      resolveRuntimePluginRegistryMock.mock.calls.length > 0
+        ? { channels: [{ plugin }] }
+        : { channels: [] },
+    );
+    const channelResolution = await importChannelResolution("delivery-external-bootstrap-once");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "external-channel",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(plugin);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
+  });
 });
