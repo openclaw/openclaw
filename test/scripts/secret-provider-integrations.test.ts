@@ -292,6 +292,20 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+  it("parses JSON command output without swallowing brace-heavy diagnostics", async () => {
+    const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=json-${Date.now()}`);
+
+    expect(
+      proof.parseJsonOutput(
+        [
+          "warning: ignored diagnostic {not json}",
+          JSON.stringify({ ok: true, nested: { value: "kept" } }, null, 2),
+          "debug: trailing diagnostic {also ignored}",
+        ].join("\n"),
+      ),
+    ).toEqual({ ok: true, nested: { value: "kept" } });
+  });
+
   it("records optional proof omissions as skips instead of passes", async () => {
     const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=skip-${Date.now()}`);
     const log = vi.spyOn(console, "log").mockImplementation(() => {});

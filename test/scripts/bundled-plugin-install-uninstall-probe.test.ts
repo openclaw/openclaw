@@ -1038,6 +1038,33 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(fs.existsSync(rpcStateDir)).toBe(false);
   });
 
+  it("ignores structured logs after gateway RPC payloads", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const entrypoint = path.join(root, "dist", "rpc-with-structured-log.js");
+    fs.writeFileSync(
+      entrypoint,
+      [
+        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
+        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(
+      runtimeSmoke.rpcCall(
+        "health",
+        {},
+        {
+          entrypoint,
+          env: {},
+          port: 19001,
+        },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
   it("accepts successful runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const server = createHttpServer((_request, response) => {
@@ -1287,6 +1314,38 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stdout.trim()).toBe(
       `admin-http-rpc\tadmin-http-rpc\t1\t${path.join(root, "dist-runtime", "extensions", "admin-http-rpc")}`,
     );
+  });
+
+  it("selects packaged plugins when list output includes structured diagnostics", () => {
+    const root = makePackageRoot();
+    const pluginRoot = path.join(root, "dist-runtime", "extensions", "admin-http-rpc");
+    writePluginManifest(root, "dist-runtime/extensions/admin-http-rpc", {
+      id: "admin-http-rpc",
+      configSchema: { required: ["port"] },
+    });
+    fs.writeFileSync(
+      path.join(root, "dist", "index.js"),
+      [
+        "if (process.argv.slice(2).join(' ') !== 'plugins list --json') {",
+        "  process.exit(1);",
+        "}",
+        `console.log(${JSON.stringify(
+          JSON.stringify({
+            plugins: [{ id: "admin-http-rpc", origin: "bundled", rootDir: pluginRoot }],
+          }),
+        )});`,
+        "console.log(JSON.stringify({ level: 'warn', message: 'post-list diagnostic' }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(`admin-http-rpc\tadmin-http-rpc\t1\t${pluginRoot}`);
   });
 
   it("does not select source-only bundled plugins for package-backed sweeps", () => {

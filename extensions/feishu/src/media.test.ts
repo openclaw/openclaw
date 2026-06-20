@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -21,7 +21,6 @@ const messageReplyMock = vi.hoisted(() => vi.fn());
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const emptyConfig: ClawdbotConfig = {};
-const tempDirs = createTempDirTracker();
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -101,23 +100,19 @@ function callData<T>(
 
 async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
   const originalHome = process.env.HOME;
-  const tempHome = tempDirs.make("openclaw-feishu-media-");
-  try {
-    process.env.HOME = tempHome;
-    return await run();
-  } finally {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
+  return await withTempDir("openclaw-feishu-media-", async (tempHome) => {
+    try {
+      process.env.HOME = tempHome;
+      return await run();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
     }
-    tempDirs.cleanup();
-  }
+  });
 }
-
-afterEach(() => {
-  tempDirs.cleanup();
-});
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {

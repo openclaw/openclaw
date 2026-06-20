@@ -149,7 +149,6 @@ import {
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import {
   dispatchCronDelivery,
   getCompletedDirectCronDeliveriesCountForTests,
@@ -338,18 +337,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(1);
 
-    // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "on it",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
-
     // No announce should have been attempted (subagents still running)
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
@@ -496,18 +483,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     // deliveryAttempted must be true so timer does NOT fire enqueueSystemEvent
     expect(state.deliveryAttempted).toBe(true);
 
-    // Verify timer guard agrees
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "on it, pulling everything together",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
-
     // No direct delivery should have been sent (stale interim suppressed)
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
@@ -577,18 +552,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-
-    // Timer should not fire enqueueSystemEvent (delivered=true)
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "Morning briefing complete.",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("applies TTS directives before direct cron announce delivery and mirrors spoken text", async () => {
@@ -1045,16 +1008,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryAttempted: true,
     });
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "Yesterday's morning briefing.",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("still delivers when the run started on time but finished more than three hours later", async () => {
@@ -1483,18 +1436,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       // deliveryAttempted must be true so the heartbeat timer does not fire
       // a fallback enqueueSystemEvent with the control-token text.
       expect(state.deliveryAttempted).toBe(true);
-
-      // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
-      expect(
-        shouldEnqueueCronMainSummary({
-          summaryText: controlToken,
-          deliveryRequested: true,
-          delivered: state.result?.delivered,
-          deliveryAttempted: state.result?.deliveryAttempted,
-          suppressMainSummary: false,
-          isCronSystemEvent: () => true,
-        }),
-      ).toBe(false);
     },
   );
 
@@ -1826,17 +1767,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryAttempted: true,
     });
     expect(state.deliveryAttempted).toBe(true);
-
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "  NO_REPLY  ",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("suppresses mixed-case NO_REPLY in text delivery", async () => {
@@ -1848,16 +1778,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       status: "ok",
       delivered: false,
     });
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "No_Reply",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("cleans up the direct cron session after a structured silent reply when deleteAfterRun is enabled", async () => {

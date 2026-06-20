@@ -842,6 +842,12 @@ function commandWordsRuntimeEntrypoint(wordsInput) {
   return "";
 }
 
+function commandWordsShellEntrypoint(wordsInput) {
+  const words = normalizeExecutableWords(wordsInput);
+  const first = shellWordBasename(words[0]);
+  return shellInlineCommandInterpreters.has(first) ? first : "";
+}
+
 function commandNeedsAwsMacosPackageManager(commandArgs) {
   if (isChangedGateCommand(commandArgs)) {
     return true;
@@ -1780,8 +1786,8 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
     'tmp_dir="$(mktemp -d)" || { release_install_lock; return 1; };',
     'pkg="node-v${node_version}-darwin-${node_arch}.tar.gz";',
     'base_url="https://nodejs.org/dist/v${node_version}";',
-    'curl -fsSLo "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
-    'curl -fsSLo "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSL --connect-timeout 10 --max-time 300 --retry 2 --retry-delay 2 -o "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 2 -o "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     '(cd "$tmp_dir" && grep " $pkg$" SHASUMS256.txt | shasum -a 256 -c -) || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     'rm -rf "$node_dir" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     'tar -xzf "$tmp_dir/$pkg" -C "$tool_root" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
@@ -1850,7 +1856,7 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
       'if [ ! -x "$bun_root/bin/bun" ] || [ ! -f "$bun_ready_marker" ]; then',
       'rm -rf "$bun_root" || { status=$?; release_bun_install_lock; return "$status"; };',
       'mkdir -p "$bun_root" || { status=$?; release_bun_install_lock; return "$status"; };',
-      'npm install --global --prefix "$bun_root" "bun@${bun_version}" || { status=$?; release_bun_install_lock; return "$status"; };',
+      'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}" || { status=$?; release_bun_install_lock; return "$status"; };',
       'touch "$bun_ready_marker" || { status=$?; release_bun_install_lock; return "$status"; };',
       "fi;",
       "release_bun_install_lock;",
@@ -2009,15 +2015,14 @@ function awsMacosScriptBootstrapRequirements(script) {
   const requirements = { packageManager: false, bun: false };
   const firstLine = script.match(/^[^\r\n]*/u)?.[0] ?? "";
   if (firstLine.startsWith("#!")) {
-    let words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
-    if ((words[0] ?? "").split("/").pop() === "env") {
-      words = words.slice(1);
-      while ((words[0] ?? "").startsWith("-")) {
-        words = words.slice(1);
-      }
-    }
+    const words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
     requirements.packageManager = commandWordsNeedEntrypoint(words, awsMacosCorepackEntrypoints);
     requirements.bun = commandWordsNeedEntrypoint(words, awsMacosBunEntrypoints);
+    if (commandWordsShellEntrypoint(words)) {
+      const body = script.slice(firstLine.length).replace(/^\r?\n/u, "");
+      requirements.packageManager ||= commandNeedsAwsMacosPackageManager([body]);
+      requirements.bun ||= commandNeedsAwsMacosBun([body]);
+    }
     return requirements;
   }
   requirements.packageManager = commandNeedsAwsMacosPackageManager([script]);

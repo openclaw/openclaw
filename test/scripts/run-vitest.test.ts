@@ -26,6 +26,7 @@ import {
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
+  spawnWatchedVitestProcess,
   shouldSuppressVitestStderrLine,
 } from "../../scripts/run-vitest.mjs";
 
@@ -796,6 +797,26 @@ describe("scripts/run-vitest", () => {
       detached: false,
       stdio: ["inherit", "pipe", "pipe"],
     });
+  });
+
+  posixIt("terminates a silent Vitest child through the watchdog", async () => {
+    const watched = spawnWatchedVitestProcess({
+      pnpmArgs: ["exec", "node", "-e", "setInterval(() => {}, 1000)"],
+      spawnParams: {
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+      env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "100" },
+    });
+
+    try {
+      expect(await waitForClose(watched.child)).toEqual({ code: null, signal: "SIGTERM" });
+    } finally {
+      watched.teardown();
+      if (watched.child.pid && isProcessAlive(watched.child.pid)) {
+        process.kill(-watched.child.pid, "SIGKILL");
+      }
+    }
   });
 
   it("reenables local check policy for local Vitest children", () => {

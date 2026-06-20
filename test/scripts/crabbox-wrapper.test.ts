@@ -1006,7 +1006,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("bun_version=1.3.14");
     expect(remoteCommand).toContain('bun_root="$tool_root/bun-v${bun_version}"');
     expect(remoteCommand).toContain(
-      'npm install --global --prefix "$bun_root" "bun@${bun_version}"',
+      'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
     );
     expect(remoteCommand).toContain("bun --version >&2 || return 1");
     expect(remoteCommand).not.toContain("corepack enable");
@@ -1041,6 +1041,12 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     );
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain("node-v${node_version}-darwin-${node_arch}.tar.gz");
+    expect(remoteCommand).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 300 --retry 2 --retry-delay 2 -o "$tmp_dir/$pkg"',
+    );
+    expect(remoteCommand).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 2 -o "$tmp_dir/SHASUMS256.txt"',
+    );
     expect(remoteCommand).toContain("shasum -a 256 -c -");
     expect(remoteCommand).toContain('ready_marker="$node_dir/.openclaw-crabbox-node-ready"');
     expect(remoteCommand).toContain(
@@ -1456,6 +1462,47 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.args.at(-1)).toBe("arg1");
   });
 
+  it("bootstraps AWS macOS script-stdin shell shebang bodies before the uploaded script", () => {
+    const script = [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "pnpm --version",
+      "bun --version",
+    ].join("\n");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
+      { input: script },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
+    expect(output.scriptContent).toContain('corepack enable --install-directory "$PNPM_HOME"');
+    expect(output.scriptContent).toContain("pnpm --version >&2");
+    expect(output.scriptContent).toContain("bun --version >&2 || return 1");
+    expect(output.scriptContent).toContain(`\n${script}\n`);
+  });
+
+  it("bootstraps Corepack for AWS macOS script-stdin env shebangs with option values", () => {
+    const script = [
+      "#!/usr/bin/env -C /tmp -u OPENCLAW_FAKE_VAR pnpm",
+      "--version",
+    ].join("\n");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
+      { input: script },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
+    expect(output.scriptContent).toContain('corepack enable --install-directory "$PNPM_HOME"');
+    expect(output.scriptContent).toContain("pnpm --version >&2");
+    expect(output.scriptContent).toContain(`\n${script}\n`);
+  });
+
   it("bootstraps Bun for AWS macOS script-stdin bun shebangs", () => {
     const script = ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n");
     const result = runWrapper(
@@ -1468,7 +1515,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(output.scriptContent).toContain("bun_version=1.3.14");
     expect(output.scriptContent).toContain(
-      'npm install --global --prefix "$bun_root" "bun@${bun_version}"',
+      'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
     );
     expect(output.scriptContent).toContain("bun --version >&2 || return 1");
     expect(output.scriptContent).not.toContain("corepack enable");

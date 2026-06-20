@@ -7,8 +7,13 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { testing } from "./qa-otel-smoke-runtime.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 describe("qa-otel-smoke receiver bounds", () => {
   let configuredBodyLimitLoad: ReturnType<typeof spawnSync>;
@@ -169,6 +174,40 @@ describe("qa-otel-smoke receiver bounds", () => {
   it("loads with configured body-size limit env values", () => {
     expect(configuredBodyLimitLoad.status).toBe(0);
     expect(configuredBodyLimitLoad.stderr).not.toContain("ReferenceError");
+  });
+
+  it("scrubs inherited OpenTelemetry exporter env before running the QA suite", () => {
+    vi.stubEnv("OTEL_SDK_DISABLED", "true");
+    vi.stubEnv("OTEL_TRACES_EXPORTER", "none");
+    vi.stubEnv("OTEL_METRICS_EXPORTER", "none");
+    vi.stubEnv("OTEL_LOGS_EXPORTER", "none");
+    vi.stubEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.example.test:4318");
+    vi.stubEnv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc");
+    vi.stubEnv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "grpc");
+    vi.stubEnv("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "grpc");
+    vi.stubEnv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "grpc");
+    vi.stubEnv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=secret");
+    vi.stubEnv("OTEL_EXPORTER_OTLP_LOGS_HEADERS", "authorization=logs-secret");
+    vi.stubEnv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=developer-laptop");
+
+    const env = testing.buildQaEnv(4318);
+
+    expect(env.OTEL_SDK_DISABLED).toBeUndefined();
+    expect(env.OTEL_TRACES_EXPORTER).toBeUndefined();
+    expect(env.OTEL_METRICS_EXPORTER).toBeUndefined();
+    expect(env.OTEL_LOGS_EXPORTER).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_PROTOCOL).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_HEADERS).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_LOGS_HEADERS).toBeUndefined();
+    expect(env.OTEL_RESOURCE_ATTRIBUTES).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe("http://127.0.0.1:4318/v1/traces");
+    expect(env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT).toBe("http://127.0.0.1:4318/v1/metrics");
+    expect(env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe("http://127.0.0.1:4318/v1/logs");
+    expect(env.OTEL_SERVICE_NAME).toBe("openclaw-qa-lab-otel-smoke");
   });
 
   it("rejects identity OTLP bodies above the decoded byte ceiling", () => {
