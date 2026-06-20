@@ -257,6 +257,9 @@ export async function start(state: CronServiceState) {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
     deferAgentTurnJobs: true,
   });
+  for (const jobId of deferredCatchupJobIds) {
+    state.pendingCatchupDeferralJobIds.add(jobId);
+  }
 
   await locked(state, async () => {
     // Startup catch-up already persisted the latest in-memory store state, and

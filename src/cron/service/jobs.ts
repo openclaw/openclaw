@@ -678,7 +678,13 @@ export function recomputeNextRunsForMaintenance(
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
-  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
+  // Callers that pass an explicit skip set get exactly that set (used by
+  // start()'s post-catchup pass which already knows its deferral ids). All
+  // other callers (read RPCs via ensureLoadedForRead, empty-due timer ticks,
+  // post-finalization recompute) fall back to the canonical service-state
+  // set populated during runMissedJobs. This preserves overflow catch-up
+  // deferrals across every maintenance recompute path (#93935).
+  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds ?? state.pendingCatchupDeferralJobIds;
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
