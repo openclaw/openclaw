@@ -63,8 +63,6 @@ describe("json-parse trailing-space key stripping", () => {
 
   it("strips trailing spaces from nested object keys", () => {
     const input = '{"job":{"schedule ":{"expr ":"30 10 * * *"}}}';
-    const { parse } = require("partial-json");
-    const parsed = parse(input);
     const result = parseStreamingJson(input);
     expect(result).toEqual({ job: { schedule: { expr: "30 10 * * *" } } });
   });
