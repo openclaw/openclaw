@@ -296,7 +296,7 @@ describe("interactive payload helpers", () => {
 
     expect(renderMessagePresentationFallbackText({ presentation })).toBe(
       [
-        "- Approve: `/approve req_1 allow-once`",
+        "- Approve",
         "- Deny: `/approve req_1 deny`",
         "- Ignore",
         "- Docs: https://example.com/docs",

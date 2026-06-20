@@ -1423,7 +1423,7 @@ describe("handleTelegramAction", () => {
 
     const call = mockCall(sendMessageTelegram, 0, "button-only fallback");
     expect(call[0]).toBe("123456");
-    expect(call[1]).toBe("- Approve: `approve`");
+    expect(call[1]).toBe("- Approve");
     expect(requireRecord(call[2], "button-only fallback options").buttons).toEqual([
       [{ text: "Approve", callback_data: "approve" }],
     ]);
@@ -1735,7 +1735,7 @@ describe("handleTelegramAction", () => {
     );
     const call = mockCall(sendMessageTelegram, 0, "interactive button fallback");
     expect(call[0]).toBe("@testchannel");
-    expect(call[1]).toBe("- Retry: `cmd:retry`");
+    expect(call[1]).toBe("- Retry");
     expect(requireRecord(call[2], "interactive button fallback options").buttons).toEqual([
       [{ text: "Retry", callback_data: "cmd:retry" }],
     ]);
