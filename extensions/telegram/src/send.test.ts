@@ -1,6 +1,7 @@
 // Telegram tests cover send plugin behavior.
 import fs from "node:fs";
 import type { Bot } from "grammy";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -15,6 +16,12 @@ import {
   resolveTelegramMessageCacheScope,
   resetTelegramMessageCacheBucketsForTest,
 } from "./message-cache.js";
+import {
+  TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+  TELEGRAM_POLL_REGISTRY_NAMESPACE,
+  type TelegramPollRegistryEntry,
+  setTelegramPollRegistryStoreForTest,
+} from "./poll-registry.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramApiOverride } from "./send.js";
@@ -3629,6 +3636,171 @@ describe("sendPollTelegram", () => {
     expect(sendPollCall[1]).toBe("Q");
     expect(sendPollCall[2]).toEqual(["A", "B"]);
     expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
+  });
+
+  it("registers a public poll's origin so votes can route back", async () => {
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+
+    try {
+      await sendPollTelegram(
+        "555",
+        { question: " Ready? ", options: [" Yes ", "No "] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+          messageThreadId: 99,
+          isAnonymous: false,
+        },
+      );
+
+      const entries = await pollStore.entries();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.value).toEqual(
+        expect.objectContaining({
+          pollId: "p1",
+          chatId: "555",
+          messageThreadId: 99,
+          question: "Ready?",
+          options: ["Yes", "No"],
+        }),
+      );
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+    }
+  });
+
+  it("does not register anonymous polls", async () => {
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+
+    try {
+      await sendPollTelegram(
+        "555",
+        { question: "Ready?", options: ["Yes", "No"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+          isAnonymous: true,
+        },
+      );
+
+      expect(await pollStore.entries()).toHaveLength(0);
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+    }
+  });
+
+  it("records the resolved thread id from a topic-suffixed target", async () => {
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    const api = {
+      sendPoll: vi.fn(async () => ({
+        message_id: 123,
+        chat: { id: -1001234567890 },
+        poll: { id: "p1" },
+      })),
+    };
+
+    try {
+      // Topic comes from the target suffix, not opts.messageThreadId; the registry must still
+      // capture the thread the poll was addressed to so the inbound vote routes back to it.
+      await sendPollTelegram(
+        "-1001234567890:topic:99",
+        { question: "Ready?", options: ["Yes", "No"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+          isAnonymous: false,
+        },
+      );
+
+      expect(
+        requireRecord(firstMockCall(api.sendPoll, "send poll call")[3], "send poll params")
+          .message_thread_id,
+      ).toBe(99);
+      const entries = await pollStore.entries();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.value).toEqual(
+        expect.objectContaining({
+          pollId: "p1",
+          chatId: "-1001234567890",
+          messageThreadId: 99,
+          question: "Ready?",
+          options: ["Yes", "No"],
+        }),
+      );
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+    }
+  });
+
+  it("does not fail an already-sent poll when the registry write throws", async () => {
+    // Best-effort bookkeeping: a registry write failure must not surface as a send failure.
+    // The poll-registry namespace's store throws on register; every other namespace keeps
+    // working through the normal in-memory test store.
+    const register = vi.fn(async () => {
+      throw new Error("registry db unavailable");
+    });
+    const failingStore = {
+      register,
+    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>;
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: ((options) =>
+          options.namespace === TELEGRAM_POLL_REGISTRY_NAMESPACE
+            ? failingStore
+            : createPluginStateKeyedStoreForTests(
+                "telegram",
+                options,
+              )) as TelegramRuntime["state"]["openKeyedStore"],
+        openSyncKeyedStore: ((options) =>
+          createPluginStateSyncKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+
+    const res = await sendPollTelegram(
+      "555",
+      { question: "Ready?", options: ["Yes", "No"] },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "t",
+        api: api as unknown as Bot["api"],
+        isAnonymous: false,
+      },
+    );
+
+    expect(res).toEqual({ messageId: "123", chatId: "555", pollId: "p1" });
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
+    expect(register).toHaveBeenCalledTimes(1);
   });
 
   it("fails poll sends instead of retrying without message_thread_id", async () => {

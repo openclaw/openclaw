@@ -35,6 +35,7 @@ import {
   isTelegramServerError,
 } from "./network-errors.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
   buildTelegramThreadReplyParams,
@@ -1888,6 +1889,32 @@ export async function sendPollTelegram(
   const messageId = resolveTelegramMessageIdOrThrow(result, "poll send");
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   const pollId = result?.poll?.id;
+  // Telegram only emits `poll_answer` updates for non-anonymous (public) polls. Register the
+  // poll's origin here at the central send boundary so votes route back regardless of which
+  // caller (message action, outbound adapter, future senders) sent it. Best-effort: a
+  // registry bookkeeping failure must not fail an already-sent poll.
+  if (pollId && opts.isAnonymous === false) {
+    try {
+      await recordTelegramPollRegistryEntry({
+        accountId: account.accountId,
+        pollId,
+        chatId: resolvedChatId,
+        // Record the thread the poll was actually addressed to, not just opts.messageThreadId.
+        // A target-suffixed topic id (e.g. "-100...:topic:99") arrives via the parsed target and
+        // is resolved by resolveTelegramSendThreadSpec into threadParams; storing that keeps
+        // the inbound vote routed to the same forum topic.
+        messageThreadId: threadParams.message_thread_id,
+        question: normalizedPoll.question,
+        options: pollOptions,
+      });
+    } catch (err) {
+      logVerbose(
+        `telegram: failed to record poll registry entry for poll ${pollId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
   recordSentMessage(chatId, messageId, opts.cfg);
 
   recordChannelActivity({
