@@ -498,62 +498,33 @@ function ensureFtsSchema(
   if (!shouldRebuildText && !shouldRebuildPath) {
     return;
   }
-  if (shouldRebuildText) {
-    db.exec(`DELETE FROM ${textTableName};`);
-  }
-  if (shouldRebuildPath) {
-    db.exec(`DELETE FROM ${pathTableName};`);
-  }
-
-  const chunks = db
-    .prepare(
-      `SELECT id, path, source, model, start_line, end_line, text\n` +
-        `  FROM ${MEMORY_INDEX_CHUNKS_TABLE}\n` +
-        ` ORDER BY rowid ASC`,
-    )
-    .all() as Array<{
-    id: string;
-    path: string;
-    source: string;
-    model: string;
-    start_line: number;
-    end_line: number;
-    text: string;
-  }>;
-  const insertText = db.prepare(
-    `INSERT INTO ${textTableName} (text, id, path, source, model, start_line, end_line)\n` +
-      ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  );
-  const insertPath = db.prepare(
-    `INSERT INTO ${pathTableName} (path_text, text, id, path, source, model, start_line, end_line)\n` +
-      ` VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  for (const chunk of chunks) {
+  db.exec("SAVEPOINT repair_memory_index_fts");
+  try {
     if (shouldRebuildText) {
-      insertText.run(
-        chunk.text,
-        chunk.id,
-        chunk.path,
-        chunk.source,
-        chunk.model,
-        chunk.start_line,
-        chunk.end_line,
+      db.exec(
+        `DELETE FROM ${textTableName};\n` +
+          `INSERT INTO ${textTableName} (text, id, path, source, model, start_line, end_line)\n` +
+          `SELECT text, id, path, source, model, start_line, end_line\n` +
+          `  FROM ${MEMORY_INDEX_CHUNKS_TABLE}\n` +
+          ` ORDER BY rowid ASC;`,
       );
     }
     if (shouldRebuildPath) {
-      insertPath.run(
-        chunk.path,
-        chunk.text,
-        chunk.id,
-        chunk.path,
-        chunk.source,
-        chunk.model,
-        chunk.start_line,
-        chunk.end_line,
+      db.exec(
+        `DELETE FROM ${pathTableName};\n` +
+          `INSERT INTO ${pathTableName} (path_text, text, id, path, source, model, start_line, end_line)\n` +
+          `SELECT path, text, id, path, source, model, start_line, end_line\n` +
+          `  FROM ${MEMORY_INDEX_CHUNKS_TABLE}\n` +
+          ` ORDER BY rowid ASC;`,
       );
     }
+    writeCurrentFtsRepairMarker(db, textTableName, pathTableName);
+    db.exec("RELEASE repair_memory_index_fts");
+  } catch (err) {
+    db.exec("ROLLBACK TO repair_memory_index_fts");
+    db.exec("RELEASE repair_memory_index_fts");
+    throw err;
   }
-  writeCurrentFtsRepairMarker(db, textTableName, pathTableName);
 }
 
 function hasColumns(columns: Array<{ name: string }>, names: string[]): boolean {

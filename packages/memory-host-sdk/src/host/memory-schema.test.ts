@@ -416,4 +416,82 @@ describe("memory index schema", () => {
       db.close();
     }
   });
+
+  it("preserves unmarked FTS rows when repair fails", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: true,
+      });
+      db.prepare(
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "chunk-1",
+        "memory/2026-06-17-1649.md",
+        "memory",
+        1,
+        2,
+        "hash",
+        "mock",
+        "canonical body",
+        "[0]",
+        1,
+      );
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run("previous body", "chunk-1", "memory/2026-06-17-1649.md", "memory", "mock", 1, 2);
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts_path (path_text, text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "previous/path.md",
+        "previous body",
+        "chunk-1",
+        "memory/2026-06-17-1649.md",
+        "memory",
+        "mock",
+        1,
+        2,
+      );
+      db.prepare("DELETE FROM memory_index_meta WHERE key = ?").run("memory_index_fts_repair_v2");
+
+      const originalExec = db.exec.bind(db);
+      const originalPrepare = db.prepare.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql: string) => {
+        if (sql.includes("INSERT INTO memory_index_chunks_fts_path")) {
+          throw new Error("forced path repair failure");
+        }
+        return originalExec(sql);
+      });
+      vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+        if (sql.includes("INSERT INTO memory_index_chunks_fts_path")) {
+          throw new Error("forced path repair failure");
+        }
+        return originalPrepare(sql);
+      });
+
+      const result = ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: true,
+      });
+
+      expect(result).toMatchObject({
+        ftsAvailable: false,
+        ftsError: "forced path repair failure",
+      });
+      expect(
+        db.prepare("SELECT text FROM memory_index_chunks_fts WHERE id = ?").get("chunk-1"),
+      ).toEqual({ text: "previous body" });
+      expect(
+        db
+          .prepare("SELECT path_text FROM memory_index_chunks_fts_path WHERE id = ?")
+          .get("chunk-1"),
+      ).toEqual({ path_text: "previous/path.md" });
+    } finally {
+      vi.restoreAllMocks();
+      db.close();
+    }
+  });
 });
