@@ -81,7 +81,7 @@ export function createChannelProgressDraftCompositor(params: {
   };
 
   const render = async (options?: { flush?: boolean }): Promise<boolean> => {
-    if (!params.active || params.mode !== "progress") {
+    if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
       return false;
     }
     const text = formatDraftText();
@@ -197,9 +197,11 @@ export function createChannelProgressDraftCompositor(params: {
     },
     markFinalReplyStarted() {
       finalReplyStarted = true;
+      gate.cancel();
     },
     markFinalReplyDelivered() {
       finalReplyDelivered = true;
+      gate.cancel();
     },
     reset() {
       clearProgressState(false);

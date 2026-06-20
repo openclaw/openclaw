@@ -44,6 +44,31 @@ describe("createChannelProgressDraftCompositor", () => {
     }
   });
 
+  it("does not materialize delayed answer activity after final delivery starts or lands", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const markFinal of ["markFinalReplyStarted", "markFinalReplyDelivered"] as const) {
+        const update = vi.fn();
+        const progress = createChannelProgressDraftCompositor({
+          entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+          mode: "progress",
+          active: true,
+          seed: "test",
+          update,
+        });
+
+        await progress.noteActivity();
+        progress[markFinal]();
+        await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
+
+        expect(update).not.toHaveBeenCalled();
+        expect(progress.hasStarted).toBe(false);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts a label-only progress draft on repeated upstream answer activity", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
