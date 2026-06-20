@@ -105,6 +105,23 @@ export function getToolParamsRecord(params: unknown): Record<string, unknown> | 
   return params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
 }
 
+/** Auto-correct hallucinated docx/pptx/xlsx extensions commonly produced by models. */
+const HALLUCINATED_EXT_RE = /\.(docodex|pptcodex|xlscodex)$/i;
+
+const EXTENSION_MAP: Record<string, string> = {
+  docodex: ".docx",
+  pptcodex: ".pptx",
+  xlscodex: ".xlsx",
+};
+
+export function normalizeHallucinatedExtension(value: string): string {
+  const match = value.match(HALLUCINATED_EXT_RE);
+  if (match && EXTENSION_MAP[match[1].toLowerCase()]) {
+    return value.slice(0, match.index) + EXTENSION_MAP[match[1].toLowerCase()];
+  }
+  return value;
+}
+
 /** Strip extra closing markers sometimes produced in XML arg_value path params. */
 export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
@@ -125,6 +142,26 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
     if (stripped !== value) {
       normalized ??= { ...record };
       normalized[key as keyof T] = stripped as T[keyof T];
+    }
+  }
+  return normalized ?? record;
+}
+
+/** Normalize hallucinated doc extensions from selected string fields without mutating input. */
+export function normalizeHallucinatedExtensionFromKeys<T extends Record<string, unknown>>(
+  record: T,
+  keys: readonly string[],
+): T {
+  let normalized: T | undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const corrected = normalizeHallucinatedExtension(value);
+    if (corrected !== value) {
+      normalized ??= { ...record };
+      normalized[key as keyof T] = corrected as T[keyof T];
     }
   }
   return normalized ?? record;
@@ -196,10 +233,14 @@ export function wrapToolParamValidation(
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
       const pathKeys = resolveMalformedXmlArgValuePathKeys(requiredParamGroups);
-      const normalizedParams =
-        record && pathKeys.length > 0
-          ? stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys)
-          : params;
+      let normalizedParams: typeof params = params;
+      if (record && pathKeys.length > 0) {
+        normalizedParams = stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys);
+        normalizedParams = normalizeHallucinatedExtensionFromKeys(
+          normalizedParams as Record<string, unknown>,
+          pathKeys,
+        );
+      }
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
       }
