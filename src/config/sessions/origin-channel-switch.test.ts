@@ -65,6 +65,22 @@ describe("session origin across a channel switch", () => {
     expect(afterTelegramAgain.origin?.threadId).toBeUndefined();
   });
 
+  it("clears stale account id when provider changes and the new turn omits it", () => {
+    const afterSlack = applyOrigin(undefined, slackTurn);
+    const telegramWithoutAccount = {
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      From: "telegram:42",
+      To: "telegram:42",
+    } satisfies Partial<MsgContext>;
+
+    const afterTelegram = applyOrigin(afterSlack, telegramWithoutAccount);
+
+    expect(afterTelegram.origin?.provider).toBe("telegram");
+    expect(afterTelegram.origin?.accountId).toBeUndefined();
+  });
+
   it("adopts the new channel's identity when the new turn supplies it", () => {
     const afterSlack = applyOrigin(undefined, slackTurn);
     const telegramWithChannel = {
