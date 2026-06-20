@@ -2439,6 +2439,9 @@ export async function runConfigUnset(opts: {
     // instead of snapshot.config (runtime-merged with defaults).
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+    const currentConfigForApplyHint = normalizeConfigMutationModelRefs(
+      structuredClone(snapshot.resolved) as OpenClawConfig,
+    );
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
       if (cliOptions.dryRun && cliOptions.json) {
@@ -2486,7 +2489,11 @@ export async function runConfigUnset(opts: {
         ? {}
         : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
-    const hint = configApplyHintForPaths([toDotPath(parsedPath)]);
+    const hint = configApplyHintForOperations(
+      [buildUnsetOperation(parsedPath)],
+      currentConfigForApplyHint,
+      normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig),
+    );
     runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: cliOptions });
