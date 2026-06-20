@@ -63,18 +63,25 @@ export function getContextNoticeViewModel(
   warning: boolean;
   compactRecommended: boolean;
 } | null {
-  if (session?.totalTokensFresh === false) {
-    return null;
-  }
+  // FIX #89662: Extract totalTokens first and validate it independently of freshness.
+  // Show indicator even with stale data - imperfect info is better than none.
   const used = session?.totalTokens;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
+
+  // Return null only when we have no usable data at all
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
     return null;
   }
+
+  // Freshness check moved AFTER data validation - stale data is still better than no data
+  const isFresh = session?.totalTokensFresh !== false;
+
   const ratio = used / limit;
   const pct = Math.min(Math.round(ratio * 100), 100);
   const warning = ratio >= CONTEXT_NOTICE_RATIO;
+
   if (!warning) {
+    // Non-warning state: use muted colors regardless of freshness
     return {
       pct,
       detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
@@ -84,7 +91,8 @@ export function getContextNoticeViewModel(
       compactRecommended: false,
     };
   }
-  // Read theme semantic tokens so color tracks the active theme (Dash, dark, light ...).
+
+  // Warning state: read theme semantic tokens so color tracks the active theme (Dash, dark, light ...).
   const { warnRgb, dangerRgb } = getThemeNoticeColors();
   const [wr, wg, wb] = warnRgb;
   const [dr, dg, db] = dangerRgb;
@@ -95,13 +103,15 @@ export function getContextNoticeViewModel(
   const color = `rgb(${r}, ${g}, ${b})`;
   const bgOpacity = 0.08 + 0.08 * t;
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
+
+  // Only recommend compaction when data is fresh - don't suggest expensive operations based on stale counts
   return {
     pct,
     detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
     color,
     bg,
     warning,
-    compactRecommended: ratio >= CONTEXT_COMPACT_RATIO,
+    compactRecommended: isFresh && ratio >= CONTEXT_COMPACT_RATIO,
   };
 }
 
