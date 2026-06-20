@@ -140,11 +140,12 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           includeArchived?: boolean;
         },
       ) => {
-        // Hide archived cards by default to match the workboard_list tool and the
-        // /workboard list command; --include-archived restores the full set.
-        let cards = (await params.store.list({ boardId: options.board })).filter(
-          (card) => options.includeArchived === true || !card.metadata?.archivedAt,
-        );
+        // Text output hides archived cards like /workboard list, while --json
+        // keeps the shipped full-card contract for existing scripts.
+        let cards = await params.store.list({ boardId: options.board });
+        if (!options.json && options.includeArchived !== true) {
+          cards = cards.filter((card) => !card.metadata?.archivedAt);
+        }
         if (options.status) {
           cards = cards.filter((card) => card.status === options.status);
         }

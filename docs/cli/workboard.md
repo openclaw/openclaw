@@ -50,16 +50,16 @@ Columns are id prefix, status, priority, board id, optional agent id, and title.
 
 Flags:
 
-| Flag                 | Purpose                                                       |
-| -------------------- | ------------------------------------------------------------- |
-| `--board <id>`       | Limit results to one board namespace                          |
-| `--status <status>`  | Limit results to one Workboard status                         |
-| `--include-archived` | Include archived cards (hidden by default, matching the tool) |
-| `--json`             | Print the full card list as machine JSON                      |
+| Flag                 | Purpose                                       |
+| -------------------- | --------------------------------------------- |
+| `--board <id>`       | Limit results to one board namespace          |
+| `--status <status>`  | Limit results to one Workboard status         |
+| `--include-archived` | Include archived cards in compact text output |
+| `--json`             | Print the full card list as machine JSON      |
 
-Archived cards are hidden by default so the CLI matches the `workboard_list`
-agent tool and the `/workboard list` command. Pass `--include-archived` to show
-them.
+Compact text output hides archived cards by default so the CLI matches the
+`/workboard list` command. Pass `--include-archived` to show them. JSON output
+keeps the full card list, including archived cards, for existing automation.
 
 ## `create`
 
