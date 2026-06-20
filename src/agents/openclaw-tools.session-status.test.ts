@@ -425,14 +425,22 @@ function latestMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
 
 function getSessionStatusTool(
   agentSessionKey = "main",
-  options?: { sandboxed?: boolean; activeModelProvider?: string; activeModelId?: string },
+  options?: {
+    sandboxed?: boolean;
+    activeModelProvider?: string;
+    activeModelId?: string;
+    runSessionKey?: string;
+    onSelfCompact?: NonNullable<Parameters<typeof createSessionStatusTool>[0]>["onSelfCompact"];
+  },
 ) {
   const tool = createSessionStatusTool({
     agentSessionKey,
+    runSessionKey: options?.runSessionKey,
     sandboxed: options?.sandboxed,
     activeModelProvider: options?.activeModelProvider,
     activeModelId: options?.activeModelId,
     config: mockConfig as never,
+    onSelfCompact: options?.onSelfCompact,
   });
   expect(tool.name).toBe("session_status");
   return tool;
@@ -460,6 +468,81 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+  });
+
+  it("requests self-compaction for the current session", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    const onSelfCompact = vi.fn(async () => ({ requested: true }));
+    const tool = getSessionStatusTool("main", { onSelfCompact });
+
+    const result = await tool.execute("call-compact", { action: "compact" });
+
+    expect(onSelfCompact).toHaveBeenCalledWith({
+      sessionKey: "main",
+      sessionId: "s1",
+      agentId: "main",
+    });
+    const details = result.details as {
+      ok?: boolean;
+      action?: string;
+      compactRequested?: boolean;
+      sessionKey?: string;
+      statusText?: string;
+    };
+    expect(details).toMatchObject({
+      ok: true,
+      action: "compact",
+      compactRequested: true,
+      sessionKey: "main",
+    });
+    expect(details.statusText).toContain("Self-compaction requested");
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("requires an active run callback before self-compaction", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    const tool = getSessionStatusTool();
+
+    await expect(tool.execute("call-compact-no-callback", { action: "compact" })).rejects.toThrow(
+      'session_status action "compact" is only available during an active agent run.',
+    );
+  });
+
+  it("blocks self-compaction for non-current sessions", async () => {
+    mockConfig = {
+      ...createMockConfig(),
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: false },
+      },
+    };
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+      other: {
+        sessionId: "s2",
+        updatedAt: 11,
+      },
+    });
+    const onSelfCompact = vi.fn(async () => ({ requested: true }));
+    const tool = getSessionStatusTool("main", { onSelfCompact });
+
+    await expect(
+      tool.execute("call-compact-other", { action: "compact", sessionKey: "other" }),
+    ).rejects.toThrow('session_status action "compact" can only target the current session.');
+    expect(onSelfCompact).not.toHaveBeenCalled();
   });
 
   it("enables transcript usage fallback for session_status", async () => {

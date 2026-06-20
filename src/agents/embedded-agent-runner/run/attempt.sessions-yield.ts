@@ -16,10 +16,11 @@ function buildSessionsYieldContextMessage(message: string): string {
   return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
 }
 
-export async function waitForSessionsYieldAbortSettle(params: {
+export async function waitForRunAbortSettle(params: {
   settlePromise: Promise<void> | null;
   runId: string;
   sessionId: string;
+  label: string;
 }): Promise<void> {
   if (!params.settlePromise) {
     return;
@@ -31,7 +32,7 @@ export async function waitForSessionsYieldAbortSettle(params: {
       .then(() => "settled" as const)
       .catch((err: unknown) => {
         log.warn(
-          `sessions_yield abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
+          `${params.label} abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
         );
         return "errored" as const;
       }),
@@ -44,9 +45,17 @@ export async function waitForSessionsYieldAbortSettle(params: {
   }
   if (outcome === "timed_out") {
     log.warn(
-      `sessions_yield abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS}`,
+      `${params.label} abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS}`,
     );
   }
+}
+
+export async function waitForSessionsYieldAbortSettle(params: {
+  settlePromise: Promise<void> | null;
+  runId: string;
+  sessionId: string;
+}): Promise<void> {
+  return waitForRunAbortSettle({ ...params, label: "sessions_yield" });
 }
 
 // Return a synthetic aborted response so agent runtime unwinds without a real provider call.
@@ -220,6 +229,69 @@ export function stripSessionsYieldArtifacts(activeSession: {
         entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
       return isYieldAbortAssistant || isYieldInterruptMessage;
     },
+    {
+      preserveTrailing: (entry) =>
+        entry.type === "custom" ||
+        entry.type === "label" ||
+        entry.type === "session_info" ||
+        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+    },
+  );
+}
+
+// Remove only the synthetic aborted assistant entry from an intentional run abort.
+export function stripRunAbortArtifacts(activeSession: {
+  messages: AgentMessage[];
+  agent: { state: { messages: AgentMessage[] } };
+  sessionManager?: unknown;
+}) {
+  const strippedMessages = activeSession.messages.slice();
+  while (strippedMessages.length > 0) {
+    const last = strippedMessages.at(-1) as AgentMessage | { role?: string; stopReason?: string };
+    if (last?.role === "assistant" && "stopReason" in last && last.stopReason === "aborted") {
+      strippedMessages.pop();
+      continue;
+    }
+    break;
+  }
+  if (strippedMessages.length !== activeSession.messages.length) {
+    activeSession.agent.state.messages = strippedMessages;
+  }
+
+  const sessionManager = activeSession.sessionManager as
+    | {
+        removeTrailingEntries?: (
+          predicate: (entry: {
+            type?: string;
+            message?: {
+              role?: string;
+              stopReason?: string;
+              provider?: string;
+              model?: string;
+            };
+          }) => boolean,
+          options?: {
+            preserveTrailing?: (entry: {
+              type?: string;
+              message?: {
+                role?: string;
+                provider?: string;
+                model?: string;
+              };
+            }) => boolean;
+          },
+        ) => number;
+      }
+    | undefined;
+  if (typeof sessionManager?.removeTrailingEntries !== "function") {
+    return;
+  }
+
+  sessionManager.removeTrailingEntries(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "assistant" &&
+      entry.message?.stopReason === "aborted",
     {
       preserveTrailing: (entry) =>
         entry.type === "custom" ||
