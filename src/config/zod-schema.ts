@@ -447,6 +447,16 @@ const McpServerSchema = z
       .strict()
       .optional(),
   })
+  .superRefine((data, ctx) => {
+    // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
+    if (data.transport === "stdio" && !data.command) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '"stdio" transport requires a non-empty command',
+        path: ["transport"],
+      });
+    }
+  })
   .catchall(z.unknown());
 
 const McpConfigSchema = z

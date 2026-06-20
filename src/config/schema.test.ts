@@ -285,6 +285,20 @@ describe("config schema", () => {
     }
   });
 
+  it("rejects stdio transport for URL-only MCP servers (command required)", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          bad: {
+            url: "https://mcp.example.com/mcp",
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("merges plugin ui hints", () => {
     const res = buildConfigSchema(pluginUiHintInput);
 
