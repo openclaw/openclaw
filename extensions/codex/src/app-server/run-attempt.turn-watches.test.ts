@@ -391,6 +391,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 100;
+    params.authProfileStore = { version: 1, profiles: {} };
 
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 500,
@@ -623,6 +624,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 100;
+    params.authProfileStore = { version: 1, profiles: {} };
 
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 500,
@@ -641,6 +643,14 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
     await vi.waitFor(() =>
       expect(authBridge.refreshCodexAppServerAuthTokens).toHaveBeenCalledTimes(1),
+    );
+    expect(authBridge.refreshCodexAppServerAuthTokens).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: expect.any(String),
+        authProfileId: params.authProfileId,
+        authProfileStore: params.authProfileStore,
+        config: params.config,
+      }),
     );
     await vi.waitFor(
       () =>

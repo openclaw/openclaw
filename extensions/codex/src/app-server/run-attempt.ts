@@ -1898,6 +1898,7 @@ export async function runCodexAppServerAttempt(
         return refreshCodexAppServerAuthTokens({
           agentDir,
           authProfileId: startupAuthProfileId,
+          authProfileStore: params.authProfileStore,
           config: params.config,
         });
       }

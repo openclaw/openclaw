@@ -212,7 +212,7 @@ async function acquireSharedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
   leaseOptions?: { leased: true },
 ): Promise<{ client: CodexAppServerClient; release?: () => void }> {
-  const { agentDir, usesNativeAuth, authProfileId, startOptions } =
+  const { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions } =
     await resolveCodexAppServerClientStartContext(options);
   const fallbackApiKeyCacheKey = authProfileId
     ? undefined
@@ -247,6 +247,21 @@ async function acquireSharedCodexAppServerClient(
       options?.onStartedClient?.(client);
       client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
+      if (authProfileId) {
+        // Shared clients must expose the same host-driven OAuth refresh path as
+        // isolated clients because turn-bound Telegram sessions reuse them.
+        client.addRequestHandler(async (request) => {
+          if (request.method !== "account/chatgptAuthTokens/refresh") {
+            return undefined;
+          }
+          return await refreshCodexAppServerAuthTokens({
+            agentDir,
+            authProfileId,
+            ...(authProfileStore ? { authProfileStore } : {}),
+            config: options?.config,
+          });
+        });
+      }
       try {
         await client.initialize();
         await applyCodexAppServerAuthProfile({
@@ -255,6 +270,7 @@ async function acquireSharedCodexAppServerClient(
           authProfileId: usesNativeAuth ? null : authProfileId,
           startOptions,
           config: options?.config,
+          ...(authProfileStore ? { authProfileStore } : {}),
         });
         return client;
       } catch (error) {
