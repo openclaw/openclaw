@@ -261,6 +261,12 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
           running: true,
         }),
         setStatus: () => undefined,
+        channelOutbound: {
+          registerMirrorDispatcher: () => undefined,
+          unregisterMirrorDispatcher: () => undefined,
+          registerEchoAdmission: () => undefined,
+          unregisterEchoAdmission: () => undefined,
+        },
       }),
   );
   return {

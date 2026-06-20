@@ -26,6 +26,21 @@ export type TelegramMessageContextOptions = {
   ingressBuffer?: "inbound-debounce" | "text-fragment";
   promptContextMinTimestampMs?: number;
   spooledReplay?: boolean;
+  /**
+   * Pin-from-here mirror turn: a synthetic inbound re-homing an already-authorized
+   * session's turn onto this chat. The SENDER allowFrom gate is skipped (the pin was
+   * the authorization, and the inbound is synthetic), but the DESTINATION-enablement
+   * gates (group/topic disabled, requireTopic) are STILL enforced so a pin stops
+   * delivering once the destination is later disabled or restricted (revocation).
+   * Everything else builds normally so the mirror renders + persists like a native turn.
+   */
+  mirror?: boolean;
+  /**
+   * Called (mirror turns only) when admission is denied by a destination-enablement
+   * gate, i.e. the pin has been revoked. Lets the caller distinguish an intentional
+   * revocation drop (keep the target suppressed) from an unexpected null context.
+   */
+  onMirrorAdmissionBlocked?: () => void;
 };
 
 export type TelegramPromptContextEntry = NonNullable<

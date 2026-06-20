@@ -1,6 +1,7 @@
 // Telegram plugin module implements bot message behavior.
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GetReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import {
   createSubsystemLogger,
   danger,
@@ -26,6 +27,7 @@ import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
+import { parseTelegramTarget } from "./targets.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
@@ -106,7 +108,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     ? { recordChannelActivity: telegramDeps.recordChannelActivity }
     : undefined;
 
-  return async (
+  const processMessage = async (
     primaryCtx: TelegramContext,
     allMedia: TelegramMediaRef[],
     storeAllowFrom: string[],
@@ -247,4 +249,129 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       return result;
     }
   };
+
+  /**
+   * Pin-from-here mirror: re-home an origin run onto THIS channel by running a
+   * synthetic inbound turn whose reply comes from the origin run's agent-event bus
+   * (replyResolver) instead of the model. Reuses this processor's exact deps +
+   * session runtime, so the mirror renders + persists through the normal pipeline
+   * and honors this account's streaming config. Admission is skipped (the /pin was
+   * the authorization). Loop-safe: replyResolver bypasses the agent-run path, so a
+   * mirror turn never re-enters the mirror fan-out.
+   */
+  const dispatchMirror = async (mirror: {
+    target: { to: string; threadId?: string | number };
+    replyResolver: GetReplyFromConfig;
+  }): Promise<void> => {
+    // Parse the target with the canonical Telegram parser so a topic/thread encoded
+    // in the target string (e.g. "telegram:-100...:topic:42") is honored, not only an
+    // explicit threadId. Falls back to the explicit threadId when the string has none.
+    const parsedTarget = parseTelegramTarget(mirror.target.to);
+    const chatId: string | number = /^-?\d+$/.test(parsedTarget.chatId)
+      ? Number(parsedTarget.chatId)
+      : parsedTarget.chatId;
+    const threadId =
+      parsedTarget.messageThreadId ??
+      (mirror.target.threadId != null && Number.isFinite(Number(mirror.target.threadId))
+        ? Number(mirror.target.threadId)
+        : undefined);
+    const numericChatId = typeof chatId === "number" ? chatId : Number(chatId);
+    const chatType: "private" | "supergroup" =
+      Number.isFinite(numericChatId) && numericChatId < 0 ? "supergroup" : "private";
+    const syntheticMessage = {
+      message_id: 0,
+      date: Math.floor(Date.now() / 1000),
+      chat: {
+        id: chatId,
+        type: chatType,
+        ...(chatType === "supergroup" ? { is_forum: threadId != null } : {}),
+      },
+      // For a DM the chat id IS the target user's id; use it as the synthetic
+      // sender so the DM access gate evaluates the REAL pinned participant
+      // (an authorized/paired DM passes; a revoked one is denied → suppressed).
+      // A synthetic sender of 0 would falsely reject every paired/allowlisted DM.
+      // Groups skip the per-message sender gate, so 0 is fine there.
+      from: {
+        id: chatType === "private" && Number.isFinite(numericChatId) ? numericChatId : 0,
+        is_bot: false,
+        first_name: "mirror",
+      },
+      // Minimal non-empty body: the body is never used (replyResolver supplies the
+      // reply from the bus) but the inbound pipeline drops empty messages.
+      text: "·",
+      ...(threadId != null ? { message_thread_id: threadId, is_topic_message: true } : {}),
+    } as unknown as TelegramContext["message"];
+    const primaryCtx: TelegramContext = {
+      message: syntheticMessage,
+      ...(bot.botInfo ? { me: bot.botInfo } : {}),
+      getFile: (async () => undefined) as unknown as TelegramContext["getFile"],
+    };
+    let revoked = false;
+    const context = await buildTelegramMessageContext({
+      primaryCtx,
+      allMedia: [],
+      storeAllowFrom: [],
+      options: {
+        mirror: true,
+        forceWasMentioned: true,
+        onMirrorAdmissionBlocked: () => {
+          revoked = true;
+        },
+      },
+      bot,
+      cfg,
+      account,
+      historyLimit,
+      groupHistories,
+      dmPolicy,
+      allowFrom,
+      groupAllowFrom,
+      ackReactionScope,
+      logger,
+      resolveGroupActivation,
+      resolveGroupRequireMention,
+      resolveTelegramGroupConfig,
+      loadFreshConfig,
+      runtime: contextRuntime,
+      sessionRuntime,
+      upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
+      sendChatActionHandler,
+    });
+    if (!context) {
+      if (revoked) {
+        // The destination's current policy now denies this pin (group/topic
+        // disabled, or requireTopic). Drop silently and return normally so the
+        // launcher KEEPS the handled-mark — the post-hoc final echo (a raw send
+        // that does not re-check enablement) must not deliver the revoked content
+        // either. This is the persisted-pin revocation path.
+        logVerbose(
+          `telegram mirror: destination policy denies ${mirror.target.to}; dropped (pin revoked)`,
+        );
+        return;
+      }
+      // Unexpected null (not a policy denial): signal failure so the launcher
+      // un-marks this target and the post-hoc final echo delivers (no silent drop).
+      throw new Error(`telegram mirror: context dropped for ${mirror.target.to}`);
+    }
+    // A mirror inbound is a synthetic re-home of an already-handled turn, NOT real
+    // user input. Suppress its message:received hooks so the echo hook does not treat
+    // the synthetic "." message as a user message and re-echo a phantom placeholder
+    // (or fire plugin received-hook side effects) into the other pinned targets.
+    context.ctxPayload.SuppressMessageReceivedHooks = true;
+    await dispatchTelegramMessage({
+      context,
+      bot,
+      cfg,
+      runtime,
+      replyToMode,
+      streamMode,
+      textLimit,
+      telegramCfg,
+      telegramDeps,
+      opts,
+      replyResolver: mirror.replyResolver,
+    });
+  };
+
+  return Object.assign(processMessage, { dispatchMirror });
 };

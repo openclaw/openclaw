@@ -79,6 +79,10 @@ import {
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  launchMirrorDispatch,
+  type MirrorDispatchHandle,
+} from "../../infra/outbound/mirror-dispatch.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -1764,6 +1768,52 @@ export async function runAgentTurnWithFallback(params: {
     }
     await deliverCompactionNoticePayload(noticePayload, "hook");
   };
+  // Pin-from-here mirror (channel-agnostic): one agent run, broadcast on the bus
+  // by runId. For each pinned echo target, re-home a turn onto that target's OWN
+  // channel dispatch with a bus-sourced replyResolver — so it renders + persists
+  // through the channel's normal pipeline and honors that channel's config
+  // (streaming on → it streams; off → final only). Must run before the model
+  // emits: the bus has no replay buffer, so each target's resolver subscribes
+  // synchronously here. The resolvers self-settle on the run's lifecycle event;
+  // on abort we dispose them.
+  let mirrorDispatch: MirrorDispatchHandle | undefined;
+  const echoEntryForStreaming = params.sessionKey ? params.getActiveSessionEntry() : undefined;
+  if (echoEntryForStreaming?.echoTargets?.length) {
+    try {
+      mirrorDispatch = await launchMirrorDispatch({
+        originRunId: runId,
+        cfg: runtimeConfig,
+        sessionKey: params.sessionKey,
+        sessionEntry: echoEntryForStreaming,
+        // Origin = the channel that triggered THIS turn. Prefer the explicit
+        // origin (OriginatingChannel/To — set for webchat chat.send and callers
+        // that do not claim the session's `last*`) over `last*`, which is only
+        // fresh for channel inbounds; otherwise a webchat-origin turn inherits a
+        // stale `last*` and may self-exclude a pinned target.
+        originChannel:
+          params.sessionCtx.OriginatingChannel ??
+          echoEntryForStreaming.lastChannel ??
+          echoEntryForStreaming.channel ??
+          params.sessionCtx.Provider ??
+          "",
+        originTo: params.sessionCtx.OriginatingTo ?? echoEntryForStreaming.lastTo ?? "",
+        originAccountId: echoEntryForStreaming.lastAccountId,
+        originThreadId: echoEntryForStreaming.lastThreadId,
+      });
+    } catch (err) {
+      logVerbose(`mirror dispatch launch failed (non-fatal): ${String(err)}`);
+    }
+    const echoAbortSignal = params.replyOperation?.abortSignal ?? params.opts?.abortSignal;
+    if (mirrorDispatch && echoAbortSignal) {
+      echoAbortSignal.addEventListener(
+        "abort",
+        () => {
+          mirrorDispatch?.dispose();
+        },
+        { once: true },
+      );
+    }
+  }
   let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;

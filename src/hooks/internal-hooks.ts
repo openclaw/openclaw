@@ -66,6 +66,8 @@ export type MessageReceivedHookContext = {
   conversationId?: string;
   /** Message ID from the provider */
   messageId?: string;
+  /** Internal marker: user echo was already emitted by the accepted gateway turn. */
+  echoUserAlreadyDelivered?: boolean;
   /** Additional provider-specific metadata */
   metadata?: Record<string, unknown>;
 };

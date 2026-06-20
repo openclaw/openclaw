@@ -4,6 +4,8 @@ import type {
   DurableMessageSendContext,
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
+import type { ChannelEchoAdmission } from "../infra/outbound/channel-admission.js";
+import type { MirrorDispatcher } from "../infra/outbound/mirror-dispatch.js";
 type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
 type ChannelMessageRuntimeModule = typeof import("../channels/message/runtime.js");
 
@@ -48,6 +50,15 @@ export type { DraftStreamLoop } from "../channels/draft-stream-loop.js";
 export { resolveChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export type { ChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
+// Pin-from-here mirror-dispatcher + echo-admission registries. Registration is
+// OWNER-SCOPED and HOST-BOUND: the gateway issues each channel plugin a registrar
+// bound to its authenticated channel id (delivered via the channel gateway context),
+// so a plugin cannot choose its own owner or touch another channel/account's mirror
+// or admission handler. The factory is host-internal (createChannelOutboundRegistrar
+// in infra/outbound) — plugins only ever RECEIVE a bound registrar, never create one.
+// Contract: docs/plugins/sdk-overview.md#channel-mirror-dispatcher.
+export type { MirrorDispatcher, ChannelEchoAdmission };
+export type { ChannelOutboundRegistrar } from "../infra/outbound/channel-outbound-registrar.js";
 export { createChannelRunQueue } from "./channel-lifecycle.core.js";
 export type {
   ChannelRunQueue,

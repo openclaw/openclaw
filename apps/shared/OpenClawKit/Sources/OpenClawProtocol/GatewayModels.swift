@@ -2639,6 +2639,56 @@ public struct SessionsDeleteParams: Codable, Sendable {
     }
 }
 
+public struct SessionsEchoParams: Codable, Sendable {
+    public let key: String
+    public let agentid: String?
+    public let action: AnyCodable?
+    public let channel: String?
+    public let to: String?
+    public let accountid: String?
+    public let threadid: AnyCodable?
+    public let label: String?
+    public let echouser: Bool?
+    public let echoassistant: Bool?
+
+    public init(
+        key: String,
+        agentid: String? = nil,
+        action: AnyCodable?,
+        channel: String?,
+        to: String?,
+        accountid: String?,
+        threadid: AnyCodable?,
+        label: String?,
+        echouser: Bool?,
+        echoassistant: Bool?)
+    {
+        self.key = key
+        self.agentid = agentid
+        self.action = action
+        self.channel = channel
+        self.to = to
+        self.accountid = accountid
+        self.threadid = threadid
+        self.label = label
+        self.echouser = echouser
+        self.echoassistant = echoassistant
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+        case action
+        case channel
+        case to
+        case accountid = "accountId"
+        case threadid = "threadId"
+        case label
+        case echouser = "echoUser"
+        case echoassistant = "echoAssistant"
+    }
+}
+
 public struct SessionsCompactParams: Codable, Sendable {
     public let key: String
     public let agentid: String?

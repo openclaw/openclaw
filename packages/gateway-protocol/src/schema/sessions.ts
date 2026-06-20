@@ -366,6 +366,26 @@ export const SessionsPluginPatchResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsEchoParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    action: Type.Optional(
+      Type.Union([Type.Literal("add"), Type.Literal("remove"), Type.Literal("list")]),
+    ),
+    channel: Type.Optional(NonEmptyString),
+    to: Type.Optional(NonEmptyString),
+    accountId: Type.Optional(NonEmptyString),
+    // Telegram forum thread IDs arrive as numbers; SessionEchoTarget.threadId is
+    // string | number, so accept both here instead of rejecting numeric IDs.
+    threadId: Type.Optional(Type.Union([NonEmptyString, Type.Number()])),
+    label: Type.Optional(NonEmptyString),
+    echoUser: Type.Optional(Type.Boolean()),
+    echoAssistant: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 /** Resets a session to a new or reset transcript state. */
 export const SessionsResetParamsSchema = Type.Object(
   {

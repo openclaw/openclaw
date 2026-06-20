@@ -74,6 +74,8 @@ import {
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { consumeStreamingEchoHandled } from "../../infra/outbound/mirror-dispatch.js";
+import { fireEchoDeliveries } from "../../infra/outbound/echo.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
@@ -3545,6 +3547,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    let userEchoAlreadyDelivered = false;
     try {
       const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
         ? {
@@ -3587,6 +3590,29 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       respond(true, ackPayload, undefined, { runId: clientRunId });
       const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
+      // User-message echo fires only once the turn is accepted for dispatch
+      // (attachments staged, abort controller registered, run added, ack sent),
+      // mirroring the assistant-echo's post-acceptance placement. Firing it
+      // earlier would leak rejected input if a pre-acceptance path errored out.
+      if (rawMessage) {
+        const userEchoEntry = entry ?? loadSessionEntry(sessionKey, sessionLoadOptions).entry;
+        if (userEchoEntry?.echoTargets?.length) {
+          void fireEchoDeliveries(
+            {
+              cfg,
+              sessionKey,
+              sessionEntry: userEchoEntry,
+              originChannel: p.originatingChannel ?? "webchat",
+              originTo: p.originatingTo ?? "",
+              originAccountId: p.originatingAccountId,
+              originThreadId: p.originatingThreadId,
+              role: "user",
+            },
+            [{ text: rawMessage }],
+          );
+          userEchoAlreadyDelivered = true;
+        }
+      }
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,
@@ -3662,6 +3688,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         OriginatingChannel: originatingChannel,
         OriginatingTo: originatingTo,
         ExplicitDeliverRoute: explicitDeliverRoute,
+        EchoUserAlreadyDelivered: userEchoAlreadyDelivered,
         AccountId: accountId,
         MessageThreadId: messageThreadId,
         ChatType: "direct",
@@ -4544,6 +4571,33 @@ export const chatHandlers: GatewayRequestHandlers = {
                     agentId,
                     message,
                   });
+                  if (displayReply) {
+                    const echoEntry =
+                      entry ?? loadSessionEntry(sessionKey, sessionLoadOptions).entry;
+                    if (echoEntry?.echoTargets?.length) {
+                      void fireEchoDeliveries(
+                        {
+                          cfg,
+                          sessionKey,
+                          sessionEntry: echoEntry,
+                          originChannel: p.originatingChannel ?? "webchat",
+                          originTo: p.originatingTo ?? "",
+                          originAccountId: p.originatingAccountId,
+                          originThreadId: p.originatingThreadId,
+                          role: "assistant",
+                        },
+                        [{ text: displayReply }],
+                        // Match the message:sent echo path (echo-hook.ts): the response mirrors
+                        // natively (no "[echo]" prefix), and targets already rendered live by a
+                        // streaming renderer are skipped so they don't get a duplicate final.
+                        {
+                          prefixed: false,
+                          filterTargets: (target) =>
+                            !consumeStreamingEchoHandled(sessionKey, target),
+                        },
+                      );
+                    }
+                  }
                 }
               } else {
                 const hasReturnedAgentErrorPayloads = returnedAgentErrorPayloads.length > 0;
@@ -4876,6 +4930,30 @@ export const chatHandlers: GatewayRequestHandlers = {
                       message,
                     });
                     broadcastedSourceReplyFinal = hasSourceReplyTranscriptMirror;
+                    if (sourceReplyText) {
+                      const echoEntry =
+                        entry ?? loadSessionEntry(sessionKey, sessionLoadOptions).entry;
+                      if (echoEntry?.echoTargets?.length) {
+                        void fireEchoDeliveries(
+                          {
+                            cfg,
+                            sessionKey,
+                            sessionEntry: echoEntry,
+                            originChannel: p.originatingChannel ?? "webchat",
+                            originTo: p.originatingTo ?? "",
+                            originAccountId: p.originatingAccountId,
+                            originThreadId: p.originatingThreadId,
+                            role: "assistant",
+                          },
+                          [{ text: sourceReplyText }],
+                          {
+                            prefixed: false,
+                            filterTargets: (target) =>
+                              !consumeStreamingEchoHandled(sessionKey, target),
+                          },
+                        );
+                      }
+                    }
                   }
                 }
               }

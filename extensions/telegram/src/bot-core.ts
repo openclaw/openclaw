@@ -21,6 +21,7 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramDmAllow } from "./access-groups.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
@@ -48,6 +49,7 @@ import {
   resolveTelegramClientTimeoutSeconds,
   resolveTelegramOutboundClientTimeoutFloorSeconds,
 } from "./client-fetch.js";
+import { isTelegramDmAccessAllowed } from "./dm-access.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
@@ -55,6 +57,7 @@ import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import { parseTelegramTarget } from "./targets.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type { TelegramBotOptions } from "./bot.types.js";
@@ -390,6 +393,82 @@ export function createTelegramBotCore(
     telegramDeps,
   });
 
+  // Pin-from-here: re-home a mirrored turn onto THIS account through its own
+  // dispatch (drafts/streaming/persistence per this account's config). Keyed by
+  // accountId so a multi-account install mirrors through the target's own bot.
+  // Host-issued, owner-bound registrar (bound to the authenticated "telegram" channel
+  // id by the gateway). A plugin can only manage its OWN mirror/admission entries —
+  // it cannot pick the owner itself, so it cannot spoof another channel. Absent only
+  // in unit tests that construct the bot directly; registration is skipped then.
+  const channelOutbound = opts.channelOutbound;
+  channelOutbound?.registerMirrorDispatcher(account.accountId, ({ target, replyResolver }) =>
+    processMessage.dispatchMirror({ target, replyResolver }),
+  );
+
+  // Pin-from-here revocation: the prompt / post-hoc echo path delivers through
+  // the channel-agnostic raw send (no inbound admission gate), so gate it on this
+  // account's live enablement. A disabled (revoked) destination then stops
+  // receiving echoes too, matching the native mirror gate. Covers groups/topics
+  // (`groups[id].enabled` / topic `enabled`), direct chats (resolveTelegram-
+  // GroupConfig returns the direct config for a positive chat id, so its
+  // `enabled: false` is caught here), and a DM policy later set to `disabled`.
+  channelOutbound?.registerEchoAdmission(account.accountId, async (cfgForAdmission, target) => {
+    // Parse with the canonical Telegram target parser so a topic/thread encoded in
+    // the target string (e.g. "telegram:-100...:topic:42") is resolved BEFORE the
+    // admission check — otherwise a topic-scoped echo target is gated against the
+    // group config instead of its own topic's enablement. Falls back to the explicit
+    // threadId when the string carries none.
+    const parsedTarget = parseTelegramTarget(target.to);
+    const chatId = /^-?\d+$/.test(parsedTarget.chatId)
+      ? Number(parsedTarget.chatId)
+      : parsedTarget.chatId;
+    const threadNum =
+      parsedTarget.messageThreadId ??
+      (target.threadId == null ? undefined : Number(target.threadId));
+    const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+      chatId,
+      threadNum != null && Number.isFinite(threadNum) ? threadNum : undefined,
+    );
+    if (groupConfig?.enabled === false) {
+      return false;
+    }
+    if (topicConfig?.enabled === false) {
+      return false;
+    }
+    // A pinned direct chat (positive id) must re-pass live DM authorization, so a
+    // DM whose access is later revoked (policy disabled, pairing dropped, removed
+    // from the allowlist) stops receiving echoes. The chat id IS the DM user's id,
+    // so it doubles as the sender for the access decision.
+    if (typeof chatId === "number" && chatId > 0) {
+      const liveCfg = loadFreshTelegramAccountConfig();
+      const liveDmPolicy = liveCfg.dmPolicy ?? dmPolicy;
+      if (liveDmPolicy === "disabled") {
+        return false;
+      }
+      const dmAllow = await resolveTelegramDmAllow({
+        cfg: cfgForAdmission,
+        allowFrom: liveCfg.allowFrom ?? allowFrom,
+        dmPolicy: liveDmPolicy,
+        accountId: account.accountId,
+        senderId: String(chatId),
+      });
+      const allowed = await isTelegramDmAccessAllowed({
+        dmPolicy: liveDmPolicy,
+        msg: {
+          from: { id: chatId, is_bot: false, first_name: "echo-target" },
+          chat: { id: chatId, type: "private" },
+        } as never,
+        chatId,
+        effectiveDmAllow: dmAllow.effectiveAllow,
+        accountId: account.accountId,
+      });
+      if (!allowed) {
+        return false;
+      }
+    }
+    return true;
+  });
+
   registerTelegramNativeCommands({
     bot,
     cfg,
@@ -436,6 +515,11 @@ export function createTelegramBotCore(
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
     threadBindingManager?.stop();
+    // Drop this account's mirror dispatcher so a stopped account never keeps a
+    // stale dispatcher (a reload re-registers a fresh one; a removal just clears it).
+    // Same telegram owner, so it can unregister the entries it registered above.
+    channelOutbound?.unregisterMirrorDispatcher(account.accountId);
+    channelOutbound?.unregisterEchoAdmission(account.accountId);
     return originalStop(...args);
   }) as typeof bot.stop;
 

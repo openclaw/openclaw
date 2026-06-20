@@ -175,6 +175,38 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 | `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
+### Channel mirror dispatcher
+
+The pin-from-here **mirror dispatcher** and **echo-admission** registries are
+reached through an **owner-bound registrar the host hands you** on the channel
+gateway context — `ChannelGatewayContext.channelOutbound`. A channel plugin never
+constructs the registrar itself: the gateway issues it already bound to your
+plugin's **authenticated channel id**.
+
+```ts
+// inside your channel plugin's gateway.startAccount(ctx):
+ctx.channelOutbound.registerMirrorDispatcher(accountId, dispatcher);
+ctx.channelOutbound.registerEchoAdmission(accountId, admission);
+// on account stop:
+ctx.channelOutbound.unregisterMirrorDispatcher(accountId);
+ctx.channelOutbound.unregisterEchoAdmission(accountId);
+```
+
+A channel registers **per account** (last-wins **for the same owner**,
+`unregister*` on stop, fail closed). `registerMirrorDispatcher` hands the channel
+a bus-sourced `replyResolver` so a pinned target's turn renders + persists
+through that channel's own dispatch under its own config; `registerEchoAdmission`
+gates the channel-agnostic prompt/post-hoc echo path on the destination's live
+enablement, so a revoked group/topic/DM stops receiving **both** the native
+mirror and the echo fallback.
+
+> **Ownership is host-bound, not caller-declared.** The registrar's owner is the
+> gateway's authenticated channel id, so a `(channel, account)` entry can only be
+> replaced or unregistered by the channel that created it. A plugin cannot choose
+> its own owner string, so it cannot spoof or hijack another channel/account's
+> mirror or admission handler. There is no public factory for constructing a
+> registrar — you only ever receive the host-bound one from the gateway context.
+
 ### Host hooks for workflow plugins
 
 Host hooks are the SDK seams for plugins that need to participate in the host

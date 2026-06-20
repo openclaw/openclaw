@@ -1079,6 +1079,7 @@ export const telegramPlugin = createChatChannelPlugin({
           setStatus: ctx.setStatus,
         });
         return resolveTelegramMonitor()({
+          channelOutbound: ctx.channelOutbound,
           token,
           accountId: account.accountId,
           config: ctx.cfg,

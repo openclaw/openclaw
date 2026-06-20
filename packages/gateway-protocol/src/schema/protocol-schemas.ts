@@ -273,6 +273,7 @@ import {
   SessionsCreateParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsDescribeParamsSchema,
+  SessionsEchoParamsSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
   SessionsFilesListParamsSchema,
@@ -407,6 +408,7 @@ export const ProtocolSchemas = {
   SessionsPluginPatchResult: SessionsPluginPatchResultSchema,
   SessionsResetParams: SessionsResetParamsSchema,
   SessionsDeleteParams: SessionsDeleteParamsSchema,
+  SessionsEchoParams: SessionsEchoParamsSchema,
   SessionsCompactParams: SessionsCompactParamsSchema,
   SessionsUsageParams: SessionsUsageParamsSchema,
 

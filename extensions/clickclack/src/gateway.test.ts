@@ -73,6 +73,12 @@ function createGatewayContext(
         ChannelGatewayContext<ResolvedClickClackAccount>["getStatus"]
       >,
     setStatus,
+    channelOutbound: {
+      registerMirrorDispatcher: vi.fn(),
+      unregisterMirrorDispatcher: vi.fn(),
+      registerEchoAdmission: vi.fn(),
+      unregisterEchoAdmission: vi.fn(),
+    },
   };
 }
 

@@ -288,6 +288,108 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
+  const echoCmd = sessionsCmd
+    .command("echo")
+    .description("Manage session echo targets (mirror messages to additional channels)");
+  echoCmd.enablePositionalOptions();
+
+  echoCmd
+    .command("add")
+    .description("Add an echo target to a session")
+    .requiredOption("--session-key <key>", "Session key to add echo target to")
+    .requiredOption("--channel <channel>", "Target channel (e.g. telegram, discord)")
+    .requiredOption("--to <id>", "Target recipient/chat id")
+    .option("--account-id <id>", "Target account id")
+    .option("--thread-id <id>", "Target thread id")
+    .option("--label <label>", "Human-readable label for this echo target")
+    .option("--no-echo-user", "Do not echo user messages")
+    .option("--no-echo-assistant", "Do not echo assistant messages")
+    .option("--store <path>", "Path to session store")
+    .option("--agent <id>", "Agent id")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as
+        | { store?: string; agent?: string; json?: boolean }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsEchoAddCommand } = await import("../../commands/sessions-echo.js");
+        await sessionsEchoAddCommand(
+          {
+            sessionKey: opts.sessionKey as string,
+            channel: opts.channel as string,
+            to: opts.to as string,
+            accountId: opts.accountId as string | undefined,
+            threadId: opts.threadId as string | undefined,
+            label: opts.label as string | undefined,
+            echoUser: opts.echoUser !== false,
+            echoAssistant: opts.echoAssistant !== false,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  echoCmd
+    .command("remove")
+    .description("Remove an echo target from a session")
+    .requiredOption("--session-key <key>", "Session key")
+    .requiredOption("--channel <channel>", "Target channel to remove")
+    .requiredOption("--to <id>", "Target recipient/chat id to remove")
+    .option("--account-id <id>", "Target account id")
+    .option("--thread-id <id>", "Target thread id")
+    .option("--store <path>", "Path to session store")
+    .option("--agent <id>", "Agent id")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as
+        | { store?: string; agent?: string; json?: boolean }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsEchoRemoveCommand } = await import("../../commands/sessions-echo.js");
+        await sessionsEchoRemoveCommand(
+          {
+            sessionKey: opts.sessionKey as string,
+            channel: opts.channel as string,
+            to: opts.to as string,
+            accountId: opts.accountId as string | undefined,
+            threadId: opts.threadId as string | undefined,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  echoCmd
+    .command("list")
+    .description("List echo targets for a session")
+    .requiredOption("--session-key <key>", "Session key")
+    .option("--store <path>", "Path to session store")
+    .option("--agent <id>", "Agent id")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as
+        | { store?: string; agent?: string; json?: boolean }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsEchoListCommand } = await import("../../commands/sessions-echo.js");
+        await sessionsEchoListCommand(
+          {
+            sessionKey: opts.sessionKey as string,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
   sessionsCmd
     .command("tail")
     .description("Tail human-readable session trajectory progress")

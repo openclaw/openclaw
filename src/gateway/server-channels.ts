@@ -8,6 +8,7 @@ import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-
 import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createChannelOutboundRegistrar } from "../infra/outbound/channel-outbound-registrar.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   createSubsystemLogger,
@@ -615,6 +616,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   log,
                   getStatus: () => getRuntime(channelId, id),
                   setStatus: (next) => setRuntimeFromTaskStatus(channelId, id, next, abort.signal),
+                  // Owner is the host's AUTHENTICATED channel id, never caller input —
+                  // a plugin cannot spoof another channel's mirror/admission ownership.
+                  channelOutbound: createChannelOutboundRegistrar(channelId),
                   ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
                 });
               const routeRegistry = getPluginHttpRouteRegistry?.();
@@ -826,6 +830,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             log,
             getStatus: () => getRuntime(channelId, id),
             setStatus: (next) => setRuntime(channelId, id, next),
+            channelOutbound: createChannelOutboundRegistrar(channelId),
           });
         }
         const stoppedCleanly = await waitForChannelStopGracefully(

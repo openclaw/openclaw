@@ -72,6 +72,7 @@ type Options = {
   recordFps: number;
   recordSeconds: number;
   remoteCommand: string[];
+  payloadFile?: string;
   sessionFile?: string;
   sutUsername?: string;
   target: string;
@@ -204,6 +205,7 @@ function usageText() {
     "  --full-artifacts              Publish all session artifacts. Default publishes only the motion GIF.",
     "  --tdlib-sha256 <hex>         Expected SHA-256 for --tdlib-url. Defaults to <url>.sha256.",
     "  --tdlib-url <url>             Linux tdlib archive containing libtdjson.so.",
+    "  --payload-file <path>         Local credential payload.json; skips Convex (use with local-container).",
     "  --dry-run                     Validate local inputs and print the plan.",
   ].join("\n");
 }
@@ -357,6 +359,8 @@ function parseArgs(argvInput: string[]): Options {
       opts.previewWidth = parsePositiveInteger(readValue(), "--preview-width");
     } else if (arg === "--provider") {
       opts.provider = readValue();
+    } else if (arg === "--payload-file") {
+      opts.payloadFile = readValue();
     } else if (arg === "--pr") {
       opts.publishPr = parsePositiveInteger(readValue(), "--pr");
     } else if (arg === "--repo") {
@@ -1732,6 +1736,39 @@ async function leaseCredential(params: { localRoot: string; opts: Options; root:
   const desktopWorkdir = path.join(params.localRoot, "desktop");
   const leaseFile = path.join(params.localRoot, "lease.json");
   const payloadFile = path.join(params.localRoot, "payload.json");
+  if (params.opts.payloadFile) {
+    // Local (no Convex): restore directly from a pre-built payload.json.
+    const localPayload = expandHome(params.opts.payloadFile);
+    await runCommand({
+      command: "node",
+      args: [
+        "--import",
+        "tsx",
+        CREDENTIAL_SCRIPT,
+        "restore",
+        "--payload-file",
+        localPayload,
+        "--user-driver-dir",
+        userDriverDir,
+        "--desktop-workdir",
+        desktopWorkdir,
+      ],
+      cwd: params.root,
+      stdio: "inherit",
+    });
+    const localData = readJsonFile(localPayload);
+    return {
+      acquired: {} as JsonObject,
+      desktopWorkdir,
+      groupId: requireString(localData, "groupId"),
+      leaseFile: "",
+      payloadFile: localPayload,
+      sutToken: requireString(localData, "sutToken"),
+      testerUserId: requireString(localData, "testerUserId"),
+      testerUsername: requireString(localData, "testerUsername"),
+      userDriverDir,
+    };
+  }
   const args = [
     CREDENTIAL_SCRIPT,
     "lease-restore",
@@ -2019,12 +2056,14 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   fs.rmSync(localRoot, { force: true, recursive: true });
   fs.mkdirSync(localRoot, { mode: 0o700, recursive: true });
 
-  const convexEnvFile = expandHome(opts.envFile ?? DEFAULT_CONVEX_ENV_FILE);
-  const hasConvexEnv =
-    trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) &&
-    trimToValue(process.env.OPENCLAW_QA_CONVEX_SECRET_CI);
-  if (!hasConvexEnv && !fs.existsSync(convexEnvFile)) {
-    throw new Error(`Missing Convex env file: ${opts.envFile ?? DEFAULT_CONVEX_ENV_FILE}`);
+  if (!opts.payloadFile) {
+    const convexEnvFile = expandHome(opts.envFile ?? DEFAULT_CONVEX_ENV_FILE);
+    const hasConvexEnv =
+      trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) &&
+      trimToValue(process.env.OPENCLAW_QA_CONVEX_SECRET_CI);
+    if (!hasConvexEnv && !fs.existsSync(convexEnvFile)) {
+      throw new Error(`Missing Convex env file: ${opts.envFile ?? DEFAULT_CONVEX_ENV_FILE}`);
+    }
   }
   await runCommand({ command: opts.crabboxBin, args: ["--version"], cwd: root });
   if (opts.dryRun) {
