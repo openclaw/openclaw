@@ -175,7 +175,7 @@ enum ConfigStore {
                 browser["priorDefaultProfile"] = priorDefault
             }
             var profiles = browser["profiles"] as? [String: Any] ?? [:]
-            profiles[self.myBrowserProfileName] = ["driver": "extension-bridge"]
+            profiles[self.myBrowserProfileName] = ["driver": "extension-bridge", "color": "#FF5A36"]
             browser["profiles"] = profiles
             browser["defaultProfile"] = self.myBrowserProfileName
             browser["enabled"] = true

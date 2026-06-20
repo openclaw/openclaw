@@ -467,6 +467,7 @@ export const handleNodeEvent = async (
         channel?: string | null;
         timeoutSeconds?: number | null;
         key?: string | null;
+        extraSystemPrompt?: string | null;
       };
 
       let link: AgentDeepLink | null;
@@ -613,6 +614,7 @@ export const handleNodeEvent = async (
           typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
         messageChannel: "node",
         allowModelOverride: false,
+        extraSystemPrompt: link?.extraSystemPrompt ?? undefined,
       });
       return undefined;
     }

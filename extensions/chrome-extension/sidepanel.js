@@ -604,13 +604,28 @@ async function deliverTurn(text) {
   // subscription on the same sessionKey. Fall back to a direct gateway turn if
   // no node is hosting the bridge.
   let routedThroughNode = false;
+  let nodeFallbackAllowed = true;
   try {
     const nodeRes = await chrome.runtime.sendMessage({ type: "nodeTurn", message: sendText, sessionKey });
     routedThroughNode = !!(nodeRes && nodeRes.ok);
+    // Only fall back to a direct (unconfined) gateway turn when no node hosts
+    // the bridge. If a node WAS hosting (a node-confined turn is expected) and
+    // routing failed, fail closed rather than silently dropping the
+    // gateway.tools.byNode confinement.
+    if (nodeRes && nodeRes.ok === false && nodeRes.fallbackAllowed === false) {
+      nodeFallbackAllowed = false;
+    }
   } catch {
     // background/relay unavailable — fall through to a direct gateway turn.
   }
   if (!routedThroughNode) {
+    if (!nodeFallbackAllowed) {
+      addMessage(
+        "system",
+        "Couldn't reach the hosting node, so this node-confined turn was not sent (it would otherwise run with the unrestricted gateway tool surface). Reconnect the node and retry.",
+      );
+      return;
+    }
     const result = await sendReq("sessions.send", {
       message: sendText,
       idempotencyKey: generateId(),

@@ -211,6 +211,10 @@ const BADGE = {
 
 /** @type {WebSocket|null} */
 let relayWs = null;
+// Whether the current/last connected relay intake is node-hosted (vs a
+// gateway-only bridge). Used to fail closed on a failed node turn instead of
+// silently running with the unrestricted gateway tool surface.
+let relayNodeIntegrated = false;
 /** @type {Promise<void>|null} */
 let relayConnectPromise = null;
 let relayGatewayToken = "";
@@ -321,12 +325,12 @@ async function getGatewayUrl() {
 }
 
 async function getRelayHost() {
-  const gatewayUrl = await getGatewayUrl();
-  try {
-    return new URL(gatewayUrl).hostname;
-  } catch {
-    return "127.0.0.1";
-  }
+  // The node-owned CDP bridge is a local loopback intake (the bundled extension
+  // drives the user's local Chrome), so the relay defaults to localhost rather
+  // than the gateway's hostname (which may be a remote tunnel). An explicit
+  // relayHost override is honored for advanced setups.
+  const stored = await chrome.storage.local.get(["relayHost"]);
+  return String(stored.relayHost || "").trim() || "127.0.0.1";
 }
 
 // Probe localhost for a node-local browser intake (the relay-driver). Prefer a
@@ -460,6 +464,12 @@ async function ensureRelayConnection() {
     }
     const isSecure = relayHost !== "127.0.0.1" && relayHost !== "localhost";
     const httpBase = `${isSecure ? "https" : "http"}://${relayHost}:${port}`;
+    try {
+      const who = await fetch(httpBase + "/whoami", { signal: AbortSignal.timeout(2000) }).then((r) => r.json());
+      relayNodeIntegrated = !!who.nodeIntegrated;
+    } catch {
+      /* keep last-known relayNodeIntegrated on probe failure */
+    }
     const wsUrl = await buildRelayWsUrl(port, gatewayToken, relayHost);
 
     // Fast preflight: is the relay server up?
@@ -1491,7 +1501,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       params: { message: msg.message, sessionKey: msg.sessionKey },
     })
       .then((result) => sendResponse({ ok: true, result }))
-      .catch((e) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      .catch((e) =>
+        sendResponse({
+          ok: false,
+          fallbackAllowed: !relayNodeIntegrated,
+          error: e instanceof Error ? e.message : String(e),
+        }),
+      );
     return true;
   }
 
