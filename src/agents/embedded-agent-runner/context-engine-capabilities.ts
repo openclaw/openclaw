@@ -26,7 +26,11 @@ type ResolveContextEngineCapabilitiesParams = {
 function resolveContextEngineModelOverridePolicy(
   cfg: OpenClawConfig | undefined,
   contextEnginePluginId: string | undefined,
-): { allowModelOverride: boolean; allowedModels?: readonly string[] } {
+): {
+  allowModelOverride: boolean;
+  allowedModels?: readonly string[];
+  hasAllowedModelsConfig?: boolean;
+} {
   if (!cfg || !contextEnginePluginId) {
     return { allowModelOverride: false };
   }
@@ -35,6 +39,7 @@ function resolveContextEngineModelOverridePolicy(
     return {
       allowModelOverride: true,
       allowedModels: entry.allowedModels,
+      hasAllowedModelsConfig: entry.hasAllowedModelsConfig === true,
     };
   }
   return { allowModelOverride: false };
@@ -75,6 +80,7 @@ export function resolveContextEngineCapabilities(
             ...(modelOverridePolicy.allowedModels
               ? { allowedModels: modelOverridePolicy.allowedModels }
               : {}),
+            ...(modelOverridePolicy.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
             allowComplete: true,
           },
         }).complete(request);

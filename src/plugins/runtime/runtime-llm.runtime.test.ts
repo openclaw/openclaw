@@ -325,9 +325,65 @@ describe("runtime.llm.complete", () => {
         model: "openai/gpt-5.5",
         messages: [{ role: "user", content: "summarize" }],
       }),
-    ).rejects.toThrow(
-      'model override "openai/gpt-5.5" is not allowlisted',
-    );
+    ).rejects.toThrow('model override "openai/gpt-5.5" is not allowlisted');
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the owning plugin configures an empty allowedModels list", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: {
+        ...cfg,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: [],
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    await expect(
+      runtimeContext.llm!.complete({
+        model: "openai/gpt-5.5",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow("no valid models");
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the owning plugin configures an all-blank allowedModels list", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: {
+        ...cfg,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["  ", ""],
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    await expect(
+      runtimeContext.llm!.complete({
+        model: "openai/gpt-5.5",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow("no valid models");
     expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
