@@ -39,6 +39,8 @@ function installStandaloneRegistry(
   setActivePluginRegistry(registry, cacheKey, mode, params.loadOptions.workspaceDir);
   switch (params.surface) {
     case "active":
+      // Runtime-loaded plugins can register HTTP routes; pin them (#94572)
+      pinActivePluginHttpRouteRegistry(registry);
       break;
     case "channel":
       pinActivePluginChannelRegistry(registry);
