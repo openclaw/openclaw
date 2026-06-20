@@ -15,6 +15,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createRunningTaskRun } from "./task-executor.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   resetTaskFlowRegistryForTests,
@@ -49,6 +50,7 @@ import {
   parseTaskScopeKind,
   parseTaskStatus,
 } from "./task-registry.types.js";
+import { getActiveTaskRouteLease } from "./task-route-lease.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -1115,5 +1117,36 @@ describe("task-registry store runtime", () => {
     expect(backing.deliveryStates.has("task-restored")).toBe(false);
     expect(deleteTask).not.toHaveBeenCalled();
     expect(deleteDeliveryState).not.toHaveBeenCalled();
+  });
+
+  it("cascades route lease cleanup when a task is deleted (PR #95352 retention review)", async () => {
+    // The auto-acquire in createRunningTaskRun writes a route lease row for
+    // every eligible detached task. The task registry delete path must clean
+    // up those leases atomically with task_runs and task_delivery_state so
+    // settled/expired/orphaned rows do not accumulate in the shared state DB.
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-lease-cascade-" },
+      async () => {
+        const task = createRunningTaskRun({
+          runtime: "cron",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          sourceId: "job-cascade",
+          runId: "run-cascade-cron",
+          task: "Cascade cleanup test",
+          status: "running",
+          deliveryStatus: "pending",
+          notifyPolicy: "done_only",
+        });
+        expect(task).not.toBeNull();
+        // Auto-acquire wrote a lease row keyed by runId. This proves the
+        // pre-delete precondition.
+        expect(getActiveTaskRouteLease("run-cascade-cron")).toBeDefined();
+
+        // The composite store delete also drops the lease row atomically.
+        expect(deleteTaskRecordById(task!.taskId)).toBe(true);
+        expect(getActiveTaskRouteLease("run-cascade-cron")).toBeUndefined();
+      },
+    );
   });
 });

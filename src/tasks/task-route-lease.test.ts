@@ -24,6 +24,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   acquireTaskRouteLease,
+  deleteTaskRouteLeasesByTaskIdInDb,
   expireStaleTaskRouteLeases,
   extendTaskRouteLease,
   getActiveTaskRouteLease,
@@ -351,6 +352,74 @@ describe("updateTaskRouteLease (#92460 P1 #2)", () => {
     // semantics for a partial origin).
     const after = getActiveTaskRouteLease("run-empty-update");
     expect(after?.requesterOrigin).toBeUndefined();
+  });
+});
+
+describe("deleteTaskRouteLeasesByTaskIdInDb (PR #95352 retention review)", () => {
+  it("removes every lease row for the given taskId and leaves other tasks untouched", () => {
+    acquireTaskRouteLease({
+      runId: "run-cascade-A",
+      taskId: "task-cascade",
+      requesterOrigin: SAMPLE_ORIGIN,
+      ttlMs: 60_000,
+    });
+    acquireTaskRouteLease({
+      runId: "run-cascade-B",
+      taskId: "task-cascade",
+      requesterOrigin: SAMPLE_ORIGIN,
+      ttlMs: 60_000,
+    });
+    acquireTaskRouteLease({
+      runId: "run-cascade-other",
+      taskId: "task-other",
+      requesterOrigin: SAMPLE_ORIGIN,
+      ttlMs: 60_000,
+    });
+    expect(getActiveTaskRouteLease("run-cascade-A")).toBeDefined();
+    expect(getActiveTaskRouteLease("run-cascade-B")).toBeDefined();
+    expect(getActiveTaskRouteLease("run-cascade-other")).toBeDefined();
+
+    const { db } = openOpenClawStateDatabase();
+    const deleted = deleteTaskRouteLeasesByTaskIdInDb(db, "task-cascade");
+    expect(deleted).toBe(2);
+
+    expect(getActiveTaskRouteLease("run-cascade-A")).toBeUndefined();
+    expect(getActiveTaskRouteLease("run-cascade-B")).toBeUndefined();
+    expect(getActiveTaskRouteLease("run-cascade-other")).toBeDefined();
+  });
+
+  it("returns 0 for an unknown taskId", () => {
+    const { db } = openOpenClawStateDatabase();
+    expect(deleteTaskRouteLeasesByTaskIdInDb(db, "task-does-not-exist")).toBe(0);
+  });
+
+  it("removes settled leases, not just active ones", () => {
+    acquireTaskRouteLease({
+      runId: "run-active-then-cascade",
+      taskId: "task-mixed",
+      requesterOrigin: SAMPLE_ORIGIN,
+      ttlMs: 60_000,
+    });
+    acquireTaskRouteLease({
+      runId: "run-settled-then-cascade",
+      taskId: "task-mixed",
+      requesterOrigin: SAMPLE_ORIGIN,
+      ttlMs: 60_000,
+    });
+    settleTaskRouteLease("run-settled-then-cascade", "settled");
+
+    const { db } = openOpenClawStateDatabase();
+    const deleted = deleteTaskRouteLeasesByTaskIdInDb(db, "task-mixed");
+    expect(deleted).toBe(2);
+
+    expect(getActiveTaskRouteLease("run-active-then-cascade")).toBeUndefined();
+    expect(getActiveTaskRouteLease("run-settled-then-cascade")).toBeUndefined();
+  });
+
+  it("does not throw when called against an empty table", () => {
+    const { db } = openOpenClawStateDatabase();
+    expect(() => deleteTaskRouteLeasesByTaskIdInDb(db, "task-empty-table")).not.toThrow();
+    expect(deleteTaskRouteLeasesByTaskIdInDb(db, "task-empty-table")).toBe(0);
   });
 });
 

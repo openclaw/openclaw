@@ -349,6 +349,35 @@ export function expireStaleTaskRouteLeases(options: { now?: number } = {}): numb
   }
 }
 
+/**
+ * Delete every route lease row whose `task_id` matches. Used by the task
+ * registry store delete path so settled/expired/orphaned leases do not
+ * accumulate after ordinary task cleanup.
+ *
+ * The lease module owns its own SQL; this function is the
+ * owner-bounded entry point that lets `task-registry.store.sqlite.ts`
+ * clean up leases inside the same write transaction as `task_runs` +
+ * `task_delivery_state` deletes. Caller owns the transaction — do not
+ * call this from a non-transactional context if you also need atomicity
+ * with other row deletes.
+ *
+ * Best-effort: never throws, returns the row count deleted (0 on
+ * failure or no matches).
+ */
+export function deleteTaskRouteLeasesByTaskIdInDb(db: DatabaseSync, taskId: string): number {
+  try {
+    const kysely = getTaskRouteLeaseKysely(db);
+    const result = executeSqliteQuerySync(
+      db,
+      kysely.deleteFrom("task_route_leases").where("task_id", "=", taskId),
+    );
+    return Number(result.numAffectedRows ?? 0n);
+  } catch (error) {
+    log.warn("deleteTaskRouteLeasesByTaskIdInDb failed", { taskId, error });
+    return 0;
+  }
+}
+
 /** Test helper: drop every lease row. Used only by the lifecycle test reset
  *  path; not exported on the production runtime surface. */
 export function resetTaskRouteLeasesForTests(): void {
