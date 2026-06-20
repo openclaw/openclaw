@@ -49,7 +49,7 @@ export const page = definePage({
       `,
       header: true,
     })),
-  load: async ({ host, app }: LogsLoadContext) => {
+  loader: async ({ host, app }: LogsLoadContext) => {
     await loadLogs(app, { reset: true });
     scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
   },

@@ -31,7 +31,7 @@ function runTask<Args extends unknown[]>(
 export const page = definePage({
   id: "sessions",
   path: "/sessions",
-  load: ({ app }: SessionsLoadContext) =>
+  loader: ({ app }: SessionsLoadContext) =>
     Promise.all([loadConfig(app), loadSessions(app)]).then(() => undefined),
   component: () =>
     import("../../ui/views/sessions.ts").then((module) => ({

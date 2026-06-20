@@ -5,6 +5,8 @@ export {
   type PageDefinition,
   type RouteHookOptions,
   type RouteLocation,
+  type RouteLoadCause,
+  type RouteLoaderOptions,
   type RouteState,
   type RouterHistory,
 } from "./types.ts";

@@ -51,7 +51,7 @@ function runTask<Args extends unknown[]>(
 export const page = definePage({
   id: "agents",
   path: "/agents",
-  load: async ({ host, app }: AgentsLoadContext) => {
+  loader: async ({ host, app }: AgentsLoadContext) => {
     await loadAgentsPage(host, app);
   },
   component: () =>

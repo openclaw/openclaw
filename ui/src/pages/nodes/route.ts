@@ -31,7 +31,7 @@ type NodesRenderContext = { state: AppViewState };
 export const page = definePage({
   id: "nodes",
   path: "/nodes",
-  load: ({ app }: NodesLoadContext) =>
+  loader: ({ app }: NodesLoadContext) =>
     Promise.all([
       loadNodes(app),
       Promise.allSettled([loadDevices(app), loadConfig(app), loadExecApprovals(app)]),

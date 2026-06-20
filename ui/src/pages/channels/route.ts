@@ -12,7 +12,7 @@ type ChannelsRenderContext = { state: AppViewState };
 export const page = definePage({
   id: "channels",
   path: "/channels",
-  load: ({ host }: ChannelsLoadContext) => loadChannelsPage(host),
+  loader: ({ host }: ChannelsLoadContext) => loadChannelsPage(host),
   component: () =>
     import("../../ui/views/channels.ts").then((module) => ({
       render: ({ state }: ChannelsRenderContext) =>

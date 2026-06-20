@@ -9,7 +9,7 @@ type InstancesLoadContext = { app: SettingsAppHost };
 export const page = definePage({
   id: "instances",
   path: "/instances",
-  load: ({ app }: InstancesLoadContext) => loadPresence(app),
+  loader: ({ app }: InstancesLoadContext) => loadPresence(app),
   component: () =>
     import("../../ui/views/instances.ts").then((module) => ({
       render: ({ state }: InstancesRenderContext) =>

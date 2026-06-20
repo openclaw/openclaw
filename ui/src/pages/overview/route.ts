@@ -14,7 +14,7 @@ type OverviewLoadContext = { host: SettingsHost };
 export const page = definePage({
   id: "overview",
   path: "/overview",
-  load: ({ host }: OverviewLoadContext, options) => loadOverview(host, undefined, options),
+  loader: ({ host }: OverviewLoadContext, options) => loadOverview(host, undefined, options),
   component: () => ({
     shell: "page" as const,
     header: true,

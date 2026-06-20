@@ -19,7 +19,7 @@ type WorkboardLoadContext = { host: SettingsHost; app: SettingsAppHost };
 export const page = definePage({
   id: "workboard",
   path: "/workboard",
-  load: ({ host, app }: WorkboardLoadContext) =>
+  loader: ({ host, app }: WorkboardLoadContext) =>
     Promise.all([
       loadConfig(app),
       loadSessions(app),

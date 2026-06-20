@@ -10,7 +10,7 @@ type UsageLoadContext = { app: SettingsAppHost };
 export const page = definePage({
   id: "usage",
   path: "/usage",
-  load: ({ app }: UsageLoadContext) => loadUsage(app).then(() => undefined),
+  loader: ({ app }: UsageLoadContext) => loadUsage(app).then(() => undefined),
   component: () =>
     import("../../ui/views/usage.ts").then((module) => ({
       render: ({ state }: UsageRenderContext) => renderUsageTab(state, module),

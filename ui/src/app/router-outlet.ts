@@ -1,13 +1,13 @@
 import type { PageDefinition, RouteState } from "../router/types.ts";
 
 type RouterOutletSource<TRouteId extends string, TLoadContext, TModule> = {
-  getState: () => RouteState<TRouteId>;
-  getRoute: (routeId: TRouteId) => PageDefinition<TRouteId, TLoadContext, TModule> | null;
+  getState: () => RouteState<TRouteId, unknown>;
+  getRoute: (routeId: TRouteId) => PageDefinition<TRouteId, TLoadContext, TModule, unknown> | null;
   getLoadedModule: (routeId: TRouteId) => TModule | undefined;
 };
 
-type RenderableModule<TContext> = {
-  render: (context: TContext) => unknown;
+type RenderableModule<TContext, TData> = {
+  render: (context: TContext, data: TData | undefined) => unknown;
 };
 
 export type RouterOutletOptions<TRouteId extends string> = {
@@ -17,7 +17,9 @@ export type RouterOutletOptions<TRouteId extends string> = {
   onRender?: (routeId: TRouteId, state: RouteState<TRouteId>, render: () => unknown) => unknown;
 };
 
-function isRenderableModule<TContext>(module: unknown): module is RenderableModule<TContext> {
+function isRenderableModule<TContext, TData>(
+  module: unknown,
+): module is RenderableModule<TContext, TData> {
   return (
     typeof module === "object" &&
     module !== null &&
@@ -47,11 +49,11 @@ export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModul
   if (route?.component && !module) {
     return options.pending?.(state) ?? null;
   }
-  if (!isRenderableModule<TContext>(module)) {
+  if (!isRenderableModule<TContext, unknown>(module)) {
     return null;
   }
   if (options.onRender) {
-    return options.onRender(routeId, state, () => module.render(context));
+    return options.onRender(routeId, state, () => module.render(context, state.resolvedData));
   }
-  return module.render(context);
+  return module.render(context, state.resolvedData);
 }
