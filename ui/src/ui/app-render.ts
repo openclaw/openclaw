@@ -528,7 +528,7 @@ function isSidebarSessionForSelectedAgent(
   return isSessionKeyTiedToAgent(row.key, selectedAgentId, resolveSidebarDefaultAgentId(state));
 }
 
-function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
+export function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
   const selectedAgentId = resolveSidebarSelectedAgentId(state);
   const shouldFilterByAgent =
     normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
@@ -540,8 +540,8 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
         row.kind !== "unknown" &&
         row.kind !== "cron" &&
         !isCronSessionKey(row.key) &&
-        !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy &&
+        (!shouldFilterByAgent || !isSubagentSessionKey(row.key)) &&
+        (!shouldFilterByAgent || !row.spawnedBy) &&
         (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
     )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))

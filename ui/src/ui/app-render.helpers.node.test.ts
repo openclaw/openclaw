@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSidebarRecentSessions } from "./app-render.ts";
 const {
   refreshChatMock,
   refreshChatAvatarMock,
@@ -1596,5 +1597,68 @@ describe("dismissRealtimeTalkError", () => {
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkTranscript).toBeNull();
+  });
+});
+
+describe("resolveSidebarRecentSessions", () => {
+  function sidebarRow(
+    key: string,
+    overrides?: Partial<{ kind: string; spawnedBy: string | null; updatedAt: number }>,
+  ) {
+    return {
+      key,
+      name: key,
+      kind: (overrides?.kind ?? "direct") as SessionRow["kind"],
+      spawnedBy: overrides?.spawnedBy ?? null,
+      updatedAt: overrides?.updatedAt ?? 0,
+      archived: false,
+      label: key,
+    } as SessionRow;
+  }
+
+  it("includes subagent and spawned sessions when sessionKey is unknown (global view)", () => {
+    const state = {
+      sessionKey: "unknown",
+      sessionsResult: {
+        sessions: [
+          sidebarRow("agent:main:main", { updatedAt: 100 }),
+          sidebarRow("agent:main:subagent:child-1", { updatedAt: 90 }),
+          sidebarRow("agent:orch:main", { updatedAt: 80, spawnedBy: "agent:main:main" }),
+          sidebarRow("agent:reviewer:main", { updatedAt: 70 }),
+          sidebarRow("agent:main:subagent:child-2", { updatedAt: 60 }),
+        ],
+      },
+    } as unknown as Parameters<typeof resolveSidebarRecentSessions>[0];
+
+    const result = resolveSidebarRecentSessions(state);
+    const keys = result.map((r) => r.key);
+
+    // In global view, subagent and spawned sessions should be visible
+    expect(keys).toContain("agent:main:subagent:child-1");
+    expect(keys).toContain("agent:orch:main");
+    expect(keys).toContain("agent:main:subagent:child-2");
+  });
+
+  it("hides subagent and spawned sessions when scoped to a specific agent", () => {
+    const state = {
+      sessionKey: "agent:main:main",
+      sessionsResult: {
+        sessions: [
+          sidebarRow("agent:main:main", { updatedAt: 100 }),
+          sidebarRow("agent:main:subagent:child-1", { updatedAt: 90 }),
+          sidebarRow("agent:orch:main", { updatedAt: 80, spawnedBy: "agent:main:main" }),
+        ],
+      },
+      agentsList: { defaultId: "main" },
+      hello: { snapshot: { sessionDefaults: { defaultAgentId: "main" } } },
+    } as unknown as Parameters<typeof resolveSidebarRecentSessions>[0];
+
+    const result = resolveSidebarRecentSessions(state);
+    const keys = result.map((r) => r.key);
+
+    // In agent-scoped view, subagent and spawned sessions are hidden
+    expect(keys).toContain("agent:main:main");
+    expect(keys).not.toContain("agent:main:subagent:child-1");
+    expect(keys).not.toContain("agent:orch:main");
   });
 });
