@@ -1039,12 +1039,18 @@ export async function runCodexAppServerAttempt(
       promptInputRange.start < 0 ||
       promptInputRange.end < promptInputRange.start ||
       promptInputRange.end > prompt.length ||
+      prompt.slice(promptInputRange.start, promptInputRange.end) !== promptText ||
       !turnPromptText.endsWith(prompt)
     ) {
       return undefined;
     }
-    const promptTextOffset = promptInputRange.end - promptText.length;
-    if (promptTextOffset < promptInputRange.start) {
+    // A hook can append the full projected prompt as newer transient context.
+    // Fit that suffix so truncation retains its latest context rather than the
+    // earlier input span. The exact input range still covers prepend-only hooks.
+    const promptTextOffset = prompt.endsWith(promptText)
+      ? prompt.length - promptText.length
+      : promptInputRange.end - promptText.length;
+    if (promptTextOffset < 0) {
       return undefined;
     }
     const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;

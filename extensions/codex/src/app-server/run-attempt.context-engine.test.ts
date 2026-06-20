@@ -512,10 +512,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const contextEngine = createContextEngine({
       assemble: vi.fn(async () => ({
         messages: [
-          assistantMessage(
-            `older context ${"x".repeat(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS)} recent anchor`,
-            10,
+          ...Array.from({ length: 9 }, (_, index) =>
+            assistantMessage(`older context ${index} ${"x".repeat(120_000)}`, index),
           ),
+          assistantMessage("recent anchor", 10),
         ],
         estimatedTokens: 300_000,
       })),

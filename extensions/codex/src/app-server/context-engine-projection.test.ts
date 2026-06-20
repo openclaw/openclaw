@@ -249,7 +249,9 @@ describe("projectContextEngineAssemblyForCodex", () => {
     // The user's actual request is the priority tail and must survive truncation.
     expect(fitted).toContain("Current user request:");
     expect(fitted.endsWith("q".repeat(40))).toBe(true);
-    // The dropped older context is reported, not silently lost.
+    // Current context still survives even when an earlier projection is dropped.
+    expect(fitted).toContain("older context");
+    // The dropped older content is reported, not silently lost.
     expect(fitted).toContain("[truncated ");
   });
 

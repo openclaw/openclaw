@@ -143,12 +143,13 @@ export function fitCodexProjectedContextForTurnStart(params: {
     const fittedContext = truncateOlderContext(context, contextBudget);
     return `${beforeContext}${fittedContext}${afterContext}`;
   }
-  // The header plus the trailing user request already fill the limit, so the
-  // older context drops entirely and the remaining text must still be bounded;
-  // otherwise Codex app-server rejects the turn for exceeding
-  // MAX_USER_INPUT_TEXT_CHARS. truncateOlderContext keeps the tail, preserving
-  // the user's actual request over the older header text.
-  return truncateOlderContext(`${beforeContext}${afterContext}`, maxChars);
+  // Hook-added prefixes can make the non-context text exceed the limit. Keep
+  // the current context tail before the user's request; dropping it would make
+  // a duplicated earlier projection crowd out the newest assembled context.
+  const afterContextText = truncateOlderContext(afterContext, maxChars);
+  const contextBudgetAfterRequest = maxChars - afterContextText.length;
+  const fittedContext = truncateOlderContext(context, contextBudgetAfterRequest);
+  return `${fittedContext}${afterContextText}`;
 }
 
 function normalizeProjectedContextRange(
