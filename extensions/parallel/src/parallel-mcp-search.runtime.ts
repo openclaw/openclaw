@@ -1,16 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { withTrustedWebSearchEndpoint } from "openclaw/plugin-sdk/provider-web-search";
 
-// Free hosted Search MCP — anonymous-friendly, used when no PARALLEL_API_KEY is
-// configured. This is the zero-config default web_search transport. Docs:
+// Free hosted Search MCP. This keyless transport is used only after the user
+// explicitly selects the `parallel-free` web_search provider. Docs:
 // https://docs.parallel.ai/integrations/mcp/search-mcp
 export const PARALLEL_MCP_SEARCH_URL = "https://search.parallel.ai/mcp";
 // Initial protocol version we advertise on `initialize`; we then echo whatever
 // the server negotiates back on every follow-up request.
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const MCP_TIMEOUT_SECONDS = 30;
+const PARALLEL_MCP_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -215,7 +217,9 @@ async function postMcp(params: {
       ok: response.ok,
       status: response.status,
       statusText: response.statusText,
-      text: await response.text(),
+      text: response.ok
+        ? await response.text()
+        : await readResponseTextLimited(response, PARALLEL_MCP_ERROR_BODY_LIMIT_BYTES),
       sessionIdHeader: response.headers.get("mcp-session-id"),
     }),
   );

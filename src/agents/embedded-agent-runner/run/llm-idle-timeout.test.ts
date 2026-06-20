@@ -10,10 +10,11 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { notifyLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
-  DEFAULT_LLM_IDLE_TIMEOUT_MS,
   resolveLlmIdleTimeoutMs,
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
+
+const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 
 describe("resolveLlmIdleTimeoutMs", () => {
   it("returns default when config is undefined", () => {

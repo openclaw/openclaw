@@ -12,7 +12,7 @@ import {
   type QaReportScenario,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { QaSuiteArtifactError } from "./errors.js";
+import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
@@ -27,6 +27,10 @@ import {
   normalizeQaProviderMode,
   type QaProviderMode,
 } from "./model-selection.js";
+import {
+  parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv,
+  sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
+} from "./progress-format.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
@@ -51,6 +55,7 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
+import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import {
   applyQaMergePatch,
   collectQaSuiteGatewayConfigPatch,
@@ -101,6 +106,7 @@ type QaSuiteEnvironment = {
 export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
 
 export type QaSuiteRunParams = {
+  evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   outputDir?: string;
   providerMode?: QaProviderMode;
@@ -121,20 +127,6 @@ export type QaSuiteRunParams = {
   runtimePair?: [RuntimeId, RuntimeId];
   captureRuntimeParityCell?: boolean;
 };
-
-function parseQaSuiteBooleanEnv(value: string | undefined): boolean | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  return undefined;
-}
 
 function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
   const override = parseQaSuiteBooleanEnv(env.OPENCLAW_QA_SUITE_PROGRESS);
@@ -210,20 +202,6 @@ async function waitForQaLabReadyOrStopOwned(params: {
     }
     throw error;
   }
-}
-
-function sanitizeQaSuiteProgressValue(value: string): string {
-  let normalized = "";
-  for (const char of value) {
-    const code = char.codePointAt(0);
-    if (code === undefined) {
-      continue;
-    }
-    const isControl = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-    normalized += isControl ? " " : char;
-  }
-  normalized = normalized.replace(/\s+/gu, " ").trim();
-  return normalized.length > 0 ? normalized : "<empty>";
 }
 
 function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
@@ -615,6 +593,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
 }
 
 async function runQaRuntimeParitySuite(params: {
+  evidenceMode?: QaScorecardEvidenceMode;
   repoRoot: string;
   outputDir: string;
   startedAt: Date;
@@ -792,6 +771,7 @@ async function runQaRuntimeParitySuite(params: {
       finishedAt,
       scenarios,
       scenarioDefinitions: params.selectedScenarios,
+      evidenceMode: params.evidenceMode,
       transport,
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
@@ -838,6 +818,7 @@ async function writeQaSuiteArtifacts(params: {
   finishedAt: Date;
   scenarios: QaSuiteScenarioResult[];
   scenarioDefinitions?: readonly QaSeedScenarioWithSource[];
+  evidenceMode?: QaScorecardEvidenceMode;
   metrics?: QaSuiteSummaryJson["metrics"];
   transport: QaTransportAdapter;
   // Reuse the canonical QaProviderMode union instead of re-declaring it
@@ -876,6 +857,7 @@ async function writeQaSuiteArtifacts(params: {
             { kind: "summary", path: path.basename(summaryPath) },
             { kind: "report", path: path.basename(reportPath) },
           ],
+          evidenceMode: params.evidenceMode,
           channelId: params.transport.id,
           env: process.env,
           generatedAt: params.finishedAt.toISOString(),
@@ -900,21 +882,6 @@ async function writeQaSuiteArtifacts(params: {
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
   }
   return { evidencePath, report, reportPath, summaryPath };
-}
-
-async function assertQaSuiteArtifactWritten(
-  kind: "evidence" | "report" | "summary",
-  filePath: string,
-) {
-  try {
-    await fs.access(filePath);
-  } catch (error) {
-    throw new QaSuiteArtifactError(
-      `${kind}_missing`,
-      `QA suite did not produce ${kind} artifact at ${filePath}: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
-  }
 }
 
 function buildQaSuiteRuntimeMetrics(params: {
@@ -1105,6 +1072,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
 
   if (params?.runtimePair) {
     return await runQaRuntimeParitySuite({
+      evidenceMode: params.evidenceMode,
       repoRoot,
       outputDir,
       startedAt,
@@ -1176,6 +1144,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
             finishedAt: partialFinishedAt,
             scenarios: partialScenarios,
             scenarioDefinitions: completedScenarioDefinitions,
+            evidenceMode: params?.evidenceMode,
             transport,
             providerMode,
             primaryModel,
@@ -1320,6 +1289,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         finishedAt,
         scenarios,
         scenarioDefinitions: selectedScenarios,
+        evidenceMode: params?.evidenceMode,
         transport,
         providerMode,
         primaryModel,
@@ -1564,7 +1534,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       gatewayHeapSnapshots,
     });
     const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
-    if (scenarios.some((scenario) => scenario.status === "fail")) {
+    if (
+      scenarios.some((scenario) => scenario.status === "fail") ||
+      gatewayRuntimeOptions?.preserveDebugArtifacts === true
+    ) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     }
     lab.setScenarioRun({
@@ -1581,6 +1554,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       scenarios,
       metrics,
       scenarioDefinitions: selectedScenarios,
+      evidenceMode: params?.evidenceMode,
       transport,
       providerMode,
       primaryModel,

@@ -19,7 +19,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
 /** Compares subagent run outcomes, treating missing timing as compatible. */
-export function runOutcomesEqual(
+function runOutcomesEqual(
   a: SubagentRunOutcome | undefined,
   b: SubagentRunOutcome | undefined,
 ): boolean {
@@ -44,7 +44,7 @@ export function runOutcomesEqual(
 }
 
 /** Returns true when an outcome carries timing fields. */
-export function runOutcomeHasTiming(outcome: SubagentRunOutcome | undefined): boolean {
+function runOutcomeHasTiming(outcome: SubagentRunOutcome | undefined): boolean {
   return (
     Number.isFinite(outcome?.startedAt) ||
     Number.isFinite(outcome?.endedAt) ||

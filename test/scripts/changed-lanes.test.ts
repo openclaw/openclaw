@@ -1172,7 +1172,10 @@ describe("scripts/changed-lanes", () => {
   it("keeps release metadata commits off the full changed gate", () => {
     const result = detectChangedLanes([
       "CHANGELOG.md",
-      "apps/android/app/build.gradle.kts",
+      "apps/android/CHANGELOG.md",
+      "apps/android/Config/Version.properties",
+      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+      "apps/android/version.json",
       "apps/ios/CHANGELOG.md",
       "apps/ios/Config/Version.xcconfig",
       "apps/ios/fastlane/metadata/en-US/release_notes.txt",
@@ -1197,6 +1200,7 @@ describe("scripts/changed-lanes", () => {
       "scripts/generate-npm-shrinkwrap.mjs",
       "deps:patches:check",
       "release-metadata:check",
+      "android:version:check",
       "ios:version:check",
       "config:schema:check",
       "config:docs:check",

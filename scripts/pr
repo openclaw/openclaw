@@ -2,6 +2,13 @@
 
 set -euo pipefail
 
+# This wrapper parses GitHub CLI JSON. Caller shells may force ANSI color globally.
+export NO_COLOR=1
+export CLICOLOR=0
+export CLICOLOR_FORCE=0
+export FORCE_COLOR=0
+unset COLORTERM
+
 # If invoked from a linked worktree copy of this script, re-exec the canonical
 # script from the repository root so behavior stays consistent across worktrees.
 script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"

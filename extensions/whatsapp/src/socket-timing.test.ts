@@ -1,12 +1,13 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 // Whatsapp tests cover socket timing plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
   WhatsAppSocketOperationTimeoutError,
   isWhatsAppSocketOperationTimeoutError,
   resolveWhatsAppSocketOperationTimeoutMs,
   resolveWhatsAppSocketTiming,
+  withWhatsAppSocketOperationTimeout,
 } from "./socket-timing.js";
 
 describe("resolveWhatsAppSocketTiming", () => {
@@ -74,5 +75,43 @@ describe("resolveWhatsAppSocketTiming", () => {
     expect(resolveWhatsAppSocketOperationTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
       MAX_TIMER_TIMEOUT_MS,
     );
+  });
+});
+
+describe("withWhatsAppSocketOperationTimeout", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("bounds a stalled readMessages socket operation with a typed timeout", async () => {
+    vi.useFakeTimers();
+    // A WhatsApp read-receipt call that never resolves (socket stall).
+    const stalled = new Promise<void>(() => {});
+    const bounded = withWhatsAppSocketOperationTimeout(
+      "readMessages",
+      stalled,
+      DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+    );
+    const rejection = expect(bounded).rejects.toMatchObject({
+      name: "WhatsAppSocketOperationTimeoutError",
+      operation: "readMessages",
+      timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      deliveryState: "unknown",
+    });
+    await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+    await rejection;
+    // The bounding timer is cleared once the operation settles.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("resolves the operation value when it settles before the bound", async () => {
+    vi.useFakeTimers();
+    const bounded = withWhatsAppSocketOperationTimeout(
+      "readMessages",
+      Promise.resolve("read"),
+      DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+    );
+    await expect(bounded).resolves.toBe("read");
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

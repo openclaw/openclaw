@@ -22,7 +22,7 @@ export { formatTokenCount } from "./token-format.js";
  * token counts.  The tiers MUST be sorted in ascending `range[0]` order
  * with no gaps.
  */
-export type PricingTier = {
+type PricingTier = {
   input: number;
   output: number;
   cacheRead: number;
@@ -52,7 +52,7 @@ export type ModelCostConfig = {
   tieredPricing?: PricingTier[];
 };
 
-export type UsageTotals = {
+type UsageTotals = {
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -104,9 +104,6 @@ let sortedPricingTiersByInput = new WeakMap<PricingTier[], PricingTier[]>();
 export function formatUsd(value?: number): string | undefined {
   if (value === undefined || !Number.isFinite(value)) {
     return undefined;
-  }
-  if (value >= 1) {
-    return `$${value.toFixed(2)}`;
   }
   if (value >= 0.01) {
     return `$${value.toFixed(2)}`;

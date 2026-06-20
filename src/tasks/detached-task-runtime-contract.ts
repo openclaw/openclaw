@@ -23,6 +23,7 @@ export type DetachedTaskCreateParams = {
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;
+  requesterAgentId?: string;
   runId?: string;
   label?: string;
   task: string;

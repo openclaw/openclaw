@@ -57,6 +57,7 @@ import {
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
+  formatMattermostDirectMessageDropLog,
   normalizeMattermostAllowEntry,
   resolveMattermostMonitorInboundAccess,
 } from "./monitor-auth.js";
@@ -69,6 +70,7 @@ import {
   formatInboundFromLabel,
   normalizeMention,
   resolveThreadSessionKeys,
+  shouldDropEmptyMattermostBody,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import { createMattermostMonitorResources, type MattermostMediaInfo } from "./monitor-resources.js";
@@ -291,20 +293,6 @@ export function canFinalizeMattermostPreviewInPlace(params: {
       replyToId: params.replyToId,
     }) === params.previewRootId?.trim()
   );
-}
-
-export function shouldClearMattermostDraftPreview(params: {
-  finalizedViaPreviewPost: boolean;
-  finalReplyDelivered: boolean;
-}): boolean {
-  return params.finalReplyDelivered && !params.finalizedViaPreviewPost;
-}
-
-export function shouldFinalizeMattermostPreviewAfterDispatch(params: {
-  finalCount: number;
-  canFinalizeInPlace: boolean;
-}): boolean {
-  return params.finalCount === 1 && params.canFinalizeInPlace;
 }
 
 type MattermostDraftPreviewState = {
@@ -1332,7 +1320,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           normalizeOptionalString(payload.data?.sender_name) ??
           normalizeOptionalString((await resolveUserInfo(senderId))?.username) ??
           senderId;
-        const rawText = normalizeOptionalString(post.message) ?? "";
+        const rawPostText = typeof post.message === "string" ? post.message : "";
+        const rawText = normalizeOptionalString(rawPostText) ?? "";
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
           cfg,
           surface: "mattermost",
@@ -1389,7 +1378,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
               return;
             }
-            logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
+            logVerboseMessage(
+              formatMattermostDirectMessageDropLog({
+                senderId,
+                dmPolicy,
+                reasonCode: accessDecision.senderAccess.reasonCode,
+              }),
+            );
             return;
           }
           if (accessDecision.ingress.reasonCode === "group_policy_disabled") {
@@ -1526,12 +1521,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
         const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
         const bodyText = normalizeMention(baseText, botUsername);
-        if (!bodyText) {
+        if (shouldDropEmptyMattermostBody({ bodyText, rawText: rawPostText, botUsername })) {
           logVerboseMessage(
-            `mattermost: drop group message (empty body after normalization channel=${channelId} sender=${senderId})`,
+            `mattermost: drop message (empty body after normalization channel=${channelId} sender=${senderId} wasMentioned=${wasMentioned})`,
           );
           return;
         }
+        // Mention-only turns need non-empty agent text; the shared reply runner rejects empty
+        // bodies before model invocation. The guard above ensures this fallback is a bot mention.
+        const bodyForAgent = bodyText || rawText.trim();
 
         core.channel.activity.record({
           channel: "mattermost",
@@ -1590,7 +1588,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             : undefined;
         const ctxPayload = core.channel.reply.finalizeInboundContext({
           Body: combinedBody,
-          BodyForAgent: bodyText,
+          BodyForAgent: bodyForAgent,
           InboundHistory: inboundHistory,
           RawBody: bodyText,
           CommandBody: commandBody,
@@ -1922,6 +1920,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                         dispatcher,
                         replyOptions: {
                           ...replyOptions,
+                          allowProgressCallbacksWhenSourceDeliverySuppressed:
+                            draftToolProgressEnabled ? true : undefined,
+                          onObservedReplyDelivery: draftToolProgressEnabled
+                            ? () => draftStream.clear()
+                            : undefined,
                           disableBlockStreaming: true,
                           ...(suppressDefaultToolProgressMessages
                             ? { suppressDefaultToolProgressMessages: true }

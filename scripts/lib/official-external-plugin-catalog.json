@@ -140,6 +140,97 @@
       }
     },
     {
+      "name": "@openclaw/exa-plugin",
+      "description": "OpenClaw Exa plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "exa",
+          "label": "Exa"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "exa"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "exa",
+            "label": "Exa Search",
+            "hint": "Neural + keyword search with date filters and content extraction",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "Exa API key",
+            "envVars": [
+              "EXA_API_KEY"
+            ],
+            "placeholder": "exa-...",
+            "signupUrl": "https://exa.ai/",
+            "docsUrl": "https://docs.openclaw.ai/tools/web",
+            "credentialPath": "plugins.entries.exa.config.webSearch.apiKey",
+            "autoDetectOrder": 65
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/exa-plugin",
+          "npmSpec": "@openclaw/exa-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/firecrawl-plugin",
+      "description": "OpenClaw Firecrawl plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "firecrawl",
+          "label": "Firecrawl"
+        },
+        "contracts": {
+          "webFetchProviders": [
+            "firecrawl"
+          ],
+          "webSearchProviders": [
+            "firecrawl"
+          ],
+          "tools": [
+            "firecrawl_search",
+            "firecrawl_scrape"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "firecrawl",
+            "label": "Firecrawl Search",
+            "hint": "Structured results with optional result scraping",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "Firecrawl API key",
+            "envVars": [
+              "FIRECRAWL_API_KEY"
+            ],
+            "placeholder": "fc-...",
+            "signupUrl": "https://www.firecrawl.dev/",
+            "docsUrl": "https://docs.openclaw.ai/tools/firecrawl",
+            "credentialPath": "plugins.entries.firecrawl.config.webSearch.apiKey",
+            "autoDetectOrder": 60
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/firecrawl-plugin",
+          "npmSpec": "@openclaw/firecrawl-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/google-meet",
       "description": "OpenClaw Google Meet participant plugin",
       "source": "official",
@@ -153,6 +244,52 @@
           "npmSpec": "@openclaw/google-meet",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.20"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/gradium-speech",
+      "description": "OpenClaw Gradium speech plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "gradium",
+          "label": "Gradium"
+        },
+        "contracts": {
+          "speechProviders": [
+            "gradium"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/gradium-speech",
+          "npmSpec": "@openclaw/gradium-speech",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/inworld-speech",
+      "description": "OpenClaw Inworld speech plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "inworld",
+          "label": "Inworld"
+        },
+        "contracts": {
+          "speechProviders": [
+            "inworld"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/inworld-speech",
+          "npmSpec": "@openclaw/inworld-speech",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
         }
       }
     },
@@ -224,6 +361,106 @@
           "npmSpec": "@openclaw/openshell-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/parallel-plugin",
+      "description": "OpenClaw Parallel web search plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "parallel",
+          "label": "Parallel"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "parallel",
+            "parallel-free"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "parallel",
+            "label": "Parallel Search",
+            "hint": "LLM-optimized dense excerpts from web sources",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "Parallel API key",
+            "envVars": [
+              "PARALLEL_API_KEY"
+            ],
+            "placeholder": "par-...",
+            "signupUrl": "https://platform.parallel.ai",
+            "docsUrl": "https://docs.openclaw.ai/tools/parallel-search",
+            "credentialPath": "plugins.entries.parallel.config.webSearch.apiKey",
+            "autoDetectOrder": 75
+          },
+          {
+            "id": "parallel-free",
+            "label": "Parallel Search (Free)",
+            "hint": "Free web search via Parallel's hosted Search MCP — no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": false,
+            "envVars": [],
+            "placeholder": "(no key needed)",
+            "signupUrl": "https://parallel.ai",
+            "docsUrl": "https://docs.openclaw.ai/tools/parallel-search",
+            "credentialPath": ""
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/parallel-plugin",
+          "npmSpec": "@openclaw/parallel-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/perplexity-plugin",
+      "description": "OpenClaw Perplexity plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "perplexity",
+          "label": "Perplexity"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "perplexity"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "perplexity",
+            "label": "Perplexity Search",
+            "hint": "Requires Perplexity API key or OpenRouter API key · structured results",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "Perplexity API key",
+            "envVars": [
+              "PERPLEXITY_API_KEY",
+              "OPENROUTER_API_KEY"
+            ],
+            "placeholder": "pplx-...",
+            "signupUrl": "https://www.perplexity.ai/settings/api",
+            "docsUrl": "https://docs.openclaw.ai/perplexity",
+            "credentialPath": "plugins.entries.perplexity.config.webSearch.apiKey",
+            "autoDetectOrder": 50
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/perplexity-plugin",
+          "npmSpec": "@openclaw/perplexity-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
         }
       }
     },

@@ -10,7 +10,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
-import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
+import "./get-reply.test-mocks.js";
 
 const mocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn(async (..._args: unknown[]) => undefined),
@@ -21,8 +21,6 @@ const mocks = vi.hoisted(() => ({
   handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
 }));
-
-registerGetReplyCommonMocks();
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -431,6 +429,58 @@ describe("getReplyFromConfig message hooks", () => {
 
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
     expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("keeps cached sticker media attached without repeating media understanding", async () => {
+    const stickerPath = "/tmp/cached-sticker.webp";
+
+    await getReplyFromConfig(
+      buildCtx({
+        Body: "[Sticker] Cached description",
+        BodyForAgent: "[Sticker] Cached description",
+        RawBody: "[Sticker] Cached description",
+        CommandBody: "[Sticker] Cached description",
+        BodyForCommands: "[Sticker] Cached description",
+        MediaPath: stickerPath,
+        MediaUrl: stickerPath,
+        MediaPaths: [stickerPath],
+        MediaUrls: [stickerPath],
+        MediaType: "image/webp",
+        MediaTypes: ["image/webp"],
+        Sticker: { cachedDescription: "Cached description" },
+        StickerMediaIncluded: true,
+        SkipStickerMediaUnderstanding: true,
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("still understands supplemental media attached to a cached sticker reply", async () => {
+    await getReplyFromConfig(
+      buildCtx({
+        Body: "[Sticker] Cached description",
+        BodyForAgent: "[Sticker] Cached description",
+        RawBody: "[Sticker] Cached description",
+        CommandBody: "[Sticker] Cached description",
+        BodyForCommands: "[Sticker] Cached description",
+        MediaPath: "/tmp/cached-sticker.webp",
+        MediaUrl: "/tmp/cached-sticker.webp",
+        MediaPaths: ["/tmp/cached-sticker.webp", "/tmp/replied-audio.ogg"],
+        MediaUrls: ["/tmp/cached-sticker.webp", "/tmp/replied-audio.ogg"],
+        MediaType: "image/webp",
+        MediaTypes: ["image/webp", "audio/ogg"],
+        Sticker: { cachedDescription: "Cached description" },
+        StickerMediaIncluded: true,
+        SkipStickerMediaUnderstanding: true,
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledOnce();
   });
 
   it("continues dispatching when media understanding fails before reply routing", async () => {

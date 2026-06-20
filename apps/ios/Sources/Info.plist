@@ -4,7 +4,7 @@
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>ai.openclaw.ios.bgrefresh</string>
+		<string>$(OPENCLAW_APP_BUNDLE_ID).bgrefresh</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -28,7 +28,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>ai.openclaw.ios</string>
+			<string>ai.openclawfoundation.app</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>openclaw</string>
@@ -78,6 +78,8 @@
 	<string>OpenClaw uses on-device speech recognition for talk mode and voice wake.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>OpenClawAppGroupIdentifier</key>
+	<string>$(OPENCLAW_APP_GROUP_ID)</string>
 	<key>OpenClawCanonicalVersion</key>
 	<string>$(OPENCLAW_IOS_VERSION)</string>
 	<key>OpenClawPushAPNsEnvironment</key>

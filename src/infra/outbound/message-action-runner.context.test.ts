@@ -361,6 +361,55 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
+      name: "blocks cross-provider message mutations by default",
+      action: "edit" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+        message: "updated",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider delete mutations by default",
+      action: "delete" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider pin mutations by default",
+      action: "pin" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider unpin mutations by default",
+      action: "unpin" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
       name: "blocks same-provider cross-context when disabled",
       action: "send" as const,
       cfg: {

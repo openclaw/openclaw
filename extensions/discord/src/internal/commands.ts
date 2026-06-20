@@ -144,9 +144,6 @@ export abstract class Command extends BaseCommand {
       `The ${(interaction as { rawData?: { data?: { name?: string } } }).rawData?.data?.name ?? this.name} command does not support autocomplete`,
     );
   }
-  async preCheck(interaction: unknown): Promise<unknown> {
-    return Boolean(interaction) || true;
-  }
   serializeOptions() {
     return this.options?.map((option) => {
       if (typeof option.autocomplete === "function") {

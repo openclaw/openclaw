@@ -4,7 +4,12 @@
  * Builds launch args, starts/stops managed Chrome, probes CDP readiness, and
  * resolves WebSocket endpoints for browser control.
  */
-import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import {
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+  execFileSync,
+  spawn,
+} from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -86,6 +91,7 @@ const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "http_status_failed",
   "invalid_json",
 ]);
+const TCP_LISTEN_STATE_HEX = "0A";
 
 export type { BrowserExecutable } from "./chrome.executables.js";
 export {
@@ -137,6 +143,307 @@ function processExists(pid: number): boolean {
     }
     return false;
   }
+}
+
+function readSingletonLockTarget(userDataDir: string): { hostname: string; pid: number } | null {
+  let target: string;
+  try {
+    target = fs.readlinkSync(path.join(userDataDir, "SingletonLock"));
+  } catch {
+    return null;
+  }
+  const match = /^(?<lockHost>.+)-(?<pid>\d+)$/.exec(target);
+  if (!match?.groups) {
+    return null;
+  }
+  const hostname = normalizeOptionalString(match.groups.lockHost) ?? "";
+  const pid = Number.parseInt(match.groups.pid ?? "", 10);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return null;
+  }
+  return { hostname, pid };
+}
+
+function readLinuxProcessStartTime(pid: number): string | null {
+  let stat: string;
+  try {
+    stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch {
+    return null;
+  }
+  const afterCommand = stat.slice(stat.lastIndexOf(")") + 2);
+  const fields = afterCommand.split(/\s+/);
+  return normalizeOptionalString(fields[19]) ?? null;
+}
+
+function readLinuxProcessArgv(pid: number): string[] | null {
+  let cmdline: Buffer;
+  try {
+    cmdline = fs.readFileSync(`/proc/${pid}/cmdline`);
+  } catch {
+    return null;
+  }
+  const argv = cmdline
+    .toString("utf8")
+    .split("\0")
+    .filter((arg) => arg.length > 0);
+  return argv.length > 0 ? argv : null;
+}
+
+function readPsCommandLine(pid: number): string | null {
+  try {
+    return (
+      normalizeOptionalString(
+        execFileSync("ps", ["-ww", "-p", String(pid), "-o", "command="], {
+          encoding: "utf8",
+          timeout: 1000,
+          maxBuffer: 64 * 1024,
+        }),
+      ) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function readPsStartTime(pid: number): string | null {
+  try {
+    return (
+      normalizeOptionalString(
+        execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
+          encoding: "utf8",
+          timeout: 1000,
+          maxBuffer: 64 * 1024,
+        }),
+      ) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function readManagedProcessCommandLine(pid: number): {
+  argv: string[] | null;
+  text: string;
+  startTime: string | null;
+} | null {
+  if (process.platform === "linux") {
+    const argv = readLinuxProcessArgv(pid);
+    if (!argv) {
+      return null;
+    }
+    const startTime = readLinuxProcessStartTime(pid);
+    if (!startTime) {
+      return null;
+    }
+    return {
+      argv,
+      text: argv.join(" "),
+      startTime,
+    };
+  }
+  if (process.platform === "darwin") {
+    const text = readPsCommandLine(pid);
+    const startTime = readPsStartTime(pid);
+    if (!text || !startTime) {
+      return null;
+    }
+    return { argv: null, text, startTime };
+  }
+  return null;
+}
+
+function isChromeExecutableFamilyMatch(commandText: string, exe: BrowserExecutable): boolean {
+  const normalizedCommand = commandText.toLowerCase();
+  const configuredPath = exe.path.toLowerCase();
+  const configuredBase = path.basename(exe.path).toLowerCase();
+  if (
+    normalizedCommand.includes(configuredPath) ||
+    (configuredBase.length > 0 && normalizedCommand.includes(configuredBase))
+  ) {
+    return true;
+  }
+  if (exe.kind === "chrome" || exe.kind === "canary") {
+    return /\b(google chrome|google-chrome|chrome|chromium)\b/i.test(commandText);
+  }
+  if (exe.kind === "chromium") {
+    return /\b(chromium|chromium-browser)\b/i.test(commandText);
+  }
+  if (exe.kind === "brave") {
+    return /\b(brave browser|brave-browser|brave)\b/i.test(commandText);
+  }
+  if (exe.kind === "edge") {
+    return /\b(microsoft edge|microsoft-edge|msedge)\b/i.test(commandText);
+  }
+  return false;
+}
+
+function processCommandHasArg(
+  command: { argv: string[] | null; text: string },
+  expected: string,
+): boolean {
+  if (command.argv) {
+    return command.argv.includes(expected);
+  }
+  return command.text.includes(expected);
+}
+
+function commandLineMatchesManagedChrome(params: {
+  command: { argv: string[] | null; text: string };
+  exe: BrowserExecutable;
+  profile: ResolvedBrowserProfile;
+  userDataDir: string;
+}): boolean {
+  return (
+    isChromeExecutableFamilyMatch(params.command.text, params.exe) &&
+    processCommandHasArg(params.command, `--remote-debugging-port=${params.profile.cdpPort}`) &&
+    processCommandHasArg(params.command, `--user-data-dir=${params.userDataDir}`)
+  );
+}
+
+function parseLinuxTcpListenInodesForPort(table: string, port: number): Set<string> {
+  const expectedPort = port.toString(16).toUpperCase().padStart(4, "0");
+  const inodes = new Set<string>();
+  for (const line of table.split(/\r?\n/).slice(1)) {
+    const fields = line.trim().split(/\s+/);
+    const localAddress = fields[1] ?? "";
+    const state = fields[3] ?? "";
+    const inode = fields[9] ?? "";
+    const localPort = localAddress.split(":").at(-1)?.toUpperCase();
+    if (localPort === expectedPort && state === TCP_LISTEN_STATE_HEX && inode) {
+      inodes.add(inode);
+    }
+  }
+  return inodes;
+}
+
+function readLinuxTcpListenInodesForPort(port: number): Set<string> {
+  const inodes = new Set<string>();
+  for (const tablePath of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    try {
+      for (const inode of parseLinuxTcpListenInodesForPort(
+        fs.readFileSync(tablePath, "utf8"),
+        port,
+      )) {
+        inodes.add(inode);
+      }
+    } catch {
+      // Missing proc tables mean this platform cannot prove listener ownership.
+    }
+  }
+  return inodes;
+}
+
+function linuxPidOwnsAnySocketInode(pid: number, inodes: Set<string>): boolean {
+  if (inodes.size === 0) {
+    return false;
+  }
+  let descriptors: string[];
+  try {
+    descriptors = fs.readdirSync(`/proc/${pid}/fd`);
+  } catch {
+    return false;
+  }
+  for (const descriptor of descriptors) {
+    let target: string;
+    try {
+      target = fs.readlinkSync(`/proc/${pid}/fd/${descriptor}`);
+    } catch {
+      continue;
+    }
+    const match = /^socket:\[(?<inode>\d+)\]$/.exec(target);
+    if (match?.groups?.inode && inodes.has(match.groups.inode)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function linuxPidListensOnPort(pid: number, port: number): boolean {
+  return linuxPidOwnsAnySocketInode(pid, readLinuxTcpListenInodesForPort(port));
+}
+
+function lsofShowsPidListeningOnPort(pid: number, port: number): boolean {
+  try {
+    const output = execFileSync(
+      "lsof",
+      ["-nP", "-a", "-p", String(pid), `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"],
+      { encoding: "utf8", timeout: 1000, maxBuffer: 64 * 1024 },
+    );
+    return output.split(/\r?\n/).some((line) => line === `p${pid}`);
+  } catch {
+    return false;
+  }
+}
+
+function pidListensOnPort(pid: number, port: number): boolean {
+  if (process.platform === "linux") {
+    return linuxPidListensOnPort(pid, port);
+  }
+  if (process.platform === "darwin") {
+    return lsofShowsPidListeningOnPort(pid, port);
+  }
+  return false;
+}
+
+type ManagedChromeProcessIdentity = {
+  pid: number;
+  startTime: string | null;
+  commandLine: string;
+};
+
+function sameManagedChromeIdentity(
+  a: ManagedChromeProcessIdentity,
+  b: ManagedChromeProcessIdentity,
+): boolean {
+  return a.pid === b.pid && a.commandLine === b.commandLine && a.startTime === b.startTime;
+}
+
+function readOwnedManagedChromeIdentity(params: {
+  pid: number;
+  exe: BrowserExecutable;
+  profile: ResolvedBrowserProfile;
+  userDataDir: string;
+}): ManagedChromeProcessIdentity | null {
+  if (!processExists(params.pid) || !pidListensOnPort(params.pid, params.profile.cdpPort)) {
+    return null;
+  }
+  const command = readManagedProcessCommandLine(params.pid);
+  if (
+    !command ||
+    !commandLineMatchesManagedChrome({
+      command,
+      exe: params.exe,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+    })
+  ) {
+    return null;
+  }
+  return {
+    pid: params.pid,
+    startTime: command.startTime,
+    commandLine: command.text,
+  };
+}
+
+function isPortInUseError(err: unknown): boolean {
+  const errno = (err as NodeJS.ErrnoException | undefined)?.code;
+  const name = err instanceof Error ? err.name : "";
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    errno === "EADDRINUSE" ||
+    name === "PortInUseError" ||
+    /\bEADDRINUSE\b|already in use/i.test(message)
+  );
+}
+
+function readCurrentHostSingletonPid(userDataDir: string, hostname = os.hostname()): number | null {
+  const lock = readSingletonLockTarget(userDataDir);
+  if (!lock || lock.hostname !== hostname || !processExists(lock.pid)) {
+    return null;
+  }
+  return lock.pid;
 }
 
 function clearChromeSingletonArtifacts(userDataDir: string) {
@@ -204,6 +511,152 @@ async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string) 
   }
   await waitForChromeProcessExit(proc, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
   clearStaleChromeSingletonLocks(userDataDir);
+}
+
+async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, CHROME_BOOTSTRAP_EXIT_POLL_MS);
+    });
+  }
+  return !processExists(pid);
+}
+
+async function terminateOwnedStaleChromeProcess(
+  params: {
+    identity: ManagedChromeProcessIdentity;
+    exe: BrowserExecutable;
+    profile: ResolvedBrowserProfile;
+    userDataDir: string;
+  },
+  timeoutMs = CHROME_STOP_TIMEOUT_MS,
+): Promise<boolean> {
+  const readCurrentIdentity = () =>
+    readOwnedManagedChromeIdentity({
+      pid: params.identity.pid,
+      exe: params.exe,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+    });
+  const beforeSigterm = readCurrentIdentity();
+  if (!beforeSigterm || !sameManagedChromeIdentity(params.identity, beforeSigterm)) {
+    return false;
+  }
+  try {
+    process.kill(params.identity.pid, "SIGTERM");
+  } catch {
+    return false;
+  }
+  if (await waitForPidExit(params.identity.pid, timeoutMs)) {
+    return true;
+  }
+  const beforeSigkill = readCurrentIdentity();
+  if (!beforeSigkill || !sameManagedChromeIdentity(params.identity, beforeSigkill)) {
+    return false;
+  }
+  try {
+    process.kill(params.identity.pid, "SIGKILL");
+  } catch {
+    return false;
+  }
+  return await waitForPidExit(params.identity.pid, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
+}
+
+function clearRecoveredChromeSingletonArtifacts(userDataDir: string, pid: number): boolean {
+  const lock = readSingletonLockTarget(userDataDir);
+  if (!lock || lock.hostname !== os.hostname() || lock.pid !== pid || processExists(pid)) {
+    return false;
+  }
+  clearChromeSingletonArtifacts(userDataDir);
+  return true;
+}
+
+async function recoverOwnedStaleManagedChromeCdpListener(params: {
+  exe: BrowserExecutable;
+  profile: ResolvedBrowserProfile;
+  userDataDir: string;
+}): Promise<boolean> {
+  if (!params.profile.cdpIsLoopback) {
+    return false;
+  }
+  const pid = readCurrentHostSingletonPid(params.userDataDir);
+  if (pid == null) {
+    return false;
+  }
+  let diagnostic: ChromeCdpDiagnostic;
+  try {
+    diagnostic = await diagnoseChromeCdp(
+      params.profile.cdpUrl,
+      CHROME_REACHABILITY_TIMEOUT_MS,
+      CHROME_WS_READY_TIMEOUT_MS,
+    );
+  } catch {
+    return false;
+  }
+  if (diagnostic.ok || diagnostic.code !== "websocket_health_command_timeout") {
+    return false;
+  }
+  const identity = readOwnedManagedChromeIdentity({
+    pid,
+    exe: params.exe,
+    profile: params.profile,
+    userDataDir: params.userDataDir,
+  });
+  if (!identity) {
+    return false;
+  }
+  if (
+    !(await terminateOwnedStaleChromeProcess({
+      identity,
+      exe: params.exe,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+    }))
+  ) {
+    return false;
+  }
+  if (!clearRecoveredChromeSingletonArtifacts(params.userDataDir, pid)) {
+    return false;
+  }
+  log.warn(
+    `Stopped stale managed Chrome CDP listener for profile "${params.profile.name}" (pid ${pid}) and retrying launch.`,
+  );
+  return true;
+}
+
+async function ensureManagedChromePortAvailable(
+  resolved: ResolvedBrowserConfig,
+  profile: ResolvedBrowserProfile,
+  userDataDir: string,
+): Promise<void> {
+  const configuredHost = new URL(profile.cdpUrl).hostname.replace(/^\[|\]$/g, "");
+  const probeHosts =
+    configuredHost === "127.0.0.1" ? [configuredHost] : ["127.0.0.1", configuredHost];
+  const ensureProbeHostsAvailable = async () => {
+    for (const host of probeHosts) {
+      await ensurePortAvailable(profile.cdpPort, host);
+    }
+  };
+
+  // Chromium tries IPv4 loopback first, while OpenClaw polls the configured endpoint.
+  // Probe both so neither Chrome's bind nor the later readiness check can be captured.
+  try {
+    await ensureProbeHostsAvailable();
+    return;
+  } catch (err) {
+    const exe = resolveBrowserExecutable(resolved, profile);
+    if (!isPortInUseError(err) || !exe) {
+      throw err;
+    }
+    if (!(await recoverOwnedStaleManagedChromeCdpListener({ exe, profile, userDataDir }))) {
+      throw err;
+    }
+  }
+  await ensureProbeHostsAvailable();
 }
 
 function chromeLaunchHints(params: {
@@ -467,7 +920,8 @@ export async function launchOpenClawChrome(
     );
   }
 
-  await ensurePortAvailable(profile.cdpPort);
+  const userDataDir = resolveOpenClawUserDataDir(profile.name);
+  await ensureManagedChromePortAvailable(resolved, profile, userDataDir);
 
   const exe = resolveBrowserExecutable(resolved, profile);
   if (!exe) {
@@ -476,7 +930,6 @@ export async function launchOpenClawChrome(
     );
   }
 
-  const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
   await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
 

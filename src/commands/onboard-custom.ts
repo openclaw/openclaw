@@ -35,15 +35,6 @@ export {
   parseNonInteractiveCustomApiFlags,
   resolveCustomModelImageInputInference,
   resolveCustomProviderId,
-  type ApplyCustomApiConfigParams,
-  type CustomApiCompatibility,
-  type CustomApiErrorCode,
-  type CustomModelImageInputInference,
-  type CustomApiResult,
-  type ParseNonInteractiveCustomApiFlagsParams,
-  type ParsedNonInteractiveCustomApiFlags,
-  type ResolveCustomProviderIdParams,
-  type ResolvedCustomProviderId,
 } from "./onboard-custom-config.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
@@ -117,8 +108,9 @@ async function requestVerification(params: {
   headers: Record<string, string>;
   body: Record<string, unknown>;
 }): Promise<VerificationResult> {
+  let res: Response | undefined;
   try {
-    const res = await fetchWithTimeout(
+    res = await fetchWithTimeout(
       params.endpoint,
       {
         method: "POST",
@@ -142,6 +134,8 @@ async function requestVerification(params: {
     return { ok: res.ok, status: res.status };
   } catch (error) {
     return { ok: false, error };
+  } finally {
+    await res?.body?.cancel().catch(() => undefined);
   }
 }
 

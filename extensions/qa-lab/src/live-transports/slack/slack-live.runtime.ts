@@ -11,6 +11,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
+import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
   defaultQaModelForMode,
@@ -21,6 +22,11 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
+import {
+  assertApprovalDecisionResult,
+  formatApprovalResultValue,
+  readAcceptedApprovalRequestId,
+} from "../shared/live-approval-result.js";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
@@ -504,11 +510,6 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof SLACK_QA_ENV_KEYS)
   return value;
 }
 
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
 function inferSlackCredentialSource(
   value: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -720,39 +721,6 @@ async function listSlackThreadMessages(params: {
     }),
   );
   return replies.messages ?? [];
-}
-
-function formatApprovalResultValue(value: unknown) {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value == null) {
-    return "<missing>";
-  }
-  return JSON.stringify(value) ?? "<unserializable>";
-}
-
-function readAcceptedApprovalRequest(result: unknown) {
-  const accepted =
-    typeof result === "object" && result !== null
-      ? (result as { id?: unknown; status?: unknown })
-      : null;
-  if (accepted?.status !== "accepted") {
-    throw new Error(
-      `approval request status was ${formatApprovalResultValue(
-        accepted?.status,
-      )} instead of accepted`,
-    );
-  }
-  return accepted;
-}
-
-function readAcceptedApprovalRequestId(result: unknown) {
-  const id = readAcceptedApprovalRequest(result).id;
-  if (typeof id !== "string" || id.trim().length === 0) {
-    throw new Error(`approval request id was ${formatApprovalResultValue(id)}`);
-  }
-  return id;
 }
 
 function collectSlackBlockStringFields(
@@ -1384,21 +1352,6 @@ async function resolveApprovalDecision(params: {
       timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
     },
   );
-}
-
-function assertApprovalDecisionResult(params: {
-  decision: SlackQaApprovalDecision;
-  result: unknown;
-}) {
-  const resultDecision =
-    typeof params.result === "object" && params.result !== null
-      ? (params.result as { decision?: unknown }).decision
-      : undefined;
-  if (resultDecision !== params.decision) {
-    throw new Error(
-      `approval decision was ${formatApprovalResultValue(resultDecision)} instead of ${params.decision}`,
-    );
-  }
 }
 
 async function runSlackApprovalScenario(params: {

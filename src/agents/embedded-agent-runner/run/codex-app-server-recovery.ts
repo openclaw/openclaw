@@ -56,10 +56,3 @@ export function resolveCodexAppServerRecoveryRetry(params: {
   }
   return { retry: true };
 }
-
-/**
- * Backward-compatible name for the original client-close retry decision. The
- * resolver now also handles completion idle timeouts under the same replay-safe
- * side-effect gate.
- */
-export const resolveCodexAppServerClientCloseRetry = resolveCodexAppServerRecoveryRetry;

@@ -1,5 +1,5 @@
 // Discord plugin module implements reply delivery behavior.
-import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
+import { formatReasoningMessage, resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildOutboundSessionContext,
   sendDurableMessageBatch,
@@ -156,6 +156,19 @@ function resolveDiscordDeliveryOptions(params: {
   };
 }
 
+function formatDiscordReasoningPayload(payload: ReplyPayload): ReplyPayload {
+  if (payload.isReasoning !== true) {
+    return payload;
+  }
+  const text = typeof payload.text === "string" ? payload.text.trim() : "";
+  const nextPayload: ReplyPayload = {
+    ...payload,
+    text: formatReasoningMessage(text),
+  };
+  delete nextPayload.isReasoning;
+  return nextPayload;
+}
+
 export async function deliverDiscordReply(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
@@ -178,7 +191,9 @@ export async function deliverDiscordReply(params: {
   void params.runtime;
 
   const delivery = resolveDiscordDeliveryOptions(params);
-  const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, { kind: params.kind });
+  const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, {
+    kind: params.kind,
+  }).map(formatDiscordReasoningPayload);
   if (payloads.length === 0) {
     return;
   }

@@ -134,13 +134,17 @@ const WRITE_GATEWAY_SCOPES = ["operator.admin", "operator.write", "operator.pair
 function buildPluginsParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig,
-  options?: { gatewayClientScopes?: string[] },
+  options?: { gatewayClientScopes?: string[]; omitGatewayClientScopes?: boolean },
 ) {
-  return buildPluginsCommandParams({
+  const params = buildPluginsCommandParams({
     commandBodyNormalized,
     cfg,
     gatewayClientScopes: options?.gatewayClientScopes,
   });
+  if (options?.omitGatewayClientScopes) {
+    delete params.ctx.GatewayClientScopes;
+  }
+  return params;
 }
 
 type MockCalls = {
@@ -280,6 +284,41 @@ describe("handlePluginsCommand", () => {
 
     const result = await handlePluginsCommand(params, true);
     expect(result?.reply?.text).toContain("requires operator.admin");
+  });
+
+  it("blocks channel-authorized non-owner plugin toggles before config mutation", async () => {
+    const params = buildPluginsParams("/plugins enable superpowers", buildCfg(), {
+      omitGatewayClientScopes: true,
+    });
+    params.command.channel = "telegram";
+    params.command.channelId = "telegram";
+    params.command.surface = "telegram";
+    params.command.senderId = "telegram-user-3";
+    params.command.senderIsOwner = false;
+    params.command.isAuthorizedSender = true;
+    params.ctx.Provider = "telegram";
+    params.ctx.Surface = "telegram";
+
+    const result = await handlePluginsCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(refreshPluginRegistryAfterConfigMutationMock).not.toHaveBeenCalled();
+  });
+
+  it("allows gateway clients with operator.admin to toggle plugins", async () => {
+    validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
+    const params = buildPluginsParams("/plugins disable superpowers", buildCfg(), {
+      gatewayClientScopes: ["operator.admin", "operator.write"],
+    });
+    params.command.senderIsOwner = false;
+
+    const result = await handlePluginsCommand(params, true);
+
+    expect(result?.reply?.text).toContain('Plugin "superpowers" disabled');
+    expectLastReplaceConfig(false);
+    expectLastRegistryRefresh(false);
   });
 
   it("enables and disables a discovered plugin", async () => {

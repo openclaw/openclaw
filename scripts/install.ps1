@@ -171,7 +171,7 @@ function Check-Node {
     return $false
 }
 
-function Get-WindowsNodeArchitecture {
+function Get-WindowsPortableArchitecture {
     foreach ($architecture in @($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE)) {
         if ($architecture -match "ARM64") {
             return "arm64"
@@ -227,7 +227,7 @@ function Ensure-PortableNodeOnUserPath {
 }
 
 function Resolve-PortableNodeDownload {
-    $architecture = Get-WindowsNodeArchitecture
+    $architecture = Get-WindowsPortableArchitecture
     $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json"
     $release = $index |
         Where-Object { $_.version -match '^v24\.' } |
@@ -528,9 +528,16 @@ function Resolve-PortableGitDownload {
         throw "Could not resolve latest git-for-windows release metadata."
     }
 
+    $architecture = Get-WindowsPortableArchitecture
+    $assetPattern = if ($architecture -eq "arm64") { '^MinGit-.*-arm64\.zip$' } else { '^MinGit-.*-64-bit\.zip$' }
     $asset = $release.assets |
-        Where-Object { $_.name -match '^MinGit-.*-64-bit\.zip$' -and $_.name -notmatch 'busybox' } |
+        Where-Object { $_.name -match $assetPattern -and $_.name -notmatch 'busybox' } |
         Select-Object -First 1
+    if (-not $asset -and $architecture -eq "arm64") {
+        $asset = $release.assets |
+            Where-Object { $_.name -match '^MinGit-.*-64-bit\.zip$' -and $_.name -notmatch 'busybox' } |
+            Select-Object -First 1
+    }
 
     if (-not $asset) {
         throw "Could not find a MinGit zip asset in the latest git-for-windows release."

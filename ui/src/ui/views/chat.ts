@@ -19,6 +19,7 @@ import { buildChatItems, type BuildChatItemsProps } from "../chat/build-chat-ite
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
+import { copyToClipboard } from "../chat/clipboard.ts";
 import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
@@ -33,6 +34,12 @@ import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../cha
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
+import {
+  REALTIME_TALK_FALLBACK_PROVIDERS,
+  listSelectableRealtimeTalkProviders,
+  resolveControlUiRealtimeTalkProviderTransports,
+  type RealtimeTalkCatalogProvider,
+} from "../chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -121,6 +128,7 @@ export type ChatProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
+  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: {
     provider: string;
     model: string;
@@ -171,6 +179,7 @@ export type ChatProps = {
     next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
   ) => void;
   onDismissError?: () => void;
+  onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -235,10 +244,13 @@ const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
   { label: "Medium", value: "0.5" },
   { label: "High", value: "0.35" },
 ];
-const TALK_PROVIDER_OPTIONS: TalkSelectOption[] = [
-  { label: "Auto", value: "" },
-  { label: "OpenAI", value: "openai" },
-  { label: "Google", value: "google" },
+const TALK_PROVIDER_AUTO_OPTION: TalkSelectOption = { label: "Auto", value: "" };
+const TALK_PROVIDER_FALLBACK_OPTIONS: TalkSelectOption[] = [
+  TALK_PROVIDER_AUTO_OPTION,
+  ...REALTIME_TALK_FALLBACK_PROVIDERS.map((provider) => ({
+    label: provider.label,
+    value: provider.id,
+  })),
 ];
 const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
   { label: "Auto", value: "" },
@@ -318,6 +330,28 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
     return nothing;
   }
+  const catalogProviders = props.realtimeTalkCatalogProviders;
+  const selectableProviders = listSelectableRealtimeTalkProviders(catalogProviders ?? []);
+  const providerOptions: TalkSelectOption[] = catalogProviders
+    ? [
+        TALK_PROVIDER_AUTO_OPTION,
+        ...selectableProviders.map((provider) => ({ label: provider.label, value: provider.id })),
+      ]
+    : TALK_PROVIDER_FALLBACK_OPTIONS;
+  const selectedCatalogProvider = options.provider
+    ? selectableProviders.find((provider) => provider.id === options.provider)
+    : null;
+  const selectedProviderTransports = selectedCatalogProvider
+    ? resolveControlUiRealtimeTalkProviderTransports(selectedCatalogProvider)
+    : undefined;
+  const transportOptions: TalkSelectOption[] = selectedProviderTransports
+    ? [
+        { label: "Auto", value: "" },
+        ...TALK_TRANSPORT_OPTIONS.filter(
+          (opt) => opt.value !== "" && selectedProviderTransports.includes(opt.value),
+        ),
+      ]
+    : TALK_TRANSPORT_OPTIONS;
   const update = (key: keyof NonNullable<ChatProps["realtimeTalkOptions"]>) => (event: Event) => {
     const value = (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
     onChange({ [key]: value });
@@ -372,13 +406,24 @@ function renderRealtimeTalkOptions(props: ChatProps) {
           ${renderNativeTalkSelect({
             label: "Provider",
             value: options.provider,
-            options: TALK_PROVIDER_OPTIONS,
-            onSelect: (provider) => onChange({ provider }),
+            options: providerOptions,
+            onSelect: (provider) => {
+              const selectedProvider = selectableProviders.find((entry) => entry.id === provider);
+              const transports = selectedProvider
+                ? resolveControlUiRealtimeTalkProviderTransports(selectedProvider)
+                : null;
+              const transport = options.transport;
+              onChange(
+                transports && transport && !transports.includes(transport)
+                  ? { provider, transport: "" }
+                  : { provider },
+              );
+            },
           })}
           ${renderNativeTalkSelect({
             label: "Transport",
             value: options.transport,
-            options: TALK_TRANSPORT_OPTIONS,
+            options: transportOptions,
             onSelect: (transport) => onChange({ transport }),
           })}
           ${renderNativeTalkSelect({
@@ -473,6 +518,7 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  composerComposing: boolean;
   historyRenderSessionKey: string | null;
   historyRenderMessagesRef: unknown[] | null;
   historyRenderMessageCount: number;
@@ -499,6 +545,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    composerComposing: false,
     historyRenderSessionKey: null,
     historyRenderMessagesRef: null,
     historyRenderMessageCount: 0,
@@ -621,8 +668,6 @@ export function resetChatViewState() {
   chatItemsBySession.clear();
   composerDraftMirrors.clear();
 }
-
-export const cleanupChatModuleState = resetChatViewState;
 
 function resolveChatHistoryRenderCap(messageCount: number): number {
   return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
@@ -1986,13 +2031,13 @@ export function renderChat(props: ChatProps) {
       return;
     }
     const code = (btn as HTMLElement).dataset.code ?? "";
-    navigator.clipboard.writeText(code).then(
-      () => {
-        btn.classList.add("copied");
-        setTimeout(() => btn.classList.remove("copied"), 1500);
-      },
-      () => {},
-    );
+    void copyToClipboard(code).then((copied) => {
+      if (!copied) {
+        return;
+      }
+      btn.classList.add("copied");
+      setTimeout(() => btn.classList.remove("copied"), 1500);
+    });
   };
   const handleChatThreadScroll = (event: Event) => {
     maybeExpandChatHistoryRenderWindow(event, requestUpdate);
@@ -2229,6 +2274,12 @@ export function renderChat(props: ChatProps) {
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
+    // IME navigation keys belong to the browser; downstream handlers can
+    // prevent them or commit the in-progress composition as a host draft.
+    if (vs.composerComposing || e.isComposing || e.keyCode === 229) {
+      return;
+    }
+
     // Slash menu navigation — arg mode
     if (vs.slashMenuOpen && vs.slashMenuMode === "args" && vs.slashMenuArgItems.length > 0) {
       const len = vs.slashMenuArgItems.length;
@@ -2336,9 +2387,6 @@ export function renderChat(props: ChatProps) {
 
     // Send on Enter (without shift)
     if (e.key === "Enter" && !e.shiftKey) {
-      if (e.isComposing || e.keyCode === 229) {
-        return;
-      }
       if (!props.connected) {
         return;
       }
@@ -2352,15 +2400,38 @@ export function renderChat(props: ChatProps) {
     }
   };
 
-  const handleInput = (e: Event) => {
-    const target = e.target as HTMLTextAreaElement;
+  const syncComposerValue = (
+    target: HTMLTextAreaElement,
+    options: { forceCommit?: boolean } = {},
+  ) => {
     adjustTextareaHeight(target);
     draftMirror.value = target.value;
     const hostDraftNeeded = isBusy || showAbortableUi || props.queue.length > 0;
-    if (hostDraftNeeded || target.value.startsWith("/") || hasVisibleSlashMenuState()) {
+    if (
+      options.forceCommit ||
+      hostDraftNeeded ||
+      target.value.startsWith("/") ||
+      hasVisibleSlashMenuState()
+    ) {
       commitComposerDraft(props, target.value);
     }
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
+  };
+  const handleInput = (e: InputEvent) => {
+    const target = e.target as HTMLTextAreaElement;
+    if (vs.composerComposing || e.isComposing) {
+      // Skip adjustTextareaHeight during IME composition — each pinyin
+      // keystroke fires `input` and the height read/write forces a
+      // synchronous reflow that blocks the composition thread.
+      // Resize runs once in handleCompositionEnd → syncComposerValue.
+      draftMirror.value = target.value;
+      return;
+    }
+    syncComposerValue(target);
+  };
+  const handleCompositionEnd = (e: CompositionEvent) => {
+    vs.composerComposing = false;
+    syncComposerValue(e.target as HTMLTextAreaElement, { forceCommit: true });
   };
   const handleBlur = (e: FocusEvent) => {
     const target = e.target as HTMLTextAreaElement;
@@ -2419,16 +2490,34 @@ export function renderChat(props: ChatProps) {
       ${renderRealtimeTalkOptions(props)}
       ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
         ? html`
-            <div class="agent-chat__stt-interim agent-chat__talk-status">
-              ${props.realtimeTalkDetail ??
-              ((props.realtimeTalkConversation?.length ?? 0) === 0
-                ? props.realtimeTalkTranscript
-                : null) ??
-              (props.realtimeTalkStatus === "thinking"
-                ? "Asking OpenClaw..."
-                : props.realtimeTalkStatus === "connecting"
-                  ? "Connecting Talk..."
-                  : "Talk live")}
+            <div
+              class="agent-chat__stt-interim agent-chat__talk-status"
+              role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
+            >
+              <span class="agent-chat__talk-status-text">
+                ${props.realtimeTalkDetail ??
+                ((props.realtimeTalkConversation?.length ?? 0) === 0
+                  ? props.realtimeTalkTranscript
+                  : null) ??
+                (props.realtimeTalkStatus === "thinking"
+                  ? "Asking OpenClaw..."
+                  : props.realtimeTalkStatus === "connecting"
+                    ? "Connecting Talk..."
+                    : "Talk live")}
+              </span>
+              ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
+                ? html`
+                    <button
+                      class="callout__dismiss"
+                      type="button"
+                      @click=${props.onDismissRealtimeTalkError}
+                      aria-label=${t("chat.composer.dismissTalkError")}
+                      title=${t("chat.composer.dismissTalkError")}
+                    >
+                      ${icons.x}
+                    </button>
+                  `
+                : nothing}
             </div>
           `
         : nothing}
@@ -2450,6 +2539,10 @@ export function renderChat(props: ChatProps) {
           aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
           @keydown=${handleKeyDown}
           @input=${handleInput}
+          @compositionstart=${() => {
+            vs.composerComposing = true;
+          }}
+          @compositionend=${handleCompositionEnd}
           @blur=${handleBlur}
           @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
           placeholder=${placeholder}

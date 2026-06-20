@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
+import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { createNpmMetadataEnv, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
@@ -125,6 +126,43 @@ export type PluginChannelSyncResult = {
   changed: boolean;
   summary: PluginChannelSyncSummary;
 };
+
+/** Return whether a tracked plugin install source can be updated in place. */
+export function isPluginInstallRecordUpdateSource(
+  record: PluginInstallRecord | undefined,
+): boolean {
+  return (
+    record?.source === "npm" ||
+    record?.source === "marketplace" ||
+    record?.source === "clawhub" ||
+    record?.source === "git"
+  );
+}
+
+/** Return whether update identity compatibility can migrate an unscoped install key. */
+export function pluginInstallRecordMayMigrateConfigId(params: {
+  pluginId: string;
+  record: PluginInstallRecord | undefined;
+  specOverride?: string;
+}): boolean {
+  if (!isPluginInstallRecordUpdateSource(params.record)) {
+    return false;
+  }
+  if (params.record?.source !== "npm") {
+    // Generic package/archive installers can resolve an unscoped tracked key
+    // to a scoped package id; the exact package identity is unavailable preflight.
+    return !params.pluginId.includes("/");
+  }
+  const packageName =
+    resolveNpmSpecPackageName(params.specOverride ?? params.record.spec) ??
+    params.record.resolvedName ??
+    resolveNpmSpecPackageName(params.record.resolvedSpec);
+  return Boolean(
+    packageName &&
+    packageName !== params.pluginId &&
+    unscopedPackageName(packageName) === params.pluginId,
+  );
+}
 
 function formatNpmInstallFailure(params: {
   pluginId: string;
@@ -961,7 +999,7 @@ function replacePluginIdInList(
   fromId: string,
   toId: string,
 ): string[] | undefined {
-  if (!entries || entries.length === 0 || fromId === toId) {
+  if (!entries || entries.length === 0 || fromId === toId || !entries.includes(fromId)) {
     return entries;
   }
   const next: string[] = [];
@@ -975,27 +1013,33 @@ function replacePluginIdInList(
 }
 
 function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string): OpenClawConfig {
-  if (fromId === toId) {
+  const plugins = cfg.plugins;
+  if (fromId === toId || !plugins) {
     return cfg;
   }
 
-  const installs = cfg.plugins?.installs;
-  const entries = cfg.plugins?.entries;
-  const slots = cfg.plugins?.slots;
-  const allow = replacePluginIdInList(cfg.plugins?.allow, fromId, toId);
-  const deny = replacePluginIdInList(cfg.plugins?.deny, fromId, toId);
+  let nextPlugins = plugins;
+  const ensureNextPlugins = () => {
+    if (nextPlugins === plugins) {
+      nextPlugins = { ...plugins };
+    }
+    return nextPlugins;
+  };
 
-  const nextInstalls = installs ? { ...installs } : undefined;
-  if (nextInstalls && fromId in nextInstalls) {
+  const installs = plugins.installs;
+  if (installs && Object.hasOwn(installs, fromId)) {
+    const nextInstalls = { ...installs };
     const record = nextInstalls[fromId];
     if (record && !(toId in nextInstalls)) {
       nextInstalls[toId] = record;
     }
     delete nextInstalls[fromId];
+    ensureNextPlugins().installs = nextInstalls;
   }
 
-  const nextEntries = entries ? { ...entries } : undefined;
-  if (nextEntries && fromId in nextEntries) {
+  const entries = plugins.entries;
+  if (entries && Object.hasOwn(entries, fromId)) {
+    const nextEntries = { ...entries };
     const entry = nextEntries[fromId];
     if (entry) {
       nextEntries[toId] = nextEntries[toId]
@@ -1006,27 +1050,28 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
         : entry;
     }
     delete nextEntries[fromId];
+    ensureNextPlugins().entries = nextEntries;
   }
 
-  const nextSlots = slots
-    ? {
-        ...slots,
-        ...(slots.memory === fromId ? { memory: toId } : {}),
-        ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
-      }
-    : undefined;
+  const allow = replacePluginIdInList(plugins.allow, fromId, toId);
+  if (allow !== plugins.allow) {
+    ensureNextPlugins().allow = allow;
+  }
+  const deny = replacePluginIdInList(plugins.deny, fromId, toId);
+  if (deny !== plugins.deny) {
+    ensureNextPlugins().deny = deny;
+  }
 
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      allow,
-      deny,
-      entries: nextEntries,
-      installs: nextInstalls,
-      slots: nextSlots,
-    },
-  };
+  const slots = plugins.slots;
+  if (slots?.memory === fromId || slots?.contextEngine === fromId) {
+    ensureNextPlugins().slots = {
+      ...slots,
+      ...(slots.memory === fromId ? { memory: toId } : {}),
+      ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
+    };
+  }
+
+  return nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
 }
 
 function withoutPluginInstallRecord(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
@@ -1287,12 +1332,7 @@ export async function updateNpmInstalledPlugins(params: {
       }
     }
 
-    if (
-      record.source !== "npm" &&
-      record.source !== "marketplace" &&
-      record.source !== "clawhub" &&
-      record.source !== "git"
-    ) {
+    if (!isPluginInstallRecordUpdateSource(record)) {
       outcomes.push({
         pluginId,
         status: "skipped",

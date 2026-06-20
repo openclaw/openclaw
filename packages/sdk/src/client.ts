@@ -327,8 +327,10 @@ export class OpenClaw {
   });
   private readonly replayByRunId = new Map<string, OpenClawEvent[]>();
   private connected = false;
+  private closed = false;
   private eventPumpPromise: Promise<void> | null = null;
   private eventPumpReady: Promise<void> | null = null;
+  private closePromise: Promise<void> | null = null;
 
   constructor(options: OpenClawOptions = {}) {
     this.transport =
@@ -351,24 +353,45 @@ export class OpenClaw {
   }
 
   async connect(): Promise<void> {
+    this.assertOpen();
     if (this.connected) {
       await this.startEventPump();
+      this.assertOpen();
       return;
     }
     if (isConnectableTransport(this.transport)) {
       await this.transport.connect();
     }
+    this.assertOpen();
     this.connected = true;
     await this.startEventPump();
+    this.assertOpen();
   }
 
   async close(): Promise<void> {
-    await this.transport.close?.();
-    await this.eventPumpPromise?.catch(() => {});
-    this.normalizedEvents.close();
-    this.eventPumpPromise = null;
-    this.eventPumpReady = null;
-    this.connected = false;
+    if (this.closePromise) {
+      return await this.closePromise;
+    }
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.closePromise = (async () => {
+      try {
+        await this.transport.close?.();
+        await this.eventPumpPromise?.catch(() => {});
+      } finally {
+        this.normalizedEvents.close();
+        this.eventPumpPromise = null;
+        this.eventPumpReady = null;
+        this.connected = false;
+      }
+    })();
+    try {
+      await this.closePromise;
+    } finally {
+      this.closePromise = null;
+    }
   }
 
   async request<T = unknown>(
@@ -377,6 +400,7 @@ export class OpenClaw {
     options?: GatewayRequestOptions,
   ): Promise<T> {
     await this.connect();
+    this.assertOpen();
     return await this.transport.request<T>(method, params, options);
   }
 
@@ -392,13 +416,21 @@ export class OpenClaw {
   }
 
   rawEvents(filter?: (event: GatewayEvent) => boolean): AsyncIterable<GatewayEvent> {
+    this.assertOpen();
     return this.transport.events(filter);
+  }
+
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new Error("OpenClaw SDK client is closed");
+    }
   }
 
   private async *iterateEvents(
     filter?: (event: OpenClawEvent) => boolean,
   ): AsyncIterable<OpenClawEvent> {
     await this.connect();
+    this.assertOpen();
     for await (const event of this.normalizedEvents.stream(filter)) {
       yield event;
     }
@@ -409,6 +441,7 @@ export class OpenClaw {
     filter?: (event: OpenClawEvent) => boolean,
   ): AsyncIterable<OpenClawEvent> {
     await this.connect();
+    this.assertOpen();
     const replayEvents = this.replaySnapshot(runId);
     let hasCanonicalAssistantRunEvent = replayEvents.some(isAssistantRunEvent);
     let hasTerminalRunEvent = replayEvents.some(isTerminalRunEvent);
@@ -675,7 +708,7 @@ export class AgentsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
   async list(params?: Record<string, unknown>): Promise<unknown> {
-    return await this.client.request("agents.list", params);
+    return await this.client.request("agents.list", params === undefined ? {} : params);
   }
 
   async get(id: string): Promise<Agent> {
@@ -700,7 +733,7 @@ export class SessionsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
   async list(params?: Record<string, unknown>): Promise<unknown> {
-    return await this.client.request("sessions.list", params);
+    return await this.client.request("sessions.list", params === undefined ? {} : params);
   }
 
   async create(params: SessionCreateParams = {}): Promise<Session> {
@@ -784,7 +817,7 @@ export class TasksNamespace extends RpcNamespace {
   }
 
   async list(params?: TasksListParams): Promise<TasksListResult> {
-    return await this.call("list", params);
+    return await this.call("list", params === undefined ? {} : params);
   }
 
   async get(taskId: string): Promise<TasksGetResult> {
@@ -806,7 +839,7 @@ export class ModelsNamespace extends RpcNamespace {
   }
 
   async list(params?: unknown): Promise<unknown> {
-    return await this.call("list", params);
+    return await this.call("list", params === undefined ? {} : params);
   }
 
   async status(params?: unknown): Promise<unknown> {
@@ -821,7 +854,7 @@ export class ToolsNamespace extends RpcNamespace {
   }
 
   async list(params?: unknown): Promise<unknown> {
-    return await this.call("catalog", params);
+    return await this.call("catalog", params === undefined ? {} : params);
   }
 
   async effective(params?: unknown): Promise<unknown> {
@@ -870,11 +903,11 @@ export class ApprovalsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
   async list(params?: unknown): Promise<unknown> {
-    return await this.client.request("exec.approval.list", params);
+    return await this.client.request("exec.approval.list", params === undefined ? {} : params);
   }
 
   async respond(approvalId: string, decision: Record<string, unknown>): Promise<unknown> {
-    return await this.client.request("exec.approval.resolve", { approvalId, ...decision });
+    return await this.client.request("exec.approval.resolve", { ...decision, id: approvalId });
   }
 }
 
@@ -885,7 +918,7 @@ export class EnvironmentsNamespace extends RpcNamespace {
   }
 
   async list(params?: unknown): Promise<EnvironmentsListResult> {
-    return await this.call("list", params ?? {});
+    return await this.call("list", params === undefined ? {} : params);
   }
 
   async create(params?: unknown): Promise<unknown> {

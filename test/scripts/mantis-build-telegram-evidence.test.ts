@@ -35,10 +35,7 @@ function makeTelegramOutput({ includeReport = true, summary = {} } = {}) {
             id: "telegram-status-command",
             title: "Telegram status command reply",
           },
-          mapping: {
-            profile: "release",
-            coverage: [],
-          },
+          coverage: [],
           execution: {
             runner: "host",
             environment: {

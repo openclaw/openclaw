@@ -26,6 +26,19 @@ export async function packageBuildCommitFromTgz(tgzPath: string): Promise<string
   return info.commit ?? "";
 }
 
+function resolveNpmPackTarballFilename(value: unknown): string {
+  const filename = typeof value === "string" ? value.trim() : "";
+  if (
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
+    die("npm pack did not report a safe tarball filename");
+  }
+  return filename;
+}
+
 export function resolveOpenClawRegistryVersion(specOrAlias: string): string {
   const rawValue = specOrAlias.trim();
   const value = rawValue.startsWith("openclaw@") ? rawValue.slice("openclaw@".length) : rawValue;
@@ -55,14 +68,6 @@ export function resolveOpenClawRegistryVersion(specOrAlias: string): string {
 
 function npmViewVersion(spec: string): string {
   return run("npm", ["view", spec, "version"], { quiet: true }).stdout.trim();
-}
-
-export async function ensureCurrentBuild(input: {
-  lockDir: string;
-  requireControlUi?: boolean;
-  checkDirty?: boolean;
-}): Promise<void> {
-  await withPackageLock(input.lockDir, async () => ensureCurrentBuildUnlocked(input));
 }
 
 async function ensureCurrentBuildUnlocked(input: {
@@ -139,11 +144,8 @@ export async function packOpenClaw(input: {
       ],
       { quiet: true },
     ).stdout;
-    const packed = JSON.parse(output).at(-1)?.filename as string | undefined;
-    if (!packed) {
-      die("npm pack did not report a filename");
-    }
-    const tgzPath = path.join(input.destination, path.basename(packed));
+    const packed = resolveNpmPackTarballFilename(JSON.parse(output).at(-1)?.filename);
+    const tgzPath = path.join(input.destination, packed);
     const version = await packageVersionFromTgz(tgzPath);
     say(`Packed ${tgzPath}`);
     say(`Target package version: ${version}`);
@@ -170,10 +172,7 @@ export async function packOpenClaw(input: {
         quiet: true,
       },
     ).stdout;
-    const packed = JSON.parse(output).at(-1)?.filename as string | undefined;
-    if (!packed) {
-      die("npm pack did not report a filename");
-    }
+    const packed = resolveNpmPackTarballFilename(JSON.parse(output).at(-1)?.filename);
     const tgzPath = path.join(input.destination, `openclaw-main-${shortHead}.tgz`);
     await copyFile(path.join(input.destination, packed), tgzPath);
     const buildCommit = await packageBuildCommitFromTgz(tgzPath);

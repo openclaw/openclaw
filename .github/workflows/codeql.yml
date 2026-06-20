@@ -32,7 +32,7 @@ on:
     - cron: "0 6 * * *"
 
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
