@@ -194,6 +194,39 @@ describe("restart sentinel", () => {
     });
   });
 
+  it("keeps old config restart sentinels readable without restart-required stats", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const filePath = resolveRestartSentinelPath();
+      const payload = {
+        kind: "config-patch" as const,
+        status: "ok" as const,
+        ts: Date.now(),
+        message: "Config updated successfully",
+        stats: { mode: "config.patch" },
+      };
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, JSON.stringify({ version: 1, payload }, null, 2), "utf-8");
+
+      const read = await readRestartSentinel();
+
+      expect(read?.payload).toEqual(payload);
+      if (!read) {
+        throw new Error("Expected old restart sentinel to be readable");
+      }
+      expect(summarizeRestartSentinel(read.payload)).toBe(
+        "Gateway restart config-patch ok (config.patch)",
+      );
+      expect(summarizeRestartSentinel(read.payload, { state: "completed" })).toBe(
+        "Gateway restart config-patch ok (config.patch)",
+      );
+      expect(formatRestartSentinelMessage(read.payload)).toBe(
+        ["Gateway restart config-patch ok (config.patch)", "Config updated successfully"].join(
+          "\n",
+        ),
+      );
+    });
+  });
+
   it("formatRestartSentinelMessage uses custom message when present", () => {
     const payload = {
       kind: "config-apply" as const,
