@@ -381,7 +381,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedRetention).toBe("24h");
   });
 
-  it("strips the internal cache boundary from OpenAI-compatible system prompts", async () => {
+  it("relocates the dynamic cache-boundary suffix to a trailing message for prefix-cache providers", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       createModel(32_000),
@@ -402,10 +402,43 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    // Stable prefix stays a byte-identical leading system message so implicit
+    // prefix-cache providers (DeepSeek) keep caching it across turns (#94518).
+    expect(messages[0]).toEqual({ role: "system", content: "Stable prefix" });
+    // The user turn stays inside the cacheable region.
+    expect(messages[1]?.role).toBe("user");
+    // The dynamic suffix is relocated to a trailing message so per-turn changes
+    // no longer invalidate the cached prefix + conversation history.
+    expect(messages[messages.length - 1]).toEqual({ role: "system", content: "Dynamic suffix" });
+    expect(messages).toHaveLength(3);
+  });
+
+  it("keeps a boundary-less system prompt as a single leading system message", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      createModel(32_000),
+      {
+        systemPrompt: "Plain system prompt with no cache boundary",
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
     expect(messages[0]).toEqual({
       role: "system",
-      content: "Stable prefix\nDynamic suffix",
+      content: "Plain system prompt with no cache boundary",
     });
+    expect(messages).toHaveLength(2);
   });
 
   it("splits the cache boundary before applying Anthropic cache control for OpenRouter Anthropic models", async () => {
