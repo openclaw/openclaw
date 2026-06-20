@@ -1982,7 +1982,7 @@ export const dispatchTelegramMessage = async ({
                     // shared createOutboundPayloadPlanEntry path (which calls
                     // shouldSuppressReasoningPayload) does not drop the payload.
                     // The original payload.isReasoning is still consumed by
-                    // lane splitting at L2017.
+                    // lane splitting at L2024.
                     const preNormalizedPayload =
                       payload.isReasoning === true ? { ...payload, isReasoning: false } : payload;
                     const normalizedPayload = normalizeDeliveryPayload(preNormalizedPayload);
