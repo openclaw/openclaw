@@ -32,6 +32,12 @@ const openRequests = new WeakMap<
   AppViewState,
   { agentId: string; id: number; itemId: string; sessionKey: string }
 >();
+type OpenRequest = {
+  agentId: string;
+  id: number;
+  itemId: string;
+  sessionKey: string;
+};
 
 function workspaceAgentId(state: AppViewState): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
@@ -215,60 +221,69 @@ function loadWorkspace(state: AppViewState, workspace: WorkspaceState, force = f
   })();
 }
 
-function openFile(state: AppViewState, workspace: WorkspaceState, path: string) {
-  const itemId = `file:${path}`;
+function beginOpenRequest(
+  state: AppViewState,
+  workspace: WorkspaceState,
+  itemId: string,
+): OpenRequest {
   workspace.activeId = itemId;
   const previous = openRequests.get(state);
-  const request = {
+  const request: OpenRequest = {
     agentId: workspace.agentId,
     id: (previous?.id ?? 0) + 1,
     itemId,
     sessionKey: state.sessionKey,
   };
   openRequests.set(state, request);
-  const isCurrent = () => {
-    const currentRequest = openRequests.get(state);
-    const current = currentWorkspaceState(state);
-    return (
-      currentRequest?.id === request.id &&
-      currentRequest.agentId === workspaceAgentId(state) &&
-      currentRequest.itemId === itemId &&
-      currentRequest.sessionKey === state.sessionKey &&
-      current?.agentId === request.agentId &&
-      current.activeId === itemId
-    );
-  };
+  return request;
+}
+
+function isCurrentOpenRequest(
+  state: AppViewState,
+  workspace: WorkspaceState,
+  request: OpenRequest,
+): boolean {
+  const currentRequest = openRequests.get(state);
+  const current = currentWorkspaceState(state);
+  return (
+    currentRequest?.id === request.id &&
+    currentRequest.agentId === workspaceAgentId(state) &&
+    currentRequest.itemId === request.itemId &&
+    currentRequest.sessionKey === state.sessionKey &&
+    current?.agentId === request.agentId &&
+    current.activeId === request.itemId
+  );
+}
+
+function openWorkspaceItem<T>(
+  state: AppViewState,
+  workspace: WorkspaceState,
+  itemId: string,
+  load: (request: OpenRequest) => Promise<T | null | undefined>,
+  render: (result: T) => SidebarContent | null,
+  missingMessage: string,
+) {
+  const request = beginOpenRequest(state, workspace, itemId);
   void (async () => {
     if (!state.client || !state.connected) {
       return;
     }
     workspace.error = null;
     try {
-      const result = await state.client.request<SessionWorkspaceGetResult | null>(
-        "sessions.files.get",
-        {
-          sessionKey: request.sessionKey,
-          path,
-          ...(request.agentId ? { agentId: request.agentId } : {}),
-        },
-      );
-      const file = result?.file;
-      if (!file || typeof file.content !== "string") {
-        if (isCurrent()) {
-          workspace.error = `Failed to load ${path}`;
+      const result = await load(request);
+      const content = result == null ? null : render(result);
+      if (!content) {
+        if (isCurrentOpenRequest(state, workspace, request)) {
+          workspace.error = missingMessage;
           requestUpdate(state);
         }
         return;
       }
-      if (isCurrent()) {
-        state.handleOpenSidebar({
-          kind: "markdown",
-          content: fileSidebarContent(file.name || path, file.content),
-          rawText: file.content,
-        });
+      if (isCurrentOpenRequest(state, workspace, request)) {
+        state.handleOpenSidebar(content);
       }
     } catch (error) {
-      if (isCurrent()) {
+      if (isCurrentOpenRequest(state, workspace, request)) {
         workspace.error = String(error);
       }
     } finally {
@@ -277,69 +292,54 @@ function openFile(state: AppViewState, workspace: WorkspaceState, path: string) 
   })();
 }
 
+function openFile(state: AppViewState, workspace: WorkspaceState, path: string) {
+  openWorkspaceItem(
+    state,
+    workspace,
+    `file:${path}`,
+    (request) =>
+      state.client!.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
+        sessionKey: request.sessionKey,
+        path,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+      }),
+    (result) => {
+      const file = result.file;
+      return !file || typeof file.content !== "string"
+        ? null
+        : {
+            kind: "markdown",
+            content: fileSidebarContent(file.name || path, file.content),
+            rawText: file.content,
+          };
+    },
+    `Failed to load ${path}`,
+  );
+}
+
 function openArtifact(state: AppViewState, workspace: WorkspaceState, artifactId: string) {
-  const itemId = `artifact:${artifactId}`;
-  workspace.activeId = itemId;
-  const previous = openRequests.get(state);
-  const request = {
-    agentId: workspace.agentId,
-    id: (previous?.id ?? 0) + 1,
-    itemId,
-    sessionKey: state.sessionKey,
-  };
-  openRequests.set(state, request);
-  const isCurrent = () => {
-    const currentRequest = openRequests.get(state);
-    const current = currentWorkspaceState(state);
-    return (
-      currentRequest?.id === request.id &&
-      currentRequest.agentId === workspaceAgentId(state) &&
-      currentRequest.itemId === itemId &&
-      currentRequest.sessionKey === state.sessionKey &&
-      current?.agentId === request.agentId &&
-      current.activeId === itemId
-    );
-  };
-  void (async () => {
-    if (!state.client || !state.connected) {
-      return;
-    }
-    workspace.error = null;
-    try {
-      const result = await state.client.request<ArtifactDownloadResult | null>(
-        "artifacts.download",
-        {
-          sessionKey: request.sessionKey,
-          artifactId,
-          ...(request.agentId ? { agentId: request.agentId } : {}),
-        },
-      );
-      if (!result?.artifact) {
-        if (isCurrent()) {
-          workspace.error = `Failed to load artifact ${artifactId}`;
-          requestUpdate(state);
-        }
-        return;
-      }
-      if (isCurrent()) {
-        state.handleOpenSidebar(
-          artifactSidebarContent({
+  openWorkspaceItem(
+    state,
+    workspace,
+    `artifact:${artifactId}`,
+    (request) =>
+      state.client!.request<ArtifactDownloadResult | null>("artifacts.download", {
+        sessionKey: request.sessionKey,
+        artifactId,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+      }),
+    (result) =>
+      !result.artifact
+        ? null
+        : artifactSidebarContent({
             data: result.data,
             encoding: result.encoding,
             mimeType: result.artifact.mimeType ?? "",
             title: result.artifact.title,
             url: result.url,
           }),
-        );
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        workspace.error = String(error);
-      }
-    } finally {
-      requestUpdate(state);
-    }
-  })();
+    `Failed to load artifact ${artifactId}`,
+  );
 }
 
 export function createSessionWorkspaceProps(state: AppViewState): SessionWorkspaceProps {
