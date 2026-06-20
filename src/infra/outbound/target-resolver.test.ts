@@ -290,6 +290,46 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
+  it("requires exact directory matches before preserving reserved literal targets", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      ...createChannelTestPluginBase({
+        id: "telegram",
+        label: "Telegram",
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+      }),
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+      messaging: {
+        targetResolver: {
+          reservedLiterals: ["current", "self", "this", "me"],
+          hint: "<chatId>",
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "memes-room", name: "memes" } satisfies ChannelDirectoryEntry,
+    ]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "me",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain('Reserved target "me"');
+      expect(result.error.message).toContain("Telegram");
+    }
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
   it("does not reuse directory cache entries across prepared plugin runtimes", async () => {
     const firstListGroups = vi
       .fn()

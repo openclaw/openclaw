@@ -227,6 +227,7 @@ function matchesDirectoryEntry(params: {
   entry: ChannelDirectoryEntry;
   query: string;
   plugin?: ChannelPlugin;
+  exactOnly?: boolean;
 }): boolean {
   const query = normalizeQuery(params.query);
   if (!query) {
@@ -244,7 +245,9 @@ function matchesDirectoryEntry(params: {
     ? stripTargetPrefixes(params.entry.handle, params.channel, params.plugin)
     : "";
   const candidates = [id, name, handle].map((value) => normalizeQuery(value)).filter(Boolean);
-  return candidates.some((value) => value === query || value.includes(query));
+  return candidates.some((value) =>
+    params.exactOnly ? value === query : value === query || value.includes(query),
+  );
 }
 
 function resolveMatch(params: {
@@ -252,6 +255,7 @@ function resolveMatch(params: {
   entries: ChannelDirectoryEntry[];
   query: string;
   plugin?: ChannelPlugin;
+  exactOnly?: boolean;
 }) {
   const matches = params.entries.filter((entry) =>
     matchesDirectoryEntry({
@@ -259,6 +263,7 @@ function resolveMatch(params: {
       entry,
       query: params.query,
       plugin: params.plugin,
+      exactOnly: params.exactOnly,
     }),
   );
   if (matches.length === 0) {
@@ -462,7 +467,13 @@ export async function resolveMessagingTarget(params: {
     preferLiveOnMiss: true,
     plugin,
   });
-  const match = resolveMatch({ channel: params.channel, entries, query, plugin });
+  const match = resolveMatch({
+    channel: params.channel,
+    entries,
+    query,
+    plugin,
+    exactOnly: Boolean(reservedLiteral),
+  });
   if (match.kind === "single") {
     const entry = match.entry;
     return {
