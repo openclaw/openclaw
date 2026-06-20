@@ -355,3 +355,7 @@ export type AgentsDeleteParams = {
   agentId: string;
   deleteFiles?: boolean;
 };
+
+export type AgentsSetDefaultParams = {
+  agentId: string;
+};
