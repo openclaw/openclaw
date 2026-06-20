@@ -62,13 +62,16 @@ export function getContextNoticeViewModel(
   bg: string;
   warning: boolean;
   compactRecommended: boolean;
+  isStale?: boolean;
 } | null {
-  if (session?.totalTokensFresh === false) {
-    return null;
-  }
   const used = session?.totalTokens;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
+    return null;
+  }
+  const isStale = session?.totalTokensFresh === false;
+  // Only hide the indicator if we have no data at all, not just stale data
+  if (isStale && used === 0) {
     return null;
   }
   const ratio = used / limit;
@@ -78,10 +81,13 @@ export function getContextNoticeViewModel(
     return {
       pct,
       detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
-      color: "var(--muted)",
-      bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
+      color: isStale ? "var(--muted-foreground)" : "var(--muted)",
+      bg: isStale
+        ? "color-mix(in srgb, var(--muted-foreground) 5%, transparent)"
+        : "color-mix(in srgb, var(--muted) 8%, transparent)",
       warning,
       compactRecommended: false,
+      isStale,
     };
   }
   // Read theme semantic tokens so color tracks the active theme (Dash, dark, light ...).
@@ -102,6 +108,7 @@ export function getContextNoticeViewModel(
     bg,
     warning,
     compactRecommended: ratio >= CONTEXT_COMPACT_RATIO,
+    isStale,
   };
 }
 
@@ -118,10 +125,14 @@ export function renderContextNotice(
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
   return html`
     <div
-      class="context-notice ${model.warning ? "context-notice--warning" : "context-notice--usage"}"
+      class="context-notice ${model.warning
+        ? "context-notice--warning"
+        : "context-notice--usage"} ${model.isStale ? "context-notice--stale" : ""}"
       role="status"
       style="--ctx-color:${model.color};--ctx-bg:${model.bg}"
-      title=${`Session context usage: ${model.detail} (${model.pct}%)`}
+      title=${model.isStale
+        ? `Session context usage: ${model.detail} (${model.pct}%) — updating...`
+        : `Session context usage: ${model.detail} (${model.pct}%)`}
     >
       ${model.warning
         ? html`
@@ -146,7 +157,7 @@ export function renderContextNotice(
               <span class="context-notice__meter-fill" style="width:${model.pct}%"></span>
             </span>
           `}
-      <span>${model.pct}% context used</span>
+      <span>${model.pct}% context used${model.isStale ? " (updating)" : ""}</span>
       <span class="context-notice__detail">${model.detail}</span>
       ${canRenderCompact
         ? html`

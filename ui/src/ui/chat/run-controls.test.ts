@@ -408,6 +408,26 @@ describe("context notice", () => {
         },
         200_000,
       ),
+    ).toMatchObject({
+      pct: 95,
+      detail: "190k / 200k",
+      isStale: true,
+      warning: true,
+    });
+
+    // Stale data with 0 tokens should still be hidden
+    expect(
+      getContextNoticeViewModel(
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          totalTokens: 0,
+          totalTokensFresh: false,
+          contextTokens: 200_000,
+        },
+        200_000,
+      ),
     ).toBeNull();
   });
 });
