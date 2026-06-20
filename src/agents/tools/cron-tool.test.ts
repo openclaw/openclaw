@@ -1098,6 +1098,52 @@ describe("cron tool", () => {
     });
   });
 
+  it("recovers whitespace-padded cron add keys from local tool-call parsers", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-padded-add", {
+      action: "add",
+      job: {
+        name: "Holiday Check-in",
+        description: "Casual check-in while on holiday, 2x per day",
+        "schedule ": { kind: "cron", expr: "30 10,20 * * *", tz: "Europe/Madrid" },
+        "sessionTarget ": "isolated",
+        "payload ": { kind: "agentTurn", message: "Holiday check-in." },
+        "enabled ": true,
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as Record<string, unknown>;
+    expect(Object.keys(params).every((key) => key === key.trim())).toBe(true);
+    expect(params).toMatchObject({
+      name: "Holiday Check-in",
+      description: "Casual check-in while on holiday, 2x per day",
+      schedule: { kind: "cron", expr: "30 10,20 * * *", tz: "Europe/Madrid" },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "Holiday check-in." },
+      enabled: true,
+    });
+  });
+
+  it("keeps a padded duplicate key when the canonical cron key already exists", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-padded-duplicate-add", {
+      action: "add",
+      job: {
+        name: "dup",
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        "enabled ": true,
+        enabled: false,
+        payload: { kind: "agentTurn", message: "dup test" },
+      },
+    });
+
+    // Genuine duplicates are not silently merged: the padded key survives so
+    // strict gateway validation surfaces the conflict instead of guessing.
+    const params = expectSingleGatewayCallMethod("cron.add") as Record<string, unknown>;
+    expect(params.enabled).toBe(false);
+    expect(params["enabled "]).toBe(true);
+  });
+
   it("stamps cron.add with caller sessionKey when missing", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 

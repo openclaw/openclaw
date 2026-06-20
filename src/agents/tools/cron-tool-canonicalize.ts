@@ -110,6 +110,26 @@ function repairConcatenatedCronToolKeys(value: Record<string, unknown>): void {
   delete value.sessionTargetName;
 }
 
+function repairWhitespacePaddedCronToolKeys(value: Record<string, unknown>): void {
+  // Some small/local tool-call serializers emit valid JSON where specific cron
+  // keys carry leading/trailing whitespace (e.g. `"schedule "`, `"enabled "`).
+  // Trim back onto the canonical key before strict gateway validation rejects
+  // the padded property names. Only recover known cron keys, and skip when the
+  // canonical key already exists so a genuine duplicate is left for validation
+  // instead of being silently merged.
+  for (const key of Object.keys(value)) {
+    const trimmed = key.trim();
+    if (trimmed === key || !CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) {
+      continue;
+    }
+    if (value[trimmed] !== undefined) {
+      continue;
+    }
+    value[trimmed] = value[key];
+    delete value[key];
+  }
+}
+
 function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): void {
   const atMs = typeof value === "number" ? value : Number(value);
   // Invalid/out-of-range timestamps stay raw so cron gateway validation reports the user error.
@@ -249,6 +269,7 @@ export function canonicalizeCronToolObject(
 ): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
   const next = { ...unwrapped };
+  repairWhitespacePaddedCronToolKeys(next);
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);
