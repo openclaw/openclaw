@@ -1720,3 +1720,32 @@ describe("buildGuardedModelFetch", () => {
     });
   });
 });
+
+import { isUndiciSocketError } from "./provider-transport-fetch.js";
+
+describe("isUndiciSocketError", () => {
+  it("detects direct UND_ERR_SOCKET code", () => {
+    const err = Object.assign(new Error("socket hang up"), { code: "UND_ERR_SOCKET" });
+    expect(isUndiciSocketError(err)).toBe(true);
+  });
+
+  it("detects nested UND_ERR_SOCKET in cause", () => {
+    const cause = Object.assign(new Error("socket hang up"), { code: "UND_ERR_SOCKET" });
+    const err = new TypeError("fetch failed", { cause });
+    expect(isUndiciSocketError(err)).toBe(true);
+  });
+
+  it("returns false for non-socket errors", () => {
+    expect(isUndiciSocketError(new Error("generic"))).toBe(false);
+  });
+
+  it("returns false for null/undefined", () => {
+    expect(isUndiciSocketError(null)).toBe(false);
+    expect(isUndiciSocketError(undefined)).toBe(false);
+  });
+
+  it("returns false for errors with different codes", () => {
+    const err = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+    expect(isUndiciSocketError(err)).toBe(false);
+  });
+});
