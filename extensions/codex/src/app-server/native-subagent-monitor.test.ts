@@ -11,7 +11,7 @@ import {
   CodexNativeSubagentMonitor,
   registerCodexNativeSubagentMonitor,
 } from "./native-subagent-monitor.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexServerNotification, JsonValue } from "./protocol.js";
 
 function createClient() {
   const handlers = new Set<(notification: CodexServerNotification) => Promise<void> | void>();
@@ -153,6 +153,27 @@ function nativeCompletionNotification(params: {
             }),
           },
         ],
+      },
+    },
+  };
+}
+
+function childTurnCompletedNotification(params: {
+  status: "completed" | "failed" | "interrupted";
+  error?: string;
+  turnId?: string;
+  items?: JsonValue[];
+}): CodexServerNotification {
+  const turnId = params.turnId ?? "child-turn";
+  return {
+    method: "turn/completed",
+    params: {
+      threadId: "child-thread",
+      turn: {
+        id: turnId,
+        status: params.status,
+        ...(params.items ? { items: params.items } : {}),
+        ...(params.error ? { error: { message: params.error } } : {}),
       },
     },
   };
@@ -314,12 +335,10 @@ describe("CodexNativeSubagentMonitor", () => {
     );
   });
 
-  it("delivers child agent-message completion when a native subagent becomes idle", async () => {
+  it("delivers a completed child turn with its final agent message", async () => {
     const client = createClient();
     const runtime = createRuntime();
-    const monitor = new CodexNativeSubagentMonitor(client, runtime, {
-      codexHome: "/tmp/codex-home",
-    });
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
     monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:discord:channel:C123",
@@ -329,15 +348,34 @@ describe("CodexNativeSubagentMonitor", () => {
 
     await notifyChildStarted(client);
     await client.notify({
-      method: "item/completed",
+      method: "item/started",
       params: {
         threadId: "child-thread",
+        turnId: "child-turn",
         item: {
           type: "agentMessage",
           id: "msg-child-final",
           phase: "final_answer",
-          text: "child final result",
+          text: "",
         },
+      },
+    });
+    await client.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "child-thread",
+        turnId: "child-turn",
+        itemId: "msg-child-final",
+        delta: "child ",
+      },
+    });
+    await client.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "child-thread",
+        turnId: "child-turn",
+        itemId: "msg-child-final",
+        delta: "final result",
       },
     });
 
@@ -351,6 +389,9 @@ describe("CodexNativeSubagentMonitor", () => {
       },
     });
 
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+    await client.notify(childTurnCompletedNotification({ status: "completed" }));
+
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "codex-thread:child-thread",
@@ -362,7 +403,7 @@ describe("CodexNativeSubagentMonitor", () => {
       expect.objectContaining({
         childSessionId: "child-thread",
         status: "succeeded",
-        statusLabel: "agent_message",
+        statusLabel: "turn_completed",
         result: "child final result",
       }),
     );
@@ -370,12 +411,10 @@ describe("CodexNativeSubagentMonitor", () => {
     client.close();
   });
 
-  it("does not deliver commentary-only child messages as native subagent completion", async () => {
+  it("does not deliver a commentary delta when the completion snapshot is absent", async () => {
     const client = createClient();
     const runtime = createRuntime();
-    const monitor = new CodexNativeSubagentMonitor(client, runtime, {
-      codexHome: "/tmp/codex-home",
-    });
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
     monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:discord:channel:C123",
@@ -385,9 +424,65 @@ describe("CodexNativeSubagentMonitor", () => {
 
     await notifyChildStarted(client);
     await client.notify({
+      method: "item/started",
+      params: {
+        threadId: "child-thread",
+        turnId: "child-turn",
+        item: {
+          type: "agentMessage",
+          id: "msg-child-commentary",
+          phase: "commentary",
+          text: "",
+        },
+      },
+    });
+    await client.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "child-thread",
+        turnId: "child-turn",
+        itemId: "msg-child-commentary",
+        delta: "checking now",
+      },
+    });
+    await client.notify(childTurnCompletedNotification({ status: "completed" }));
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionId: "child-thread",
+        result: "Codex native subagent completed without a final assistant message.",
+      }),
+    );
+
+    client.close();
+  });
+
+  it("does not complete commentary-only child messages before a terminal turn", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "child-thread",
+        turnId: "child-turn",
+        itemId: "msg-child-commentary",
+        delta: "checking now",
+      },
+    });
+    await client.notify({
       method: "item/completed",
       params: {
         threadId: "child-thread",
+        turnId: "child-turn",
         item: {
           type: "agentMessage",
           id: "msg-child-commentary",
@@ -406,6 +501,162 @@ describe("CodexNativeSubagentMonitor", () => {
 
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
     expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+
+    await client.notify(childTurnCompletedNotification({ status: "completed" }));
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionId: "child-thread",
+        result: "Codex native subagent completed without a final assistant message.",
+      }),
+    );
+
+    client.close();
+  });
+
+  it("delivers a completed child turn with its snapshot-only final message", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify(
+      childTurnCompletedNotification({
+        status: "completed",
+        items: [
+          {
+            id: "msg-child-snapshot",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "snapshot final result",
+          },
+        ],
+      }),
+    );
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionId: "child-thread",
+        result: "snapshot final result",
+      }),
+    );
+
+    client.close();
+  });
+
+  it("reconciles transcript text for a completed child turn without a final message", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-subagent-"));
+    const codexHome = path.join(tempDir, "codex-home");
+    const transcriptDir = path.join(codexHome, "sessions", "2026", "06", "09");
+    await fs.mkdir(transcriptDir, { recursive: true });
+    await fs.writeFile(
+      path.join(transcriptDir, "rollout-2026-06-09T10-11-12-child-thread.jsonl"),
+      [
+        JSON.stringify({
+          type: "session_meta",
+          payload: {
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: "parent-thread",
+                  depth: 1,
+                },
+              },
+            },
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-06-09T10:12:00.000Z",
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: "child turn transcript result",
+            completed_at: 1781009520,
+          },
+        }),
+        "",
+      ].join("\n"),
+    );
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+      codexHome,
+      transcriptPollDelaysMs: [60_000],
+    });
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify(childTurnCompletedNotification({ status: "completed" }));
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionId: "child-thread",
+        statusLabel: "task_complete",
+        result: "child turn transcript result",
+      }),
+    );
+
+    client.close();
+  });
+
+  it("does not reuse an interrupted child turn's message after resuming", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify({
+      method: "item/completed",
+      params: {
+        threadId: "child-thread",
+        turnId: "child-turn",
+        item: {
+          type: "agentMessage",
+          id: "msg-child-partial",
+          text: "partial child result",
+        },
+      },
+    });
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "idle" },
+      },
+    });
+    await client.notify(childTurnCompletedNotification({ status: "interrupted" }));
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+
+    await client.notify(
+      childTurnCompletedNotification({ status: "completed", turnId: "resumed-child-turn" }),
+    );
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionId: "child-thread",
+        status: "succeeded",
+        result: "Codex native subagent completed without a final assistant message.",
+      }),
+    );
 
     client.close();
   });

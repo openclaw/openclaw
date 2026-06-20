@@ -1,18 +1,58 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   assertInspectLoaded,
   assertUninstalled,
   parseDurationMs,
+  testing as probeTesting,
 } from "./plugin-lifecycle-probe-runtime.js";
 
 const tempDirs = createTempDirTracker();
 
 function makeTempDir(): string {
   return tempDirs.make("openclaw-plugin-lifecycle-probe-");
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForFile(pathToCheck: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(pathToCheck)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`Timed out waiting for ${pathToCheck}`);
+}
+
+class FakeCommandChild extends EventEmitter {
+  readonly signals: string[] = [];
+
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.signals.push(String(signal));
+    if (signal === "SIGTERM") {
+      queueMicrotask(() => this.emit("exit", 0, null));
+    }
+    return true;
+  }
 }
 
 afterEach(tempDirs.cleanup);
@@ -69,5 +109,73 @@ describe("plugin lifecycle matrix probe", () => {
 
   it("preserves disabled npm install timeout semantics", () => {
     expect(parseDurationMs("0", "600s")).toBeUndefined();
+  });
+
+  it("rejects timed commands that exit cleanly during kill grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeCommandChild();
+      const runPromise = probeTesting.runCommand("fake-command", ["install"], {
+        spawnImpl: (() => child) as unknown as typeof import("node:child_process").spawn,
+        timeoutKillGraceMs: 100,
+        timeoutMs: 10,
+      });
+      const runError = runPromise.catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      const error = await runError;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("fake-command install timed out after 10ms");
+      expect(child.signals).toEqual(["SIGTERM"]);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(child.signals).toEqual(["SIGTERM"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps fallback SIGKILL armed for ignored-stdio descendants", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = makeTempDir();
+    const descendantPidPath = path.join(dir, "descendant.pid");
+    let descendantPid: number | undefined;
+    try {
+      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+      const parentScript = [
+        "import { spawn } from 'node:child_process';",
+        "import { writeFileSync } from 'node:fs';",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "child.unref();",
+        "writeFileSync(process.env.OPENCLAW_TEST_DESCENDANT_PID, String(child.pid));",
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const run = probeTesting.runCommand(
+        process.execPath,
+        ["--input-type=module", "-e", parentScript],
+        {
+          env: { ...process.env, OPENCLAW_TEST_DESCENDANT_PID: descendantPidPath },
+          timeoutKillGraceMs: 250,
+          timeoutMs: 500,
+        },
+      );
+      await waitForFile(descendantPidPath, 2_000);
+      await sleep(300);
+
+      await expect(run).rejects.toThrow(/timed out after 500ms/u);
+
+      descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+      expect(isProcessRunning(descendantPid)).toBe(false);
+    } finally {
+      if (descendantPid && isProcessRunning(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
   });
 });

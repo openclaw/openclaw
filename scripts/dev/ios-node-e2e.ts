@@ -17,12 +17,57 @@ function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
 }
 
+function usage(): string {
+  return [
+    "Usage: bun scripts/dev/ios-node-e2e.ts --url <wss://host[:port]> --token <gateway.auth.token> [options]",
+    "Or set env: OPENCLAW_GATEWAY_URL / OPENCLAW_GATEWAY_TOKEN",
+    "",
+    "Options:",
+    "  --node <id|name-substring>  Select a connected iOS node",
+    "  --wait-seconds <n>          Seconds to wait for an iOS node (default: 25)",
+    "  --dangerous                 Include camera/screen commands",
+    "  --json                      Print JSON results",
+    "  -h, --help                  Show this help",
+  ].join("\n");
+}
+
 const argv = process.argv.slice(2);
 const getArg = (flag: string) => {
   const index = argv.indexOf(flag);
   return index === -1 ? undefined : argv[index + 1];
 };
 const hasFlag = (flag: string) => argv.includes(flag);
+const BOOLEAN_FLAGS = new Set(["--dangerous", "--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set(["--node", "--token", "--url", "--wait-seconds"]);
+
+function failCli(message: string): never {
+  writeStderrLine(message);
+  process.exit(1);
+}
+
+function validateArgs(): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        failCli(`${arg} requires a value`);
+      }
+      index += 1;
+      continue;
+    }
+    failCli(`Unknown argument: ${arg}`);
+  }
+}
+
+if (hasFlag("--help") || hasFlag("-h")) {
+  writeStdoutLine(usage());
+  process.exit(0);
+}
+validateArgs();
 
 type NodeListPayload = {
   ts?: number;
@@ -46,10 +91,7 @@ const dangerous = hasFlag("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS =
 const jsonOut = hasFlag("--json");
 
 if (!urlRaw || !token) {
-  writeStderrLine(
-    "Usage: bun scripts/dev/ios-node-e2e.ts --url <wss://host[:port]> --token <gateway.auth.token> [--node <id|name-substring>] [--dangerous] [--json]\n" +
-      "Or set env: OPENCLAW_GATEWAY_URL / OPENCLAW_GATEWAY_TOKEN",
-  );
+  writeStderrLine(usage());
   process.exit(1);
 }
 

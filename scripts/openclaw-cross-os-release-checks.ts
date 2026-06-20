@@ -83,6 +83,17 @@ for (const signal of Object.keys(CROSS_OS_SIGNAL_EXIT_CODES) as NodeJS.Signals[]
   });
 }
 
+function exitForwardedSignalWhenChildTreesDone() {
+  if (forwardedSignalExitCode === undefined || CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.size > 0) {
+    return;
+  }
+  if (forwardedSignalForceKillTimer) {
+    clearTimeout(forwardedSignalForceKillTimer);
+    forwardedSignalForceKillTimer = undefined;
+  }
+  process.exit(forwardedSignalExitCode);
+}
+
 const providerConfig = {
   openai: {
     extensionId: "openai",
@@ -2554,6 +2565,7 @@ async function configureDiscordSmoke(params) {
 export async function readBoundedCrossOsResponseText(
   response: Response,
   maxChars = CROSS_OS_FETCH_BODY_MAX_CHARS,
+  options: { signal?: AbortSignal | null } = {},
 ): Promise<string> {
   if (!response.body) {
     return "";
@@ -2563,10 +2575,11 @@ export async function readBoundedCrossOsResponseText(
   const decoder = new TextDecoder();
   let text = "";
   let truncated = false;
+  let aborted = false;
 
   try {
     while (text.length <= maxChars) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readCrossOsResponseChunk(reader, options.signal);
       if (done) {
         text += decoder.decode();
         break;
@@ -2579,8 +2592,11 @@ export async function readBoundedCrossOsResponseText(
         break;
       }
     }
+  } catch (error) {
+    aborted = options.signal?.aborted === true;
+    throw error;
   } finally {
-    if (truncated) {
+    if (truncated || aborted) {
       await reader.cancel().catch(() => undefined);
     } else {
       reader.releaseLock();
@@ -2588,6 +2604,36 @@ export async function readBoundedCrossOsResponseText(
   }
 
   return truncated ? `${text}\n[truncated]` : text;
+}
+
+function readCrossOsResponseChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal | null,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (!signal) {
+    return reader.read();
+  }
+  if (signal.aborted) {
+    throw crossOsAbortReason(signal);
+  }
+  return new Promise((resolveRead, rejectRead) => {
+    const onAbort = () => rejectRead(crossOsAbortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader
+      .read()
+      .then(resolveRead, rejectRead)
+      .finally(() => {
+        signal.removeEventListener("abort", onAbort);
+      });
+  });
+}
+
+function crossOsAbortReason(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  return new Error(typeof reason === "string" ? reason : "The operation was aborted.");
 }
 
 export function dashboardHtmlMarkerStatus(html: string): {
@@ -2647,11 +2693,12 @@ async function waitForDiscordMessage(params) {
     let response;
     let text;
     try {
+      const init = buildDiscordFetchInit(params.token);
       response = await fetch(
         `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
-        buildDiscordFetchInit(params.token),
+        init,
       );
-      text = await readBoundedCrossOsResponseText(response);
+      text = await readBoundedCrossOsResponseText(response, undefined, { signal: init.signal });
     } catch {
       await sleep(2_000);
       continue;
@@ -2680,20 +2727,21 @@ export function buildDiscordFetchInit(token, init = {}) {
 }
 
 async function postDiscordMessage(params) {
+  const init = buildDiscordFetchInit(params.token, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      content: params.content,
+      flags: 4096,
+    }),
+  });
   const response = await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages`,
-    buildDiscordFetchInit(params.token, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        content: params.content,
-        flags: 4096,
-      }),
-    }),
+    init,
   );
-  const text = await readBoundedCrossOsResponseText(response);
+  const text = await readBoundedCrossOsResponseText(response, undefined, { signal: init.signal });
   if (!response.ok) {
     throw new Error(`Failed to post Discord smoke message: ${text}`);
   }
@@ -2704,16 +2752,21 @@ async function postDiscordMessage(params) {
   }
 }
 
-async function deleteDiscordMessage(params) {
+export async function deleteDiscordMessage(params) {
   if (!params.messageId) {
     return;
   }
-  await fetch(
-    `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
-    buildDiscordFetchInit(params.token, {
-      method: "DELETE",
-    }),
-  ).catch(() => undefined);
+  try {
+    const response = await fetch(
+      `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
+      buildDiscordFetchInit(params.token, {
+        method: "DELETE",
+      }),
+    );
+    await response.body?.cancel?.().catch(() => undefined);
+  } catch {
+    // Cleanup is best-effort; the smoke result should not fail after readback succeeds.
+  }
 }
 
 async function waitForInstalledDiscordReadback(params) {
@@ -3525,10 +3578,11 @@ async function runDashboardSmoke(params) {
       attempt += 1;
       logStream.write(`${new Date().toISOString()} attempt=${attempt} url=${dashboardUrl}\n`);
       try {
+        const signal = AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS);
         const response = await fetch(dashboardUrl, {
-          signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
+          signal,
         });
-        const html = await readBoundedCrossOsResponseText(response);
+        const html = await readBoundedCrossOsResponseText(response, undefined, { signal });
         const markers = dashboardHtmlMarkerStatus(html);
         const assetUrls = resolveDashboardAssetUrls(dashboardUrl, html);
         if (response.ok && markers.ready) {
@@ -3978,6 +4032,7 @@ async function runCommandInvocation(invocation, options) {
     child.on("close", (exitCode) => {
       activeChildTree.unregister();
       if (forwardedSignalExitCode !== undefined) {
+        finalize(exitForwardedSignalWhenChildTreesDone);
         return;
       }
       finalize(() => {

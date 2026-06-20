@@ -692,6 +692,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable metrics signal export to the configured OpenTelemetry collector endpoint. Keep enabled for runtime health dashboards, and disable only if metric volume must be minimized.",
   "diagnostics.otel.logs":
     "Enable log signal export through OpenTelemetry in addition to local logging sinks. Use this when centralized log correlation is required across services and agents.",
+  "diagnostics.otel.logsExporter":
+    'Log export sink for diagnostics.otel.logs. Use "otlp" for the configured OTLP logs endpoint, "stdout" for one JSON record per stdout line in container log pipelines, and "both" when both sinks are required.',
   "diagnostics.otel.sampleRate":
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
@@ -1496,7 +1498,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.timeoutSeconds":
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 180). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
-    "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
+    "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":

@@ -68,8 +68,6 @@ function createGoogleChatSendReceipt(params: {
   });
 }
 
-export const formatAllowFromEntry = formatGoogleChatAllowFromEntry;
-
 const collectGoogleChatGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedGoogleChatAccount>({
     providerConfigPresent: (cfg) => cfg.channels?.googlechat !== undefined,
@@ -121,7 +119,7 @@ export const googlechatSecurityAdapter = {
     resolvePolicy: (account: ResolvedGoogleChatAccount) => account.config.dm?.policy,
     resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.dm?.allowFrom,
     allowFromPathSuffix: "dm.",
-    normalizeEntry: (raw: string) => formatAllowFromEntry(raw),
+    normalizeEntry: (raw: string) => formatGoogleChatAllowFromEntry(raw),
   },
   collectWarnings: collectGoogleChatSecurityWarnings,
 };
@@ -162,7 +160,7 @@ export const googlechatThreadingAdapter = {
 export const googlechatPairingTextAdapter = {
   idLabel: "googlechatUserId",
   message: PAIRING_APPROVED_MESSAGE,
-  normalizeAllowEntry: (entry: string) => formatAllowFromEntry(entry),
+  normalizeAllowEntry: (entry: string) => formatGoogleChatAllowFromEntry(entry),
   notify: async ({
     cfg,
     id,

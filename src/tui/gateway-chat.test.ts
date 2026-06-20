@@ -47,13 +47,13 @@ type ModeExecProviderFixture = {
   tokenMarker: string;
   passwordMarker: string;
   providers: {
-    tokenProvider: {
+    tokenprovider: {
       source: "exec";
       command: string;
       args: string[];
       allowInsecurePath: true;
     };
-    passwordProvider: {
+    passwordprovider: {
       source: "exec";
       command: string;
       args: string[];
@@ -85,13 +85,13 @@ async function withModeExecProviderFixture(
       tokenMarker,
       passwordMarker,
       providers: {
-        tokenProvider: {
+        tokenprovider: {
           source: "exec",
           command: process.execPath,
           args: ["-e", tokenExecProgram],
           allowInsecurePath: true,
         },
-        passwordProvider: {
+        passwordprovider: {
           source: "exec",
           command: process.execPath,
           args: ["-e", passwordExecProgram],
@@ -361,7 +361,7 @@ describe("resolveGatewayConnection", () => {
       loadConfig.mockReturnValue({
         secrets: {
           providers: {
-            fileProvider: {
+            fileprovider: {
               source: "file",
               path: secretFile,
               mode: "json",
@@ -372,7 +372,7 @@ describe("resolveGatewayConnection", () => {
         gateway: {
           mode: "local",
           auth: {
-            token: { source: "file", provider: "fileProvider", id: "/gatewayToken" },
+            token: { source: "file", provider: "fileprovider", id: "/gatewayToken" },
           },
         },
       });
@@ -396,7 +396,7 @@ describe("resolveGatewayConnection", () => {
     loadConfig.mockReturnValue({
       secrets: {
         providers: {
-          execProvider: {
+          execprovider: {
             source: "exec",
             command: process.execPath,
             args: ["-e", execProgram],
@@ -407,7 +407,7 @@ describe("resolveGatewayConnection", () => {
       gateway: {
         mode: "local",
         auth: {
-          token: { source: "exec", provider: "execProvider", id: "EXEC_GATEWAY_TOKEN" },
+          token: { source: "exec", provider: "execprovider", id: "EXEC_GATEWAY_TOKEN" },
         },
       },
     });
@@ -428,8 +428,8 @@ describe("resolveGatewayConnection", () => {
             mode: "local",
             auth: {
               mode: "token",
-              token: { source: "exec", provider: "tokenProvider", id: "TOKEN_SECRET" },
-              password: { source: "exec", provider: "passwordProvider", id: "PASSWORD_SECRET" },
+              token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
+              password: { source: "exec", provider: "passwordprovider", id: "PASSWORD_SECRET" },
             },
           },
         });
@@ -455,8 +455,8 @@ describe("resolveGatewayConnection", () => {
             mode: "local",
             auth: {
               mode: "password",
-              token: { source: "exec", provider: "tokenProvider", id: "TOKEN_SECRET" },
-              password: { source: "exec", provider: "passwordProvider", id: "PASSWORD_SECRET" },
+              token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
+              password: { source: "exec", provider: "passwordprovider", id: "PASSWORD_SECRET" },
             },
           },
         });

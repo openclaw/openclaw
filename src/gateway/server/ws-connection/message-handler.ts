@@ -184,6 +184,7 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.pair.remove",
   "device.token.rotate",
   "device.token.revoke",
+  "node.pair.remove",
 ]);
 const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
 

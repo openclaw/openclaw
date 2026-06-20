@@ -1,4 +1,5 @@
 // Measure Rpc Rtt tests cover measure rpc rtt script behavior.
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -22,6 +23,7 @@ class FakeWebSocket extends EventEmitter {
   closed = false;
   readyState = 0;
   sent: string[] = [];
+  terminated = false;
 
   constructor(
     readonly url: string,
@@ -41,6 +43,11 @@ class FakeWebSocket extends EventEmitter {
     this.readyState = 3;
     this.emit("close", 1000, "closed");
   }
+
+  terminate(): void {
+    this.terminated = true;
+    this.close();
+  }
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -58,6 +65,22 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
 
     await expect(client.waitOpen()).rejects.toThrow("gateway websocket open timeout");
     expect(FakeWebSocket.instances[0]?.closed).toBe(true);
+    expect(FakeWebSocket.instances[0]?.terminated).toBe(true);
+  });
+
+  it("rejects websocket closes before opening", async () => {
+    FakeWebSocket.instances = [];
+    const client = createGatewayClient({
+      WebSocket: FakeWebSocket,
+      openTimeoutMs: 10_000,
+      url: "ws://127.0.0.1:12345",
+    });
+
+    const opened = client.waitOpen();
+    FakeWebSocket.instances[0]?.emit("close", 1006, Buffer.from("bye"));
+
+    await expect(opened).rejects.toThrow("closed before open (1006): bye");
+    expect(FakeWebSocket.instances[0]?.closed).toBe(false);
   });
 
   it("rejects pending websocket requests when cleanup closes the client", async () => {
@@ -77,6 +100,28 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
 
     await expect(request).rejects.toThrow("gateway websocket client closed");
     expect(socket.closed).toBe(true);
+  });
+
+  it("clears pending websocket request timers when send throws synchronously", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    const client = createGatewayClient({
+      WebSocket: FakeWebSocket,
+      url: "ws://127.0.0.1:12345",
+    });
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("fake websocket was not created");
+    }
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.send = () => {
+      throw new Error("socket closed during send");
+    };
+
+    await expect(client.request("health", {}, 10_000)).rejects.toThrow("socket closed during send");
+
+    expect(vi.getTimerCount()).toBe(0);
+    client.close();
   });
 
   it("parses bounded RPC RTT options strictly", () => {
@@ -110,6 +155,20 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     for (const flag of ["--output-dir", "--repo-root", "--iterations", "--methods"]) {
       expect(() => parseArgs([flag, "--methods", "health"])).toThrow(`${flag} requires a value.`);
     }
+  });
+
+  it("prints usage for help without requiring an output directory", () => {
+    expect(parseArgs(["--help"])).toMatchObject({ help: true });
+    expect(parseArgs(["-h"])).toMatchObject({ help: true });
+
+    const result = spawnSync(process.execPath, ["scripts/measure-rpc-rtt.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/measure-rpc-rtt.mjs");
+    expect(result.stderr).toBe("");
   });
 
   it("does not publish zero-millisecond RPC RTT summaries", () => {
@@ -260,15 +319,52 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       signalCode: null,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    expect(signalGatewayProcess(child, "SIGTERM", kill)).toBe(true);
+    expect(signalGatewayProcess(child, "SIGTERM", kill, { runTaskkill })).toBe(true);
 
     if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenCalledWith(-12345, "SIGTERM");
       expect(child.kill).not.toHaveBeenCalled();
     }
+  });
+
+  it("signals Windows gateway process trees with taskkill", () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      pid: 12345,
+      signalCode: null,
+    });
+    const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    expect(
+      signalGatewayProcess(child, "SIGTERM", kill, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    expect(
+      signalGatewayProcess(child, "SIGKILL", kill, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(kill).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("treats missing gateway process groups as already exited", () => {
@@ -281,8 +377,9 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const kill = vi.fn(() => {
       throw Object.assign(new Error("no such process"), { code: "ESRCH" });
     });
+    const runTaskkill = vi.fn(() => ({ error: new Error("not found"), status: 1 }));
 
-    expect(signalGatewayProcess(child, "SIGTERM", kill)).toBe(false);
+    expect(signalGatewayProcess(child, "SIGTERM", kill, { runTaskkill })).toBe(false);
   });
 
   it("checks process group liveness instead of only the pnpm wrapper", () => {
@@ -310,12 +407,18 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       signalCode: null,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    await stopGateway(child, { killGraceMs: 1, killProcess: kill });
+    await stopGateway(child, { killGraceMs: 1, killProcess: kill, runTaskkill });
 
     if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12346", "/T"], {
+        stdio: "ignore",
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12346", "/T", "/F"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12346, 0);
       expect(kill).toHaveBeenNthCalledWith(2, -12346, "SIGTERM");
@@ -346,12 +449,23 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       }
       return true;
     });
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    await stopGateway(child, { forceKillGraceMs: 50, killGraceMs: 1, killProcess: kill });
+    await stopGateway(child, {
+      forceKillGraceMs: 50,
+      killGraceMs: 1,
+      killProcess: kill,
+      runTaskkill,
+    });
 
     if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12350", "/T"], {
+        stdio: "ignore",
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12350", "/T", "/F"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenCalledWith(-12350, "SIGKILL");
       expect(postKillLivenessChecks).toBe(2);
@@ -367,8 +481,9 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       signalCode: null,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    await stopGateway(child, { killGraceMs: 1, killProcess: kill });
+    await stopGateway(child, { killGraceMs: 1, killProcess: kill, runTaskkill });
 
     if (process.platform === "win32") {
       expect(child.kill).not.toHaveBeenCalled();
@@ -380,7 +495,8 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     }
   });
 
-  it("cleans up the gateway process group before re-raising parent signals", () => {
+  it("gives gateway process groups a grace window before re-raising parent signals", async () => {
+    vi.useFakeTimers();
     const child = Object.assign(new EventEmitter(), {
       exitCode: null,
       kill: vi.fn(),
@@ -392,24 +508,39 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       pid: 98765,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    const removeCleanup = installGatewayParentCleanup(child, {
-      killProcess: kill,
-      processLike,
-    });
-    processLike.emit("SIGTERM");
+    try {
+      const removeCleanup = installGatewayParentCleanup(child, {
+        killProcess: kill,
+        processLike,
+        runTaskkill,
+      });
+      processLike.emit("SIGTERM");
 
-    if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    } else {
-      expect(kill).toHaveBeenNthCalledWith(1, -12348, "SIGTERM");
-      expect(kill).toHaveBeenNthCalledWith(2, -12348, "SIGKILL");
-      expect(child.kill).not.toHaveBeenCalled();
+      if (process.platform === "win32") {
+        expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "12348", "/T"], {
+          stdio: "ignore",
+        });
+        expect(child.kill).not.toHaveBeenCalled();
+        expect(processLike.kill).toHaveBeenCalledWith(98765, "SIGTERM");
+      } else {
+        expect(kill).toHaveBeenNthCalledWith(1, -12348, "SIGTERM");
+        expect(kill).toHaveBeenNthCalledWith(2, -12348, 0);
+        expect(kill).not.toHaveBeenCalledWith(-12348, "SIGKILL");
+        expect(processLike.kill).not.toHaveBeenCalled();
+        removeCleanup();
+
+        await vi.advanceTimersByTimeAsync(250);
+
+        expect(kill).toHaveBeenCalledWith(-12348, "SIGKILL");
+        expect(child.kill).not.toHaveBeenCalled();
+        expect(processLike.kill).toHaveBeenCalledWith(98765, "SIGTERM");
+      }
+      expect(processLike.listenerCount("SIGTERM")).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
-    expect(processLike.kill).toHaveBeenCalledWith(98765, "SIGTERM");
-    expect(processLike.listenerCount("SIGTERM")).toBe(0);
-
-    removeCleanup();
   });
 
   it("cleans up the gateway process group on parent exit", () => {
@@ -424,15 +555,20 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       pid: 98766,
     });
     const kill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
     const removeCleanup = installGatewayParentCleanup(child, {
       killProcess: kill,
       processLike,
+      runTaskkill,
     });
     processLike.emit("exit");
 
     if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "12349", "/T"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12349, "SIGTERM");
       expect(kill).toHaveBeenNthCalledWith(2, -12349, "SIGKILL");
@@ -557,5 +693,46 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+  });
+
+  it("cancels unconsumed readiness probe response bodies", async () => {
+    const child = new EventEmitter();
+    let readyzCanceled = false;
+    let healthzCanceled = false;
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        body: {
+          async cancel() {
+            readyzCanceled = true;
+          },
+        },
+        ok: false,
+        status: 503,
+      })
+      .mockResolvedValueOnce({
+        body: {
+          async cancel() {
+            healthzCanceled = true;
+          },
+        },
+        ok: true,
+        status: 200,
+      })
+      .mockResolvedValueOnce(jsonResponse({ failing: [], ready: true }));
+
+    await waitForGatewayReady({
+      child,
+      fetchImpl,
+      port: 12345,
+      probeTimeoutMs: 7,
+      readyTimeoutMs: 50,
+      sleepMs: 1,
+      stderrPath: "/no/such/stderr.log",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(readyzCanceled).toBe(true);
+    expect(healthzCanceled).toBe(true);
   });
 });

@@ -139,8 +139,16 @@ export function fitCodexProjectedContextForTurnStart(params: {
   const context = params.promptText.slice(range.start, range.end);
   const afterContext = params.promptText.slice(range.end);
   const contextBudget = maxChars - beforeContext.length - afterContext.length;
-  const fittedContext = truncateOlderContext(context, contextBudget);
-  return `${beforeContext}${fittedContext}${afterContext}`;
+  if (contextBudget > 0) {
+    const fittedContext = truncateOlderContext(context, contextBudget);
+    return `${beforeContext}${fittedContext}${afterContext}`;
+  }
+  // The header plus the trailing user request already fill the limit, so the
+  // older context drops entirely and the remaining text must still be bounded;
+  // otherwise Codex app-server rejects the turn for exceeding
+  // MAX_USER_INPUT_TEXT_CHARS. truncateOlderContext keeps the tail, preserving
+  // the user's actual request over the older header text.
+  return truncateOlderContext(`${beforeContext}${afterContext}`, maxChars);
 }
 
 function normalizeProjectedContextRange(
@@ -457,5 +465,20 @@ function truncateOlderContext(text: string, maxChars: number): string {
     return marker.slice(0, maxChars);
   }
   tailChars = maxChars - marker.length;
-  return `${marker}${text.slice(text.length - tailChars).trimStart()}`;
+  return `${marker}${sliceTailFromCodePointBoundary(text, tailChars).trimStart()}`;
+}
+
+// Keep the kept tail at a code-point boundary so a UTF-16 surrogate pair is
+// never split at the cut: a tail start that lands on a low surrogate would
+// orphan it into U+FFFD, corrupting the first character. Dropping that unit
+// stays within maxChars (it only removes a char), so the bound still holds.
+function sliceTailFromCodePointBoundary(text: string, tailChars: number): string {
+  let start = text.length - tailChars;
+  if (start > 0 && start < text.length) {
+    const code = text.charCodeAt(start);
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      start += 1;
+    }
+  }
+  return text.slice(start);
 }

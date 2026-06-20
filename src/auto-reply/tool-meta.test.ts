@@ -2,7 +2,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { formatToolAggregate, shortenMeta } from "./tool-meta.js";
+import { formatToolAggregate } from "./tool-meta.js";
 
 // Use path.resolve so inputs match the resolved HOME on every platform.
 const home = path.resolve("/Users/test");
@@ -12,12 +12,14 @@ function withHome<T>(run: () => T): T {
 }
 
 describe("tool meta formatting", () => {
-  it("shortens meta strings with optional colon suffix", () => {
+  it("shortens home paths with optional colon suffix", () => {
     withHome(() => {
-      expect(shortenMeta(`${home}/a.txt`)).toBe("~/a.txt");
-      expect(shortenMeta(`${home}/a.txt:12`)).toBe("~/a.txt:12");
-      expect(shortenMeta(`cd ${home}/dir && ls`)).toBe("cd ~/dir && ls");
-      expect(shortenMeta("")).toBe("");
+      expect(formatToolAggregate("fs", [`${home}/a.txt`])).toContain("~/a.txt");
+      expect(formatToolAggregate("fs", [`${home}/a.txt:12`])).toContain("~/a.txt:12");
+      expect(formatToolAggregate("exec", [`cd ${home}/dir && ls`])).toContain(
+        "cd ~/dir && ls",
+      );
+      expect(formatToolAggregate("fs", [""])).toBe("🧩 Fs");
     });
   });
 

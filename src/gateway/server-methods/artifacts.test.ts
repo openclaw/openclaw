@@ -244,8 +244,12 @@ describe("artifacts RPC handlers", () => {
     expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
-        sessionFile: "/tmp/sess-main.jsonl",
+        sessionEntry: {
+          sessionFile: "/tmp/sess-main.jsonl",
+          sessionId: "sess-main",
+        },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: "/tmp/sessions.json",
       },
       expect.any(Function),
@@ -750,6 +754,127 @@ describe("artifacts RPC handlers", () => {
     });
     expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
     expect(artifacts?.[0]).not.toHaveProperty("data");
+  });
+
+  it("treats malformed direct artifact data as unsupported downloads", async () => {
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "file",
+            data: "not-base64!",
+            title: "bad.txt",
+          },
+        ],
+        __openclaw: { seq: 6 },
+      },
+    ]);
+
+    const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
+    const artifacts = expectArtifactList(calls).artifacts;
+    expect(artifacts).toHaveLength(1);
+    expectFields(artifacts?.[0], {
+      title: "bad.txt",
+    });
+    expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
+    expect(artifacts?.[0]).not.toHaveProperty("data");
+  });
+
+  it("keeps unpadded direct artifact base64 downloadable", async () => {
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "file",
+            data: "JVBERi0",
+            title: "report.pdf",
+          },
+        ],
+        __openclaw: { seq: 7 },
+      },
+    ]);
+
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    const artifact = expectArtifactList(listed.calls).artifacts?.[0];
+    const artifactId = requireNonEmptyString(artifact?.id, "expected listed artifact id");
+    expectFields(artifact, {
+      title: "report.pdf",
+      sizeBytes: 5,
+    });
+    expectFields(artifact?.download, { mode: "bytes" });
+
+    const download = await downloadArtifact({
+      sessionKey: "agent:main:main",
+      artifactId,
+    });
+    const downloadPayload = expectOkPayload(download.calls) as Record<string, unknown>;
+    expectFields(downloadPayload, {
+      encoding: "base64",
+      data: "JVBERi0=",
+    });
+  });
+
+  it("treats malformed base64 data URLs as unsupported downloads", async () => {
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            image_url: "data:image/png;base64,not-base64!",
+            alt: "bad.png",
+          },
+        ],
+        __openclaw: { seq: 7 },
+      },
+    ]);
+
+    const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
+    const artifacts = expectArtifactList(calls).artifacts;
+    expect(artifacts).toHaveLength(1);
+    expectFields(artifacts?.[0], {
+      title: "bad.png",
+    });
+    expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
+    expect(artifacts?.[0]).not.toHaveProperty("data");
+  });
+
+  it("keeps unpadded base64 data URLs downloadable", async () => {
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            image_url: "data:image/gif;base64,R0lGOD",
+            alt: "tiny.gif",
+          },
+        ],
+        __openclaw: { seq: 8 },
+      },
+    ]);
+
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    const artifact = expectArtifactList(listed.calls).artifacts?.[0];
+    const artifactId = requireNonEmptyString(artifact?.id, "expected listed artifact id");
+    expectFields(artifact, {
+      title: "tiny.gif",
+      mimeType: "image/gif",
+      sizeBytes: 4,
+    });
+    expectFields(artifact?.download, { mode: "bytes" });
+
+    const download = await downloadArtifact({
+      sessionKey: "agent:main:main",
+      artifactId,
+    });
+    const downloadPayload = expectOkPayload(download.calls) as Record<string, unknown>;
+    expectFields(downloadPayload, {
+      encoding: "base64",
+      data: "R0lGOD==",
+    });
   });
 
   it("treats unsafe artifact URLs as unsupported downloads", async () => {

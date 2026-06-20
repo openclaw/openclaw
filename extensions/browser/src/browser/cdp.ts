@@ -299,56 +299,6 @@ async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promi
   await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
 }
 
-/** Runtime.evaluate remote-object subset used by CDP helpers. */
-export type CdpRemoteObject = {
-  type: string;
-  subtype?: string;
-  value?: unknown;
-  description?: string;
-  unserializableValue?: string;
-  preview?: unknown;
-};
-
-/** Exception details surfaced from CDP Runtime.evaluate. */
-export type CdpExceptionDetails = {
-  text?: string;
-  lineNumber?: number;
-  columnNumber?: number;
-  exception?: CdpRemoteObject;
-  stackTrace?: unknown;
-};
-
-/** Evaluate JavaScript in a CDP target and return by value when possible. */
-export async function evaluateJavaScript(opts: {
-  wsUrl: string;
-  expression: string;
-  awaitPromise?: boolean;
-  returnByValue?: boolean;
-}): Promise<{
-  result: CdpRemoteObject;
-  exceptionDetails?: CdpExceptionDetails;
-}> {
-  return await withCdpSocket(opts.wsUrl, async (send) => {
-    await send("Runtime.enable").catch(() => {});
-    const evaluated = (await send("Runtime.evaluate", {
-      expression: opts.expression,
-      awaitPromise: Boolean(opts.awaitPromise),
-      returnByValue: opts.returnByValue ?? true,
-      userGesture: true,
-      includeCommandLineAPI: true,
-    })) as {
-      result?: CdpRemoteObject;
-      exceptionDetails?: CdpExceptionDetails;
-    };
-
-    const result = evaluated?.result;
-    if (!result) {
-      throw new Error("CDP Runtime.evaluate returned no result");
-    }
-    return { result, exceptionDetails: evaluated.exceptionDetails };
-  });
-}
-
 /** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
   ref: string;

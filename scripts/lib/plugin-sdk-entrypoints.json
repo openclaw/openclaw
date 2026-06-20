@@ -218,6 +218,7 @@
   "session-binding-runtime",
   "session-key-runtime",
   "session-store-runtime",
+  "session-transcript-runtime",
   "sqlite-runtime",
   "sqlite-runtime-testing",
   "session-transcript-hit",

@@ -63,11 +63,6 @@ export const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join(
   ".dreams",
   "phase-signals.json",
 );
-export const SHORT_TERM_LOCK_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "short-term-promotion.lock",
-);
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;

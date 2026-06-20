@@ -231,9 +231,8 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
-function isControlCommandThatMustNotFallback(opts: Pick<AgentCliOpts, "message">): boolean {
-  const normalized = opts.message.trim().toLowerCase();
-  return normalized === "/compact" || normalized.startsWith("/compact ");
+function isCompactControlCommand(message: string): boolean {
+  return /^\/compact(?:\s|:|$)/iu.test(message.trim());
 }
 
 function isSessionResetCommand(message: string): boolean {
@@ -839,6 +838,17 @@ export async function agentCliCommand(
   deps?: AgentCliDeps,
 ) {
   protectJsonStdout(opts);
+  // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
+  // rejects CLI-originated senders, so the message would fall through to a
+  // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
+  // Fail loudly and point at the first-class command instead of no-opping.
+  if (isCompactControlCommand(opts.message)) {
+    runtime.error?.(
+      "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
+    );
+    runtime.exit(1);
+    return undefined;
+  }
   const dispatchOpts = await normalizeSessionKeyOptsForDispatch(opts);
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
@@ -876,9 +886,6 @@ export async function agentCliCommand(
         throw err;
       }
       if (isGatewayAgentTimeoutError(err)) {
-        if (isControlCommandThatMustNotFallback(dispatchOpts)) {
-          throw err;
-        }
         const fallbackAgentId = await resolveAgentIdForGatewayTimeoutFallback(dispatchOpts);
         const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
         runtime.error?.(

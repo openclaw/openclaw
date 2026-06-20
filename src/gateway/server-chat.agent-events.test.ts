@@ -44,6 +44,7 @@ import {
   createAgentEventHandler,
   createChatRunState,
   createSessionEventSubscriberRegistry,
+  createChatAbortMarker,
   createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
   type AgentEventHandlerOptions,
@@ -2762,7 +2763,7 @@ describe("agent event handler", () => {
       sessionKey: "session-aborted",
       clientRunId: "client-aborted",
     });
-    chatRunState.abortedRuns.set("client-aborted", 1_000);
+    chatRunState.abortedRuns.set("client-aborted", createChatAbortMarker());
 
     handler({
       runId: "run-aborted",
@@ -2775,6 +2776,81 @@ describe("agent event handler", () => {
     expect(chatRunState.abortedRuns.has("client-aborted")).toBe(true);
     expect(chatRunState.registry.peek("run-aborted")).toBeUndefined();
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      name: "older timestamp",
+      marker: () => 1_000,
+    },
+    {
+      name: "same-millisecond older sequence",
+      marker: () => ({ abortedAtMs: 2_000, sequence: -1 }),
+    },
+  ])(
+    "ignores stale aborted markers from older same-key runs for fresh chat lifecycle events ($name)",
+    ({ marker }) => {
+      const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({ now: 2_000 });
+      chatRunState.abortedRuns.set("client-stale-abort", marker());
+      chatRunState.registry.add("run-stale-abort", {
+        sessionKey: "session-stale-abort",
+        clientRunId: "client-stale-abort",
+      });
+
+      handler({
+        runId: "run-stale-abort",
+        seq: 1,
+        stream: "assistant",
+        ts: 2_100,
+        data: { text: "Fresh output", delta: "Fresh output" },
+      });
+      handler({
+        runId: "run-stale-abort",
+        seq: 2,
+        stream: "lifecycle",
+        ts: 2_200,
+        data: { phase: "end" },
+      });
+
+      const chatCalls = chatBroadcastCalls(broadcast);
+      expect(chatCalls).toHaveLength(2);
+      const deltaPayload = chatCalls[0][1];
+      const finalPayload = chatCalls[1][1];
+      expect(deltaPayload.state).toBe("delta");
+      expect(finalPayload.state).toBe("final");
+      expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
+      expect(chatRunState.abortedRuns.has("client-stale-abort")).toBe(true);
+      expect(chatRunState.registry.peek("run-stale-abort")).toBeUndefined();
+    },
+  );
+
+  it("honors same-millisecond abort markers from the current same-key run", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({ now: 3_000 });
+    chatRunState.registry.add("run-current-abort", {
+      sessionKey: "session-current-abort",
+      clientRunId: "client-current-abort",
+    });
+    chatRunState.abortedRuns.set("client-current-abort", createChatAbortMarker());
+
+    handler({
+      runId: "run-current-abort",
+      seq: 1,
+      stream: "assistant",
+      ts: 3_100,
+      data: { text: "Suppressed output", delta: "Suppressed output" },
+    });
+    handler({
+      runId: "run-current-abort",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 3_200,
+      data: { phase: "end", aborted: true, stopReason: "rpc" },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
+    expect(chatRunState.abortedRuns.has("client-current-abort")).toBe(true);
+    expect(chatRunState.registry.peek("run-current-abort")).toBeUndefined();
   });
 
   it("keeps live session setting metadata at the top level for lifecycle updates", async () => {
@@ -3166,7 +3242,7 @@ describe("agent event handler", () => {
       data: { phase: "error", error: "provider failed" },
     });
 
-    expect(chatRunState.registry.peek("run-fallback-retry")).toEqual({
+    expect(chatRunState.registry.peek("run-fallback-retry")).toMatchObject({
       sessionKey: "session-fallback",
       clientRunId: "run-fallback-client",
     });
@@ -3189,7 +3265,7 @@ describe("agent event handler", () => {
 
     vi.advanceTimersByTime(100);
 
-    expect(chatRunState.registry.peek("run-fallback-retry")).toEqual({
+    expect(chatRunState.registry.peek("run-fallback-retry")).toMatchObject({
       sessionKey: "session-fallback",
       clientRunId: "run-fallback-client",
     });

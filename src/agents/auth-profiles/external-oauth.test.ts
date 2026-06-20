@@ -1,12 +1,12 @@
 /**
  * Tests runtime external OAuth overlays.
  * Covers provider plugin profiles, external CLI scoped discovery, persistence
- * rules, and compatibility aliases.
+ * rules, and external CLI bootstrap policy.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import { testing, overlayExternalAuthProfiles } from "./external-auth.js";
-import { readManagedExternalCliCredential } from "./external-cli-sync.js";
+import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
@@ -186,7 +186,7 @@ describe("auth external oauth helpers", () => {
     expect(overlaidProfile.access).toBe("fresh-cli-access-token");
     expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
     expect(overlaidProfile.accountId).toBe("acct-cli");
-    const managedCredential = readManagedExternalCliCredential({
+    const managedCredential = readExternalCliBootstrapCredential({
       profileId: "openai:default",
       credential: tokenlessCredential,
     });

@@ -132,11 +132,6 @@ export class SlashCommandRegistry {
     }));
   }
 
-  /** Return all pre-dispatch commands. */
-  getPreDispatchCommands(): Map<string, SlashCommand> {
-    return this.commands;
-  }
-
   /** Return all registered commands (both maps) for help listing. */
   getAllCommands(): Map<string, SlashCommand> {
     const all = new Map<string, SlashCommand>();

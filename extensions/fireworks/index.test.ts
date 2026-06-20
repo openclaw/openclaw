@@ -15,9 +15,10 @@ import {
   FIREWORKS_DEFAULT_CONTEXT_WINDOW,
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
-  FIREWORKS_K2_6_MODEL_ID,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
+
+const FIREWORKS_KIMI_K2_6_MODEL_ID = "accounts/fireworks/models/kimi-k2p6";
 
 function createFireworksDefaultRuntimeModel(params: { reasoning: boolean }): ProviderRuntimeModel {
   return {
@@ -65,7 +66,7 @@ describe("fireworks provider plugin", () => {
       throw new Error("expected Fireworks catalog models");
     }
     expect(models.map((model) => model.id)).toEqual([
-      FIREWORKS_K2_6_MODEL_ID,
+      FIREWORKS_KIMI_K2_6_MODEL_ID,
       FIREWORKS_DEFAULT_MODEL_ID,
     ]);
     expect(models[0]?.reasoning).toBe(false);
@@ -144,7 +145,7 @@ describe("fireworks provider plugin", () => {
 
   it("defers manifest catalog models to core static-catalog resolution", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
-    for (const modelId of [FIREWORKS_K2_6_MODEL_ID, FIREWORKS_DEFAULT_MODEL_ID]) {
+    for (const modelId of [FIREWORKS_KIMI_K2_6_MODEL_ID, FIREWORKS_DEFAULT_MODEL_ID]) {
       const resolved = provider.resolveDynamicModel?.(
         createProviderDynamicModelContext({
           provider: "fireworks",
@@ -172,7 +173,7 @@ describe("fireworks provider plugin", () => {
     expect(
       provider.resolveThinkingProfile?.({
         provider: "fireworks",
-        modelId: FIREWORKS_K2_6_MODEL_ID,
+        modelId: FIREWORKS_KIMI_K2_6_MODEL_ID,
       }),
     ).toEqual({
       levels: [{ id: "off" }],
@@ -184,7 +185,7 @@ describe("fireworks provider plugin", () => {
         modelId: "accounts/fireworks/models/qwen3.6-plus",
       }),
     ).toBeUndefined();
-    expect(resolveThinkingProfile({ modelId: FIREWORKS_K2_6_MODEL_ID })).toEqual({
+    expect(resolveThinkingProfile({ modelId: FIREWORKS_KIMI_K2_6_MODEL_ID })).toEqual({
       levels: [{ id: "off" }],
       defaultLevel: "off",
     });

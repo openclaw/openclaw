@@ -273,6 +273,46 @@ snapshots:
     expect(signal?.aborted).toBe(true);
   });
 
+  it("cancels stalled successful bulk advisory response bodies on request timeout", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull() {
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: 5,
+      fetchImpl: async () => new Response(body, { status: 200 }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels stalled failed bulk advisory response bodies on request timeout", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull() {
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: 5,
+      fetchImpl: async () => new Response(body, { status: 500, statusText: "Internal Error" }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
+    expect(cancelled).toBe(true);
+  });
+
   it("bounds successful bulk advisory response bodies", async () => {
     let cancelled = false;
     const body = new ReadableStream({

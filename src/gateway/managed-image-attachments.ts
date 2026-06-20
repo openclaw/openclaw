@@ -731,8 +731,9 @@ async function getSessionManagedOutgoingAttachmentIndex(
   const readResult = await readSessionMessagesWithSourceAsync(
     {
       agentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId,
+      sessionKey,
       storePath,
     },
     {

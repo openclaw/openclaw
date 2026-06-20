@@ -12,6 +12,20 @@ describe("plugin npm runtime build args", () => {
     expect(parseSingleBuildArgs(["extensions/slack"])).toEqual({
       packageDir: "extensions/slack",
     });
+    expect(parseSingleBuildArgs(["--", "extensions/slack"])).toEqual({
+      packageDir: "extensions/slack",
+    });
+  });
+
+  it("returns help before resolving build targets", () => {
+    expect(parseBulkBuildArgs(["--help"])).toEqual({
+      help: true,
+      packageDirs: [],
+    });
+    expect(parseSingleBuildArgs(["--help"])).toEqual({
+      help: true,
+      packageDir: "",
+    });
   });
 
   it("rejects missing or option-looking package targets", () => {
@@ -21,6 +35,9 @@ describe("plugin npm runtime build args", () => {
     );
     expect(() => parseSingleBuildArgs(["--package"])).toThrow(
       "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>",
+    );
+    expect(() => parseSingleBuildArgs(["extensions/slack", "extra"])).toThrow(
+      "unexpected plugin npm runtime build argument: extra",
     );
   });
 });

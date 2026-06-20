@@ -88,7 +88,7 @@ async function withTaskCommandStateDir(
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
     async (state) => {
-      taskRegistryMaintenance.stopTaskRegistryMaintenanceForTests();
+      taskRegistryMaintenance.stopTaskRegistryMaintenance();
       taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
       resetConfigRuntimeState();
       resetDetachedTaskLifecycleRuntimeForTests();
@@ -99,7 +99,7 @@ async function withTaskCommandStateDir(
       try {
         await run(state);
       } finally {
-        taskRegistryMaintenance.stopTaskRegistryMaintenanceForTests();
+        taskRegistryMaintenance.stopTaskRegistryMaintenance();
         taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
         resetConfigRuntimeState();
         resetDetachedTaskLifecycleRuntimeForTests();
@@ -119,7 +119,7 @@ describe("tasks commands", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    taskRegistryMaintenance.stopTaskRegistryMaintenanceForTests();
+    taskRegistryMaintenance.stopTaskRegistryMaintenance();
     taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
     resetConfigRuntimeState();
     resetDetachedTaskLifecycleRuntimeForTests();
