@@ -431,6 +431,10 @@ function collectErrorCodes(err: unknown): Set<string> {
       if (typeof code === "string" && code.trim()) {
         codes.add(code.trim().toUpperCase());
       }
+      const errno = (current as { errno?: unknown }).errno;
+      if (typeof errno === "number") {
+        codes.add(String(errno));
+      }
       const cause = (current as { cause?: unknown }).cause;
       if (cause && !seen.has(cause)) {
         queue.push(cause);
@@ -473,6 +477,10 @@ function shouldUseTelegramTransportFallback(err: unknown): boolean {
         : "",
     codes: collectErrorCodes(err),
   };
+  // EADDRNOTAVAIL 是本地 socket 分配失败，换远程 IP 无效
+  if (ctx.codes.has("EADDRNOTAVAIL") || ctx.codes.has("99")) {
+    return false;
+  }
   const hasFetchFailedEnvelope = ctx.message.includes("fetch failed");
   const hasKnownNetworkCode = FALLBACK_RETRY_ERROR_CODES.some((code) => ctx.codes.has(code));
   return hasKnownNetworkCode || (hasFetchFailedEnvelope && ctx.codes.size === 0);

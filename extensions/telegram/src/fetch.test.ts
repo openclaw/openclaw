@@ -113,6 +113,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
+let shouldRetryTelegramTransportFallback: typeof import("./fetch.js").shouldRetryTelegramTransportFallback;
 const tempDirs: string[] = [];
 
 type TelegramDispatcherPolicy = NonNullable<
@@ -125,8 +126,12 @@ type ExplicitProxyTelegramDispatcherPolicy = Extract<
 >;
 
 beforeAll(async () => {
-  ({ resolveTelegramApiBase, resolveTelegramFetch, resolveTelegramTransport } =
-    await import("./fetch.js"));
+  ({
+    resolveTelegramApiBase,
+    resolveTelegramFetch,
+    resolveTelegramTransport,
+    shouldRetryTelegramTransportFallback,
+  } = await import("./fetch.js"));
 });
 
 beforeEach(() => {
@@ -1325,6 +1330,26 @@ describe("resolveTelegramFetch", () => {
       instance.destroy.mockRejectedValueOnce(new Error("already destroyed"));
 
       await expect(transport.close()).resolves.toBeUndefined();
+    });
+  });
+
+  describe("shouldRetryTelegramTransportFallback", () => {
+    it("returns false for EADDRNOTAVAIL code string", () => {
+      const err = buildFetchFallbackError("EADDRNOTAVAIL");
+      expect(shouldRetryTelegramTransportFallback(err)).toBe(false);
+    });
+
+    it("returns false for EADDRNOTAVAIL numeric errno", () => {
+      const connectErr = Object.assign(new Error("connect EADDRNOTAVAIL api.telegram.org:443"), {
+        errno: 99,
+      });
+      const err = Object.assign(new TypeError("fetch failed"), { cause: connectErr });
+      expect(shouldRetryTelegramTransportFallback(err)).toBe(false);
+    });
+
+    it("returns true for other network errors", () => {
+      const err = buildFetchFallbackError("ENETUNREACH");
+      expect(shouldRetryTelegramTransportFallback(err)).toBe(true);
     });
   });
 });
