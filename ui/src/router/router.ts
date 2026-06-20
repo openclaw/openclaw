@@ -483,10 +483,13 @@ export function createRouter<
       return;
     }
     const canonical = locationForPath(compiled.pathForRoute(routeId, basePath));
+    const target = matched
+      ? normalized
+      : { ...canonical, search: normalized.search, hash: normalized.hash };
     if (!matched && history) {
-      history.replace({ ...canonical, search: normalized.search, hash: normalized.hash });
+      history.replace(target);
     }
-    await navigate(routeId, context, { history: "none", revalidate }, normalized);
+    await navigate(routeId, context, { history: "none", revalidate }, target);
   };
 
   const invalidate = (routeId?: TRouteId) => {
@@ -558,9 +561,16 @@ export function createRouter<
       const normalized = normalizeLocation(location);
       const matched = compiled.routeIdFromPath(normalized.pathname, basePath);
       const routeId = matched ?? defaultRouteId;
-      return routeId
-        ? navigate(routeId, context, { history: "none" }, normalized)
-        : Promise.resolve();
+      const target = routeId
+        ? matched
+          ? normalized
+          : {
+              ...locationForPath(compiled.pathForRoute(routeId, basePath)),
+              search: normalized.search,
+              hash: normalized.hash,
+            }
+        : normalized;
+      return routeId ? navigate(routeId, context, { history: "none" }, target) : Promise.resolve();
     },
     revalidate(
       context: TLoadContext,
