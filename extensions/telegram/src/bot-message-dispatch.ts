@@ -1401,6 +1401,12 @@ export const dispatchTelegramMessage = async ({
       if (segment.lane === "reasoning") {
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
+        // When reasoning lane has no stream (/reasoning on, not stream),
+        // deliver thinking text via the answer lane so it persists. (#94937)
+        if (!lanes[segment.lane].stream) {
+          updateDraftFromPartial(answerLane, segment.update);
+          continue;
+        }
       }
       updateDraftFromPartial(lanes[segment.lane], segment.update);
     }
