@@ -206,6 +206,13 @@ export type CronServiceState = {
   restartRecoveryPending: boolean;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutRestartNotified: boolean;
+  /**
+   * #92460: dedicated low-frequency timer that GCs stale task-route leases.
+   * Kept separate from `timer` (which is the per-tick cron scheduling wake-up)
+   * so lease cleanup still runs even when the cron scheduler is disabled and
+   * so its lifetime is decoupled from any individual `armTimer` cycle.
+   */
+  leaseGcTimer: NodeJS.Timeout | null;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -230,6 +237,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutRestartNotified: false,
+    leaseGcTimer: null,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
