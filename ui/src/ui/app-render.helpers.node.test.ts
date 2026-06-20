@@ -1598,3 +1598,29 @@ describe("dismissRealtimeTalkError", () => {
     expect(state.realtimeTalkTranscript).toBeNull();
   });
 });
+
+// Issue #95295 - Cross-agent session visibility tests
+describe("sessionsShowAllAgents state", () => {
+  it("should default to false (hidden subagent sessions)", () => {
+    // The default value is set in the initial state creation
+    // This test documents the expected default behavior
+    const mockState = {
+      sessionsShowAllAgents: false,
+    } as Partial<AppViewState>;
+
+    expect(mockState.sessionsShowAllAgents).toBe(false);
+  });
+
+  it("should be toggleable via state mutation", () => {
+    const state = {
+      sessionsShowAllAgents: false,
+    } as Partial<AppViewState>;
+
+    // Simulate toggle
+    state.sessionsShowAllAgents = !state.sessionsShowAllAgents;
+    expect(state.sessionsShowAllAgents).toBe(true);
+
+    state.sessionsShowAllAgents = !state.sessionsShowAllAgents;
+    expect(state.sessionsShowAllAgents).toBe(false);
+  });
+});

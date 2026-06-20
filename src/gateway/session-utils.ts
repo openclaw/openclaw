@@ -2532,6 +2532,7 @@ function filterSessionEntries(params: {
   const { cfg, store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
+  const includeAllAgents = opts.includeAllAgents === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
@@ -2552,7 +2553,9 @@ function filterSessionEntries(params: {
       if (!includeUnknown && key === "unknown") {
         return false;
       }
-      if (agentId) {
+      // When includeAllAgents is true, skip agent-scoped filtering to allow
+      // cross-agent session discovery (e.g., subagent sessions from other agents)
+      if (agentId && !includeAllAgents) {
         if (key === "global") {
           return includeGlobal;
         }

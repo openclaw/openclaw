@@ -532,6 +532,8 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
   const selectedAgentId = resolveSidebarSelectedAgentId(state);
   const shouldFilterByAgent =
     normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
+  const showAllAgents = state.sessionsShowAllAgents === true;
+
   return (state.sessionsResult?.sessions ?? [])
     .filter(
       (row) =>
@@ -540,7 +542,10 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
         row.kind !== "unknown" &&
         row.kind !== "cron" &&
         !isCronSessionKey(row.key) &&
+        // When showAllAgents is enabled, allow subagent sessions to appear
+        !showAllAgents &&
         !isSubagentSessionKey(row.key) &&
+        !showAllAgents &&
         !row.spawnedBy &&
         (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
     )

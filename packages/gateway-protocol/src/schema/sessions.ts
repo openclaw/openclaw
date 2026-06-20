@@ -185,6 +185,11 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /**
+     * When true, include sessions from all agents and subagent sessions.
+     * Bypasses the default agent-scoped filtering for cross-agent visibility.
+     */
+    includeAllAgents: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

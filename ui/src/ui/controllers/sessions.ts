@@ -1118,10 +1118,12 @@ async function loadSessionsOnce(
       normalizeSessionsFilterOverride(overrides?.limit) ??
       parseSessionsFilterInteger(state.sessionsFilterLimit);
     const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
+    const showAllAgents = overrides?.showAllAgents ?? state.sessionsShowAllAgents;
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
       configuredAgentsOnly,
+      includeAllAgents: showAllAgents,
     };
     const agentId = overrides?.agentId?.trim();
     const resultAgentId = agentId ? normalizeAgentId(agentId) : null;
@@ -1349,4 +1351,14 @@ export async function restoreSessionFromCheckpoint(
     "sessions.compaction.restore",
     "Restore this session to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
   );
+}
+
+/**
+ * Toggle the showAllAgents mode for cross-agent session visibility.
+ * When enabled, includes sessions from all agents and subagent sessions.
+ */
+export async function toggleShowAllAgents(state: SessionsState): Promise<void> {
+  state.sessionsShowAllAgents = !state.sessionsShowAllAgents;
+  // Reload sessions with the new filter setting
+  await loadSessions(state);
 }
