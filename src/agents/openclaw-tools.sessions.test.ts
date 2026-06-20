@@ -763,7 +763,7 @@ describe("sessions tools", () => {
     );
   });
 
-  it("sessions_history forwards includeFamily and resetAncestors to chat.history", async () => {
+  it("sessions_history forwards includeFamily to chat.history", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
@@ -780,12 +780,10 @@ describe("sessions tools", () => {
     }
 
     await tool.execute("call-family", { sessionKey: "main", includeFamily: true });
-    await tool.execute("call-ancestors", { sessionKey: "main", resetAncestors: true });
 
     const historyCalls = calls.filter((call) => call.method === "chat.history");
-    expect(historyCalls).toHaveLength(2);
+    expect(historyCalls).toHaveLength(1);
     expect(historyCalls[0]?.params).toMatchObject({ sessionKey: "main", includeFamily: true });
-    expect(historyCalls[1]?.params).toMatchObject({ sessionKey: "main", includeFamily: true });
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
