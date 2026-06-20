@@ -508,7 +508,7 @@ function renderControlDirectorSessionDiagnostics(row: GatewaySessionRow) {
       ${summary.details.length > 0
         ? html`
             <dl class="session-control-director-diagnostics__grid">
-              ${summary.details.slice(0, 12).map(
+              ${summary.details.slice(0, 18).map(
                 (detail) => html`
                   <div>
                     <dt>${detail.label}</dt>

@@ -119,6 +119,12 @@ export function summarizeControlDirectorDiagnostics(
   const details: ControlDirectorDiagnosticsDetail[] = [];
 
   addDetail(details, "Truth gate", truthAudit?.status);
+  addDetail(details, "Claim", blockedTruthClaim?.claim ?? truthAudit?.claims[0]?.claim);
+  addDetail(
+    details,
+    "Claim hash",
+    blockedTruthClaim?.claimHash ?? truthAudit?.claims[0]?.claimHash,
+  );
   addDetail(
     details,
     "Claim type",
@@ -133,6 +139,11 @@ export function summarizeControlDirectorDiagnostics(
     details,
     "Missing evidence",
     blockedTruthClaim?.missingCondition ?? firstMissing(truthAudit?.missing),
+  );
+  addDetail(
+    details,
+    "Rewrite",
+    blockedTruthClaim?.rewriteAction ?? truthAudit?.claims[0]?.rewriteAction,
   );
   addDetail(details, "Judge", mission?.judgeCompletionGate?.status ?? approval?.judgeStatus);
   addDetail(details, "Judge verdict", approval?.judgeVerdict);

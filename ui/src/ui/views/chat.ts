@@ -1696,7 +1696,7 @@ function renderControlDirectorDiagnosticsCard(session: GatewaySessionRow | undef
       ${summary.details.length > 0
         ? html`
             <dl class="chat-control-director-diagnostics__grid">
-              ${summary.details.slice(0, 8).map(
+              ${summary.details.slice(0, 16).map(
                 (detail) => html`
                   <div>
                     <dt>${detail.label}</dt>
