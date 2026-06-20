@@ -187,12 +187,17 @@ export const streamOpenAICompletions: StreamFunction<
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
       const blocks = output.content as StreamingBlock[];
+      // A block can be finished mid-stream (native reasoning sealed at the
+      // text-lane transition) and again by the end-of-stream loop; guard so its
+      // *_end event is emitted exactly once.
+      const finishedBlocks = new Set<StreamingBlock>();
       const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
       const finishBlock = (block: StreamingBlock) => {
         const contentIndex = getContentIndex(block);
-        if (contentIndex === -1) {
+        if (contentIndex === -1 || finishedBlocks.has(block)) {
           return;
         }
+        finishedBlocks.add(block);
         if (block.type === "text") {
           stream.push({
             type: "text_end",
@@ -249,7 +254,19 @@ export const streamOpenAICompletions: StreamFunction<
         }
         return thinkingBlock;
       };
+      // Native-thinking providers (e.g. deepseek `reasoning_content`) stream the
+      // reasoning lane, then switch to the answer via `content` with no boundary
+      // event. Seal the open thought when visible text begins so `thinking_end`
+      // precedes the answer; tag-based <think> reasoning has no native thinking
+      // block (it is closed by the partitioner), so this is a no-op there.
+      const sealNativeReasoningBeforeText = () => {
+        if (thinkingBlock && !reasoningTagTextPartitioner.isInsideReasoning()) {
+          finishBlock(thinkingBlock);
+          thinkingBlock = null;
+        }
+      };
       const appendTextDelta = (delta: string) => {
+        sealNativeReasoningBeforeText();
         const block = ensureTextBlock();
         block.text += delta;
         stream.push({
@@ -403,6 +420,9 @@ export const streamOpenAICompletions: StreamFunction<
 
           if (choice?.delta?.tool_calls) {
             flushPartitionedContent();
+            // The tool-call lane is also a reasoning boundary; seal the thought
+            // before toolcall_start so thinking_end never trails the action.
+            sealNativeReasoningBeforeText();
             for (const toolCall of choice.delta.tool_calls) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
