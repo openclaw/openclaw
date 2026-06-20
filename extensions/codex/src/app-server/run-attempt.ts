@@ -378,11 +378,15 @@ async function runCodexAgentEndHook(
   params: EmbeddedRunAttemptParams,
   hookParams: CodexAgentEndHookParams,
 ): Promise<void> {
+  const sideEffectParams = {
+    ...hookParams,
+    ctx: { ...hookParams.ctx, config: params.config },
+  };
   if (shouldAwaitCodexAgentEndHook(params)) {
-    await awaitAgentEndSideEffects(hookParams);
+    await awaitAgentEndSideEffects(sideEffectParams);
     return;
   }
-  runAgentEndSideEffects(hookParams);
+  runAgentEndSideEffects(sideEffectParams);
 }
 
 export async function runCodexAppServerAttempt(

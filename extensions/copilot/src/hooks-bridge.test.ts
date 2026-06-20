@@ -75,6 +75,24 @@ describe("createHooksBridge", () => {
     });
   });
 
+  it("reports the original prompt when a native prompt hook fails", async () => {
+    const observedPrompt = vi.fn();
+    const hooks = createHooksBridge(
+      {
+        onUserPromptSubmitted: async () => {
+          throw new Error("prompt hook failed");
+        },
+        onHookError: () => undefined,
+      },
+      { onUserPromptSubmitted: observedPrompt },
+    )!;
+
+    await expect(
+      hooks.onUserPromptSubmitted!({ ...hookBase, prompt: "hello" }, { sessionId: "s" }),
+    ).resolves.toBeUndefined();
+    expect(observedPrompt).toHaveBeenCalledWith({ prompt: "hello" });
+  });
+
   it("isolates synchronous and asynchronous handler failures", async () => {
     const onHookError = vi.fn();
     const hooks = createHooksBridge({
