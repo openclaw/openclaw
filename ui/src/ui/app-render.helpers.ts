@@ -729,7 +729,7 @@ export function dismissChatError(state: AppViewState) {
 
 function isPersistedSessionRow(row: SessionsListResult["sessions"][number]): boolean {
   const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : "";
-  return Boolean(sessionId || typeof row.updatedAt === "number");
+  return Boolean(sessionId);
 }
 
 function isFallbackMainSessionKey(state: AppViewState, sessionKey: string): boolean {

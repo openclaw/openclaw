@@ -180,7 +180,7 @@ function createChatSessionState(overrides: Partial<AppViewState> = {}) {
       path: "",
       count: 1,
       defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: [row({ key: "agent:ops:main" })],
+      sessions: [row({ key: "agent:ops:main", sessionId: "session-ops-main" })],
     },
     settings,
     applySettings(next: typeof settings) {
@@ -881,7 +881,7 @@ describe("createChatSession", () => {
         path: "",
         count: 1,
         defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-        sessions: [row({ key: "global", kind: "global" })],
+        sessions: [row({ key: "global", kind: "global", sessionId: "session-global" })],
       },
     });
     createSessionAndRefreshMock.mockResolvedValue("agent:work:dashboard:new-chat");
@@ -956,6 +956,43 @@ describe("createChatSession", () => {
         count: 1,
         defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
         sessions: [row({ key: "agent:ops:main", updatedAt: null })],
+      },
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, { source: "user" });
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
+      state,
+      {
+        agentId: "ops",
+        parentSessionKey: undefined,
+        emitCommandHooks: undefined,
+      },
+      {
+        activeMinutes: 120,
+        limit: 50,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+        agentId: "ops",
+      },
+    );
+    expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
+  });
+
+  it("does not use an updatedAt-only current session row as a parent", async () => {
+    const state = createChatSessionState({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "agent:ops:main", updatedAt: 123 })],
       },
     });
     createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
