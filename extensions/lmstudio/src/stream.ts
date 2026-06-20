@@ -144,6 +144,22 @@ function withLmstudioResolvedModelKey(
   };
 }
 
+function resolveLmstudioModelKeyFromError(error: unknown): string | undefined {
+  let current = error;
+  const seen = new Set<object>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const record = current as { cause?: unknown; resolvedModelKey?: unknown };
+    const resolvedModelKey =
+      typeof record.resolvedModelKey === "string" ? record.resolvedModelKey.trim() : "";
+    if (resolvedModelKey) {
+      return resolvedModelKey;
+    }
+    current = record.cause;
+  }
+  return undefined;
+}
+
 function createPreloadKey(params: {
   baseUrl: string;
   modelKey: string;
@@ -248,6 +264,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
                     cause: error,
                     consecutiveFailures: entry.consecutiveFailures,
                     cooldownMs: entry.untilMs - Date.now(),
+                    resolvedModelKey: resolveLmstudioModelKeyFromError(error),
                   });
                 },
               )
@@ -269,6 +286,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
             consecutiveFailures?: number;
             cooldownMs?: number;
           };
+          resolvedModelKey = resolveLmstudioModelKeyFromError(error);
           const cause = annotated.cause ?? error;
           const failures = annotated.consecutiveFailures ?? 1;
           const cooldownSec = Math.max(0, Math.round((annotated.cooldownMs ?? 0) / 1000));

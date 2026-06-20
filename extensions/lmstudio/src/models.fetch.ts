@@ -27,6 +27,10 @@ type LmstudioLoadResponse = {
   status?: string;
 };
 
+type LmstudioResolvedModelKeyError = {
+  resolvedModelKey: string;
+};
+
 type FetchLmstudioModelsResult = {
   reachable: boolean;
   status?: number;
@@ -77,6 +81,19 @@ function asLmstudioModelWire(value: unknown): LmstudioModelWire {
     throw new Error("LM Studio model list: malformed JSON response");
   }
   return value as LmstudioModelWire;
+}
+
+function withResolvedLmstudioModelKey(
+  error: unknown,
+  resolvedModelKey: string,
+): Error & LmstudioResolvedModelKeyError {
+  if (error instanceof Error) {
+    return Object.assign(error, { resolvedModelKey });
+  }
+  return Object.assign(new Error(String(error)), {
+    cause: error,
+    resolvedModelKey,
+  });
 }
 
 /** Fetches /api/v1/models and reports transport reachability separately from HTTP status. */
@@ -240,42 +257,48 @@ export async function ensureLmstudioModelLoaded(params: {
     return canonicalModelKey;
   }
 
-  const { response, release } = await fetchLmstudioEndpoint({
-    url: `${baseUrl}/api/v1/models/load`,
-    init: {
-      method: "POST",
-      headers: buildLmstudioAuthHeaders({
-        apiKey: params.apiKey,
-        headers: params.headers,
-        json: true,
-      }),
-      body: JSON.stringify({
-        model: canonicalModelKey,
-        // Ask LM Studio to load with our default target, capped to the model's own limit.
-        context_length: contextLengthForLoad,
-      }),
-    },
-    timeoutMs,
-    fetchImpl: params.fetchImpl,
-    ssrfPolicy: params.ssrfPolicy,
-    auditContext: "lmstudio-model-load",
-  });
   try {
-    if (!response.ok) {
-      const body = await readResponseTextLimited(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES);
-      throw new Error(`LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`);
-    }
-    let payload: LmstudioLoadResponse;
+    const { response, release } = await fetchLmstudioEndpoint({
+      url: `${baseUrl}/api/v1/models/load`,
+      init: {
+        method: "POST",
+        headers: buildLmstudioAuthHeaders({
+          apiKey: params.apiKey,
+          headers: params.headers,
+          json: true,
+        }),
+        body: JSON.stringify({
+          model: canonicalModelKey,
+          // Ask LM Studio to load with our default target, capped to the model's own limit.
+          context_length: contextLengthForLoad,
+        }),
+      },
+      timeoutMs,
+      fetchImpl: params.fetchImpl,
+      ssrfPolicy: params.ssrfPolicy,
+      auditContext: "lmstudio-model-load",
+    });
     try {
-      payload = (await response.json()) as LmstudioLoadResponse;
-    } catch (cause) {
-      throw new Error("LM Studio model load returned malformed JSON", { cause });
+      if (!response.ok) {
+        const body = await readResponseTextLimited(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES);
+        throw new Error(
+          `LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`,
+        );
+      }
+      let payload: LmstudioLoadResponse;
+      try {
+        payload = (await response.json()) as LmstudioLoadResponse;
+      } catch (cause) {
+        throw new Error("LM Studio model load returned malformed JSON", { cause });
+      }
+      if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
+        throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
+      }
+    } finally {
+      await release();
     }
-    if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
-      throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
-    }
-  } finally {
-    await release();
+  } catch (error) {
+    throw withResolvedLmstudioModelKey(error, canonicalModelKey);
   }
   return canonicalModelKey;
 }

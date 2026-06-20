@@ -516,6 +516,42 @@ describe("lmstudio-models", () => {
     expectLoadModelKey(fetchMock, canonicalKey);
   });
 
+  it("keeps the canonical model key on load failures after variant discovery", async () => {
+    const canonicalKey = "gemma-4-e4b-it-ultra-uncensored-heretic";
+    const variantKey = `${canonicalKey}@q4_k_m`;
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [
+              {
+                type: "llm",
+                key: canonicalKey,
+                variants: [variantKey],
+                selected_variant: variantKey,
+                loaded_instances: [],
+              },
+            ],
+          }),
+        };
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return new Response("load failed", { status: 503 });
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    const error = await ensureLmstudioModelLoaded({
+      baseUrl: "http://localhost:1234/v1",
+      modelKey: variantKey,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ resolvedModelKey: canonicalKey });
+  });
+
   it("preserves a suffixed key when LM Studio advertises it as the model key", async () => {
     const suffixedKey = "local/special-model@q4_k_m";
     const fetchMock = createModelLoadFetchMock({

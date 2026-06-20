@@ -319,6 +319,27 @@ describe("lmstudio stream wrapper", () => {
     expect(baseStream).toHaveBeenCalledTimes(1);
   });
 
+  it("streams with the canonical model key when preload fails after discovery", async () => {
+    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(
+      Object.assign(new Error("load failed"), {
+        resolvedModelKey: "gemma-4-e4b-it-ultra-uncensored-heretic",
+      }),
+    );
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const stream = runWrappedLmstudioStream(wrapped, {
+      id: "lmstudio/gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m",
+    });
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expect(baseStream).toHaveBeenCalledTimes(1);
+    expectBaseStreamModelFields(baseStream, {
+      provider: "lmstudio",
+      id: "gemma-4-e4b-it-ultra-uncensored-heretic",
+    });
+  });
+
   it("skips native model preload when provider params disable it", async () => {
     const baseStream = buildDoneStreamFn();
     const wrapped = wrapLmstudioInferencePreload({
