@@ -146,10 +146,10 @@ export class HyperlinkMarkdown implements Component {
 
   constructor(
     text: string,
-    private paddingX: number,
-    private paddingY: number,
-    private theme: MarkdownTheme,
-    private defaultTextStyle?: DefaultTextStyle,
+    paddingX: number,
+    paddingY: number,
+    theme: MarkdownTheme,
+    defaultTextStyle?: DefaultTextStyle,
   ) {
     this.inner = createCodeAwareMarkdown(text, paddingX, paddingY, theme, defaultTextStyle);
     this.urls = extractUrls(text);
