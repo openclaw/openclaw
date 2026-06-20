@@ -3057,11 +3057,13 @@ data class GatewayLogEntry(
 )
 
 private val gatewayAnsiControlPattern = Regex("\\u001B\\[[0-?]*[ -/]*[@-~]")
-private val gatewayVisibleSgrPattern = Regex("\\[(?:0|\\d{1,3};\\d{1,3}(?:;\\d{1,3})*)m")
+private val gatewayEscapedAnsiControlPattern = Regex("""\\u001[Bb]\[[0-?]*[ -/]*[@-~]""")
+private val gatewayVisibleSgrPattern = Regex("\\[(?:0|\\d{1,3}(?:;\\d{1,3})*)m(?!])")
 
 internal fun sanitizeGatewayLogText(value: String): String =
   value
     .replace(gatewayAnsiControlPattern, "")
+    .replace(gatewayEscapedAnsiControlPattern, "")
     .replace(gatewayVisibleSgrPattern, "")
 
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()

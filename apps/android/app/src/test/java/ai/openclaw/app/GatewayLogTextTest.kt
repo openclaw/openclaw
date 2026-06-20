@@ -21,6 +21,22 @@ class GatewayLogTextTest {
   }
 
   @Test
+  fun sanitizeGatewayLogTextRemovesSingleParameterVisibleSgrFragments() {
+    assertEquals(
+      "error and bold",
+      sanitizeGatewayLogText("[31merror[0m and [1mbold[0m"),
+    )
+  }
+
+  @Test
+  fun sanitizeGatewayLogTextRemovesJsonEscapedAnsiSgrSequences() {
+    assertEquals(
+      """{"1":"hindsight: Skipping retain"}""",
+      sanitizeGatewayLogText("""{"1":"\u001b[38;5;103mhindsight:\u001b[0m Skipping retain"}"""),
+    )
+  }
+
+  @Test
   fun sanitizeGatewayLogTextKeepsPlainBracketedText() {
     assertEquals(
       "cache ttl [5m] expired",
