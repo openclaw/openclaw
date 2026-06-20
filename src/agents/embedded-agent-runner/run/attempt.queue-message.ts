@@ -17,6 +17,44 @@ export type EmbeddedAgentActiveSessionSteerTarget = {
 /** Default wait for a steered user message to appear in the active transcript. */
 export const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
+export type EmbeddedAgentSteerDeliveryOptions = {
+  debounceMs?: number;
+  deliveryTimeoutMs?: number;
+  waitForTranscriptCommit?: boolean;
+  getLastDebounceQueuedAtMs?: () => number;
+  ensureStillAccepting?: () => void;
+};
+
+export function normalizeQueuedSteeringDebounceMs(debounceMs: unknown): number {
+  return typeof debounceMs === "number" && Number.isFinite(debounceMs)
+    ? Math.max(0, Math.floor(debounceMs))
+    : 0;
+}
+
+export async function waitForQueuedSteeringDebounce(
+  debounceMs: unknown,
+  getLastQueuedAtMs?: () => number,
+): Promise<boolean> {
+  const delayMs = normalizeQueuedSteeringDebounceMs(debounceMs);
+  if (delayMs <= 0) {
+    return false;
+  }
+  const fallbackLastQueuedAtMs = Date.now();
+  await new Promise<void>((resolve) => {
+    const check = () => {
+      const sinceLastQueued = Date.now() - (getLastQueuedAtMs?.() ?? fallbackLastQueuedAtMs);
+      if (sinceLastQueued >= delayMs) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(check, delayMs - sinceLastQueued);
+      timer.unref?.();
+    };
+    check();
+  });
+  return true;
+}
+
 function extractQueuedUserMessageText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
@@ -218,8 +256,10 @@ export async function steerAndWaitForTranscriptCommit(
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  options: { deliveryTimeoutMs?: number; waitForTranscriptCommit?: boolean } | undefined,
+  options: EmbeddedAgentSteerDeliveryOptions | undefined,
 ): Promise<void> {
+  await waitForQueuedSteeringDebounce(options?.debounceMs, options?.getLastDebounceQueuedAtMs);
+  options?.ensureStillAccepting?.();
   if (options?.waitForTranscriptCommit !== true) {
     await activeSession.steer(text);
     return;

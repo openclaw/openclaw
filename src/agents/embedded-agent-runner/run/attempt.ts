@@ -3430,16 +3430,33 @@ export async function runEmbeddedAttempt(
         externalAbort = true;
         abortRun();
       };
+      let lastQueuedSteeringAtMs = 0;
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
       } = {
         kind: "embedded",
         queueMessage: async (text: string, options) => {
+          lastQueuedSteeringAtMs = Date.now();
           if (options?.steeringMode) {
             activeSession.agent.steeringMode = options.steeringMode;
           }
-          await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
+          await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, {
+            ...options,
+            getLastDebounceQueuedAtMs: () => lastQueuedSteeringAtMs,
+            ensureStillAccepting: () => {
+              if (!activeSession.isStreaming) {
+                throw new Error(
+                  "active session stopped streaming before queued steering could be delivered",
+                );
+              }
+              if (subscription.isCompacting()) {
+                throw new Error(
+                  "active session started compacting before queued steering could be delivered",
+                );
+              }
+            },
+          });
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),

@@ -2,11 +2,110 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelQueuedSteeringMessage,
+  normalizeQueuedSteeringDebounceMs,
   steerAndWaitForTranscriptCommit,
+  steerActiveSessionWithOptionalDeliveryWait,
   type EmbeddedAgentActiveSessionSteerTarget,
 } from "./attempt.queue-message.js";
 
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it("normalizes queued steering debounce durations", () => {
+    expect(normalizeQueuedSteeringDebounceMs(undefined)).toBe(0);
+    expect(normalizeQueuedSteeringDebounceMs(Number.NaN)).toBe(0);
+    expect(normalizeQueuedSteeringDebounceMs(-5)).toBe(0);
+    expect(normalizeQueuedSteeringDebounceMs(12.8)).toBe(12);
+  });
+
+  it("waits for the configured steering debounce before queueing", async () => {
+    vi.useFakeTimers();
+    try {
+      const steer = vi.fn(async () => {});
+      const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+        getSteeringMessages: () => [],
+        steer,
+        subscribe: () => () => {},
+      };
+
+      const queued = steerActiveSessionWithOptionalDeliveryWait(activeSession, "delayed steer", {
+        debounceMs: 50,
+      });
+
+      await Promise.resolve();
+      expect(steer).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(49);
+      expect(steer).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(queued).resolves.toBeUndefined();
+      expect(steer).toHaveBeenCalledWith("delayed steer");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits until the active steering debounce window is quiet", async () => {
+    vi.useFakeTimers();
+    try {
+      const steer = vi.fn(async () => {});
+      const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+        getSteeringMessages: () => [],
+        steer,
+        subscribe: () => () => {},
+      };
+      let lastQueuedAtMs = Date.now();
+      const startQueuedSteer = (text: string) =>
+        steerActiveSessionWithOptionalDeliveryWait(activeSession, text, {
+          debounceMs: 50,
+          getLastDebounceQueuedAtMs: () => lastQueuedAtMs,
+        });
+
+      const first = startQueuedSteer("first steer");
+      await vi.advanceTimersByTimeAsync(30);
+      lastQueuedAtMs = Date.now();
+      const second = startQueuedSteer("second steer");
+
+      await vi.advanceTimersByTimeAsync(49);
+      expect(steer).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+      expect(steer).toHaveBeenCalledTimes(2);
+      expect(steer).toHaveBeenCalledWith("first steer");
+      expect(steer).toHaveBeenCalledWith("second steer");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rechecks active-run acceptance after steering debounce", async () => {
+    vi.useFakeTimers();
+    try {
+      const steer = vi.fn(async () => {});
+      const ensureStillAccepting = vi.fn(() => {
+        throw new Error("active run stopped");
+      });
+      const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+        getSteeringMessages: () => [],
+        steer,
+        subscribe: () => () => {},
+      };
+
+      const queued = steerActiveSessionWithOptionalDeliveryWait(activeSession, "stale steer", {
+        debounceMs: 50,
+        ensureStillAccepting,
+      });
+      const rejection = expect(queued).rejects.toThrow("active run stopped");
+
+      await vi.advanceTimersByTimeAsync(50);
+      await rejection;
+      expect(ensureStillAccepting).toHaveBeenCalledOnce();
+      expect(steer).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("waits for the queued user message_end transcript boundary", async () => {
     // A queued steer is only durable once the user message_end event lands in
     // the active transcript.
