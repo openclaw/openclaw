@@ -642,10 +642,10 @@ export function createCopilotAgentHarness(
                 cleanup: Promise<DeferredCompactionCleanupOutcome>;
                 sdkSessionId: string;
               }) => {
-                const tracked = trackedSessions.get(openclawSessionId);
-                const stored = lookupStoredBinding(options?.sessionStore, openclawSessionId);
-                const ownsTrackedSession = tracked?.sdkSessionId === sdkSessionId;
-                const ownsStoredSession = stored?.sdkSessionId === sdkSessionId;
+                const trackedBinding = trackedSessions.get(openclawSessionId);
+                const storedBinding = lookupStoredBinding(options?.sessionStore, openclawSessionId);
+                const ownsTrackedSession = trackedBinding?.sdkSessionId === sdkSessionId;
+                const ownsStoredSession = storedBinding?.sdkSessionId === sdkSessionId;
                 if (!ownsTrackedSession && !ownsStoredSession) {
                   return;
                 }

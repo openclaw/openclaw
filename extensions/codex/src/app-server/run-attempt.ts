@@ -1101,12 +1101,12 @@ export async function runCodexAppServerAttempt(
     };
   };
   let promptBuild = await buildPromptFromCurrentInputs();
-  const decorateCodexTurnPromptText = (promptBuild: {
+  const decorateCodexTurnPromptText = (promptBuildResult: {
     prompt: string;
     promptInputRange?: { start: number; end: number };
   }) => {
     const turnPromptText = prependCodexOpenClawPromptContext(
-      promptBuild.prompt,
+      promptBuildResult.prompt,
       openClawPromptContext,
       {
         preservePromptWithoutContext:
@@ -1115,19 +1115,19 @@ export async function runCodexAppServerAttempt(
       },
     );
     const projectedRanges = resolveShiftedPromptContextRange(
-      promptBuild.prompt,
-      promptBuild.promptInputRange,
+      promptBuildResult.prompt,
+      promptBuildResult.promptInputRange,
       turnPromptText,
     );
     const preservedRange =
       resolveShiftedPromptInputRange(
-        promptBuild.prompt,
-        promptBuild.promptInputRange,
+        promptBuildResult.prompt,
+        promptBuildResult.promptInputRange,
         turnPromptText,
       ) ??
       resolveCodexDeliveryHintPreservedInputRange({
-        prompt: promptBuild.prompt,
-        promptInputRange: promptBuild.promptInputRange,
+        prompt: promptBuildResult.prompt,
+        promptInputRange: promptBuildResult.promptInputRange,
         decoratedPrompt: turnPromptText,
       });
     return fitCodexProjectedContextForTurnStart({

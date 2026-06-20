@@ -1540,7 +1540,7 @@ describe("createCopilotAgentHarness", () => {
       await harness.runAttempt(makeCompactParams());
       const result = await harness.compact?.(makeCompactParams());
 
-      expect(pool.acquire).not.toHaveBeenCalled();
+      expect(pool.acquire.mock.calls).toHaveLength(0);
       expect(result).toEqual({
         ok: false,
         compacted: false,

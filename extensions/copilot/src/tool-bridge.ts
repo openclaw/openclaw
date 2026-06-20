@@ -424,7 +424,7 @@ export function convertOpenClawToolToSdkTool(
   };
   const notifyToolCompleted = (completion: CopilotToolCompletion) => {
     try {
-      void Promise.resolve(ctx.onToolCompleted?.(completion)).catch((error) => {
+      void Promise.resolve(ctx.onToolCompleted?.(completion)).catch((error: unknown) => {
         console.warn("[copilot-tool-bridge] onToolCompleted handler threw; continuing", error);
       });
     } catch (error) {

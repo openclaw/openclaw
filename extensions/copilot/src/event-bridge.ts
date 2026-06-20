@@ -263,12 +263,7 @@ export function attachEventBridge(
       return compactionChain;
     },
     async awaitCompactionCompletion() {
-      // Background compaction can outlive session.idle. Keep the observer
-      // attached until its completion callback has run before releasing the session.
-      while (activeCompactionCount > 0) {
-        await compactionIdle;
-      }
-      await compactionChain;
+      await awaitStableCompaction();
     },
     awaitSessionIdle() {
       return observedSessionIdle ? Promise.resolve() : sessionIdle;
@@ -337,6 +332,20 @@ export function attachEventBridge(
     }
     const queued = compactionChain.then(callback, callback);
     compactionChain = queued.catch(() => undefined);
+  }
+
+  async function awaitStableCompaction(): Promise<void> {
+    const idle = activeCompactionCount > 0 ? compactionIdle : undefined;
+    if (idle) {
+      await idle;
+    }
+    const callbacks = compactionChain;
+    await callbacks;
+    // Compaction events can arrive while an earlier hook callback settles.
+    // Recheck both queues before teardown so the root observer stays attached.
+    if (activeCompactionCount > 0 || compactionChain !== callbacks) {
+      await awaitStableCompaction();
+    }
   }
 }
 

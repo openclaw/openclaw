@@ -723,22 +723,22 @@ export async function runCopilotAttempt(
     }
     bridge = attachEventBridge(session, {
       onAssistantDelta: input.onAssistantDelta,
-      onCompactionStart: () => {
+      onCompactionStart: async () => {
         const sessionFile = readString(input.sessionFile);
         if (!sessionFile) {
           return;
         }
-        return runAgentHarnessBeforeCompactionHook({
+        await runAgentHarnessBeforeCompactionHook({
           sessionFile,
           ctx: hookContext,
         });
       },
-      onCompactionComplete: ({ messagesRemoved, success }) => {
+      onCompactionComplete: async ({ messagesRemoved, success }) => {
         const sessionFile = readString(input.sessionFile);
         if (!success || !sessionFile) {
           return;
         }
-        return runAgentHarnessAfterCompactionHook({
+        await runAgentHarnessAfterCompactionHook({
           sessionFile,
           compactedCount: messagesRemoved ?? -1,
           ctx: hookContext,

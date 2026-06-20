@@ -108,6 +108,12 @@ function flushAsync() {
   return tick().then(tick).then(tick);
 }
 
+function waitForEventLoopTurn(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 function getPromptErrorCode(result: AgentHarnessAttemptResult): string | undefined {
   return (result.promptError as { code?: string } | undefined)?.code;
 }
@@ -343,7 +349,7 @@ describe("runCopilotAttempt", () => {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitForEventLoopTurn();
 
     expect(beforePromptBuild).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "hello" }),
@@ -499,7 +505,7 @@ describe("runCopilotAttempt", () => {
     expect(sdk.sessions[0]?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
     expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
     expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
-    expect(pool.release).toHaveBeenCalledTimes(1);
+    expect(pool.release.mock.calls).toHaveLength(1);
   });
 
   it("cancels retained compaction when the caller aborts after a turn result", async () => {
@@ -602,7 +608,7 @@ describe("runCopilotAttempt", () => {
     await runCopilotAttempt(makeParams({ hooksConfig: { onUserPromptSubmitted } } as never), {
       pool: makeFakePool(sdk),
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitForEventLoopTurn();
 
     expect(onUserPromptSubmitted).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "hello" }),
@@ -668,7 +674,7 @@ describe("runCopilotAttempt", () => {
         pool: makeFakePool(sdk),
       },
     );
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitForEventLoopTurn();
 
     expect(result.aborted).toBe(true);
     expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
@@ -695,7 +701,7 @@ describe("runCopilotAttempt", () => {
       settled = true;
       return result;
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitForEventLoopTurn();
 
     expect(agentEnd).toHaveBeenCalledTimes(1);
     expect(settled).toBe(false);
@@ -1935,7 +1941,7 @@ describe("runCopilotAttempt", () => {
     expect(sdk.sessions[0]?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
     expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
     expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
-    expect(pool.release).toHaveBeenCalledTimes(1);
+    expect(pool.release.mock.calls).toHaveLength(1);
   });
 
   it("cancels deferred cleanup when the timed-out caller aborts", async () => {
