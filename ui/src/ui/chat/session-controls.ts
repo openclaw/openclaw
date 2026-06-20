@@ -94,7 +94,7 @@ export function renderChatSessionSelect(
   const agentSelect = compact ? "" : renderChatAgentSelect(state, onSwitchSession, agentOptions);
   const sessionSwitcherOnly = options.sessionSwitcherOnly ?? false;
   const modelSelect = sessionSwitcherOnly ? "" : renderChatModelSelect(state);
-  const quotaPill = sessionSwitcherOnly ? "" : renderChatQuotaPill(state);
+  const quotaPill = compact ? "" : renderChatQuotaPill(state);
   const surface = options.surface ?? "desktop";
   const selectedSessionLabel = resolveSelectedChatSessionLabel(state, sessionGroups);
   const pickerOpen = state.chatSessionPickerOpen && state.chatSessionPickerSurface === surface;

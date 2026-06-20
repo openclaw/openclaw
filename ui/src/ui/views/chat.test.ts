@@ -420,6 +420,26 @@ function createChatHeaderState(
   return { state, request };
 }
 
+function createProviderUsageAuthStatus(): NonNullable<AppViewState["modelAuthStatusResult"]> {
+  return {
+    ts: Date.now(),
+    providers: [
+      {
+        provider: "openai",
+        displayName: "Codex",
+        status: "ok",
+        profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+        usage: {
+          windows: [
+            { label: "3h", usedPercent: 18 },
+            { label: "Week", usedPercent: 72 },
+          ],
+        },
+      },
+    ],
+  };
+}
+
 async function flushTasks() {
   await vi.dynamicImportSettled();
 }
@@ -3363,23 +3383,7 @@ describe("chat session controls", () => {
 
   it("shows provider quota in the chat header when usage data is loaded", () => {
     const { state } = createChatHeaderState();
-    state.modelAuthStatusResult = {
-      ts: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-          usage: {
-            windows: [
-              { label: "3h", usedPercent: 18 },
-              { label: "Week", usedPercent: 72 },
-            ],
-          },
-        },
-      ],
-    };
+    state.modelAuthStatusResult = createProviderUsageAuthStatus();
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
@@ -3391,6 +3395,46 @@ describe("chat session controls", () => {
     quota?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }));
 
     expect(state.setTab).toHaveBeenCalledWith("usage");
+  });
+
+  it("shows provider quota in the sidebar session switcher", () => {
+    const { state } = createChatHeaderState();
+    state.modelAuthStatusResult = createProviderUsageAuthStatus();
+    const container = document.createElement("div");
+    render(
+      renderChatSessionSelect(state, () => undefined, {
+        sessionSwitcherOnly: true,
+        surface: "sidebar",
+      }),
+      container,
+    );
+
+    const row = container.querySelector<HTMLElement>(".chat-controls__session-row");
+    const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
+    expect(row?.classList.contains("chat-controls__session-row--session-switcher")).toBe(true);
+    expect(row?.classList.contains("chat-controls__session-row--has-quota")).toBe(true);
+    expect(container.querySelector('[data-chat-model-select="true"]')).toBeNull();
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 28%");
+    expect(quota?.getAttribute("title")).toContain("Codex · Week");
+  });
+
+  it("hides provider quota in the compact sidebar session switcher", () => {
+    const { state } = createChatHeaderState();
+    state.modelAuthStatusResult = createProviderUsageAuthStatus();
+    const container = document.createElement("div");
+    render(
+      renderChatSessionSelect(state, () => undefined, {
+        compact: true,
+        sessionSwitcherOnly: true,
+        surface: "sidebar",
+      }),
+      container,
+    );
+
+    const row = container.querySelector<HTMLElement>(".chat-controls__session-row");
+    expect(row?.classList.contains("chat-controls__session-row--compact")).toBe(true);
+    expect(row?.classList.contains("chat-controls__session-row--has-quota")).toBe(false);
+    expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {

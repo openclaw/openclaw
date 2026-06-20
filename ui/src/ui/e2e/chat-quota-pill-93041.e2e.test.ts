@@ -88,18 +88,27 @@ describeE2e("Control UI #93041 desktop chat quota pill (mocked Gateway E2E)", ()
     const fixture = await openChat(authStatusWithUsage);
     const { page } = fixture;
     try {
-      const pill = page.locator('[data-chat-provider-usage="true"]');
-      await pill.waitFor({ state: "visible" });
+      const sidebarPill = page.locator('.sidebar-session-select [data-chat-provider-usage="true"]');
+      await sidebarPill.waitFor({ state: "visible" });
+      const composerPill = page
+        .locator('.agent-chat__composer-controls [data-chat-provider-usage="true"]')
+        .first();
+      await composerPill.waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(artifactDir, "01-chat-with-pill.png") });
       await page
         .locator(".agent-chat__composer-controls")
         .first()
         .screenshot({ path: path.join(artifactDir, "02-composer-controls.png") });
+      await page
+        .locator(".sidebar-session-select")
+        .screenshot({ path: path.join(artifactDir, "03-sidebar-session-select.png") });
 
-      const text = (await pill.textContent())?.replace(/\s+/g, " ").trim();
-      expect(text).toContain("Usage");
-      expect(await pill.getAttribute("href")).toBe("/usage");
-      expect(await pill.getAttribute("title")).toContain("Codex");
+      const sidebarText = (await sidebarPill.textContent())?.replace(/\s+/g, " ").trim();
+      const composerText = (await composerPill.textContent())?.replace(/\s+/g, " ").trim();
+      expect(sidebarText).toContain("Usage");
+      expect(composerText).toContain("Usage");
+      expect(await sidebarPill.getAttribute("href")).toBe("/usage");
+      expect(await sidebarPill.getAttribute("title")).toContain("Codex");
     } finally {
       await closeChat(fixture);
     }
