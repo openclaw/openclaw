@@ -349,17 +349,20 @@ export async function resolveDeliveryTarget(
     allowFrom: effectiveAllowFrom,
   });
   if (!docked.ok) {
-    return {
-      ok: false,
-      channel,
-      to: undefined,
-      accountId,
-      threadId: explicitThreadId,
-      mode,
-      error: docked.error,
-    };
+    if (!toCandidate || !docked.error.message.includes("Reserved target")) {
+      return {
+        ok: false,
+        channel,
+        to: undefined,
+        accountId,
+        threadId: explicitThreadId,
+        mode,
+        error: docked.error,
+      };
+    }
+  } else {
+    toCandidate = docked.to;
   }
-  toCandidate = docked.to;
   const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
     cfg,
     channel,
