@@ -7,7 +7,7 @@ type VectorWriteDb = {
   };
 };
 
-const vectorToBlob = (embedding: number[]): Buffer =>
+export const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
 
 export function replaceMemoryVectorRow(params: {
