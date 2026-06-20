@@ -996,8 +996,18 @@ async function finishPreparedManualRun(
   try {
     let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
     try {
+      // #92460 P1 #1 (post-review): pass the lease key (`manual:...` for
+      // queued manual runs, else the same `cron:...` task ledger id) through
+      // the execution pipeline so `runIsolatedAgentJob` and the resolver
+      // (`resolveDeliveryTarget` → `getActiveTaskRouteLease(jobPayload.runId)`)
+      // look up the lease under the SAME id that `tryCreateManualTaskRun`
+      // acquired it under. Previously this passed `taskRunId` (the
+      // `cron:` task ledger id) which made the resolver miss the lease for
+      // queued manual runs (`enqueueRun` → `runId = "manual:..."`). The task
+      // ledger row stays under `cron:` so downstream run-log readers do not
+      // see `manual:`-prefixed rows; only the resolver-bound run id changes.
       coreResult = await executeJobCoreWithTimeout(state, executionJob, {
-        runId: taskRunId,
+        runId,
         activeJobMarker: prepared.activeJobMarker,
       });
     } catch (err) {

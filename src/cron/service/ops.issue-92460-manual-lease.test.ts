@@ -217,4 +217,39 @@ describe("manual cron route-lease lifecycle — issue #92460 P1 manual path", ()
       }
     });
   });
+
+  it("forwards the manual: runId through executeJobCoreWithTimeout to runIsolatedAgentJob", async () => {
+    // ClawSweeper P1 #1 (post-7fea99fdb8): the prior cut acquired the lease
+    // under the `manual:` id but `finishPreparedManualRun` still passed
+    // `runId: taskRunId` (the `cron:` id) to `executeJobCoreWithTimeout`,
+    // so the resolver's `getActiveTaskRouteLease(jobPayload.runId)` looked
+    // up the wrong key. This test pins the alignment end-to-end: capture
+    // the `runId` arg that `runIsolatedAgentJob` receives and assert it
+    // matches the `manual:` id (not the `cron:` task ledger id).
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-20T12:00:00.000Z");
+    const manualRunId = `manual:isolated-92460-pipe:${now}:1`;
+
+    await withStateDirForStorePath(storePath, async () => {
+      await writeCronStoreSnapshot({
+        storePath,
+        jobs: [createIsolatedCronJobWithDelivery(now, "isolated-92460-pipe")],
+      });
+      const capturedRunIds: Array<string | undefined> = [];
+      const state = createOkIsolatedCronState({ storePath, now });
+      // Override runIsolatedAgentJob so we can capture its runId arg.
+      state.deps.runIsolatedAgentJob = vi.fn(async (params) => {
+        capturedRunIds.push(params.runId);
+        return { status: "ok" as const, summary: "ok" };
+      });
+
+      await run(state, "isolated-92460-pipe", "force", { runId: manualRunId });
+
+      expect(capturedRunIds).toHaveLength(1);
+      expect(capturedRunIds[0]).toBe(manualRunId);
+      // The internal `cron:` task ledger id (which `tryCreateManualTaskRun`
+      // returns) must NOT be the runId that reached the resolver pipeline.
+      expect(capturedRunIds[0]).not.toBe(`cron:isolated-92460-pipe:${now}`);
+    });
+  });
 });
