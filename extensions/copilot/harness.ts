@@ -628,14 +628,14 @@ export function createCopilotAgentHarness(
                 const stored = lookupStoredBinding(options?.sessionStore, openclawSessionId);
                 const ownsTrackedSession = tracked?.sdkSessionId === sdkSessionId;
                 const ownsStoredSession = stored?.sdkSessionId === sdkSessionId;
+                if (!ownsTrackedSession && !ownsStoredSession) {
+                  return;
+                }
                 trackDeferredCompactionCleanup({
                   abort,
                   cleanup,
                   sessionId: openclawSessionId,
                 });
-                if (!ownsTrackedSession && !ownsStoredSession) {
-                  return;
-                }
                 // The attempt retains this SDK session until its background
                 // compaction resolves. Preserve its binding for a successful
                 // completion, but do not let a new turn resume it yet.

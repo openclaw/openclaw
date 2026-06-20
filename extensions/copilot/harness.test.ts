@@ -700,6 +700,61 @@ describe("createCopilotAgentHarness", () => {
       expect(sessionStore.store.delete).toHaveBeenCalledWith("oc-sess-reuse");
     });
 
+    it("ignores deferred cleanup from a session replaced by an overlapping attempt", async () => {
+      const firstAttemptFinished = createDeferred<void>();
+      const staleCleanup = createDeferred<"aborted" | "completed" | "deadline">();
+      let firstAttemptDeps:
+        | {
+            onDeferredCompaction?: (info: {
+              abort: () => void;
+              cleanup: Promise<"aborted" | "completed" | "deadline">;
+              sdkSessionId: string;
+            }) => void;
+          }
+        | undefined;
+      let attempt = 0;
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        attempt += 1;
+        if (attempt === 1) {
+          deps.onSessionEstablished?.({
+            sdkSessionId: "sdk-sess-stale",
+            pooledClient: { key: {} as any, client: {} as any },
+            sessionConfig: TEST_SESSION_CONFIG,
+          });
+          firstAttemptDeps = deps;
+          await firstAttemptFinished.promise;
+        } else if (attempt === 2) {
+          deps.onSessionEstablished?.({
+            sdkSessionId: "sdk-sess-current",
+            pooledClient: { key: {} as any, client: {} as any },
+            sessionConfig: TEST_SESSION_CONFIG,
+          });
+        }
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({ pool: makePoolMock() });
+
+      const firstAttempt = harness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      await flushAsyncWork();
+      await harness.runAttempt(makeAttemptParams({ runId: "t2" }));
+      firstAttemptDeps?.onDeferredCompaction?.({
+        abort: () => undefined,
+        cleanup: staleCleanup.promise,
+        sdkSessionId: "sdk-sess-stale",
+      });
+      firstAttemptFinished.resolve();
+      await firstAttempt;
+
+      await harness.runAttempt(makeAttemptParams({ runId: "t3" }));
+      const thirdCallParams = mocks.runCopilotAttempt.mock.calls[2]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+
+      expect(thirdCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-current");
+      staleCleanup.resolve("completed");
+      await flushAsyncWork();
+    });
+
     it("does not seed sdkSessionId on the first turn (nothing tracked yet)", async () => {
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
