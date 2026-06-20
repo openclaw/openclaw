@@ -182,7 +182,7 @@ export function requestSafeGatewayRestart(
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
-    deferralTimeoutMs: opts.deferralTimeoutMs,
+    ...(opts.deferralTimeoutMs !== undefined ? { deferralTimeoutMs: opts.deferralTimeoutMs } : {}),
     ...(opts.preservePendingEmitHooks === true || skipDeferral
       ? { preservePendingEmitHooksOnDeferralBypass: true }
       : {}),

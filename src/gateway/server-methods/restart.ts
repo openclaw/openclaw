@@ -27,11 +27,12 @@ function normalizeDeferralTimeoutMs(value: unknown): number | undefined {
 
 export const restartHandlers: GatewayRequestHandlers = {
   "gateway.restart.request": async ({ respond, params }) => {
+    const deferralTimeoutMs = normalizeDeferralTimeoutMs(params.deferralTimeoutMs);
     const result = requestSafeGatewayRestart({
       reason: normalizeReason(params.reason),
       delayMs: 0,
       skipDeferral: normalizeSkipDeferral(params.skipDeferral),
-      deferralTimeoutMs: normalizeDeferralTimeoutMs(params.deferralTimeoutMs),
+      ...(deferralTimeoutMs !== undefined ? { deferralTimeoutMs } : {}),
     });
     respond(true, result);
   },
