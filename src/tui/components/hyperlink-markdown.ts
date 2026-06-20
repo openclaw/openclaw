@@ -8,6 +8,7 @@ type MarkdownSegment =
   | { kind: "code"; prefix: string; fence: string; info: string; lines: string[]; closed: boolean };
 
 const OPEN_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+const HTML_BLOCK_START_RE = /^(?: {0,3})<([A-Za-z][\w:-]*)(?:\s[^>]*)?>\s*$/;
 const CODE_WRAP_TOKEN_RE = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]+/gu;
 const WHITESPACE_RE = /^\s+$/;
 
@@ -34,6 +35,18 @@ function parseInvalidBacktickFence(line: string): { fence: string } | undefined 
   return { fence: match[2] };
 }
 
+function parseHtmlBlockStart(line: string): string | undefined {
+  const match = HTML_BLOCK_START_RE.exec(line);
+  if (!match || line.includes("</") || line.trimEnd().endsWith("/>")) {
+    return undefined;
+  }
+  return match[1].toLowerCase();
+}
+
+function isHtmlBlockEnd(line: string, tag: string): boolean {
+  return line.trim().toLowerCase() === `</${tag}>`;
+}
+
 function isClosingFence(line: string, openingFence: string): boolean {
   const marker = openingFence[0];
   const minLength = openingFence.length;
@@ -58,6 +71,19 @@ function parseMarkdownSegments(text: string): MarkdownSegment[] {
   };
 
   for (let i = 0; i < lines.length; i += 1) {
+    const htmlTag = parseHtmlBlockStart(lines[i]);
+    if (htmlTag) {
+      markdownLines.push(lines[i]);
+      i += 1;
+      for (; i < lines.length; i += 1) {
+        markdownLines.push(lines[i]);
+        if (isHtmlBlockEnd(lines[i], htmlTag)) {
+          break;
+        }
+      }
+      continue;
+    }
+
     const opening = parseOpeningFence(lines[i]);
     if (!opening) {
       const invalidOpening = parseInvalidBacktickFence(lines[i]);

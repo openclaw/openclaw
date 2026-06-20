@@ -69,4 +69,13 @@ describe("HyperlinkMarkdown", () => {
 
     expect(rendered.every((line) => visibleWidth(line) <= 3)).toBe(true);
   });
+
+  it("matches upstream markdown for fences inside html blocks", () => {
+    const text = ["<div>", "```", "x", "```", "</div>"].join("\n");
+
+    const rendered = plainLines(new HyperlinkMarkdown(text, 0, 0, markdownTheme).render(80));
+    const upstream = plainLines(new Markdown(text, 0, 0, markdownTheme).render(80));
+
+    expect(rendered).toEqual(upstream);
+  });
 });
