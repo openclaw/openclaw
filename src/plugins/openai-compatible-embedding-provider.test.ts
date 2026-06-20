@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
+import { type LookupFn, resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
@@ -456,10 +456,13 @@ describe("openai-compatible generic embedding provider", () => {
     );
     expect(client.ssrfPolicy?.allowedHostnames).toEqual(["llm.internal"]);
     expect(client.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
+    const lookupFn = (async () => [
+      { address: "169.254.169.254", family: 4 },
+    ]) as unknown as LookupFn;
     await expect(
       resolvePinnedHostnameWithPolicy("llm.internal", {
         policy: client.ssrfPolicy,
-        lookupFn: async () => [{ address: "169.254.169.254", family: 4 as const }],
+        lookupFn,
       }),
     ).rejects.toThrow("Blocked: resolves to private/internal/special-use IP address");
   });
@@ -483,10 +486,11 @@ describe("openai-compatible generic embedding provider", () => {
       }),
     );
     expect(client.ssrfPolicy).toBeUndefined();
+    const lookupFn = (async () => [{ address: "10.0.0.5", family: 4 }]) as unknown as LookupFn;
     await expect(
       resolvePinnedHostnameWithPolicy("llm.internal", {
         policy: client.ssrfPolicy,
-        lookupFn: async () => [{ address: "10.0.0.5", family: 4 as const }],
+        lookupFn,
       }),
     ).rejects.toThrow(/private\/internal\/special-use IP address/u);
   });
