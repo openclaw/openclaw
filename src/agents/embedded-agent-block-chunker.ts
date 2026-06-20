@@ -149,6 +149,10 @@ export class EmbeddedBlockChunker {
     const { force, emit } = params;
     const minChars = Math.max(1, Math.floor(this.#chunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
+    // The paragraph fast path appends this separator to the emitted chunk, so its
+    // length must be reserved in the fit check below to keep emitted chunks within
+    // maxChars (#94216).
+    const paragraphSeparator = "\n\n";
 
     if (this.#buffer.length < minChars && !force) {
       return;
@@ -178,14 +182,20 @@ export class EmbeddedBlockChunker {
       if (this.#chunking.flushOnParagraph && !force) {
         const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
-        if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
+        // Reserve the appended separator so the emitted chunk (slice + separator)
+        // stays within maxChars; a paragraph that would overflow falls through to the
+        // size-split path below instead of breaching the delivery limit (#94216).
+        if (
+          paragraphBreak &&
+          paragraphBreak.index - start <= paragraphLimit - paragraphSeparator.length
+        ) {
           const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
           if (chunk.trim().length > 0) {
             // Attach the canonical paragraph boundary the chunk just ended at so a
             // downstream client that concatenates successive deliveries reconstructs
             // the separator (issue #42106). The coalescer normalizes any trailing
             // newline run before re-joining, so this never compounds into 4+ newlines.
-            emit(`${chunk}\n\n`);
+            emit(`${chunk}${paragraphSeparator}`);
           }
           start = skipLeadingNewlines(source, paragraphBreak.index + paragraphBreak.length);
           reopenFence = undefined;

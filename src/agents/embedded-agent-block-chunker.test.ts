@@ -41,6 +41,24 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunks.join("")).toBe("# Title\n\nFirst paragraph.");
   });
 
+  it("keeps paragraph-boundary chunks within maxChars including the separator (issue #94216)", () => {
+    // Exact-boundary repro from review: a paragraph whose length equals maxChars
+    // must not emit `chunk + "\n\n"` (which would exceed maxChars). With maxChars 10
+    // and "abcdefghij\n\nRest", the paragraph fast path must not emit a 12-char chunk;
+    // it falls through to the size-split path, which respects the delivery bound.
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 10 });
+    chunker.append("abcdefghij\n\nRest");
+    const chunks: string[] = [];
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    // No emitted chunk may exceed the delivery bound, separator included.
+    expectChunksWithinLength(chunks, 10);
+    // No content is lost when the over-limit paragraph falls back to size splitting.
+    expect(chunks.join("")).toContain("abcdefghij");
+    expect(chunks.join("")).toContain("Rest");
+  });
+
   it("breaks at paragraph boundary right after fence close", () => {
     // A closed fence is a safe boundary; splitting before it would corrupt
     // markdown rendered by downstream clients.
