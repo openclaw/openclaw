@@ -178,6 +178,31 @@ describe("resolveSlackChannelType", () => {
     expect(conversationsInfoMock).not.toHaveBeenCalled();
   });
 
+  it("returns Slack channel names from conversations.info", async () => {
+    conversationsInfoMock.mockResolvedValueOnce({
+      channel: {
+        id: "C0123456789",
+        name: "allowed-channel",
+      },
+    });
+
+    await expect(
+      resolveSlackConversationInfo({
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-test",
+            },
+          },
+        } as never,
+        channelId: "C0123456789",
+      }),
+    ).resolves.toEqual({
+      type: "channel",
+      name: "allowed-channel",
+    });
+  });
+
   it("preserves the channel-type wrapper contract", async () => {
     conversationsInfoMock.mockResolvedValueOnce({
       channel: {

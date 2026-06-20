@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 export type SlackConversationInfo = {
   type: "channel" | "group" | "dm" | "unknown";
+  name?: string;
   user?: string;
 };
 
@@ -94,9 +95,12 @@ export async function resolveSlackConversationInfo(params: {
       return result;
     }
     const info = await client.conversations.info({ channel: channelId });
-    const channel = info.channel as { is_im?: boolean; is_mpim?: boolean } | undefined;
+    const channel = info.channel as
+      | { is_im?: boolean; is_mpim?: boolean; name?: unknown }
+      | undefined;
     const type = channel?.is_im ? "dm" : channel?.is_mpim ? "group" : "channel";
-    const result = { type } as const;
+    const name = normalizeOptionalString(channel?.name);
+    const result: SlackConversationInfo = { type, ...(name ? { name } : {}) };
     SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, result);
     return result;
   } catch {

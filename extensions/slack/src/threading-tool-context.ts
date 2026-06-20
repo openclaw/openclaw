@@ -36,8 +36,10 @@ export function buildSlackThreadingToolContext(params: {
   const currentChannelId = currentMessagingTarget?.startsWith("channel:")
     ? currentMessagingTarget.slice("channel:".length)
     : (normalizeOptionalString(params.context.NativeChannelId) ?? currentMessagingTarget);
+  const currentChannelName = normalizeOptionalString(params.context.Channel)?.replace(/^#/, "");
   return {
     currentChannelId,
+    currentChannelName,
     currentMessagingTarget,
     currentThreadTs,
     replyToMode: effectiveReplyToMode,
