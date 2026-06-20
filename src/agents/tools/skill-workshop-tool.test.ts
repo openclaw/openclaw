@@ -260,6 +260,62 @@ describe("skill_workshop tool", () => {
     );
   });
 
+  it("rejects create and revise calls that target existing workspace skills", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-target-");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "foo"),
+      name: "foo",
+      description: "Existing Foo skill",
+      body: "# Foo\n\nExisting workflow.\n",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "bar"),
+      name: "bar",
+      description: "Existing Bar skill",
+      body: "# Bar\n\nExisting workflow.\n",
+    });
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+
+    await expect(
+      tool.execute("call-create", {
+        action: "create",
+        name: "Foo Hardening",
+        description: "Improve existing skills",
+        proposal_content:
+          "# Foo hardening\n\n" +
+          "| Target | Change |\n" +
+          "| --- | --- |\n" +
+          "| `skills/foo/SKILL.md` | Add stronger preflight rules. |\n" +
+          "| `skills/bar/scripts/new-helper.js` | Add a helper script. |\n",
+      }),
+    ).rejects.toThrow(
+      "action=create cannot propose changes to existing workspace skills: skills/bar/, skills/foo/",
+    );
+    await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+
+    const proposal = await tool.execute("call-safe-create", {
+      action: "create",
+      name: "New Helper",
+      description: "Create a new helper skill",
+      proposal_content: "# New Helper\n\nUse this as a new skill.\n",
+    });
+    await expect(
+      tool.execute("call-revise", {
+        action: "revise",
+        proposal_id: (proposal.details as { id: string }).id,
+        proposal_content:
+          "Patch the existing `skills/foo/SKILL.md` instead of creating a sibling.\n",
+      }),
+    ).rejects.toThrow(
+      "action=create cannot propose changes to existing workspace skills: skills/foo/",
+    );
+    const inspected = await tool.execute("call-inspect", {
+      action: "inspect",
+      proposal_id: (proposal.details as { id: string }).id,
+    });
+    expect(inspected.details).toMatchObject({ proposedVersion: "v1" });
+  });
+
   it.runIf(process.platform !== "win32")(
     "rejects create and revise calls that target trusted symlink workspace skills",
     async () => {

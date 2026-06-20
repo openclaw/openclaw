@@ -5,6 +5,7 @@
  */
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertCreateProposalDoesNotPatchExistingSkills } from "../../skills/workshop/create-target-guard.js";
 import {
   applySkillProposal,
   inspectSkillProposal,
@@ -213,6 +214,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       let proposal: SkillProposalReadResult;
       let contentText: string;
       if (action === "create") {
+        assertCreateProposalDoesNotPatchExistingSkills({
+          workspaceDir: options.workspaceDir,
+          config: options.config,
+          content: proposalContent,
+        });
         proposal = await proposeCreateSkill({
           workspaceDir: options.workspaceDir,
           config: options.config,
@@ -252,6 +258,13 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           name: readStringParam(params, "name"),
           workspaceDir: options.workspaceDir,
         });
+        if (pendingProposal.record.kind === "create") {
+          assertCreateProposalDoesNotPatchExistingSkills({
+            workspaceDir: options.workspaceDir,
+            config: options.config,
+            content: proposalContent,
+          });
+        }
         proposal = await reviseSkillProposal({
           workspaceDir: options.workspaceDir,
           config: options.config,

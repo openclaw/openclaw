@@ -743,9 +743,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain("keep `description` under 160 bytes");
     expect(withTool).toContain("`proposal_content` within the configured body limit");
     expect(withTool).toContain(
-      "If proposal content references an existing workspace path like `skills/<name>/SKILL.md` or `skills/<name>/scripts/...`, use `action=update` with `skill_name` for that live skill instead of `action=create`; split multi-skill changes into separate update proposals.",
-    );
-    expect(withTool).toContain(
       "Use `action=list` or `action=inspect` only for pending proposal discovery/inspection. Do not use filesystem search for proposal discovery.",
     );
     expect(withTool).toContain("`action=revise` for an existing pending proposal");

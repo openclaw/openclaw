@@ -12,7 +12,6 @@ export function buildSkillWorkshopPromptSection(): string[] {
     "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
     "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations. The final proposal artifact must go through `skill_workshop`.",
     "Use `action=create` for a new skill, `action=update` for an existing approved/live skill, and `action=revise` for an existing pending proposal; keep `description` under 160 bytes and `proposal_content` within the configured body limit.",
-    "If proposal content references an existing workspace path like `skills/<name>/SKILL.md` or `skills/<name>/scripts/...`, use `action=update` with `skill_name` for that live skill instead of `action=create`; split multi-skill changes into separate update proposals.",
     "For `action=update`, pass a concise `description` when the existing live skill description should be shortened in the proposal listing.",
     "For `action=revise`, pass `proposal_id` when known. If it is not known, pass the proposal or skill name in `name` so `skill_workshop` can resolve the pending proposal or return candidates.",
     "Use `action=list` or `action=inspect` only for pending proposal discovery/inspection. Do not use filesystem search for proposal discovery.",
