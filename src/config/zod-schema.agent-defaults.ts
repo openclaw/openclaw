@@ -42,6 +42,7 @@ export const AgentDefaultsSchema = z
           .strict(),
       )
       .optional(),
+    appSkills: z.array(z.string()).optional(),
     workspace: z.string().optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),

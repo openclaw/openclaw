@@ -24,13 +24,8 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { appUserIdFromSessionKey } from "../app-profile-context.js";
-import {
-  canonicalUserFileDir,
-  isAppUserSession,
-  resolveAppToolWorkspace,
-  resolveAppUserId,
-} from "../app-user-workspace.js";
+import { resolveAppPromptContext } from "../app-prompt-context.js";
+import { canonicalUserFileDir, resolveAppToolWorkspace } from "../app-user-workspace.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
@@ -376,9 +371,13 @@ export async function compactEmbeddedPiSessionDirect(
     // load_skill instead of reading SKILL.md, so compaction must not leak <location>
     // or lose load-by-name (codex 4519976882 #2). Single, prompt-limited source for
     // the app prompt + load_skill allowlist; the skills PROMPT is built after tools.
-    const appUserId = isAppUserSession(params.sessionKey)
-      ? (resolveAppUserId(params.sessionKey) ?? appUserIdFromSessionKey(params.sessionKey))
-      : null;
+    // Mirror attempt.ts via the shared helper so the run + compaction paths cannot drift
+    // (Codex 4536644504 #2): app user id, "app" PromptMode, agent-scoped app-skill allowlist.
+    const appCtx = resolveAppPromptContext({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
+    const appUserId = appCtx.appUserId;
     const appSkills = appUserId
       ? limitAppSkills(
           params.skillsSnapshot?.resolvedSkills ??
@@ -388,6 +387,7 @@ export async function compactEmbeddedPiSessionDirect(
             }).resolvedSkills ??
             [],
           params.config,
+          appCtx.appSkillsAllowlist,
         )
       : undefined;
 
@@ -527,7 +527,9 @@ export async function compactEmbeddedPiSessionDirect(
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
         ? "minimal"
-        : "full";
+        : appCtx.isAppSession
+          ? "app"
+          : "full";
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],

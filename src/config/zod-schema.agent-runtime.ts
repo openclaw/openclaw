@@ -589,6 +589,7 @@ export const AgentEntrySchema = z
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     skills: z.array(z.string()).optional(),
+    appSkills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,

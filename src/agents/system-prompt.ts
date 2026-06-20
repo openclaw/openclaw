@@ -11,8 +11,11 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  * - "full": All sections (default, for main agent)
  * - "minimal": Reduced sections (Tooling, Workspace, Runtime) - used for subagents
  * - "none": Just basic identity line, no sections
+ * - "app": App-user sessions — drops owner/CLI/self-update/model-aliases/docs/heartbeat/
+ *   silent-reply framework sections the app user can't use, but KEEPS Reply-Tags/Messaging/
+ *   Voice (unlike "minimal"). Telegram/owner sessions stay on "full" → byte-identical.
  */
-export type PromptMode = "full" | "minimal" | "none";
+export type PromptMode = "full" | "minimal" | "none" | "app";
 
 export function buildSkillsSection(params: {
   skillsPrompt?: string;
@@ -415,6 +418,9 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  // App-user sessions: drop framework sections the app user can't act on, but keep the
+  // conversational sections (Reply-Tags/Messaging/Voice) that "minimal" would strip.
+  const isApp = promptMode === "app";
   const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
   const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
@@ -448,7 +454,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
-    isMinimal,
+    isMinimal: isMinimal || isApp,
     readToolName,
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
@@ -496,21 +502,26 @@ export function buildAgentSystemPrompt(params: {
     "Use plain human language for narration unless in a technical context.",
     "",
     ...safetySection,
-    "## OpenClaw CLI Quick Reference",
-    "OpenClaw is controlled via subcommands. Do not invent commands.",
-    "To manage the Gateway daemon service (start/stop/restart):",
-    "- openclaw gateway status",
-    "- openclaw gateway start",
-    "- openclaw gateway stop",
-    "- openclaw gateway restart",
-    "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
-    "",
+    // CLI quick-reference is framework guidance the app user can't act on → drop for app.
+    ...(isApp
+      ? []
+      : [
+          "## OpenClaw CLI Quick Reference",
+          "OpenClaw is controlled via subcommands. Do not invent commands.",
+          "To manage the Gateway daemon service (start/stop/restart):",
+          "- openclaw gateway status",
+          "- openclaw gateway start",
+          "- openclaw gateway stop",
+          "- openclaw gateway restart",
+          "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
+          "",
+        ]),
     ...skillsSection,
     ...memorySection,
-    ...buildSelfManagementSection({ isMinimal, availableTools }),
-    // Skip self-update for subagent/none modes
-    hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
-    hasGateway && !isMinimal
+    ...buildSelfManagementSection({ isMinimal: isMinimal || isApp, availableTools }),
+    // Skip self-update for subagent/none/app modes
+    hasGateway && !isMinimal && !isApp ? "## OpenClaw Self-Update" : "",
+    hasGateway && !isMinimal && !isApp
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
@@ -518,19 +529,19 @@ export function buildAgentSystemPrompt(params: {
           "After restart, OpenClaw pings the last active session automatically.",
         ].join("\n")
       : "",
-    hasGateway && !isMinimal ? "" : "",
+    hasGateway && !isMinimal && !isApp ? "" : "",
     "",
-    // Skip model aliases for subagent/none modes
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    // Skip model aliases for subagent/none/app modes
+    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal && !isApp
       ? "## Model Aliases"
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal && !isApp
       ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal && !isApp
       ? params.modelAliasLines.join("\n")
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal && !isApp ? "" : "",
     userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
@@ -585,7 +596,7 @@ export function buildAgentSystemPrompt(params: {
           .join("\n")
       : "",
     params.sandboxInfo?.enabled ? "" : "",
-    ...buildUserIdentitySection(ownerLine, isMinimal),
+    ...buildUserIdentitySection(ownerLine, isMinimal || isApp),
     ...buildTimeSection({
       userTimezone,
     }),
@@ -659,8 +670,8 @@ export function buildAgentSystemPrompt(params: {
     }
   }
 
-  // Skip silent replies for subagent/none modes
-  if (!isMinimal) {
+  // Skip silent replies for subagent/none/app modes
+  if (!isMinimal && !isApp) {
     lines.push(
       "## Silent Replies",
       `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
@@ -677,8 +688,8 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
-  // Skip heartbeats for subagent/none modes
-  if (!isMinimal) {
+  // Skip heartbeats for subagent/none/app modes
+  if (!isMinimal && !isApp) {
     lines.push(
       "## Heartbeats",
       heartbeatPromptLine,

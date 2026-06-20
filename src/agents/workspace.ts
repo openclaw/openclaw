@@ -482,6 +482,49 @@ export function filterBootstrapFilesForSession(
   return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
 }
 
+/** Boilerplate bootstrap files dropped for APP-USER sessions only (not for Telegram/owner). */
+const APP_EXCLUDED_BOOTSTRAP: ReadonlySet<string> = new Set<string>([
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_MEMORY_ALT_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+]);
+
+/**
+ * App-user bootstrap shaping (app sessions only — never runs for Telegram/owner, so their
+ * assembled prompt stays byte-identical). Two effects:
+ *  1. Drop boilerplate files an app user never needs (TOOLS/MEMORY/HEARTBEAT/IDENTITY/USER).
+ *  2. Prefer a lean `<name>.app.md` variant's content when one exists on disk (e.g.
+ *     AGENTS.app.md / SOUL.app.md), keeping the entry's canonical name. The originals on
+ *     disk are never read for swapping, so non-app sessions keep the full files verbatim.
+ */
+export async function applyAppBootstrapVariants(
+  files: WorkspaceBootstrapFile[],
+  workspaceDir: string,
+): Promise<WorkspaceBootstrapFile[]> {
+  const resolvedDir = resolveUserPath(workspaceDir);
+  const result: WorkspaceBootstrapFile[] = [];
+  for (const file of files) {
+    if (APP_EXCLUDED_BOOTSTRAP.has(file.name)) {
+      continue;
+    }
+    const variantName = file.name.replace(/\.md$/i, ".app.md");
+    if (variantName !== file.name) {
+      try {
+        const content = await fs.readFile(path.join(resolvedDir, variantName), "utf8");
+        result.push({ ...file, content, missing: false });
+        continue;
+      } catch {
+        // No variant on disk → keep the canonical file as-is.
+      }
+    }
+    result.push(file);
+  }
+  return result;
+}
+
 export async function loadExtraBootstrapFiles(
   dir: string,
   extraPatterns: string[],

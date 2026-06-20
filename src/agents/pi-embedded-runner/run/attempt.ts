@@ -24,13 +24,8 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import { appUserIdFromSessionKey } from "../../app-profile-context.js";
-import {
-  canonicalUserFileDir,
-  isAppUserSession,
-  resolveAppToolWorkspace,
-  resolveAppUserId,
-} from "../../app-user-workspace.js";
+import { resolveAppPromptContext } from "../../app-prompt-context.js";
+import { canonicalUserFileDir, resolveAppToolWorkspace } from "../../app-user-workspace.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -296,9 +291,13 @@ export async function runEmbeddedAttempt(
     // shared SKILL.md by path. Resolve the chatting user (turn-1-safe via the #71
     // session-key fallback) and, when present, surface the live skills through the
     // read-only `load_skill` tool + a path-free app skills prompt.
-    const appUserId = isAppUserSession(params.sessionKey)
-      ? (resolveAppUserId(params.sessionKey) ?? appUserIdFromSessionKey(params.sessionKey))
-      : null;
+    // Shared app-session decisions (run + compaction parity): app user id, "app" PromptMode,
+    // and the agent-scoped app-skill allowlist (resolved by agent id up front, never global).
+    const appCtx = resolveAppPromptContext({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
+    const appUserId = appCtx.appUserId;
     // Filtered + prompt-limited skills (the SAME subset the normal prompt renders):
     // the single source for both the app skills prompt and the load_skill allowlist,
     // so they cannot drift (codex 4517821566 #2) and never exceed the configured
@@ -313,6 +312,7 @@ export async function runEmbeddedAttempt(
             }).resolvedSkills ??
             [],
           params.config,
+          appCtx.appSkillsAllowlist,
         )
       : undefined;
 
@@ -491,7 +491,9 @@ export async function runEmbeddedAttempt(
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
         ? "minimal"
-        : "full";
+        : appCtx.isAppSession
+          ? "app"
+          : "full";
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],

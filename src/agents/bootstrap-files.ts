@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { appendAppProfileBootstrapFile } from "./app-profile-context.js";
+import { isAppUserSession } from "./app-user-workspace.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
@@ -8,6 +9,7 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import {
+  applyAppBootstrapVariants,
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
@@ -31,10 +33,15 @@ export async function resolveBootstrapFilesForRun(params: {
   agentId?: string;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const bootstrapFiles = filterBootstrapFilesForSession(
+  let bootstrapFiles = filterBootstrapFilesForSession(
     await loadWorkspaceBootstrapFiles(params.workspaceDir),
     sessionKey,
   );
+  // App-user sessions only: drop boilerplate files and prefer lean `<name>.app.md` variants.
+  // Telegram/owner sessions skip this entirely → their assembled prompt is byte-identical.
+  if (isAppUserSession(sessionKey)) {
+    bootstrapFiles = await applyAppBootstrapVariants(bootstrapFiles, params.workspaceDir);
+  }
 
   const withHooks = await applyBootstrapHookOverrides({
     files: bootstrapFiles,

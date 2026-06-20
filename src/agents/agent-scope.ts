@@ -20,6 +20,7 @@ type ResolvedAgentConfig = {
   agentDir?: string;
   model?: AgentEntry["model"];
   skills?: AgentEntry["skills"];
+  appSkills?: AgentEntry["appSkills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
   heartbeat?: AgentEntry["heartbeat"];
@@ -114,6 +115,7 @@ export function resolveAgentConfig(
         ? entry.model
         : undefined,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
+    appSkills: Array.isArray(entry.appSkills) ? entry.appSkills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
     heartbeat: entry.heartbeat,
@@ -130,6 +132,26 @@ export function resolveAgentSkillsFilter(
   agentId: string,
 ): string[] | undefined {
   return normalizeSkillFilter(resolveAgentConfig(cfg, agentId)?.skills);
+}
+
+/**
+ * Resolve the per-agent APP-USER skill allowlist: the matching `agents.list[]` entry's
+ * `appSkills` if present, otherwise `agents.defaults.appSkills`. Mirrors the model/workspace
+ * defaults-fallback precedent (resolveAgentWorkspaceDir) — single-agent gateways (e.g. `life`,
+ * which has no `agents.list[]`) configure it under `agents.defaults`. Returns `undefined` when
+ * unset (callers then leave the app skill catalog unchanged → other app agents unaffected).
+ * An explicit empty array is honored as "no app skills".
+ */
+export function resolveAppSkillsAllowlist(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string[] | undefined {
+  const entry = resolveAgentConfig(cfg, agentId)?.appSkills;
+  if (Array.isArray(entry)) {
+    return entry;
+  }
+  const fallback = cfg.agents?.defaults?.appSkills;
+  return Array.isArray(fallback) ? fallback : undefined;
 }
 
 export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {

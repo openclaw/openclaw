@@ -27,6 +27,13 @@ export type AgentConfig = {
   model?: AgentModelConfig;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
+  /**
+   * Optional allowlist of skills exposed to APP-USER sessions only (the `<available_skills>`
+   * catalog + `load_skill` set). Omit = app sessions see the agent's normal skill set;
+   * provided = app sessions are restricted to this subset (Telegram/owner unaffected).
+   * Resolved per-agent with `agents.defaults.appSkills` fallback (see resolveAppSkillsAllowlist).
+   */
+  appSkills?: string[];
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;

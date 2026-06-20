@@ -87,4 +87,17 @@ describe("limitAppSkills", () => {
   it("returns a small set unchanged", () => {
     expect(limitAppSkills([sk(1), sk(2)])).toHaveLength(2);
   });
+
+  it("allowlist undefined → set unchanged (default behavior)", () => {
+    expect(limitAppSkills([sk(1), sk(2)], undefined, undefined)).toHaveLength(2);
+  });
+
+  it("allowlist [] → no app skills", () => {
+    expect(limitAppSkills([sk(1), sk(2)], undefined, [])).toHaveLength(0);
+  });
+
+  it("allowlist names → only the named subset (agent-scoped, never global)", () => {
+    const limited = limitAppSkills([sk(1), sk(2), sk(3)], undefined, ["skill-1", "skill-3"]);
+    expect(limited.map((s) => s.name)).toEqual(["skill-1", "skill-3"]);
+  });
 });

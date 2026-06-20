@@ -575,8 +575,20 @@ export function buildAppSkillsPrompt(skills: Skill[]): string {
  * can neither see nor load more skills than a normal session's prompt shows
  * (codex 4519976882 #3).
  */
-export function limitAppSkills(skills: Skill[], config?: OpenClawConfig): Skill[] {
-  return applySkillsPromptLimits({ skills, config }).skillsForPrompt;
+export function limitAppSkills(
+  skills: Skill[],
+  config?: OpenClawConfig,
+  appAllowlist?: string[],
+): Skill[] {
+  // Optional per-agent app-skill allowlist (resolved by the caller via
+  // resolveAppSkillsAllowlist, so this helper stays config-shape-agnostic and can't
+  // accidentally scope every agent). undefined = unchanged; [] = no app skills; names = subset.
+  let scoped = skills;
+  if (appAllowlist !== undefined) {
+    const allow = normalizeSkillFilter(appAllowlist) ?? [];
+    scoped = skills.filter((skill) => allow.includes(skill.name));
+  }
+  return applySkillsPromptLimits({ skills: scoped, config }).skillsForPrompt;
 }
 
 export function resolveSkillsPromptForRun(params: {

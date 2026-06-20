@@ -124,6 +124,12 @@ export type CliBackendConfig = {
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). */
   model?: AgentModelListConfig;
+  /**
+   * Default allowlist of skills exposed to APP-USER sessions only, applied to agents that
+   * do not set their own `appSkills`. Single-agent gateways (no `agents.list[]`) set it here.
+   * Omit = app sessions see the normal skill set. Telegram/owner sessions are unaffected.
+   */
+  appSkills?: string[];
   /** Optional image-capable model and fallbacks (provider/model). */
   imageModel?: AgentModelListConfig;
   /** Model catalog with optional aliases (full provider/model keys). */
