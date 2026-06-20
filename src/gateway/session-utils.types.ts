@@ -18,8 +18,6 @@ import type {
 } from "../shared/session-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
-// Shared Gateway session response contracts. Server methods, UI adapters, and
-// tests import these types so list/patch/preview payloads evolve together.
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
@@ -29,7 +27,6 @@ export type GatewaySessionsDefaults = {
   thinkingDefault?: string;
 };
 
-/** Runtime status surfaced for the latest session run. */
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
 type SubagentRunState = "active" | "interrupted" | "historical";
@@ -49,6 +46,7 @@ export type GatewaySessionRow = {
   subagentRole?: SessionEntry["subagentRole"];
   subagentControlScope?: SessionEntry["subagentControlScope"];
   kind: "direct" | "group" | "global" | "unknown";
+  title?: string;
   label?: string;
   displayName?: string;
   derivedTitle?: string;
