@@ -716,4 +716,79 @@ describe("outbound channel resolution", () => {
       }),
     ).toBe(plugin);
   });
+
+  it("delivery resolver rejects a media-only non-gateway plugin", async () => {
+    // Direct/hybrid media rides createPluginHandler, which requires a text
+    // sender; a media-only plugin is a false positive that fails later with
+    // "Outbound not configured", so the delivery resolver must skip it.
+    const mediaOnlyPlugin = {
+      id: "alpha",
+      outbound: { deliveryMode: "direct", sendMedia: vi.fn() },
+    };
+    getLoadedChannelPluginMock.mockReturnValue(mediaOnlyPlugin);
+    getChannelPluginMock.mockReturnValue(mediaOnlyPlugin);
+    getActivePluginRegistryMock.mockReturnValue({ channels: [] });
+    const channelResolution = await importChannelResolution("delivery-media-only");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: {} as never,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("delivery resolver resolves a gateway-mode plugin with no local send methods", async () => {
+    const gatewayPlugin = { id: "alpha", outbound: { deliveryMode: "gateway" } };
+    getLoadedChannelPluginMock.mockReturnValue(gatewayPlugin);
+    const channelResolution = await importChannelResolution("delivery-gateway-only");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: {} as never,
+      }),
+    ).toBe(gatewayPlugin);
+  });
+
+  it("delivery resolver resolves a plugin sending text via message.send.text", async () => {
+    const plugin = createSendingPlugin("alpha");
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
+    const channelResolution = await importChannelResolution("delivery-message-text");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: {} as never,
+      }),
+    ).toBe(plugin);
+  });
+
+  it("delivery resolver resolves a plugin with only the legacy outbound text adapter", async () => {
+    const plugin = { id: "alpha", outbound: { deliveryMode: "direct", sendText: vi.fn() } };
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
+    const channelResolution = await importChannelResolution("delivery-legacy-outbound-text");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: {} as never,
+      }),
+    ).toBe(plugin);
+  });
+
+  it("delivery resolver resolves a poll-only non-gateway plugin", async () => {
+    // sendPoll() routes through the gateway gated only by outbound.sendPoll, so
+    // a direct poll-only plugin is independently deliverable.
+    const plugin = { id: "alpha", outbound: { deliveryMode: "direct", sendPoll: vi.fn() } };
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
+    const channelResolution = await importChannelResolution("delivery-poll-only");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: {} as never,
+      }),
+    ).toBe(plugin);
+  });
 });
