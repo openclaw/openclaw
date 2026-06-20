@@ -202,10 +202,17 @@ Manual allowlist enforcement matches resolved binary path globs and bare command
 globs. Bare names match only commands invoked through PATH, so `rg` can match
 `/opt/homebrew/bin/rg` when the command is `rg`, but not `./rg` or `/tmp/rg`.
 When `security=allowlist`, shell commands are auto-allowed only if every pipeline
-segment is allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections
-are rejected in allowlist mode unless every top-level segment satisfies the
-allowlist (including safe bins). Redirections remain unsupported.
-Durable `allow-always` trust does not bypass that rule: a chained command still requires every
+segment is allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) still requires every
+top-level segment to satisfy the allowlist (including safe bins).
+
+Stream-only redirections that touch no filesystem are allowlist-analyzable: discarding
+stdout or stderr to `/dev/null` (`>/dev/null`, `1>/dev/null`, `2>/dev/null`) and
+duplicating between the standard streams (`2>&1`, `1>&2`) are auto-allowed when every
+command segment also passes the allowlist or safe-bin check. Every other redirection
+still requires approval, including file writes and appends (`> file`, `>> file`), file
+reads (`< file`), stderr-to-file (`2> err.log`), the `&>` shorthand, descriptor close
+(`>&-`), and any target other than `/dev/null` or descriptors 1/2.
+Durable `allow-always` trust does not bypass these rules: a chained command still requires every
 top-level segment to match.
 
 `autoAllowSkills` is a separate convenience path in exec approvals. It is not the same as
