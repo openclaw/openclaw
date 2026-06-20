@@ -44,6 +44,23 @@ type KeyedSharedCodexAppServerClientState = {
 };
 
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
+const scopedAuthProfileStoreCacheKeys = new WeakMap<AuthProfileStore, string>();
+let nextScopedAuthProfileStoreCacheKey = 0;
+
+function resolveScopedAuthProfileStoreCacheKey(
+  authProfileStore: AuthProfileStore | undefined,
+): string | undefined {
+  if (!authProfileStore) {
+    return undefined;
+  }
+  const cached = scopedAuthProfileStoreCacheKeys.get(authProfileStore);
+  if (cached) {
+    return cached;
+  }
+  const key = `scoped-auth-store:${++nextScopedAuthProfileStoreCacheKey}`;
+  scopedAuthProfileStoreCacheKeys.set(authProfileStore, key);
+  return key;
+}
 
 function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   const globalState = globalThis as typeof globalThis & {
@@ -216,10 +233,14 @@ async function acquireSharedCodexAppServerClient(
   const fallbackApiKeyCacheKey = authProfileId
     ? undefined
     : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions });
+  const authProfileStoreCacheKey = usesNativeAuth
+    ? undefined
+    : resolveScopedAuthProfileStoreCacheKey(authProfileStore);
   const key = codexAppServerStartOptionsKey(startOptions, {
     authProfileId,
     agentDir: usesNativeAuth ? undefined : agentDir,
     fallbackApiKeyCacheKey,
+    authProfileStoreCacheKey,
   });
   const state = getSharedCodexAppServerClientState();
   const entry = getOrCreateSharedClientEntry(state, key);

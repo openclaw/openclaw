@@ -405,6 +405,78 @@ describe("shared Codex app-server client", () => {
     });
   });
 
+  it("keeps different scoped auth stores on separate shared clients", async () => {
+    const firstHarness = createClientHarness();
+    const secondHarness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(firstHarness.client)
+      .mockReturnValueOnce(secondHarness.client);
+    const firstAuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:shared-scoped": {
+          type: "token",
+          provider: "openai",
+          token: "first-token",
+        },
+      },
+    };
+    const secondAuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:shared-scoped": {
+          type: "token",
+          provider: "openai",
+          token: "second-token",
+        },
+      },
+    };
+    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockReturnValue("openai:shared-scoped");
+
+    const firstClientPromise = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      authProfileStore: firstAuthProfileStore,
+    });
+    await sendInitializeResult(firstHarness, "openclaw/0.125.0 (macOS; test)");
+    await expect(firstClientPromise).resolves.toBe(firstHarness.client);
+
+    const secondClientPromise = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      authProfileStore: secondAuthProfileStore,
+    });
+    await sendInitializeResult(secondHarness, "openclaw/0.125.0 (macOS; test)");
+    await expect(secondClientPromise).resolves.toBe(secondHarness.client);
+
+    const firstWriteCount = firstHarness.writes.length;
+    firstHarness.send({
+      id: "refresh-first-scoped-store",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "unauthorized", previousAccountId: "first-account" },
+    });
+    await vi.waitFor(() => expect(firstHarness.writes.length).toBeGreaterThan(firstWriteCount));
+
+    const secondWriteCount = secondHarness.writes.length;
+    secondHarness.send({
+      id: "refresh-second-scoped-store",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "unauthorized", previousAccountId: "second-account" },
+    });
+    await vi.waitFor(() => expect(secondHarness.writes.length).toBeGreaterThan(secondWriteCount));
+
+    expect(mocks.refreshCodexAppServerAuthTokens).toHaveBeenNthCalledWith(1, {
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: "openai:shared-scoped",
+      authProfileStore: firstAuthProfileStore,
+      config: undefined,
+    });
+    expect(mocks.refreshCodexAppServerAuthTokens).toHaveBeenNthCalledWith(2, {
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: "openai:shared-scoped",
+      authProfileStore: secondAuthProfileStore,
+      config: undefined,
+    });
+  });
+
   it("skips target auth resolution when native source auth is requested", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);

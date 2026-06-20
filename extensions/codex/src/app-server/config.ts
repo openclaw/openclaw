@@ -868,6 +868,7 @@ export function codexAppServerStartOptionsKey(
     authProfileId?: string;
     agentDir?: string;
     fallbackApiKeyCacheKey?: string;
+    authProfileStoreCacheKey?: string;
   } = {},
 ): string {
   return JSON.stringify({
@@ -887,6 +888,7 @@ export function codexAppServerStartOptionsKey(
     authProfileId: params.authProfileId ?? null,
     agentDir: params.agentDir ?? null,
     fallbackApiKeyCacheKey: params.fallbackApiKeyCacheKey ?? null,
+    authProfileStoreCacheKey: params.authProfileStoreCacheKey ?? null,
   });
 }
 
