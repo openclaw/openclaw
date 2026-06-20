@@ -325,7 +325,7 @@ export function collectTelegramRootGroupsMissingAccountGroupsWarnings(params: {
     .map((hit) => `${sanitizeForLog(hit.accountId)} (${sanitizeForLog(hit.groupsPath)})`)
     .join(", ");
   return [
-    `- channels.telegram.groups is set in a multi-account Telegram config, but these enabled accounts have no account-local group rules: ${paths}. Telegram group rules are account-scoped in multi-account setups; move or copy group entries to channels.telegram.accounts.<accountId>.groups for each bot account that should respond in groups.`,
+    `- channels.telegram.groups is set in a multi-account Telegram config, but these enabled allowlisted accounts have no account-local group rules: ${paths}. Root channels.telegram.groups can still participate in generic group ID allowlisting while an account has no local groups. Once you add channels.telegram.accounts.<accountId>.groups, that account uses the local map instead of the root map; copy every allowed group or use "*" there before adding account-scoped options such as requireMention, topics, or per-group allowFrom.`,
   ];
 }
 

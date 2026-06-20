@@ -486,7 +486,7 @@ describe("telegram doctor", () => {
     ]);
   });
 
-  it("warns when root groups do not cover enabled multi-account Telegram accounts", async () => {
+  it("warns when root groups do not populate enabled multi-account Telegram account groups", async () => {
     const cfg = {
       channels: {
         telegram: {
@@ -526,7 +526,7 @@ describe("telegram doctor", () => {
 
     const warnings = collectTelegramRootGroupsMissingAccountGroupsWarnings({ hits });
     expect(warnings).toEqual([
-      "- channels.telegram.groups is set in a multi-account Telegram config, but these enabled accounts have no account-local group rules: alerts (channels.telegram.accounts.alerts.groups). Telegram group rules are account-scoped in multi-account setups; move or copy group entries to channels.telegram.accounts.<accountId>.groups for each bot account that should respond in groups.",
+      '- channels.telegram.groups is set in a multi-account Telegram config, but these enabled allowlisted accounts have no account-local group rules: alerts (channels.telegram.accounts.alerts.groups). Root channels.telegram.groups can still participate in generic group ID allowlisting while an account has no local groups. Once you add channels.telegram.accounts.<accountId>.groups, that account uses the local map instead of the root map; copy every allowed group or use "*" there before adding account-scoped options such as requireMention, topics, or per-group allowFrom.',
     ]);
     expect(
       await telegramDoctor.collectPreviewWarnings?.({

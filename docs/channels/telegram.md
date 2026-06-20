@@ -161,7 +161,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Tab title="Group policy and allowlists">
     Two controls apply together:
 
-    1. **Which groups are allowed** (`channels.telegram.groups`, or `channels.telegram.accounts.<accountId>.groups` in multi-account configs)
+    1. **Which groups are allowed** (`channels.telegram.groups`, plus `channels.telegram.accounts.<accountId>.groups` when a multi-account named bot needs account-local group settings)
        - no `groups` config:
          - with `groupPolicy: "open"`: any group can pass group-ID checks
          - with `groupPolicy: "allowlist"` (default): groups are blocked until you add `groups` entries (or `"*"`)
@@ -180,7 +180,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
     If `groupAllowFrom` is unset, Telegram falls back to config `allowFrom`, not the pairing store.
     Practical pattern for one-owner bots: set your user ID in `channels.telegram.allowFrom`, leave `groupAllowFrom` unset, and allow the target groups under `channels.telegram.groups`.
-    In multi-account Telegram configs, put group rules under the active bot account, for example `channels.telegram.accounts.default.groups` or `channels.telegram.accounts.alerts.groups`. A root `channels.telegram.groups` entry is useful for single-account configs, but it can be misleading once multiple bot accounts exist because named accounts need account-local group rules.
+    In multi-account Telegram configs, root `channels.telegram.groups` can still participate in generic group ID allowlisting while an account has no local groups. Add account-local groups under the active bot account, for example `channels.telegram.accounts.default.groups` or `channels.telegram.accounts.alerts.groups`, when that named bot needs account-scoped group options such as `requireMention`, `topics`, or per-group `allowFrom`. Once an account-local `groups` map exists, that account uses it instead of the root map, so copy every allowed group or use `"*"` there before adding account-scoped options.
     Runtime note: if `channels.telegram` is completely missing, runtime defaults to fail-closed `groupPolicy="allowlist"` unless `channels.defaults.groupPolicy` is explicitly set.
 
     Owner-only group setup:
@@ -1028,8 +1028,8 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
 
   <Accordion title="Bot not seeing group messages at all">
 
-    - when `channels.telegram.groups` exists, group must be listed (or include `"*"`)
-    - in multi-account configs, check the active account path too: `channels.telegram.accounts.<accountId>.groups`
+    - when `channels.telegram.groups` exists, group must be listed (or include `"*"`) for the shared group ID allowlist
+    - in multi-account configs, check the active account path too when the named bot account needs account-scoped group settings: `channels.telegram.accounts.<accountId>.groups`
     - verify bot membership in group
     - review logs: `openclaw logs --follow` for skip reasons
 
@@ -1151,7 +1151,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 </Accordion>
 
 <Note>
-Multi-account precedence: when two or more account IDs are configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit. Otherwise OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns. Named accounts inherit `channels.telegram.allowFrom` / `groupAllowFrom`, but not `accounts.default.*` values. Put group allowlists for named bot accounts under `channels.telegram.accounts.<accountId>.groups`.
+Multi-account precedence: when two or more account IDs are configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit. Otherwise OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns. Named accounts inherit `channels.telegram.allowFrom` / `groupAllowFrom`, but not `accounts.default.*` values or root groups into their account-local group config. Root `channels.telegram.groups` can still participate in generic group ID allowlisting while an account has no local groups; if you add `channels.telegram.accounts.<accountId>.groups` for account-scoped group options, copy every allowed group or use `"*"`.
 </Note>
 
 ## Related
