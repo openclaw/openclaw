@@ -152,6 +152,37 @@ describe("resolveMemoryBackendConfig", () => {
     });
   });
 
+  it("preserves Windows drive-letter absolute qmd command paths", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command:
+            "C:\\Users\\penny\\AppData\\Roaming\\npm\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe(
+      "C:\\Users\\penny\\AppData\\Roaming\\npm\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js",
+    );
+  });
+
+  it("preserves Windows UNC absolute qmd command paths", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: "\\\\nas-server\\qmd\\dist\\cli\\qmd.js",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe("\\\\nas-server\\qmd\\dist\\cli\\qmd.js");
+  });
+
   it("parses quoted qmd command paths", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },
