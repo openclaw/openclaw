@@ -90,6 +90,11 @@ function isAnthropicBedrockModel(modelId: string): boolean {
   return false;
 }
 
+/** Amazon Nova models support native Bedrock Converse prompt caching. */
+function isNovaModel(modelId: string): boolean {
+  return modelId.trim().toLowerCase().startsWith("amazon.nova-");
+}
+
 function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
@@ -413,7 +418,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     const modelRef = { id: modelId, params: model?.params };
     if (
       isAnthropicBedrockModel(modelId) ||
-      resolveClaudeModelIdentity(modelRef).startsWith("claude-")
+      resolveClaudeModelIdentity(modelRef).startsWith("claude-") ||
+      isNovaModel(modelId)
     ) {
       return streamFn;
     }
@@ -576,7 +582,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         extractRegionFromBaseUrl(model?.baseUrl) ??
         currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
-        isBedrockAppInferenceProfile(modelId) && !sharedRuntimeWouldInjectCachePoints(modelId);
+        (isBedrockAppInferenceProfile(modelId) || isNovaModel(modelId)) &&
+        !sharedRuntimeWouldInjectCachePoints(modelId);
       const shouldOmitTemperature =
         opus47OrNewer || fable5 || isLatestAdaptiveBedrockModelRef(modelId, model?.params);
       const shouldPatchMaxThinking = supportsNativeMax && thinkingLevel === "max";
@@ -664,6 +671,25 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                       omitUnsupportedClaudePayloadTemperature(payloadRecord);
                     }
                   }
+                }
+                return originalOnPayload?.(payload, payloadModel);
+              },
+            }),
+          );
+        }
+
+        // Nova models support Bedrock Converse prompt caching natively.
+        // Inject cache points directly without API resolution.
+        if (isNovaModel(modelId)) {
+          return underlying(
+            streamModel,
+            context,
+            withAwsCredentialRefreshOnPayload({
+              ...merged,
+              onPayload: (payload: unknown, payloadModel: unknown) => {
+                if (payload && typeof payload === "object") {
+                  const payloadRecord = payload as Record<string, unknown>;
+                  injectBedrockCachePoints(payloadRecord, "short");
                 }
                 return originalOnPayload?.(payload, payloadModel);
               },

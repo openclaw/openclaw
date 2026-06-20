@@ -438,7 +438,7 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
-  it("disables prompt caching for non-Anthropic Bedrock models", async () => {
+  it("does not force cacheRetention: none for Nova models (native Bedrock caching)", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
     const wrapped = provider.wrapStreamFn?.({
       provider: "amazon-bedrock",
@@ -446,18 +446,17 @@ describe("amazon-bedrock provider plugin", () => {
       streamFn: (_model: unknown, _context: unknown, options: Record<string, unknown>) => options,
     } as never);
 
-    expectWrappedResultFields(
-      wrapped?.(
-        {
-          api: "openai-completions",
-          provider: "amazon-bedrock",
-          id: "amazon.nova-micro-v1:0",
-        } as never,
-        { messages: [] } as never,
-        {},
-      ),
-      { cacheRetention: "none" },
+    const result = wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "amazon-bedrock",
+        id: "amazon.nova-micro-v1:0",
+      } as never,
+      { messages: [] } as never,
+      {},
     );
+    // Nova models should keep cache enabled (not forced to "none")
+    expect(result).not.toHaveProperty("cacheRetention", "none");
   });
 
   it("refreshes AWS shared config cache before Bedrock sends", async () => {
@@ -934,8 +933,8 @@ describe("amazon-bedrock provider plugin", () => {
       const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
 
       expect(result).not.toHaveProperty("capturedPayload");
-      // The onPayload hook should not exist when no guardrail is configured
-      expectWrappedResultFields(result, { cacheRetention: "none" });
+      // Nova models should keep cache enabled (not forced to "none")
+      expect(result).not.toHaveProperty("cacheRetention", "none");
     });
 
     it("injects all four fields when guardrail config includes optional fields", async () => {
@@ -1000,7 +999,7 @@ describe("amazon-bedrock provider plugin", () => {
       expect(result).not.toHaveProperty("cacheRetention", "none");
     });
 
-    it("injects guardrailConfig for non-Anthropic models with cacheRetention: none", async () => {
+    it("injects guardrailConfig for Nova models without forcing cacheRetention: none", async () => {
       const provider = await registerWithConfig({
         guardrail: {
           guardrailIdentifier: "guardrail-nova",
@@ -1009,15 +1008,15 @@ describe("amazon-bedrock provider plugin", () => {
       });
       const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
 
-      // Non-Anthropic models should get guardrailConfig
+      // Nova models should get guardrailConfig
       expect(result.capturedPayload).toEqual({
         guardrailConfig: {
           guardrailIdentifier: "guardrail-nova",
           guardrailVersion: "3",
         },
       });
-      // Non-Anthropic models should also get cacheRetention: "none"
-      expectWrappedResultFields(result, { cacheRetention: "none" });
+      // Nova models should keep cache enabled (not forced to "none")
+      expect(result).not.toHaveProperty("cacheRetention", "none");
     });
 
     it("uses live plugin config to inject guardrailConfig after startup disable", async () => {
@@ -1057,7 +1056,8 @@ describe("amazon-bedrock provider plugin", () => {
       );
 
       expect(result).not.toHaveProperty("capturedPayload");
-      expectWrappedResultFields(result, { cacheRetention: "none" });
+      // Nova models should keep cache enabled (not forced to "none")
+      expect(result).not.toHaveProperty("cacheRetention", "none");
     });
   });
 
