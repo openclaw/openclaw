@@ -1,3 +1,5 @@
+import { html } from "lit";
+import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { definePage } from "../../router/index.ts";
@@ -13,8 +15,14 @@ export const page = definePage({
   path: "/debug",
   component: () =>
     import("../../ui/views/debug.ts").then((module) => ({
-      render: ({ state }: DebugRenderContext) =>
-        renderSettingsWorkspace(
+      render: ({ state }: DebugRenderContext) => html`
+        <section class="content-header">
+          <div>
+            <div class="page-title">${titleForRoute("debug")}</div>
+            <div class="page-sub">${subtitleForRoute("debug")}</div>
+          </div>
+        </section>
+        ${renderSettingsWorkspace(
           state,
           module.renderDebug({
             loading: state.debugLoading,
@@ -33,14 +41,17 @@ export const page = definePage({
             onRefresh: () => void loadDebug(state),
             onCall: () => void callDebugMethod(state),
           }),
-        ),
+        )}
+      `,
+      header: true,
     })),
-  onEnter: ({ host }: DebugLoadContext) =>
-    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]),
-  onLeave: ({ host }: DebugLoadContext) =>
-    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]),
   load: async ({ host, app }: DebugLoadContext) => {
     await loadDebug(app);
     host.eventLog = host.eventLogBuffer;
   },
+  onEnter: ({ host }: DebugLoadContext) => {
+    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
+  },
+  onLeave: ({ host }: DebugLoadContext) =>
+    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]),
 });

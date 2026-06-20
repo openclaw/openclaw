@@ -16,6 +16,7 @@ export type RouterHistory = {
 export type RouteHookOptions = {
   signal: AbortSignal;
   shouldRun: () => boolean;
+  revalidating: boolean;
 };
 
 export type PageDefinition<
@@ -28,8 +29,8 @@ export type PageDefinition<
   aliases?: readonly string[];
   component?: () => MaybePromise<TModule>;
   load?: (context: TLoadContext, options: RouteHookOptions) => MaybePromise<void>;
-  onEnter?: (context: TLoadContext, options: RouteHookOptions) => MaybePromise<void>;
-  onLeave?: (context: TLoadContext, options: RouteHookOptions) => MaybePromise<void>;
+  onEnter?: (context: TLoadContext, options: RouteHookOptions) => void;
+  onLeave?: (context: TLoadContext, options: RouteHookOptions) => void;
 };
 
 export type RouteState<TRouteId extends string = string> = {
@@ -38,6 +39,7 @@ export type RouteState<TRouteId extends string = string> = {
   pendingRouteId: TRouteId | null;
   resolvedRouteId: TRouteId | null;
   status: "idle" | "loading" | "resolved" | "error";
+  revalidating: boolean;
   error?: unknown;
 };
 

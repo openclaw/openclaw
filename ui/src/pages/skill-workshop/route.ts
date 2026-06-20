@@ -11,7 +11,10 @@ export const page = definePage({
   path: "/skills/workshop",
   component: () =>
     import("./page.ts").then((module) => ({
+      shell: "page" as const,
+      header: true,
       render: ({ state }: SkillWorkshopRenderContext) => module.renderSkillWorkshopPage(state),
     })),
-  load: ({ app }: SkillWorkshopLoadContext) => loadSkillWorkshopProposals(app, { force: true }),
+  load: ({ app }: SkillWorkshopLoadContext) =>
+    loadSkillWorkshopProposals(app, { force: true }).then(() => undefined),
 });

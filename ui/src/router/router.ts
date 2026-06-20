@@ -46,7 +46,11 @@ export function normalizeRoutePath(path: string): string {
 }
 
 function pathKey(path: string): string {
-  return normalizeRoutePath(path).toLowerCase();
+  const normalized = normalizeRoutePath(path).toLowerCase();
+  if (normalized.endsWith("/index.html")) {
+    return normalizeRoutePath(normalized.slice(0, -"/index.html".length));
+  }
+  return normalized;
 }
 
 function normalizeLocation(location: RouteLocation): RouteLocation {
@@ -55,6 +59,12 @@ function normalizeLocation(location: RouteLocation): RouteLocation {
     search: location.search,
     hash: location.hash,
   };
+}
+
+function locationsEqual(left: RouteLocation | null, right: RouteLocation): boolean {
+  return (
+    left?.pathname === right.pathname && left.search === right.search && left.hash === right.hash
+  );
 }
 
 function pathnameWithoutBase(pathname: string, basePath: string): string {
@@ -68,6 +78,7 @@ function pathnameWithoutBase(pathname: string, basePath: string): string {
 
 function compileRoutes<TRouteId extends string, TLoadContext, TModule>(
   routes: RouterOptions<TRouteId, TLoadContext, TModule>["routes"],
+  defaultRouteId: TRouteId | null,
 ): CompiledRoutes<TRouteId, TLoadContext, TModule> {
   const byId = new Map<TRouteId, PageDefinition<TRouteId, TLoadContext, TModule>>();
   const byPath = new Map<string, TRouteId>();
@@ -100,7 +111,8 @@ function compileRoutes<TRouteId extends string, TLoadContext, TModule>(
       return base ? `${base}${route.path}` : route.path;
     },
     routeIdFromPath(pathname, basePath = "") {
-      return byPath.get(pathKey(pathnameWithoutBase(pathname, basePath))) ?? null;
+      const key = pathKey(pathnameWithoutBase(pathname, basePath));
+      return byPath.get(key) ?? (key === "/" ? defaultRouteId : null);
     },
   };
 }
@@ -124,18 +136,28 @@ function isCurrentRun(current: NavigationRun | null, run: NavigationRun): boolea
   return current === run && !run.controller.signal.aborted;
 }
 
+function cancelRun(run: NavigationRun | null): void {
+  if (!run) {
+    return;
+  }
+  run.controller.abort();
+}
+
 export function createRouter<TRouteId extends string, TLoadContext = unknown, TModule = unknown>(
   options: RouterOptions<TRouteId, TLoadContext, TModule>,
 ) {
-  const compiled = compileRoutes(options.routes);
   const defaultRouteId = options.defaultRouteId ?? null;
+  const compiled = compileRoutes(options.routes, defaultRouteId);
   const moduleCache = new Map<TRouteId, Promise<TModule>>();
   const moduleValues = new Map<TRouteId, TModule>();
   const listeners = new Set<(state: RouteState<TRouteId>) => void>();
   let history: RouterHistory | undefined;
   let basePath = "";
   let stopHistory: (() => void) | undefined;
+  // Keep a successful run active until the next navigation so route-owned
+  // background work can stop when that route is left.
   let currentRun: NavigationRun | null = null;
+  let activeNavigation: Promise<void> | null = null;
   let resolvedRouteId: TRouteId | null = null;
   let state: RouteState<TRouteId> = {
     requested: locationForPath("/"),
@@ -143,6 +165,7 @@ export function createRouter<TRouteId extends string, TLoadContext = unknown, TM
     pendingRouteId: null,
     resolvedRouteId: null,
     status: "idle",
+    revalidating: false,
   };
 
   const publish = (next: RouteState<TRouteId>) => {
@@ -169,24 +192,32 @@ export function createRouter<TRouteId extends string, TLoadContext = unknown, TM
     return loaded;
   };
 
+  const loadRouteChunk = (routeId: TRouteId): Promise<TModule> => {
+    const route = compiled.byId.get(routeId);
+    if (!route) {
+      return Promise.reject(new Error(`Unknown route id "${routeId}".`));
+    }
+    return loadModule(route);
+  };
+
   const loadRoute = async (
     route: PageDefinition<TRouteId, TLoadContext, TModule>,
     context: TLoadContext,
     hookOptions: RouteHookOptions,
   ) => {
-    await Promise.all([route.load?.(context, hookOptions), loadModule(route)]);
+    await Promise.all([route.load?.(context, hookOptions), loadRouteChunk(route.id)]);
   };
 
-  const runHook = async (
+  const runHook = (
     routeId: TRouteId | null,
     hook: "onEnter" | "onLeave",
     context: TLoadContext,
     hookOptions: RouteHookOptions,
-  ) => {
+  ): void => {
     if (!routeId || !hookOptions.shouldRun()) {
       return;
     }
-    await compiled.byId.get(routeId)?.[hook]?.(context, hookOptions);
+    compiled.byId.get(routeId)?.[hook]?.(context, hookOptions);
   };
 
   const navigate = async (
@@ -199,67 +230,87 @@ export function createRouter<TRouteId extends string, TLoadContext = unknown, TM
     if (!route) {
       throw new Error(`Unknown route id "${routeId}".`);
     }
+    const location = normalizeLocation(requestedLocation);
     if (
       resolvedRouteId === routeId &&
       state.status === "resolved" &&
-      !navigationOptions.revalidate
+      !navigationOptions.revalidate &&
+      locationsEqual(state.resolved, location)
     ) {
       return;
     }
 
-    const location = normalizeLocation(requestedLocation);
     if (history && navigationOptions.history && navigationOptions.history !== "none") {
       history[navigationOptions.history](location);
     }
 
-    currentRun?.controller.abort();
+    cancelRun(currentRun);
     const run: NavigationRun = { controller: new AbortController() };
     currentRun = run;
+    const revalidating = navigationOptions.revalidate === true && resolvedRouteId === routeId;
     const hookOptions: RouteHookOptions = {
       signal: run.controller.signal,
       shouldRun: () => isCurrentRun(currentRun, run),
+      revalidating,
     };
-    const previousRouteId =
-      navigationOptions.revalidate && resolvedRouteId === routeId ? null : resolvedRouteId;
-    publish({
-      requested: location,
-      resolved: state.resolved,
-      pendingRouteId: routeId,
-      resolvedRouteId,
-      status: "loading",
-    });
-
-    try {
-      await loadRoute(route, context, hookOptions);
-      if (!hookOptions.shouldRun()) {
-        return;
-      }
-      resolvedRouteId = routeId;
-      publish({
-        requested: location,
-        resolved: location,
-        pendingRouteId: null,
-        resolvedRouteId,
-        status: "resolved",
-      });
-      await runHook(previousRouteId, "onLeave", context, hookOptions);
-      await runHook(routeId, "onEnter", context, hookOptions);
-    } catch (error) {
-      if (!hookOptions.shouldRun()) {
-        return;
-      }
+    const previousRouteId = revalidating ? null : resolvedRouteId;
+    const navigation = (async () => {
       publish({
         requested: location,
         resolved: state.resolved,
-        pendingRouteId: null,
+        pendingRouteId: routeId,
         resolvedRouteId,
-        status: "error",
-        error,
+        status: "loading",
+        revalidating,
       });
-      throw error;
+
+      try {
+        await loadRoute(route, context, hookOptions);
+        if (!hookOptions.shouldRun()) {
+          return;
+        }
+        runHook(previousRouteId, "onLeave", context, hookOptions);
+        if (!hookOptions.shouldRun()) {
+          return;
+        }
+        runHook(routeId, "onEnter", context, hookOptions);
+        if (!hookOptions.shouldRun()) {
+          return;
+        }
+        resolvedRouteId = routeId;
+        publish({
+          requested: location,
+          resolved: location,
+          pendingRouteId: null,
+          resolvedRouteId,
+          status: "resolved",
+          revalidating: false,
+        });
+      } catch (error) {
+        if (!hookOptions.shouldRun()) {
+          return;
+        }
+        publish({
+          requested: location,
+          resolved: state.resolved,
+          pendingRouteId: routeId,
+          resolvedRouteId,
+          status: "error",
+          revalidating,
+          error,
+        });
+        if (isCurrentRun(currentRun, run)) {
+          currentRun = null;
+        }
+        throw error;
+      }
+    })();
+    activeNavigation = navigation;
+    try {
+      await navigation;
     } finally {
-      if (isCurrentRun(currentRun, run)) {
-        currentRun = null;
+      if (activeNavigation === navigation) {
+        activeNavigation = null;
       }
     }
   };
@@ -286,6 +337,16 @@ export function createRouter<TRouteId extends string, TLoadContext = unknown, TM
     routes: [...compiled.byId.values()],
     getRoute: (routeId: TRouteId) => compiled.byId.get(routeId) ?? null,
     getLoadedModule: (routeId: TRouteId) => moduleValues.get(routeId),
+    loadRouteChunk,
+    // Preloading is component-only. Page loaders mutate application state, so
+    // they run only as part of an actual navigation or explicit revalidation.
+    preloadRoute(routeId: TRouteId): Promise<void> {
+      return loadRouteChunk(routeId).then(() => undefined);
+    },
+    preloadLocation(location: RouteLocation): Promise<void> {
+      const routeId = compiled.routeIdFromPath(location.pathname, basePath);
+      return routeId ? loadRouteChunk(routeId).then(() => undefined) : Promise.resolve();
+    },
     getState: () => state,
     subscribe(listener: (next: RouteState<TRouteId>) => void) {
       listeners.add(listener);
@@ -312,19 +373,48 @@ export function createRouter<TRouteId extends string, TLoadContext = unknown, TM
       }
       return navigate(routeId, context, { history: "none" }, normalized);
     },
-    revalidate(context: TLoadContext): Promise<void> {
-      if (!resolvedRouteId) {
+    revalidate(
+      context: TLoadContext,
+      routeId = (state.status === "loading" ? state.pendingRouteId : null) ??
+        resolvedRouteId ??
+        undefined,
+    ): Promise<void> {
+      if (!routeId) {
         return Promise.resolve();
       }
-      const routeId = resolvedRouteId;
-      return navigate(routeId, context, { history: "none", revalidate: true });
+      if (state.status === "loading") {
+        const pendingRouteId = routeId;
+        const navigation = activeNavigation;
+        if (!pendingRouteId || !navigation) {
+          return Promise.resolve();
+        }
+        return navigation.then(() => {
+          if (state.status !== "resolved" || resolvedRouteId !== pendingRouteId) {
+            return;
+          }
+          const location = state.resolved ?? state.requested;
+          return navigate(pendingRouteId, context, { history: "none", revalidate: true }, location);
+        });
+      }
+      const location = state.resolved ?? state.requested;
+      return navigate(routeId, context, { history: "none", revalidate: true }, location);
     },
     stop() {
       stopHistory?.();
       stopHistory = undefined;
-      currentRun?.controller.abort();
+      cancelRun(currentRun);
       currentRun = null;
+      activeNavigation = null;
       history = undefined;
+      resolvedRouteId = null;
+      publish({
+        requested: locationForPath("/"),
+        resolved: null,
+        pendingRouteId: null,
+        resolvedRouteId: null,
+        status: "idle",
+        revalidating: false,
+      });
     },
   };
 }

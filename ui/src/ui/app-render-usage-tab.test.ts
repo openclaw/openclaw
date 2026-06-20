@@ -2,21 +2,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import type { LazyView } from "./lazy-view.ts";
 import type { UsageProps } from "./views/usageTypes.ts";
 
 const renderUsageMock = vi.hoisted(() => vi.fn((_props: UsageProps) => null));
 
 type UsageViewModule = typeof import("./views/usage.ts");
 
-function createLoadedUsageView(): LazyView<UsageViewModule> {
-  return {
-    read: () => ({ renderUsage: renderUsageMock }) as unknown as UsageViewModule,
-    retry: () => {},
-    error: () => undefined,
-    hasError: () => false,
-    pending: () => false,
-  };
+function createUsageView(): UsageViewModule {
+  return { renderUsage: renderUsageMock } as unknown as UsageViewModule;
 }
 
 function createState(overrides: Partial<AppViewState> = {}): AppViewState {
@@ -56,7 +49,7 @@ describe("renderUsageTab", () => {
   });
 
   it("passes configured agents to the usage view", () => {
-    renderUsageTab(createState(), createLoadedUsageView());
+    renderUsageTab(createState(), createUsageView());
 
     expect(renderUsageMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -71,7 +64,7 @@ describe("renderUsageTab", () => {
       client: { request } as unknown as AppViewState["client"],
     });
 
-    renderUsageTab(state, createLoadedUsageView());
+    renderUsageTab(state, createUsageView());
     expect(renderUsageMock).toHaveBeenCalled();
     const props = renderUsageMock.mock.calls[0]?.[0];
     if (!props) {
