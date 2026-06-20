@@ -1,6 +1,6 @@
 ---
 name: gog
-description: "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs."
+description: "Google Workspace and Google API CLI for Gmail, Calendar, Drive, Docs, Sheets, Chat, Classroom, Maps, YouTube, and more."
 homepage: https://gogcli.sh
 metadata:
   {
@@ -24,13 +24,25 @@ metadata:
 
 # gog
 
-Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
+Use `gog` for Google Workspace and Google API tasks. Requires OAuth setup.
+
+This bundled skill is a quick-start reference, not the authoritative command index. `gogcli` changes faster than OpenClaw releases, so before using a command that is not shown here, check the live CLI help or generated docs:
+
+- `gog --help`
+- `gog <command> --help`
+- `gog schema` for machine-readable command/flag metadata
+- https://gogcli.sh/ and https://github.com/openclaw/gogcli/tree/main/docs/commands for the generated command reference
 
 Setup (once)
 
 - `gog auth credentials /path/to/client_secret.json`
 - `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
 - `gog auth list`
+- Use `gog auth services` to list available service groups and scopes before requesting access for newer command families.
+
+Command surface
+
+`gog` includes commands for Gmail, Calendar, Drive, Contacts/People, Sheets, Docs, Slides, Chat, Classroom, Forms, Meet, Apps Script, Analytics, Search Console, Workspace Admin/Groups, Keep, Tasks, YouTube, Maps, Photos, Sites, backups, and a typed MCP server.
 
 Common commands
 
@@ -43,13 +55,16 @@ Common commands
 - Gmail draft: `gog gmail drafts create --to a@b.com --subject "Hi" --body-file ./message.txt`
 - Gmail send draft: `gog gmail drafts send <draftId>`
 - Gmail reply: `gog gmail send --to a@b.com --subject "Re: Hi" --body "Reply" --reply-to-message-id <msgId>`
+- Gmail filters export: `gog gmail settings filters export --account you@example.com --out filters.xml`
 - Calendar list events: `gog calendar events <calendarId> --from <iso> --to <iso>`
 - Calendar create event: `gog calendar create <calendarId> --summary "Title" --from <iso> --to <iso>`
 - Calendar create with color: `gog calendar create <calendarId> --summary "Title" --from <iso> --to <iso> --event-color 7`
 - Calendar update event: `gog calendar update <calendarId> <eventId> --summary "New Title" --event-color 4`
 - Calendar show colors: `gog calendar colors`
 - Drive search: `gog drive search "query" --max 10`
+- Drive raw API JSON: `gog drive raw <fileId> --json`
 - Contacts: `gog contacts list --max 20`
+- People profile: `gog people me --json`
 - Sheets get: `gog sheets get <sheetId> "Tab!A1:D10" --json`
 - Sheets update: `gog sheets update <sheetId> "Tab!A1:B2" --values-json '[["A","B"],["1","2"]]' --input USER_ENTERED`
 - Sheets append: `gog sheets append <sheetId> "Tab!A:C" --values-json '[["x","y","z"]]' --insert INSERT_ROWS`
@@ -57,6 +72,10 @@ Common commands
 - Sheets metadata: `gog sheets metadata <sheetId> --json`
 - Docs export: `gog docs export <docId> --format txt --out /tmp/doc.txt`
 - Docs cat: `gog docs cat <docId>`
+- Forms: `gog forms --help`
+- Maps/Places: `gog maps --help`
+- YouTube: `gog youtube --help`
+- MCP server: `gog mcp --help`
 
 Calendar Colors
 
