@@ -928,6 +928,31 @@ describe("failover-error", () => {
     expect(isTimeoutError(err)).toBe(true);
   });
 
+  it("treats AbortError with 'This operation was aborted' message as timeout (#94998)", () => {
+    // Provider transport timeouts (e.g. 365s AbortSignal.timeout) can surface
+    // AbortError with the DOM-standard message "This operation was aborted".
+    // This must be classified as a timeout so model fallback is triggered.
+    const err = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    expect(isTimeoutError(err)).toBe(true);
+  });
+
+  it("does not treat session-write-lock AbortError with 'This operation was aborted' as timeout (#94998)", () => {
+    // Even when the message matches, session write lock contention must not be
+    // misclassified as a provider timeout.
+    const lockError = new SessionWriteLockTimeoutError({
+      timeoutMs: 10_000,
+      owner: "pid=37121",
+      lockPath: "/tmp/openclaw/session.jsonl.lock",
+    });
+    const err = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+      cause: lockError,
+    });
+    expect(isTimeoutError(err)).toBe(false);
+  });
+
   it("classifies abort-wrapped RESOURCE_EXHAUSTED as rate_limit", () => {
     const err = Object.assign(new Error("request aborted"), {
       name: "AbortError",
