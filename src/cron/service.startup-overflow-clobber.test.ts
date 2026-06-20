@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { start } from "./service/ops.js";
+import { list, remove, start, status } from "./service/ops.js";
 import { createCronServiceState } from "./service/state.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
@@ -106,6 +106,93 @@ describe("CronService startup catch-up repair scoping", () => {
 
     expect(repaired?.state.nextRunAtMs).toBe(naturalSlot);
     expect(repaired?.state.nextRunAtMs).not.toBe(staleFutureSlot);
+
+    state.stopped = true;
+    await store.cleanup();
+  });
+
+  it("keeps the overflow daily-cron deferral after read RPCs (cron list/status) run post-start (#93935)", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    const stagger = 5_000;
+    const deferredSlot = startNow + stagger;
+    const tomorrowNaturalSlot = Date.parse("2025-12-14T09:00:00.000Z");
+
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        createHourlyCronJob("hourly-0", Date.parse("2025-12-13T03:00:00.000Z")),
+        createHourlyCronJob("hourly-1", Date.parse("2025-12-13T04:00:00.000Z")),
+        createHourlyCronJob("hourly-2", Date.parse("2025-12-13T05:00:00.000Z")),
+        createHourlyCronJob("hourly-3", Date.parse("2025-12-13T06:00:00.000Z")),
+        createHourlyCronJob("hourly-4", Date.parse("2025-12-13T07:00:00.000Z")),
+        createDailyCronJob("daily-overflow", Date.parse("2025-12-13T09:00:00.000Z")),
+      ],
+    });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startNow,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await start(state);
+
+    // Sanity check: start() preserves the deferral (this is the #93810 invariant).
+    const afterStart = state.store?.jobs.find((job) => job.id === "daily-overflow");
+    expect(afterStart?.state.nextRunAtMs).toBe(deferredSlot);
+    expect(state.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(true);
+
+    // Simulate any caller that issues a plain read RPC before the staggered
+    // catch-up tick fires (Mac app poll, control UI refresh, `cron list`).
+    await status(state);
+    await list(state);
+
+    const afterRead = state.store?.jobs.find((job) => job.id === "daily-overflow");
+    expect(afterRead?.state.nextRunAtMs).toBe(deferredSlot);
+    expect(afterRead?.state.nextRunAtMs).not.toBe(tomorrowNaturalSlot);
+
+    state.stopped = true;
+    await store.cleanup();
+  });
+
+  it("clears the deferral when the deferred job is removed so the id cannot leak (#93935)", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        createHourlyCronJob("hourly-0", Date.parse("2025-12-13T03:00:00.000Z")),
+        createHourlyCronJob("hourly-1", Date.parse("2025-12-13T04:00:00.000Z")),
+        createHourlyCronJob("hourly-2", Date.parse("2025-12-13T05:00:00.000Z")),
+        createHourlyCronJob("hourly-3", Date.parse("2025-12-13T06:00:00.000Z")),
+        createHourlyCronJob("hourly-4", Date.parse("2025-12-13T07:00:00.000Z")),
+        createDailyCronJob("daily-overflow", Date.parse("2025-12-13T09:00:00.000Z")),
+      ],
+    });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startNow,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await start(state);
+
+    expect(state.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(true);
+
+    const removed = await remove(state, "daily-overflow");
+    expect(removed).toEqual({ ok: true, removed: true });
+    expect(state.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(false);
 
     state.stopped = true;
     await store.cleanup();
