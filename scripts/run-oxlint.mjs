@@ -69,7 +69,13 @@ export function parseOpenClawOxlintArgs(argv) {
 }
 
 export function shouldSkipOxlintLock({ focusedConfig, env }) {
-  return focusedConfig || env.OPENCLAW_OXLINT_SKIP_LOCK === "1";
+  if (env.OPENCLAW_OXLINT_SKIP_LOCK === "1") {
+    return true;
+  }
+  if (env.OPENCLAW_OXLINT_FORCE_LOCK === "1") {
+    return false;
+  }
+  return focusedConfig;
 }
 
 /**

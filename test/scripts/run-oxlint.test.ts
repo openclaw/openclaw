@@ -84,6 +84,15 @@ describe("run-oxlint", () => {
     expect(
       shouldSkipOxlintLock({ focusedConfig: false, env: { OPENCLAW_OXLINT_SKIP_LOCK: "1" } }),
     ).toBe(true);
+    expect(
+      shouldSkipOxlintLock({ focusedConfig: true, env: { OPENCLAW_OXLINT_FORCE_LOCK: "1" } }),
+    ).toBe(false);
+    expect(
+      shouldSkipOxlintLock({
+        focusedConfig: true,
+        env: { OPENCLAW_OXLINT_FORCE_LOCK: "1", OPENCLAW_OXLINT_SKIP_LOCK: "1" },
+      }),
+    ).toBe(true);
   });
 
   it("prepares extension package boundary artifacts for normal lint runs", () => {
