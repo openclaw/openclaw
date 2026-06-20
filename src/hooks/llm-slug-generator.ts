@@ -12,7 +12,11 @@ import {
   resolveAgentDir,
 } from "../agents/agent-scope.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -94,11 +98,26 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    const { provider, model: defaultModel } = resolveDefaultModelForAgent({
+    const { provider: defaultProvider, model: defaultModel } = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId,
     });
-    const model = params.model ?? defaultModel;
+    let provider = defaultProvider;
+    let model = defaultModel;
+    if (params.model) {
+      const resolved = resolveModelRefFromString({
+        cfg: params.cfg,
+        raw: params.model,
+        defaultProvider,
+        aliasIndex: buildModelAliasIndex({ cfg: params.cfg, defaultProvider }),
+      })?.ref;
+      if (resolved) {
+        provider = resolved.provider;
+        model = resolved.model;
+      } else {
+        model = params.model;
+      }
+    }
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
     const result = await runEmbeddedAgent({
