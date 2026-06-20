@@ -267,9 +267,11 @@ export async function claimTelegramSpooledUpdate(
 
 export async function releaseTelegramSpooledUpdateClaim(
   update: ClaimedTelegramSpooledUpdate,
+  options?: { lastError?: string },
 ): Promise<void> {
   await createTelegramIngressQueue(path.dirname(update.pendingPath)).release(
     queueMutationTarget(update),
+    { lastError: options?.lastError },
   );
 }
 
