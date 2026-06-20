@@ -108,7 +108,6 @@ function createHost() {
     logsAutoFollow: false,
     logsAtBottom: true,
     logsEntries: [],
-    sessionPopStateHandler: vi.fn(),
     topbarObserver: null,
   };
 }
