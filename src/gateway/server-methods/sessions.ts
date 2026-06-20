@@ -1411,7 +1411,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         reason: "new",
       });
     }
-    if (!requestedKey) {
+    const hasCreateIntent = Boolean(p.label ?? p.model ?? p.task ?? p.message);
+    if (!requestedKey && !hasCreateIntent) {
       const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId });
       const existingKey = findActiveDashboardSessionKey(store, agentId);
       if (existingKey) {

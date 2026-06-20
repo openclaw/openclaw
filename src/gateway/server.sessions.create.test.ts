@@ -690,3 +690,61 @@ test("sessions.create without key creates new dashboard session when existing on
   expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
   expect(created.payload?.key).not.toBe("agent:ops:dashboard:ended");
 });
+
+test("sessions.create with label creates new dashboard session when active dashboard exists", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    agentId: "ops",
+    entries: {
+      "agent:ops:dashboard:existing": sessionStoreEntry("sess-existing", {
+        updatedAt: 1000,
+        label: "Existing Dashboard",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    sessionId?: string;
+    entry?: { label?: string };
+  }>("sessions.create", {
+    agentId: "ops",
+    label: "New Chat",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+  expect(created.payload?.key).not.toBe("agent:ops:dashboard:existing");
+});
+
+test("sessions.create with task creates new dashboard session when active dashboard exists", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    agentId: "ops",
+    entries: {
+      "agent:ops:dashboard:existing": sessionStoreEntry("sess-existing", {
+        updatedAt: 1000,
+        label: "Existing Dashboard",
+      }),
+    },
+  });
+  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  const { ws } = await openClient();
+
+  const created = await rpcReq<{
+    key?: string;
+    sessionId?: string;
+    runStarted?: boolean;
+    runId?: string;
+  }>(ws, "sessions.create", {
+    agentId: "ops",
+    task: "new task from reconnect",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+  expect(created.payload?.key).not.toBe("agent:ops:dashboard:existing");
+  expect(created.payload?.runStarted).toBe(true);
+
+  ws.close();
+});
