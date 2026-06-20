@@ -175,7 +175,7 @@ async function finalizeCopilotAttempt(
       messages: result.messagesSnapshot,
       success: !result.aborted && !result.promptError && !result.timedOut,
       ...(result.promptError
-        ? { error: result.promptError.message }
+        ? { error: toError(result.promptError).message }
         : result.timedOut
           ? { error: "Copilot SDK turn timed out." }
           : {}),
