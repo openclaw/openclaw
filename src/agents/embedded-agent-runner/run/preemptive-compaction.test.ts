@@ -453,4 +453,47 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
   });
+
+  it("context engine llmBoundaryTokenPressure overrides built-in CJK overestimation", () => {
+    const cjkToolResult = "测试页面内容：".repeat(3_000) + "结束";
+    const messages = [
+      makeToolResultMessage(cjkToolResult),
+      makeToolResultMessage(cjkToolResult),
+      makeToolResultMessage(cjkToolResult),
+    ];
+    const contextTokenBudget = 128_000;
+    const reserveTokens = 20_000;
+
+    const withoutOverride = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "system",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+    });
+    expect(withoutOverride.shouldCompact).toBe(true);
+    expect(withoutOverride.pressureSource).toBe("transcript_estimate");
+
+    const contextEngineEstimate = 42_000;
+    const renderedOverhead = estimateRenderedLlmBoundaryTokenPressure({
+      systemPrompt: "system",
+      prompt: "continue",
+    });
+
+    const withOverride = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "system",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens: contextEngineEstimate + renderedOverhead,
+        source: "context_engine_assemble",
+      },
+    });
+    expect(withOverride.shouldCompact).toBe(false);
+    expect(withOverride.route).toBe("fits");
+    expect(withOverride.pressureSource).toBe("context_engine_assemble");
+    expect(withOverride.estimatedPromptTokens).toBe(contextEngineEstimate + renderedOverhead);
+  });
 });

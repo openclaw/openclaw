@@ -494,6 +494,7 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
+  estimateRenderedLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -2582,6 +2583,7 @@ export async function runEmbeddedAttempt(
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
         "assembled";
+      let contextEngineEstimatedTokens: number | undefined;
       const inFlightPromptSettlePromises = new Set<Promise<void>>();
       const inFlightAbortSettlePromises = new Set<Promise<void>>();
       const trackSettlePromise = (
@@ -3334,6 +3336,9 @@ export async function runEmbeddedAttempt(
               activeSession.agent.state.messages = assembledMessages;
             }
             contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
+            if (assembled.estimatedTokens > 0) {
+              contextEngineEstimatedTokens = assembled.estimatedTokens;
+            }
             if (contextEnginePromptAuthority === "preassembly_may_overflow") {
               unwindowedContextEngineMessagesForPrecheck =
                 preassemblyContextEngineMessagesForPrecheck;
@@ -4575,11 +4580,18 @@ export async function runEmbeddedAttempt(
                   llmBoundaryOptionsForPrecheck,
                 )
               : undefined;
-          const llmBoundaryTokenPressure = estimateLlmBoundaryTokenPressure({
-            messages: hookMessagesForCurrentPrompt,
-            systemPrompt: systemPromptForHook,
-            prompt: llmBoundaryPromptForPrecheck,
-          });
+          const llmBoundaryTokenPressure =
+            contextEngineEstimatedTokens != null
+              ? contextEngineEstimatedTokens +
+                estimateRenderedLlmBoundaryTokenPressure({
+                  systemPrompt: systemPromptForHook,
+                  prompt: llmBoundaryPromptForPrecheck,
+                })
+              : estimateLlmBoundaryTokenPressure({
+                  messages: hookMessagesForCurrentPrompt,
+                  systemPrompt: systemPromptForHook,
+                  prompt: llmBoundaryPromptForPrecheck,
+                });
           const preemptiveCompaction = skipPromptSubmission
             ? null
             : shouldPreemptivelyCompactBeforePrompt({
@@ -4594,7 +4606,10 @@ export async function runEmbeddedAttempt(
                 toolResultMaxChars: promptToolResultMaxChars,
                 llmBoundaryTokenPressure: {
                   estimatedPromptTokens: llmBoundaryTokenPressure,
-                  source: "llm_boundary_normalized_prompt",
+                  source:
+                    contextEngineEstimatedTokens != null
+                      ? "context_engine_assemble"
+                      : "llm_boundary_normalized_prompt",
                   renderedChars: llmBoundaryPromptForPrecheck.length,
                 },
               });
