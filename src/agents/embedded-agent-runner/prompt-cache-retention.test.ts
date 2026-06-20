@@ -114,6 +114,33 @@ describe("prompt cache retention", () => {
     ).toBe("short");
   });
 
+  it("does not map 'standard' cacheRetention to 'short' for Google models", () => {
+    // Regression: the standard→short alias must not leak outside the
+    // Anthropic/Bedrock cache family (issue #94482).
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "google",
+        "google-generative-ai",
+        "gemini-3.1-pro-preview",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("does not map 'standard' cacheRetention to 'short' for prompt-cache-key providers", () => {
+    // Regression: the standard→short alias must not leak outside the
+    // Anthropic/Bedrock cache family (issue #94482).
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "omlx-local",
+        "openai-completions",
+        "local_model",
+        true,
+      ),
+    ).toBeUndefined();
+  });
+
   it("does not map 'standard' cacheRetention for non-Anthropic Bedrock models", () => {
     expect(
       resolveCacheRetention(
