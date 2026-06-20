@@ -106,6 +106,8 @@ export function resolveSubagentModelAndThinkingPlan(params: {
       }
     : undefined;
 
+  const resolvedModelParts = resolvedModel ? splitModelRef(resolvedModel) : undefined;
+
   return {
     status: "ok" as const,
     resolvedModel,
@@ -116,6 +118,19 @@ export function resolveSubagentModelAndThinkingPlan(params: {
         ? {
             model: resolvedModel,
             modelOverrideSource,
+            // Persist the model override so that agent-command model selection
+            // resolves the requested model instead of falling back to the default.
+            // Without these fields, agent-command only sees the runtime model/
+            // modelProvider fields (which resolveSessionModelRef uses) but its
+            // primary selection path checks modelOverride/providerOverride first.
+            ...(resolvedModelParts?.model
+              ? {
+                  modelOverride: resolvedModelParts.model,
+                  ...(resolvedModelParts.provider
+                    ? { providerOverride: resolvedModelParts.provider }
+                    : {}),
+                }
+              : {}),
             ...(modelOrigin
               ? {
                   // Config-selected models are session overrides, not legacy fallback residue.
