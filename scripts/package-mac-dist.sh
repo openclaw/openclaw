@@ -256,7 +256,10 @@ if [[ "$SKIP_DSYM" != "1" ]]; then
     fi
     echo "🧩 dSYM: $DSYM_ZIP"
     rm -f "$DSYM_ZIP"
-    ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"
+    if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then
+      rm -rf "$TMP_DSYM"
+      exit 1
+    fi
     rm -rf "$TMP_DSYM"
   else
     echo "Error: dSYM not found (set SKIP_DSYM=1 to skip symbols)" >&2

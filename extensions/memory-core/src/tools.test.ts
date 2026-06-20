@@ -12,7 +12,7 @@ import {
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
   setMemorySyncImpl,
-} from "./memory-tool-manager-mock.js";
+} from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
 import {

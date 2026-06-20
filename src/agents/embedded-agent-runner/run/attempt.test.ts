@@ -3396,8 +3396,13 @@ describe("buildAfterTurnRuntimeContext", () => {
         config: {
           agents: {
             defaults: {
+              models: {
+                "openrouter/anthropic/claude-sonnet-4-5": {
+                  alias: "summary",
+                },
+              },
               compaction: {
-                model: "openrouter/anthropic/claude-sonnet-4-5",
+                model: "summary",
               },
             },
           },
@@ -3415,9 +3420,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    // buildEmbeddedCompactionRuntimeContext now resolves the override eagerly
-    // so that context engines (including third-party ones) receive the correct
-    // compaction model in the runtime context.
+    // Resolve aliases before handing runtime context to any context engine;
+    // otherwise third-party engines can dispatch the bare alias as a model id.
     expect(legacy.provider).toBe("openrouter");
     expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
     // Auth profile dropped because provider changed from openai to openrouter.

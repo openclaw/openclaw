@@ -4,6 +4,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { isRepoRootRelativeRef } from "./cli-paths.js";
+import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
 
@@ -87,8 +88,8 @@ const qaScenarioExecutionSchema = z.union([
 const qaCoverageIdSchema = z
   .string()
   .trim()
-  .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
-    message: "coverage ids must use lowercase dotted or dashed tokens",
+  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
+    message: "coverage ids must use lowercase dotted tokens",
   });
 
 const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
@@ -124,6 +125,7 @@ const qaScenarioCoverageSchema = z
 
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
+  preserveDebugArtifacts: z.boolean().optional(),
 });
 
 export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;
@@ -291,37 +293,14 @@ const repoPathCache = new Map<string, string | null>();
 let qaScenarioYamlPathsCache: string[] | null = null;
 let qaScenarioPackCache: QaScenarioPack | null = null;
 
-function walkUpDirectories(start: string): string[] {
-  const roots: string[] = [];
-  let current = path.resolve(start);
-  while (true) {
-    roots.push(current);
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return roots;
-    }
-    current = parent;
-  }
-}
-
-function resolveRepoPath(relativePath: string, kind: "file" | "directory" = "file"): string | null {
+function resolveRepoPath(relativePath: string, kind: QaRepoPathKind = "file"): string | null {
   const cacheKey = `${kind}:${relativePath}`;
   if (repoPathCache.has(cacheKey)) {
     return repoPathCache.get(cacheKey) ?? null;
   }
-  for (const dir of walkUpDirectories(import.meta.dirname)) {
-    const candidate = path.join(dir, relativePath);
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    const stat = fs.statSync(candidate);
-    if ((kind === "file" && stat.isFile()) || (kind === "directory" && stat.isDirectory())) {
-      repoPathCache.set(cacheKey, candidate);
-      return candidate;
-    }
-  }
-  repoPathCache.set(cacheKey, null);
-  return null;
+  const resolved = resolveQaRepoPath(import.meta.dirname, relativePath, kind);
+  repoPathCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 export function hasQaScenarioPack(): boolean {

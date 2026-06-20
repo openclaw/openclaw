@@ -315,7 +315,7 @@ Current existing-session limits:
 - `hover`, `scrollintoview`, `drag`, `select`, `fill`, and `evaluate` reject
   per-call timeout overrides
 - `select` supports one value only
-- `wait --load networkidle` is not supported
+- `wait --load networkidle` is not supported on existing-session profiles (works on managed and raw/remote CDP)
 - file uploads require `--ref` / `--input-ref`, do not support CSS
   `--element`, and currently support one file at a time
 - dialog hooks do not support `--timeout`

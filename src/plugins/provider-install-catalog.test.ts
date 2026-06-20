@@ -64,6 +64,7 @@ vi.mock("./official-external-plugin-catalog.js", async () => {
 });
 
 import {
+  resolveDeprecatedProviderInstallCatalogEntry,
   resolveProviderInstallCatalogEntries,
   resolveProviderInstallCatalogEntry,
 } from "./provider-install-catalog.js";
@@ -654,6 +655,42 @@ describe("provider install catalog", () => {
       pluginId: "gmi",
       providerId: "gmi",
       providerAliases: ["gmi-cloud", "gmicloud"],
+    });
+  });
+
+  it("resolves deprecated official external auth choices before their plugin is installed", () => {
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        name: "@openclaw/qwen-provider",
+        source: "official",
+        kind: "provider",
+        openclaw: {
+          plugin: { id: "qwen", label: "Qwen Cloud" },
+          providers: [
+            {
+              id: "qwen",
+              name: "Qwen Cloud",
+              authChoices: [
+                {
+                  method: "api-key",
+                  choiceId: "qwen-api-key",
+                  deprecatedChoiceIds: ["modelstudio-api-key"],
+                  choiceLabel: "Qwen Cloud API key",
+                },
+              ],
+            },
+          ],
+          install: {
+            npmSpec: "@openclaw/qwen-provider",
+            defaultChoice: "npm",
+          },
+        },
+      },
+    ]);
+
+    expect(resolveDeprecatedProviderInstallCatalogEntry("modelstudio-api-key")).toMatchObject({
+      pluginId: "qwen",
+      choiceId: "qwen-api-key",
     });
   });
 

@@ -47,33 +47,21 @@ Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings
 
 For pull request runs, the terminal timing-summary job runs the helper from the trusted base revision before passing `GH_TOKEN` to `gh run view`. That keeps the tokened query out of branch-controlled code while still summarizing the pull request's current CI run.
 
-## Real behavior proof
+## PR context and evidence
 
-External contributor PRs run a `Real behavior proof` gate from
+External contributor PRs run a PR context and evidence gate from
 `.github/workflows/real-behavior-proof.yml`. The workflow checks out the trusted
 base commit and evaluates the PR body only; it does not execute code from the
 contributor branch.
 
 The gate applies to PR authors who are not repository owners, members,
-collaborators, or bots. It passes when the PR body contains a
-`Real behavior proof` section with filled values for:
-
-- `Behavior or issue addressed`
-- `Real environment tested`
-- `Exact steps or command run after this patch`
-- `Evidence after fix`
-- `Observed result after fix`
-- `What was not tested`
-
-The evidence must show the changed behavior after the patch in a real OpenClaw
-setup. Screenshots, recordings, terminal captures, console output, copied live
-output, redacted runtime logs, and linked artifacts all count. Unit tests, mocks,
-snapshots, lint, typechecks, and CI results are useful supporting verification,
-but they do not satisfy this gate by themselves.
+collaborators, or bots. It passes when the PR body contains authored
+`What Problem This Solves` and `Evidence` sections. Evidence can be a focused
+test, CI result, screenshot, recording, terminal output, live observation,
+redacted log, or artifact link. The body provides intent and useful validation;
+reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
-Maintainers can apply `proof: override` only when the proof gate should not
-apply to that PR.
 
 ## Scope and routing
 

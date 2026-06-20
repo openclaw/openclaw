@@ -2,9 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
+  applyRestartRecoveryLifecycle,
   appendTranscriptMessage,
   appendTranscriptEvent,
   applySessionEntryLifecycleMutation,
@@ -16,11 +18,14 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry,
+  persistSessionResetLifecycle,
+  persistSessionRolloverLifecycle,
   persistSessionTranscriptTurn,
   purgeDeletedAgentSessionEntries,
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
   trimSessionTranscriptForManualCompact,
@@ -448,6 +453,62 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("applies restart recovery replacements without exposing mutable store rows", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "session-1",
+            status: "running",
+            updatedAt: 10,
+          },
+          "agent:main:other": {
+            sessionId: "session-2",
+            status: "running",
+            updatedAt: 20,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await applyRestartRecoveryLifecycle({
+      storePath,
+      update: (entries) => {
+        const main = entries.find((entry) => entry.sessionKey === "agent:main:main");
+        const other = entries.find((entry) => entry.sessionKey === "agent:main:other");
+        if (other) {
+          other.entry.status = "failed";
+        }
+        if (!main) {
+          return { result: { replaced: false } };
+        }
+        main.entry.abortedLastRun = true;
+        main.entry.updatedAt = 30;
+        return {
+          result: { replaced: true },
+          replacements: [{ sessionKey: main.sessionKey, entry: main.entry }],
+        };
+      },
+    });
+
+    expect(result).toEqual({ replaced: true });
+    const store = loadSessionStore(storePath);
+    expect(store["agent:main:main"]).toMatchObject({
+      abortedLastRun: true,
+      sessionId: "session-1",
+      updatedAt: 30,
+    });
+    expect(store["agent:main:other"]).toMatchObject({
+      sessionId: "session-2",
+      status: "running",
+      updatedAt: 20,
+    });
+  });
+
   it("cleans scoped lifecycle entries and unreferenced transcript artifacts", async () => {
     const nowMs = Date.now();
     const oldDate = new Date(nowMs - 600_000);
@@ -538,6 +599,118 @@ describe("session accessor file-backed seam", () => {
     expect(files).toContain("referenced.jsonl");
     expect(fs.existsSync(siblingTranscriptPath)).toBe(true);
     expect(fs.readdirSync(siblingDir)).toEqual(["sibling-lifecycle.jsonl"]);
+  });
+
+  it("persists reset lifecycle entry changes with transcript replay and cleanup", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:main";
+    const previousTranscript = path.join(tempDir, "previous-session.jsonl");
+    const nextTranscript = path.join(tempDir, "next-session.jsonl");
+    const previousEntry: SessionEntry = {
+      sessionFile: previousTranscript,
+      sessionId: "previous-session",
+      updatedAt: now,
+    };
+    const nextEntry: SessionEntry = {
+      sessionFile: nextTranscript,
+      sessionId: "next-session",
+      updatedAt: now + 1,
+    };
+    fs.writeFileSync(
+      previousTranscript,
+      [
+        JSON.stringify({ type: "session", id: "previous-session" }),
+        JSON.stringify({
+          id: "msg-user",
+          message: { role: "user", content: "hello" },
+          parentId: null,
+          timestamp: "2026-06-16T00:00:00.000Z",
+          type: "message",
+        }),
+        JSON.stringify({
+          id: "msg-assistant",
+          message: { role: "assistant", content: "hi" },
+          parentId: "msg-user",
+          timestamp: "2026-06-16T00:00:01.000Z",
+          type: "message",
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await upsertSessionEntry({ sessionKey, storePath }, previousEntry);
+
+    const result = await persistSessionResetLifecycle({
+      agentId: "main",
+      cleanupPreviousTranscript: true,
+      nextEntry,
+      nextSessionFile: nextTranscript,
+      previousEntry,
+      previousSessionId: previousEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
+
+    expect(result.replayedMessages).toBe(2);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
+    expect(fs.existsSync(previousTranscript)).toBe(false);
+    expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
+  });
+
+  it("persists rollover entries and returns archived previous transcript info", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:telegram:dm:user";
+    const retiredKey = "agent:main:main";
+    const previousTranscript = path.join(tempDir, "previous-rollover.jsonl");
+    const previousEntry: SessionEntry = {
+      sessionFile: previousTranscript,
+      sessionId: "previous-rollover",
+      updatedAt: now,
+    };
+    const nextEntry: SessionEntry = {
+      sessionFile: path.join(tempDir, "next-rollover.jsonl"),
+      sessionId: "next-rollover",
+      updatedAt: now + 1,
+    };
+    fs.writeFileSync(previousTranscript, '{"type":"session","id":"previous-rollover"}\n', "utf-8");
+    await upsertSessionEntry({ sessionKey, storePath }, previousEntry);
+    await upsertSessionEntry(
+      { sessionKey: retiredKey, storePath },
+      {
+        lastChannel: "telegram",
+        lastTo: "user",
+        sessionId: "legacy-main",
+        updatedAt: now,
+      },
+    );
+
+    const result = await persistSessionRolloverLifecycle({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      previousEntry,
+      retiredEntry: {
+        key: retiredKey,
+        entry: {
+          sessionId: "legacy-main",
+          updatedAt: now,
+        },
+      },
+      sessionEntry: nextEntry,
+      sessionKey,
+      storePath,
+    });
+
+    expect(result.sessionEntry).toMatchObject(nextEntry);
+    expect(result.previousSessionTranscript.transcriptArchived).toBe(true);
+    expect(result.previousSessionTranscript.sessionFile).toContain(
+      "previous-rollover.jsonl.reset.",
+    );
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
+    expect(loadSessionEntry({ sessionKey: retiredKey, storePath })).toEqual({
+      sessionId: "legacy-main",
+      updatedAt: expect.any(Number),
+    });
+    expect(fs.existsSync(previousTranscript)).toBe(false);
+    expect(fs.existsSync(result.previousSessionTranscript.sessionFile ?? "")).toBe(true);
   });
 
   it("loads and appends transcript events through a session scope", async () => {
@@ -764,21 +937,51 @@ describe("session accessor file-backed seam", () => {
       totalTokensFresh: true,
       updatedAt: 100,
     });
-    fs.writeFileSync(manualTranscriptPath, "line 1\n\nline 2\nline 3\nline 4\n", "utf-8");
+    const transcriptRecords = [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-06-19T12:00:00.000Z",
+        cwd: tempDir,
+      },
+      ...[1, 2, 3, 4].map((index) => ({
+        type: "message",
+        id: `entry-${index}`,
+        parentId: index === 1 ? null : `entry-${index - 1}`,
+        timestamp: `2026-06-19T12:00:0${index}.000Z`,
+        message: { role: "user", content: `message ${index}`, timestamp: index },
+      })),
+    ];
+    const originalTranscript = `${transcriptRecords.map((record) => JSON.stringify(record)).join("\n")}\n`;
+    fs.writeFileSync(manualTranscriptPath, originalTranscript, { encoding: "utf-8", mode: 0o640 });
     const updates: unknown[] = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
 
     const result = await trimSessionTranscriptForManualCompact(scope, {
-      maxLines: 2,
+      maxLines: 3,
       nowMs: 500,
     });
 
     unsubscribe();
-    expect(result).toMatchObject({ compacted: true, kept: 2 });
+    expect(result).toMatchObject({ compacted: true, kept: 3 });
     const archived = result.compacted ? result.archived : "";
     expect(path.basename(archived)).toMatch(new RegExp(`^${sessionId}\\.jsonl\\.bak\\.`));
-    expect(fs.readFileSync(archived, "utf-8")).toBe("line 1\n\nline 2\nline 3\nline 4\n");
-    expect(fs.readFileSync(manualTranscriptPath, "utf-8")).toBe("line 3\nline 4\n");
+    expect(fs.readFileSync(archived, "utf-8")).toBe(originalTranscript);
+    const trimmedRecords = fs
+      .readFileSync(manualTranscriptPath, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(trimmedRecords).toMatchObject([
+      { type: "session", id: sessionId },
+      { type: "message", id: "entry-3", parentId: null },
+      { type: "message", id: "entry-4", parentId: "entry-3" },
+    ]);
+    expect(fs.statSync(manualTranscriptPath).mode & 0o777).toBe(0o600);
+    const reopened = SessionManager.open(manualTranscriptPath, tempDir, tempDir);
+    expect(reopened.getEntries().map((entry) => entry.id)).toEqual(["entry-3", "entry-4"]);
+    expect(reopened.buildSessionContext().messages).toHaveLength(2);
     const updatedEntry = loadSessionEntry(scope);
     expect(updatedEntry).toMatchObject({
       sessionFile: manualTranscriptPath,
@@ -790,7 +993,287 @@ describe("session accessor file-backed seam", () => {
     expect(updatedEntry?.outputTokens).toBeUndefined();
     expect(updatedEntry?.totalTokens).toBeUndefined();
     expect(updatedEntry?.totalTokensFresh).toBeUndefined();
-    expect(updates).toEqual([{ sessionFile: archived }]);
+    expect(updates).toEqual([
+      { sessionFile: archived },
+      { sessionFile: fs.realpathSync(manualTranscriptPath) },
+    ]);
+  });
+
+  it("keeps retained messages reachable through an out-of-window label", async () => {
+    const sessionId = "22222222-2222-4222-8222-222222222222";
+    const sessionFile = path.join(tempDir, `${sessionId}.jsonl`);
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const records = [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-06-19T12:00:00.000Z",
+        cwd: tempDir,
+      },
+      {
+        type: "message",
+        id: "old",
+        parentId: null,
+        timestamp: "2026-06-19T12:00:01.000Z",
+        message: { role: "user", content: "old", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "kept-1",
+        parentId: "old",
+        timestamp: "2026-06-19T12:00:02.000Z",
+        message: { role: "user", content: "kept one", timestamp: 2 },
+      },
+      {
+        type: "label",
+        id: "label-1",
+        parentId: "kept-1",
+        targetId: "old",
+        label: "trimmed target",
+        timestamp: "2026-06-19T12:00:03.000Z",
+      },
+      {
+        type: "message",
+        id: "kept-2",
+        parentId: "label-1",
+        timestamp: "2026-06-19T12:00:04.000Z",
+        message: { role: "user", content: "kept two", timestamp: 4 },
+      },
+    ];
+    await upsertSessionEntry(scope, { sessionFile, sessionId, updatedAt: 1 });
+    fs.writeFileSync(
+      sessionFile,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf-8",
+    );
+
+    await expect(
+      trimSessionTranscriptForManualCompact(scope, { maxLines: 4 }),
+    ).resolves.toMatchObject({ compacted: true, kept: 4 });
+
+    const context = SessionManager.open(sessionFile, tempDir, tempDir).buildSessionContext();
+    expect(JSON.stringify(context.messages)).toContain("kept one");
+    expect(JSON.stringify(context.messages)).toContain("kept two");
+  });
+
+  it("does not reactivate an abandoned branch when a leaf target was trimmed", async () => {
+    const sessionId = "44444444-4444-4444-8444-444444444444";
+    const sessionFile = path.join(tempDir, `${sessionId}.jsonl`);
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const records = [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-06-19T12:00:00.000Z",
+        cwd: tempDir,
+      },
+      {
+        type: "message",
+        id: "selected-before-window",
+        parentId: null,
+        timestamp: "2026-06-19T12:00:01.000Z",
+        message: { role: "user", content: "selected", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "abandoned-side-row",
+        parentId: "selected-before-window",
+        appendMode: "side",
+        timestamp: "2026-06-19T12:00:02.000Z",
+        message: { role: "user", content: "must stay hidden", timestamp: 2 },
+      },
+      {
+        type: "leaf",
+        id: "leaf-1",
+        parentId: "abandoned-side-row",
+        targetId: "selected-before-window",
+        appendParentId: "selected-before-window",
+        timestamp: "2026-06-19T12:00:03.000Z",
+      },
+    ];
+    await upsertSessionEntry(scope, { sessionFile, sessionId, updatedAt: 1 });
+    fs.writeFileSync(
+      sessionFile,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf-8",
+    );
+
+    await expect(
+      trimSessionTranscriptForManualCompact(scope, { maxLines: 3 }),
+    ).resolves.toMatchObject({ compacted: true, kept: 3 });
+
+    const persisted = fs
+      .readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(persisted.find((entry) => entry.type === "leaf")).toMatchObject({
+      targetId: null,
+      appendParentId: null,
+    });
+    expect(
+      SessionManager.open(sessionFile, tempDir, tempDir).buildSessionContext().messages,
+    ).toEqual([]);
+  });
+
+  it("keeps malformed leaf controls transparent while re-rooting retained descendants", async () => {
+    const sessionId = "55555555-5555-4555-8555-555555555555";
+    const sessionFile = path.join(tempDir, `${sessionId}.jsonl`);
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const records = [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-06-19T12:00:00.000Z",
+        cwd: tempDir,
+      },
+      {
+        type: "message",
+        id: "trimmed",
+        parentId: null,
+        message: { role: "user", content: "trimmed", timestamp: 1 },
+        timestamp: "2026-06-19T12:00:01.000Z",
+      },
+      {
+        type: "message",
+        id: "retained-root",
+        parentId: "trimmed",
+        message: { role: "user", content: "retained root", timestamp: 2 },
+        timestamp: "2026-06-19T12:00:02.000Z",
+      },
+      {
+        type: "leaf",
+        id: "malformed-leaf",
+        parentId: "retained-root",
+        timestamp: "2026-06-19T12:00:03.000Z",
+      },
+      {
+        type: "message",
+        id: "retained-child",
+        parentId: "malformed-leaf",
+        message: { role: "user", content: "retained child", timestamp: 4 },
+        timestamp: "2026-06-19T12:00:04.000Z",
+      },
+    ];
+    await upsertSessionEntry(scope, { sessionFile, sessionId, updatedAt: 1 });
+    fs.writeFileSync(
+      sessionFile,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+    );
+
+    await expect(
+      trimSessionTranscriptForManualCompact(scope, { maxLines: 4 }),
+    ).resolves.toMatchObject({ compacted: true, kept: 4 });
+
+    const serializedContext = JSON.stringify(
+      SessionManager.open(sessionFile, tempDir, tempDir).buildSessionContext().messages,
+    );
+    expect(serializedContext).toContain("retained root");
+    expect(serializedContext).toContain("retained child");
+  });
+
+  it("repairs a retained compaction boundary when its first kept entry was trimmed", async () => {
+    const sessionId = "33333333-3333-4333-8333-333333333333";
+    const sessionFile = path.join(tempDir, `${sessionId}.jsonl`);
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const records = [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-06-19T12:00:00.000Z",
+        cwd: tempDir,
+      },
+      {
+        type: "message",
+        id: "old-boundary",
+        parentId: null,
+        timestamp: "2026-06-19T12:00:01.000Z",
+        message: { role: "user", content: "old", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "kept-before-compaction",
+        parentId: "old-boundary",
+        timestamp: "2026-06-19T12:00:02.000Z",
+        message: { role: "user", content: "kept before", timestamp: 2 },
+      },
+      {
+        type: "compaction",
+        id: "compaction-1",
+        parentId: "kept-before-compaction",
+        timestamp: "2026-06-19T12:00:03.000Z",
+        summary: "summary",
+        firstKeptEntryId: "old-boundary",
+        tokensBefore: 100,
+      },
+      {
+        type: "compaction",
+        id: "compaction-2",
+        parentId: "compaction-1",
+        timestamp: "2026-06-19T12:00:04.000Z",
+        summary: "hardened summary",
+        firstKeptEntryId: "compaction-2",
+        tokensBefore: 50,
+      },
+      {
+        type: "message",
+        id: "kept-after-compaction",
+        parentId: "compaction-2",
+        timestamp: "2026-06-19T12:00:05.000Z",
+        message: { role: "user", content: "kept after", timestamp: 5 },
+      },
+    ];
+    await upsertSessionEntry(scope, { sessionFile, sessionId, updatedAt: 1 });
+    fs.writeFileSync(
+      sessionFile,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf-8",
+    );
+
+    await expect(
+      trimSessionTranscriptForManualCompact(scope, { maxLines: 5 }),
+    ).resolves.toMatchObject({ compacted: true, kept: 5 });
+
+    const reopened = SessionManager.open(sessionFile, tempDir, tempDir);
+    expect(
+      reopened
+        .getEntries()
+        .find((entry) => entry.type === "compaction" && entry.id === "compaction-1"),
+    ).toMatchObject({
+      firstKeptEntryId: "kept-before-compaction",
+    });
+    expect(
+      reopened
+        .getEntries()
+        .find((entry) => entry.type === "compaction" && entry.id === "compaction-2"),
+    ).toMatchObject({ firstKeptEntryId: "compaction-2" });
+    const serializedContext = JSON.stringify(reopened.buildSessionContext().messages);
+    expect(serializedContext).not.toContain("kept before");
+    expect(serializedContext).toContain("kept after");
   });
 
   it("prefers the current generated transcript over a stale generated sessionFile", async () => {
@@ -809,16 +1292,43 @@ describe("session accessor file-backed seam", () => {
       sessionId: currentSessionId,
       updatedAt: 100,
     });
-    fs.writeFileSync(currentTranscriptPath, "current one\ncurrent two\n", "utf-8");
+    const currentHeader = {
+      type: "session",
+      version: 3,
+      id: currentSessionId,
+      timestamp: "2026-06-19T12:00:00.000Z",
+      cwd: tempDir,
+    };
+    const currentOne = {
+      type: "message",
+      id: "current-one",
+      parentId: null,
+      timestamp: "2026-06-19T12:00:01.000Z",
+      message: { role: "user", content: "current one", timestamp: 1 },
+    };
+    const currentTwo = {
+      type: "message",
+      id: "current-two",
+      parentId: "current-one",
+      timestamp: "2026-06-19T12:00:02.000Z",
+      message: { role: "user", content: "current two", timestamp: 2 },
+    };
+    fs.writeFileSync(
+      currentTranscriptPath,
+      `${[currentHeader, currentOne, currentTwo].map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf-8",
+    );
     fs.writeFileSync(staleTranscriptPath, "stale one\nstale two\n", "utf-8");
 
     const result = await trimSessionTranscriptForManualCompact(scope, {
-      maxLines: 1,
+      maxLines: 2,
       sessionFile: staleTranscriptPath,
     });
 
-    expect(result).toMatchObject({ compacted: true, kept: 1 });
-    expect(fs.readFileSync(currentTranscriptPath, "utf-8")).toBe("current two\n");
+    expect(result).toMatchObject({ compacted: true, kept: 2 });
+    expect(fs.readFileSync(currentTranscriptPath, "utf-8")).toBe(
+      `${JSON.stringify(currentHeader)}\n${JSON.stringify({ ...currentTwo, parentId: null })}\n`,
+    );
     expect(fs.readFileSync(staleTranscriptPath, "utf-8")).toBe("stale one\nstale two\n");
   });
 
@@ -1302,6 +1812,44 @@ describe("session accessor file-backed seam", () => {
     expect(readTarget.sessionFile).toBe(explicitSessionFile);
     expect(writeTarget.sessionFile).toBe(explicitSessionFile);
     expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
+  });
+
+  it("uses a supplied read session entry without loading the store", () => {
+    const explicitSessionFile = path.join(tempDir, "entry-session.jsonl");
+    fs.writeFileSync(explicitSessionFile, "", "utf8");
+    fs.writeFileSync(storePath, "{not-json", "utf8");
+
+    const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
+      sessionEntry: {
+        sessionFile: explicitSessionFile,
+        sessionId: "session-1",
+      },
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    });
+
+    expect(target).toMatchObject({
+      agentId: "main",
+      sessionFile: fs.realpathSync(explicitSessionFile),
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("resolves an explicit read transcript file without agent identity", () => {
+    const explicitSessionFile = path.join(tempDir, "explicit-read-session.jsonl");
+
+    const target = resolveSessionTranscriptReadTarget({
+      sessionFile: explicitSessionFile,
+      sessionId: "session-1",
+    });
+
+    expect(target).toEqual({
+      sessionFile: explicitSessionFile,
+      sessionId: "session-1",
+    });
   });
 
   it("keeps read and write runtime targets aligned for new topic sessions", async () => {

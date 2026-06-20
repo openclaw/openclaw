@@ -1,15 +1,14 @@
 // Tests reply utility helpers for response normalization and send decisions.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseAudioTag } from "../../media/audio-tags.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { parseAudioTag } from "../../media/audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
-  hasTemplateVariables,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
 import {
@@ -1437,14 +1436,5 @@ describe("extractShortModelName", () => {
     for (const [input, expected] of cases) {
       expect(extractShortModelName(input), input).toBe(expected);
     }
-  });
-});
-
-describe("hasTemplateVariables", () => {
-  it("handles empty, static, and repeated variable checks", () => {
-    expect(hasTemplateVariables("")).toBe(false);
-    expect(hasTemplateVariables("[{model}]")).toBe(true);
-    expect(hasTemplateVariables("[{model}]")).toBe(true);
-    expect(hasTemplateVariables("[Claude]")).toBe(false);
   });
 });

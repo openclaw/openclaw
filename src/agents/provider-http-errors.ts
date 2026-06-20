@@ -77,6 +77,9 @@ export async function readResponseTextLimited(
       // Stop the upstream body once the diagnostic budget is full.
       await reader.cancel().catch(() => {});
     }
+    try {
+      reader.releaseLock();
+    } catch {}
   }
 
   return text;

@@ -162,6 +162,7 @@ public actor GatewayNodeSession {
         let clientId = options.clientId.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientMode = options.clientMode.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let deviceIdentityProfile = options.deviceIdentityProfile.rawValue
         let includeDeviceIdentity = options.includeDeviceIdentity ? "1" : "0"
         let permissions = options.permissions
             .map { key, value in
@@ -179,6 +180,7 @@ public actor GatewayNodeSession {
             clientId,
             clientMode,
             clientDisplayName,
+            deviceIdentityProfile,
             includeDeviceIdentity,
             permissions,
         ].joined(separator: "|")

@@ -74,7 +74,6 @@ function createStatusScanDepsRuntimeModuleMock(
 }
 
 type StatusGatewayProbeModuleMock = {
-  pickGatewaySelfPresence: Mock<() => null>;
   resolveGatewayProbeAuthResolution: StatusScanSharedMocks["resolveGatewayProbeAuthResolution"];
 };
 
@@ -82,7 +81,6 @@ function createStatusGatewayProbeModuleMock(
   mocks: Pick<StatusScanSharedMocks, "resolveGatewayProbeAuthResolution">,
 ): StatusGatewayProbeModuleMock {
   return {
-    pickGatewaySelfPresence: vi.fn(() => null),
     resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
   };
 }
@@ -181,7 +179,8 @@ export async function loadStatusScanModuleForTest(
   vi.resetModules();
   const getStatusCommandSecretTargetIds = mocks.getStatusCommandSecretTargetIds ?? vi.fn(() => []);
   const resolveMemorySearchConfig =
-    mocks.resolveMemorySearchConfig ?? vi.fn(() => ({ store: { path: "/tmp/main.sqlite" } }));
+    mocks.resolveMemorySearchConfig ??
+    vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
 
   vi.doMock("../channels/config-presence.js", () => ({
     hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,

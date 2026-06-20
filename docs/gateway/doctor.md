@@ -397,6 +397,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **State dir permissions**: verifies writability; offers to repair permissions (and emits a `chown` hint when owner/group mismatch is detected).
     - **macOS cloud-synced state dir**: warns when state resolves under iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or `~/Library/CloudStorage/...` because sync-backed paths can cause slower I/O and lock/sync races.
     - **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*` mount source, because SD or eMMC-backed random I/O can be slower and wear faster under session and credential writes.
+    - **Linux volatile state dir**: warns when state resolves to `tmpfs` or `ramfs`, because sessions, credentials, config, and SQLite state with its WAL/journal sidecars will disappear on reboot. Docker `overlay` mounts are intentionally not flagged because their writable layers persist across host reboots while the container remains.
     - **Session dirs missing**: `sessions/` and the session store directory are required to persist history and avoid `ENOENT` crashes.
     - **Transcript mismatch**: warns when recent session entries have missing transcript files.
     - **Main session "1-line JSONL"**: flags when the main transcript has only one line (history is not accumulating).

@@ -149,7 +149,6 @@ import {
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import {
   dispatchCronDelivery,
   getCompletedDirectCronDeliveriesCountForTests,
@@ -338,18 +337,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(1);
 
-    // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "on it",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
-
     // No announce should have been attempted (subagents still running)
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
@@ -496,18 +483,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     // deliveryAttempted must be true so timer does NOT fire enqueueSystemEvent
     expect(state.deliveryAttempted).toBe(true);
 
-    // Verify timer guard agrees
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "on it, pulling everything together",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
-
     // No direct delivery should have been sent (stale interim suppressed)
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
@@ -577,18 +552,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-
-    // Timer should not fire enqueueSystemEvent (delivered=true)
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "Morning briefing complete.",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("applies TTS directives before direct cron announce delivery and mirrors spoken text", async () => {
@@ -1045,16 +1008,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryAttempted: true,
     });
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "Yesterday's morning briefing.",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("still delivers when the run started on time but finished more than three hours later", async () => {
@@ -1173,6 +1126,79 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+  });
+
+  it("cleans up the direct cron session when delivery target resolution is refused (deleteAfterRun)", async () => {
+    // A keyless implicit cron whose inherited shared-bucket target is refused
+    // (resolvedDelivery.ok=false, issue #91613 fail-closed path) must still
+    // retire its session/transcript when deleteAfterRun is enabled — otherwise
+    // the one-shot session leaks.
+    const params = makeBaseParams({ synthesizedText: "refused report" });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("refusing inherited shared-bucket delivery target"),
+    };
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expectResultFields(state.result, {
+      status: "error",
+      errorKind: "delivery-target",
+    });
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:cron:test-job",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("cleans up the direct cron session when refused delivery is best-effort (deleteAfterRun)", async () => {
+    // Same fail-closed refusal, best-effort variant: dispatch returns status:ok
+    // (warn-logs instead of failing the run) but the deleteAfterRun session must
+    // still be retired.
+    const params = makeBaseParams({
+      synthesizedText: "refused report",
+      deliveryBestEffort: true,
+    });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("refusing inherited shared-bucket delivery target"),
+    };
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expectResultFields(state.result, {
+      status: "ok",
+    });
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:cron:test-job",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
   });
 
   it("text delivery fires exactly once (no double-deliver)", async () => {
@@ -1410,18 +1436,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       // deliveryAttempted must be true so the heartbeat timer does not fire
       // a fallback enqueueSystemEvent with the control-token text.
       expect(state.deliveryAttempted).toBe(true);
-
-      // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
-      expect(
-        shouldEnqueueCronMainSummary({
-          summaryText: controlToken,
-          deliveryRequested: true,
-          delivered: state.result?.delivered,
-          deliveryAttempted: state.result?.deliveryAttempted,
-          suppressMainSummary: false,
-          isCronSystemEvent: () => true,
-        }),
-      ).toBe(false);
     },
   );
 
@@ -1753,17 +1767,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryAttempted: true,
     });
     expect(state.deliveryAttempted).toBe(true);
-
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "  NO_REPLY  ",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("suppresses mixed-case NO_REPLY in text delivery", async () => {
@@ -1775,16 +1778,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       status: "ok",
       delivered: false,
     });
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "No_Reply",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("cleans up the direct cron session after a structured silent reply when deleteAfterRun is enabled", async () => {

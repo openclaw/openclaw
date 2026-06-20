@@ -429,6 +429,8 @@ export function createOpenClawCodingTools(options?: {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
+  /** Canonical transport channel when tool-policy provider differs from delivery channel. */
+  messageChannel?: string;
   /** Specific ingress provider used only for transport tool availability. */
   toolPolicyMessageProvider?: string;
   agentAccountId?: string;
@@ -1212,6 +1214,8 @@ export function createOpenClawCodingTools(options?: {
     }),
   );
   options?.recordToolPrepStage?.("schema-normalization");
+  const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
+  const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
   const hookContext = {
     agentId,
     ...(options?.config ? { config: options.config } : {}),
@@ -1225,6 +1229,10 @@ export function createOpenClawCodingTools(options?: {
     sessionId: options?.sessionId,
     runId: options?.runId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
+    ...(turnSourceChannel ? { turnSourceChannel } : {}),
+    ...(turnSourceTo ? { turnSourceTo } : {}),
+    ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
+    ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     onToolOutcome: options?.onToolOutcome,

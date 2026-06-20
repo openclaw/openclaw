@@ -367,11 +367,13 @@ export function renderTestEnvMutationReport(
 }
 
 function parseArgs(argv: string[]): {
+  help: boolean;
   includeAllowed: boolean;
   json: boolean;
   limit: number;
   repoRoot: string;
 } {
+  let help = false;
   let includeAllowed = false;
   let json = false;
   let limit = 120;
@@ -380,6 +382,10 @@ function parseArgs(argv: string[]): {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--") {
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      help = true;
       continue;
     }
     if (arg === "--include-allowed") {
@@ -411,11 +417,31 @@ function parseArgs(argv: string[]): {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { includeAllowed, json, limit, repoRoot };
+  return { help, includeAllowed, json, limit, repoRoot };
+}
+
+function printHelp(): void {
+  process.stdout.write(`OpenClaw test env mutation report
+
+Usage:
+  pnpm test:env-mutations:report [options]
+
+Options:
+  --include-allowed    Include allowed harness findings in text output
+  --json               Print the full JSON report
+  --limit <n>          Maximum text findings to print; use 0 for all (default: 120)
+  --repo-root <path>   Repository root to scan (default: current working directory)
+  --help, -h           Show this help message
+`);
 }
 
 export function main(argv = process.argv.slice(2)): number {
   const args = parseArgs(argv);
+  if (args.help) {
+    printHelp();
+    return 0;
+  }
+
   const report = collectTestEnvMutationReport({ repoRoot: args.repoRoot });
   if (args.json) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

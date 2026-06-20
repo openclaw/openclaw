@@ -854,11 +854,6 @@ function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string
   return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
 }
 
-/** Returns whether the current dynamic tool list can serve workspace memory. */
-export function hasCodexWorkspaceMemoryTools(tools: readonly CodexDynamicToolSpec[]): boolean {
-  return getCodexWorkspaceMemoryToolNames(tools).length > 0;
-}
-
 /** Lists available memory tool names understood by Codex workspace memory routing. */
 export function getCodexWorkspaceMemoryToolNames(tools: readonly CodexDynamicToolSpec[]): string[] {
   const availableToolNames = new Set(

@@ -1,7 +1,10 @@
 // Lmstudio plugin module implements models.fetch behavior.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonArrayFieldResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -17,6 +20,7 @@ import {
 import { buildLmstudioAuthHeaders } from "./runtime.js";
 
 const log = createSubsystemLogger("extensions/lmstudio/models");
+const LMSTUDIO_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 type LmstudioLoadResponse = {
   status?: string;
@@ -253,7 +257,7 @@ export async function ensureLmstudioModelLoaded(params: {
   });
   try {
     if (!response.ok) {
-      const body = await response.text();
+      const body = await readResponseTextLimited(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES);
       throw new Error(`LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`);
     }
     let payload: LmstudioLoadResponse;

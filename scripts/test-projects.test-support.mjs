@@ -287,6 +287,11 @@ const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.conf
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_TARGET = "test/scripts/docker-build-helper.test.ts";
 const TOOLING_ISOLATED_TEST_TARGET = "test/scripts/openclaw-e2e-instance.test.ts";
+const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
+  "test/scripts/**/*.test.ts",
+  "test/scripts/*.test.ts",
+]);
+const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
@@ -723,6 +728,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/run-oxlint-shards.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-with-env.mjs", ["test/scripts/run-with-env.test.ts"]],
   ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
+  ["scripts/setup-auth-system.sh", ["test/scripts/test-projects.test.ts"]],
   ["scripts/ci-run-timings.mjs", ["test/scripts/ci-run-timings.test.ts"]],
   ["scripts/docker-e2e.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/docker-e2e-rerun.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
@@ -1462,6 +1468,64 @@ function splitTargetChunks(targets, chunkCount) {
     offset += chunkSize;
   }
   return chunks;
+}
+
+function listBroadScriptTestTargets(pattern, cwd) {
+  const root = path.join(cwd, "test/scripts");
+  if (!fs.existsSync(root)) {
+    return [];
+  }
+  return listRepoFilesRecursive(root, cwd)
+    .filter((file) => file.endsWith(".test.ts") && path.matchesGlob(file, pattern))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function listBroadToolingScriptTestTargets(pattern, cwd) {
+  return listBroadScriptTestTargets(pattern, cwd).filter(
+    (file) => classifyTarget(file, cwd) === "tooling",
+  );
+}
+
+function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
+  if (watchMode || config !== TOOLING_VITEST_CONFIG || !includePatterns) {
+    return null;
+  }
+  const [pattern] = includePatterns;
+  const targets =
+    includePatterns.length === 1 && BROAD_TOOLING_SCRIPT_TEST_PATTERNS.has(pattern)
+      ? listBroadToolingScriptTestTargets(pattern, cwd)
+      : includePatterns.every((target) => target.startsWith("test/scripts/"))
+        ? includePatterns
+        : [];
+  if (targets.length <= BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE) {
+    return null;
+  }
+  const chunkCount = Math.ceil(targets.length / BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE);
+  const chunks = splitTargetChunks(targets, chunkCount);
+  return chunks.length > 0
+    ? chunks.map((chunk) => ({
+        config,
+        forwardedArgs,
+        includePatterns: chunk,
+        watchMode,
+      }))
+    : null;
+}
+
+function expandBroadToolingScriptTargets(targetArgs, cwd, watchMode) {
+  if (watchMode) {
+    return targetArgs;
+  }
+  return uniqueOrdered(
+    targetArgs.flatMap((targetArg) => {
+      const pattern = toScopedIncludePattern(targetArg, cwd);
+      if (!BROAD_TOOLING_SCRIPT_TEST_PATTERNS.has(pattern)) {
+        return [targetArg];
+      }
+      const targets = listBroadScriptTestTargets(pattern, cwd);
+      return targets.length > 0 ? targets : [targetArg];
+    }),
+  );
 }
 
 function isExistingPathTarget(arg, cwd) {
@@ -2754,7 +2818,11 @@ export function buildVitestRunPlans(
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
-  const activeTargetArgs = expandExplicitSourceTestTargets(requestedTargetArgs, cwd);
+  const activeTargetArgs = expandBroadToolingScriptTargets(
+    expandExplicitSourceTestTargets(requestedTargetArgs, cwd),
+    cwd,
+    watchMode,
+  );
   const activeForwardedArgs =
     changedTargetArgs !== null ? stripChangedArgs(forwardedArgs) : forwardedArgs;
   if (changedTargetArgs !== null && activeTargetArgs.length === 0) {
@@ -2963,9 +3031,21 @@ export function buildVitestRunPlans(
             }),
           );
     const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
+    const forwardedPlanArgs = [...nonTargetArgs, ...scopedTargetArgs];
+    const broadToolingScriptPlans = createBroadToolingScriptPlans({
+      config,
+      cwd,
+      forwardedArgs: forwardedPlanArgs,
+      includePatterns,
+      watchMode,
+    });
+    if (broadToolingScriptPlans) {
+      plans.push(...broadToolingScriptPlans);
+      continue;
+    }
     plans.push({
       config,
-      forwardedArgs: [...nonTargetArgs, ...scopedTargetArgs],
+      forwardedArgs: forwardedPlanArgs,
       includePatterns,
       watchMode,
     });

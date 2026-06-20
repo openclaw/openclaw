@@ -122,9 +122,7 @@ describe("check-workflows", () => {
 
       expect(result.status).toBe(0);
       const pythonArgs = readFileSync(markerPath, "utf8");
-      expect(pythonArgs).toContain(
-        "-m pip install --disable-pip-version-check pre-commit==4.2.0",
-      );
+      expect(pythonArgs).toContain("-m pip install --disable-pip-version-check pre-commit==4.2.0");
       expect(pythonArgs).toContain(
         "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
       );
@@ -142,11 +140,18 @@ describe("check-workflows", () => {
     expect(workflow).toContain(
       '$import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")',
     );
+    expect(workflow).toContain("function Resolve-UbuntuWslRootfsUrl");
+    expect(workflow).toContain('"x64" { $wslArch = "amd64" }');
+    expect(workflow).toContain('"arm64" { $wslArch = "arm64" }');
+    expect(workflow).toContain("ubuntu-noble-wsl-$wslArch-wsl.rootfs.tar.gz");
+    expect(workflow).toContain("ubuntu_wsl_rootfs_arch=$wslArch");
     expect(workflow).toContain('Write-Host "wsl_import_exit=$($import.Code)"');
     expect(workflow).toContain("wsl2_restart_required=true");
     expect(workflow).toContain("import_ubuntu_wsl2=skipped_restart_required");
     expect(workflow).toContain("wsl_exec_skipped=restart_required");
-    expect(workflow).toContain('"wsl2_restart_required=$($restartRequired.ToString().ToLowerInvariant())"');
+    expect(workflow).toContain(
+      '"wsl2_restart_required=$($restartRequired.ToString().ToLowerInvariant())"',
+    );
     expect(workflow).toContain(
       '$exec = Invoke-WslText -Arguments @("-d", $distro, "--exec", "bash", "-lc"',
     );
@@ -159,7 +164,9 @@ describe("check-workflows", () => {
     const workflow = readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8");
 
     expect(workflow).toContain("run_windows_ci:");
-    expect(workflow).toContain('description: "Run the focused Windows-native CI test shard after probing"');
+    expect(workflow).toContain(
+      'description: "Run the focused Windows-native CI test shard after probing"',
+    );
     expect(workflow).toContain("default: false");
     expect(workflow).toContain("if: ${{ inputs.run_windows_ci }}");
     expect(workflow).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");

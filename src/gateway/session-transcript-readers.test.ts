@@ -41,7 +41,7 @@ describe("session transcript reader facade", () => {
       `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
       "utf-8",
     );
-    return { sessionId, storePath };
+    return { sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
   }
 
   test("reads active-branch messages and message ids through a scope", async () => {

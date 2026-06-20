@@ -125,6 +125,11 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
@@ -673,6 +678,10 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        turnSourceChannel: params.ctx?.turnSourceChannel,
+        turnSourceTo: params.ctx?.turnSourceTo,
+        turnSourceAccountId: params.ctx?.turnSourceAccountId,
+        turnSourceThreadId: params.ctx?.turnSourceThreadId,
         timeoutMs,
         twoPhase: true,
       },

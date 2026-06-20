@@ -1044,6 +1044,35 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html).toBe(markdown);
   });
 
+  it.each([
+    {
+      name: "local path",
+      markdown:
+        "See [scripts/yougile.py](/home/user/.openclaw/workspace/scripts/yougile.py#L41) and [docs](https://example.com/docs)",
+      rejectedAnchor: '<a href="/home',
+      visibleLabel: "<code>scripts/yougile.py</code>",
+    },
+    {
+      name: "relative path",
+      markdown: "Edit [config](./openclaw.json) or see [docs](https://example.com/docs)",
+      rejectedAnchor: '<a href="./',
+      visibleLabel: "config",
+    },
+  ])("keeps rich delivery when a markdown link targets a $name", async (testCase) => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 48, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", testCase.markdown, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richHtml = String(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "");
+    expect(richHtml).not.toContain(testCase.rejectedAnchor);
+    expect(richHtml).toContain(testCase.visibleLabel);
+    expect(richHtml).toContain('<a href="https://example.com/docs">docs</a>');
+  });
+
   it("renders complex markdown into HTML text", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
     const markdown = [

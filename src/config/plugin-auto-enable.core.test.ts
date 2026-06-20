@@ -4,9 +4,6 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "../plugins/discovery.js";
-import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   applyPluginAutoEnable,
   detectPluginAutoEnableCandidates,
@@ -14,6 +11,7 @@ import {
   resolvePluginAutoEnableCandidateReason,
 } from "./plugin-auto-enable.js";
 import {
+  createPluginMetadataSnapshot,
   makeIsolatedEnv,
   makeRegistry,
   resetPluginAutoEnableTestState,
@@ -77,53 +75,6 @@ function makeBundledChannelCandidate(params: {
     packageManifest: {
       plugin: { id: params.pluginId },
       channel: { id: params.channelId },
-    },
-  };
-}
-
-function createPluginMetadataSnapshot(params: {
-  config?: OpenClawConfig;
-  manifestRegistry: PluginManifestRegistry;
-  workspaceDir?: string;
-}): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
-  return {
-    policyHash,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
-    registryDiagnostics: [],
-    manifestRegistry: params.manifestRegistry,
-    plugins: params.manifestRegistry.plugins,
-    diagnostics: params.manifestRegistry.diagnostics,
-    byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (pluginId) => pluginId,
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: params.manifestRegistry.plugins.length,
     },
   };
 }
@@ -265,6 +216,31 @@ describe("applyPluginAutoEnable core", () => {
         providerId: "google",
       }),
     ).toBe("google auth configured");
+  });
+
+  it("auto-enables external speech providers selected by TTS config", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        messages: { tts: { provider: "gradium" } },
+        plugins: { allow: ["telegram"] },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "gradium",
+          channels: [],
+          contracts: { speechProviders: ["gradium"] },
+          origin: "global",
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "gradium"]);
+    expect(result.config.plugins?.entries?.gradium).toEqual({ enabled: true });
+    expect(result.autoEnabledReasons).toEqual({
+      gradium: ["gradium speech provider selected"],
+    });
+    expect(result.changes).toContain("gradium speech provider selected, enabled automatically.");
   });
 
   it("treats an undefined config as empty", () => {

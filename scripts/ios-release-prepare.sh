@@ -172,7 +172,6 @@ OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app
 OPENCLAW_SHARE_BUNDLE_ID = ai.openclawfoundation.app.share
 OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclawfoundation.app.activitywidget
 OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp.extension
 OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT = production
 OPENCLAW_PUSH_TRANSPORT = relay
 OPENCLAW_PUSH_DISTRIBUTION = official

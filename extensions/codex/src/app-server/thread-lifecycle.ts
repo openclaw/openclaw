@@ -80,10 +80,6 @@ class CodexThreadStartRequestError extends Error {
   }
 }
 
-export function isCodexThreadStartRequestError(error: unknown): boolean {
-  return error instanceof CodexThreadStartRequestError;
-}
-
 export type CodexThreadFinalConfigPatchDecision =
   | { action: "resume"; binding: CodexAppServerThreadBinding }
   | { action: "start" };

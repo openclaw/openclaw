@@ -266,6 +266,26 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stderr).toContain("invalid bundled plugin runtime index: 1e3");
   });
 
+  it("rejects unsafe bundled plugin runtime limit env values", async () => {
+    await expect(
+      importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: String(Number.MAX_SAFE_INTEGER + 1),
+      }),
+    ).rejects.toThrow("invalid OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: 9007199254740992");
+  });
+
+  it("rejects bundled plugin runtime ports outside the TCP range", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const env = {
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE: "65533",
+    };
+
+    expect(runtimeSmoke.resolveRuntimeSmokePort(0, 2, env)).toBe(65535);
+    expect(() => runtimeSmoke.resolveRuntimeSmokePort(1, 0, env)).toThrow(
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE with bundled plugin runtime index 1 and offset 0 must resolve to a TCP port from 1 to 65535. Got: 65536",
+    );
+  });
+
   it("caps noisy runtime gateway logs", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES: "64",
@@ -433,6 +453,32 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(runtimeSmoke.hasChildExited(child)).toBe(true);
     await runtimeSmoke.stopGateway(child);
 
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("signals Windows runtime child process trees with taskkill", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    runtimeSmoke.signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    runtimeSmoke.signalChildProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
     expect(child.kill).not.toHaveBeenCalled();
   });
 
@@ -748,6 +794,72 @@ describe("bundled plugin install/uninstall probe", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "keeps closed runtime command groups tracked for parent cleanup",
+    async () => {
+      const root = makePackageRoot();
+      const commandPath = path.join(root, "closed-command.mjs");
+      const runnerPath = path.join(root, "run-closed-runtime-command.mjs");
+      const commandSettledPath = path.join(root, "command-settled");
+      const descendantPidPath = path.join(root, "closed-command-descendant.pid");
+      const descendantScript = [
+        "import fs from 'node:fs';",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      fs.writeFileSync(
+        commandPath,
+        [
+          "import childProcess from 'node:child_process';",
+          `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "child.unref();",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      fs.writeFileSync(
+        runnerPath,
+        [
+          "import fs from 'node:fs';",
+          `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
+          `runtimeSmoke.runCommand(process.execPath, [${JSON.stringify(commandPath)}], {`,
+          "  timeoutMs: 60_000,",
+          "}).finally(() => {",
+          `  fs.writeFileSync(${JSON.stringify(commandSettledPath)}, "1");`,
+          "});",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const runner = spawn(process.execPath, [runnerPath], {
+        stdio: "ignore",
+      });
+      let descendantPid: number | undefined;
+      try {
+        await waitForFile(descendantPidPath, 1000);
+        descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        expect(pidIsAlive(descendantPid)).toBe(true);
+        await waitForFile(commandSettledPath, 1000);
+
+        runner.kill("SIGTERM");
+
+        await waitForDead(descendantPid, 2000);
+      } finally {
+        if (runner.pid && pidIsAlive(runner.pid)) {
+          runner.kill("SIGKILL");
+        }
+        if (descendantPid !== undefined && pidIsAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "cleans detached runtime gateway groups when the parent is signaled",
     async () => {
       const root = makePackageRoot();
@@ -926,6 +1038,33 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(fs.existsSync(rpcStateDir)).toBe(false);
   });
 
+  it("ignores structured logs after gateway RPC payloads", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const entrypoint = path.join(root, "dist", "rpc-with-structured-log.js");
+    fs.writeFileSync(
+      entrypoint,
+      [
+        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
+        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(
+      runtimeSmoke.rpcCall(
+        "health",
+        {},
+        {
+          entrypoint,
+          env: {},
+          port: 19001,
+        },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
   it("accepts successful runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const server = createHttpServer((_request, response) => {
@@ -1042,6 +1181,34 @@ describe("bundled plugin install/uninstall probe", () => {
     }
   });
 
+  it("bounds readyz diagnostic response bodies", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
+    });
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, {
+        "content-length": String(1024 * 1024 + 1),
+        "content-type": "application/json",
+      });
+      response.end();
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+
+      await expect(
+        runtimeSmoke.assertReadyzProbe({
+          allowedDegradedReadyzFailures: ["qa-channel"],
+          pluginId: "qa-channel",
+          port,
+        }),
+      ).rejects.toThrow("/readyz probe response body exceeded 1048576 bytes");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("bounds stalled runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const sockets = new Set<Socket>();
@@ -1147,6 +1314,38 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stdout.trim()).toBe(
       `admin-http-rpc\tadmin-http-rpc\t1\t${path.join(root, "dist-runtime", "extensions", "admin-http-rpc")}`,
     );
+  });
+
+  it("selects packaged plugins when list output includes structured diagnostics", () => {
+    const root = makePackageRoot();
+    const pluginRoot = path.join(root, "dist-runtime", "extensions", "admin-http-rpc");
+    writePluginManifest(root, "dist-runtime/extensions/admin-http-rpc", {
+      id: "admin-http-rpc",
+      configSchema: { required: ["port"] },
+    });
+    fs.writeFileSync(
+      path.join(root, "dist", "index.js"),
+      [
+        "if (process.argv.slice(2).join(' ') !== 'plugins list --json') {",
+        "  process.exit(1);",
+        "}",
+        `console.log(${JSON.stringify(
+          JSON.stringify({
+            plugins: [{ id: "admin-http-rpc", origin: "bundled", rootDir: pluginRoot }],
+          }),
+        )});`,
+        "console.log(JSON.stringify({ level: 'warn', message: 'post-list diagnostic' }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(`admin-http-rpc\tadmin-http-rpc\t1\t${pluginRoot}`);
   });
 
   it("does not select source-only bundled plugins for package-backed sweeps", () => {

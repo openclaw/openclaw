@@ -31,6 +31,7 @@ const DEFAULT_MAX_COMMAND_RSS_MIB = 8192;
 const DEFAULT_OUTPUT_CAPTURE_CHARS = 1024 * 1024;
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
+const COMMAND_PARENT_SIGNAL_KILL_GRACE_MS = 2000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
@@ -56,6 +57,40 @@ const ERROR_LOG_ALLOW_PATTERNS = [
 ];
 
 let callGatewayModulePromise;
+const activeCommandChildren = new Set();
+const commandParentSignals =
+  process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+let commandShutdownPromise;
+let commandSignalHandlersInstalled = false;
+
+function installCommandSignalHandlers() {
+  if (commandSignalHandlersInstalled) {
+    return;
+  }
+  commandSignalHandlersInstalled = true;
+  for (const signal of commandParentSignals) {
+    process.on(signal, commandSignalHandlers.get(signal));
+  }
+}
+
+function removeCommandSignalHandlers() {
+  if (!commandSignalHandlersInstalled) {
+    return;
+  }
+  commandSignalHandlersInstalled = false;
+  for (const signal of commandParentSignals) {
+    process.off(signal, commandSignalHandlers.get(signal));
+  }
+}
+
+const commandSignalHandlers = new Map(
+  commandParentSignals.map((signal) => [
+    signal,
+    () => {
+      void shutdownActiveCommands(signal);
+    },
+  ]),
+);
 
 function usage() {
   return `Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs
@@ -83,6 +118,15 @@ Environment:
 
 export function shouldPrintHelp(argv) {
   return argv.some((arg) => arg === "--help" || arg === "-h");
+}
+
+export function validateCliArgs(argv) {
+  for (const arg of argv) {
+    if (arg === "--help" || arg === "-h") {
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
 }
 
 export function readPositiveInt(raw, fallback, label = "value") {
@@ -182,7 +226,13 @@ export async function findAvailableLoopbackPort(options = {}) {
 export async function resolveKitchenSinkRpcPort(env = process.env, options = {}) {
   const rawPort = (env.OPENCLAW_KITCHEN_SINK_RPC_PORT || "").trim();
   if (rawPort) {
-    return readPositiveInt(rawPort, 0, "OPENCLAW_KITCHEN_SINK_RPC_PORT");
+    const port = readPositiveInt(rawPort, 0, "OPENCLAW_KITCHEN_SINK_RPC_PORT");
+    if (port > 65535) {
+      throw new Error(
+        `OPENCLAW_KITCHEN_SINK_RPC_PORT must be a TCP port from 1 to 65535. Got: ${JSON.stringify(rawPort)}`,
+      );
+    }
+    return port;
   }
   return await (options.findAvailablePort ?? findAvailableLoopbackPort)();
 }
@@ -286,6 +336,11 @@ function formatCapturedOutput(label, buffer) {
 }
 
 export function runCommand(command, args, options = {}) {
+  if (commandShutdownPromise) {
+    return commandShutdownPromise.then(() => {
+      throw new Error(`${command} ${args.join(" ")} skipped during parent signal shutdown`);
+    });
+  }
   return new Promise((resolve, reject) => {
     const config = resolveKitchenSinkRpcConfig();
     const {
@@ -305,11 +360,14 @@ export function runCommand(command, args, options = {}) {
       ...spawnOptions,
       detached: spawnOptions.detached ?? process.platform !== "win32",
     });
+    activeCommandChildren.add(child);
+    installCommandSignalHandlers();
     const startedAt = Date.now();
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
     let forceKillTimer;
+    let forceKillAt;
     let sampleTimer;
     let resourceSampleInFlight = null;
     let capturedResourceSampleCount = 0;
@@ -363,6 +421,7 @@ export function runCommand(command, args, options = {}) {
     const timer = setTimeout(() => {
       timedOut = true;
       signalProcessGroup(child, "SIGTERM");
+      forceKillAt = Date.now() + timeoutKillGraceMs;
       forceKillTimer = setTimeout(() => signalProcessGroup(child, "SIGKILL"), timeoutKillGraceMs);
       forceKillTimer.unref();
     }, timeoutMs);
@@ -375,6 +434,8 @@ export function runCommand(command, args, options = {}) {
     child.on("error", (error) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
+      forceKillAt = undefined;
+      releaseCommandChild(child);
       void stopResourceSampling().finally(() =>
         reject(toLintErrorObject(error, "Command failed before exit")),
       );
@@ -383,6 +444,8 @@ export function runCommand(command, args, options = {}) {
       clearTimeout(timer);
       const finish = () => {
         clearTimeout(forceKillTimer);
+        forceKillAt = undefined;
+        releaseCommandChild(child);
         void stopResourceSampling().then((resourceSampleFailure) => {
           if (!timedOut && status === 0) {
             if (resourceSampleFailure) {
@@ -424,7 +487,10 @@ export function runCommand(command, args, options = {}) {
       };
 
       if (timedOut) {
-        void finishTimedOutCommandProcessTree(child, timeoutKillGraceMs).then(finish, finish);
+        void finishTimedOutCommandProcessTree(child, {
+          forceKillAt,
+          timeoutKillGraceMs,
+        }).then(finish, finish);
         return;
       }
 
@@ -433,12 +499,51 @@ export function runCommand(command, args, options = {}) {
   });
 }
 
-async function finishTimedOutCommandProcessTree(child, timeoutKillGraceMs) {
+async function finishTimedOutCommandProcessTree(child, { forceKillAt, timeoutKillGraceMs }) {
   if (!commandProcessTreeIsAlive(child)) {
     return;
   }
-  signalProcessGroup(child, "SIGKILL");
+  const graceRemainingMs =
+    forceKillAt === undefined ? timeoutKillGraceMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForCommandProcessTreeExit(child, graceRemainingMs);
+  }
+  if (commandProcessTreeIsAlive(child)) {
+    signalProcessGroup(child, "SIGKILL");
+  }
   await waitForCommandProcessTreeExit(child, timeoutKillGraceMs);
+}
+
+function releaseCommandChild(child) {
+  activeCommandChildren.delete(child);
+  if (activeCommandChildren.size === 0 && !commandShutdownPromise) {
+    removeCommandSignalHandlers();
+  }
+}
+
+async function shutdownActiveCommands(signal) {
+  if (commandShutdownPromise) {
+    for (const child of activeCommandChildren) {
+      signalProcessGroup(child, "SIGKILL");
+    }
+    return commandShutdownPromise;
+  }
+  const children = [...activeCommandChildren];
+  for (const child of children) {
+    signalProcessGroup(child, signal);
+  }
+  commandShutdownPromise = Promise.all(
+    children.map((child) =>
+      finishTimedOutCommandProcessTree(child, {
+        forceKillAt: Date.now() + COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+        timeoutKillGraceMs: COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+      }),
+    ),
+  ).finally(() => {
+    removeCommandSignalHandlers();
+    process.kill(process.pid, signal);
+  });
+  return commandShutdownPromise;
 }
 
 async function waitForCommandProcessTreeExit(child, timeoutMs) {
@@ -519,7 +624,7 @@ async function resolveOpenClawCommand(runner, args, env, options = {}) {
   };
 }
 
-function parseJsonOutput(stdout) {
+export function parseJsonOutput(stdout) {
   const trimmed = stdout.trim();
   if (!trimmed) {
     throw new Error("command produced no JSON output");
@@ -548,7 +653,10 @@ export function parseGatewayCliRequestFailure(error) {
   } catch {
     return null;
   }
-  const requestError = payload?.ok === false ? payload.error : null;
+  return payload?.ok === false ? createGatewayClientRequestError(payload.error) : null;
+}
+
+export function createGatewayClientRequestError(requestError) {
   if (
     requestError?.type !== "gateway_request_error" ||
     !isNonEmptyString(requestError.code) ||
@@ -649,6 +757,9 @@ function extractBalancedJsonObjects(text) {
     if (text[index] !== "{") {
       continue;
     }
+    if (!isJsonObjectRecordStart(text, index)) {
+      continue;
+    }
     const end = findBalancedJsonObjectEnd(text, index);
     if (end > index) {
       candidates.push(text.slice(index, end + 1));
@@ -656,6 +767,17 @@ function extractBalancedJsonObjects(text) {
     }
   }
   return candidates;
+}
+
+function isJsonObjectRecordStart(text, index) {
+  if (index === 0) {
+    return true;
+  }
+  let cursor = index - 1;
+  while (cursor >= 0 && (text[cursor] === " " || text[cursor] === "\t")) {
+    cursor -= 1;
+  }
+  return cursor < 0 || text[cursor] === "\n" || text[cursor] === "\r";
 }
 
 function findBalancedJsonObjectEnd(text, startIndex) {
@@ -697,6 +819,10 @@ function hasOwnPayloadField(raw, field) {
 
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
+    const requestError = createGatewayClientRequestError(raw.error);
+    if (requestError) {
+      throw requestError;
+    }
     throw new Error(`gateway RPC failed: ${boundedJsonPreview(raw.error ?? raw)}`);
   }
   if (
@@ -886,14 +1012,10 @@ export async function fetchJson(url, options = {}) {
     let removeExternalAbort = () => {};
     const abortPromise = externalSignal
       ? new Promise((_, reject) => {
-          const abortError = () =>
-            externalSignal.reason instanceof Error
-              ? externalSignal.reason
-              : new Error("fetch aborted");
           const onAbort = () => {
-            const error = abortError();
+            const error = getExternalAbortReason(externalSignal);
             controller.abort(error);
-            reject(new Error(error.message, { cause: error }));
+            reject(createExternalAbortError(externalSignal));
           };
           if (externalSignal.aborted) {
             onAbort();
@@ -916,10 +1038,12 @@ export async function fetchJson(url, options = {}) {
         timeoutPromise,
         ...(abortPromise ? [abortPromise] : []),
       ]);
+      const bodyAbortPromise = abortPromise
+        ? Promise.race([timeoutPromise, abortPromise])
+        : timeoutPromise;
       const text = await Promise.race([
-        readBoundedResponseText(response, maxBodyBytes),
-        timeoutPromise,
-        ...(abortPromise ? [abortPromise] : []),
+        readBoundedResponseText(response, maxBodyBytes, bodyAbortPromise),
+        bodyAbortPromise,
       ]);
       let body = null;
       try {
@@ -933,7 +1057,7 @@ export async function fetchJson(url, options = {}) {
       if (attempt >= attempts || !isRetryableTransientNetworkError(error)) {
         throw error;
       }
-      await delay(options.retryDelayMs ?? 250);
+      await delayWithAbort(options.retryDelayMs ?? 250, externalSignal);
     } finally {
       removeExternalAbort();
       if (timeout) {
@@ -944,41 +1068,79 @@ export async function fetchJson(url, options = {}) {
   throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
-export async function readBoundedResponseText(
-  response,
-  byteLimit = resolveKitchenSinkRpcConfig().fetchBodyMaxBytes,
-) {
+function getExternalAbortReason(signal) {
+  return signal?.reason instanceof Error ? signal.reason : new Error("fetch aborted");
+}
+
+function createExternalAbortError(signal) {
+  const reason = getExternalAbortReason(signal);
+  return new Error(reason.message, { cause: reason });
+}
+
+async function delayWithAbort(delayMs, signal) {
+  if (!signal) {
+    await delay(delayMs);
+    return;
+  }
+  if (signal.aborted) {
+    throw createExternalAbortError(signal);
+  }
+  try {
+    await delay(delayMs, undefined, { signal });
+  } catch (error) {
+    if (signal.aborted) {
+      throw createExternalAbortError(signal);
+    }
+    throw error;
+  }
+}
+
+export async function readBoundedResponseText(response, byteLimit, timeoutPromise) {
+  const resolvedByteLimit = byteLimit ?? resolveKitchenSinkRpcConfig().fetchBodyMaxBytes;
   const contentLength = response.headers?.get?.("content-length");
-  if (contentLength) {
+  if (contentLength && /^\d+$/u.test(contentLength)) {
     const parsedContentLength = Number(contentLength);
-    if (Number.isFinite(parsedContentLength) && parsedContentLength > byteLimit) {
+    if (!Number.isSafeInteger(parsedContentLength) || parsedContentLength > resolvedByteLimit) {
       await response.body?.cancel?.().catch(() => undefined);
-      throw createFetchBodyTooLargeError(byteLimit);
+      throw createFetchBodyTooLargeError(resolvedByteLimit);
     }
   }
 
   const reader = response.body?.getReader?.();
   if (!reader) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > byteLimit) {
-      throw createFetchBodyTooLargeError(byteLimit);
+    const text = await withOptionalTimeout(response.text(), timeoutPromise);
+    if (Buffer.byteLength(text, "utf8") > resolvedByteLimit) {
+      throw createFetchBodyTooLargeError(resolvedByteLimit);
     }
     return text;
   }
   const chunks = [];
   let totalBytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
+  try {
+    for (;;) {
+      const read = reader.read();
+      const { done, value } = await withOptionalTimeout(
+        read,
+        timeoutPromise?.catch((error) => {
+          cancelReaderSoon(reader);
+          throw error;
+        }),
+      );
+      if (done) {
+        break;
+      }
+      const chunk = Buffer.from(value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > resolvedByteLimit) {
+        await reader.cancel().catch(() => undefined);
+        throw createFetchBodyTooLargeError(resolvedByteLimit);
+      }
+      chunks.push(chunk);
     }
-    const chunk = Buffer.from(value);
-    totalBytes += chunk.byteLength;
-    if (totalBytes > byteLimit) {
-      await reader.cancel().catch(() => undefined);
-      throw createFetchBodyTooLargeError(byteLimit);
-    }
-    chunks.push(chunk);
+  } finally {
+    try {
+      reader.releaseLock?.();
+    } catch {}
   }
   return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
@@ -987,6 +1149,19 @@ function createFetchBodyTooLargeError(byteLimit) {
   return Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
     code: "ETOOBIG",
   });
+}
+
+async function withOptionalTimeout(promise, timeoutPromise) {
+  if (!timeoutPromise) {
+    return await promise;
+  }
+  return await Promise.race([promise, timeoutPromise]);
+}
+
+function cancelReaderSoon(reader) {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
 }
 
 function configureKitchenSink(env, port) {
@@ -1824,12 +1999,14 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     if (hasMalformedProcessTreeRows(malformedRows, rootTreeRows)) {
       return null;
     }
+    const rootRow = rootTreeRows.find((row) => row.processId === safePid) ?? null;
     const descendants = rootTreeRows.filter((row) => row.processId !== safePid);
-    const commandMatches = descendants.filter((row) =>
+    const matchesCommandNeedles = (row) =>
       commandLineNeedles.every((needle) =>
         row.command.toLowerCase().includes(needle.toLowerCase()),
-      ),
-    );
+      );
+    const commandMatches = descendants.filter(matchesCommandNeedles);
+    const rootCommandMatches = rootRow && matchesCommandNeedles(rootRow) ? [rootRow] : [];
     const gatewayTitleMatches = descendants.filter((row) =>
       row.command.toLowerCase().includes("openclaw-gateway"),
     );
@@ -1838,7 +2015,9 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
         ? commandMatches
         : gatewayTitleMatches.length > 0
           ? gatewayTitleMatches
-          : descendants,
+          : descendants.length > 0
+            ? descendants
+            : rootCommandMatches,
     );
     if (!selected) {
       return null;
@@ -2538,9 +2717,16 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (shouldPrintHelp(process.argv.slice(2))) {
+  const argv = process.argv.slice(2);
+  if (shouldPrintHelp(argv)) {
     process.stdout.write(usage());
   } else {
+    try {
+      validateCliArgs(argv);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
     await main();
   }
 }

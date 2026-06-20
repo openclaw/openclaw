@@ -245,6 +245,8 @@ describe("package-mac-dist plist validation", () => {
     expect(dsymBlock).toContain("Error: missing DWARF binaries for dSYM merge");
     expect(dsymBlock).toContain("Error: dSYM not found");
     expect(dsymBlock).toContain("exit 1");
+    expect(dsymBlock).toContain('if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then');
+    expect(dsymBlock).toContain('rm -rf "$TMP_DSYM"');
     expect(dsymBlock).not.toContain("WARN:");
     expect(dsymBlock).not.toContain("continuing");
   });

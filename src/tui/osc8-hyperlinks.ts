@@ -6,11 +6,6 @@ const ANSI_RE = new RegExp(`${SGR_PATTERN}|${OSC8_PATTERN}`, "g");
 const SGR_START_RE = new RegExp(`^${SGR_PATTERN}`);
 const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
 
-/** Wrap text with an OSC 8 terminal hyperlink. */
-export function wrapOsc8(url: string, text: string): string {
-  return `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
-}
-
 /**
  * Extract all unique URLs from raw markdown text.
  * Finds both bare URLs and markdown link hrefs [text](url).

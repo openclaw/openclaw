@@ -41,6 +41,10 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
     ).toThrow(/reject mode failed for an unexpected reason/u);
   });
 
+  it("rejects out-of-range gateway ports before connecting", () => {
+    expect(() => testing.resolveGatewayPort({ PORT: "65536" })).toThrow("invalid PORT: 65536");
+  });
+
   it("accepts success mode only when the final assistant reply contains the marker", () => {
     expect(() =>
       testing.validateSuccessResult({
