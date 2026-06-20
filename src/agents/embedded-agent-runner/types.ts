@@ -129,14 +129,40 @@ type ContextManagementTrace = {
 
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
 
-export type EmbeddedRunFailureSignal = {
-  kind: "execution_denied";
-  source: "tool";
-  toolName?: string;
-  code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
-  message: string;
-  fatalForCron: true;
-};
+/**
+ * Discriminated by `kind`:
+ *   - `execution_denied`: structured exec/bash tool rejection (e.g. host
+ *     denial codes) that an unattended cron run cannot recover from.
+ *   - `tool_unavailable_exhausted`: the embedded runner's unknown-tool loop
+ *     guard rewrote the assistant's final message into canned self-debug
+ *     text after the model kept calling an unavailable tool. Cron must fail
+ *     closed instead of announcing the injected text to the user channel
+ *     (#92535).
+ *
+ * When `bypassCronDelivery` is true, cron skips delivery dispatch entirely
+ * and records an operator-facing error instead of synthesizing the failure
+ * message into an outbound payload.
+ */
+export type EmbeddedRunFailureSignal =
+  | {
+      kind: "execution_denied";
+      source: "tool";
+      toolName?: string;
+      code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
+      message: string;
+      fatalForCron: true;
+      bypassCronDelivery?: boolean;
+    }
+  | {
+      kind: "tool_unavailable_exhausted";
+      source: "runner";
+      toolName?: string;
+      code: "TOOL_UNAVAILABLE_EXHAUSTED";
+      message: string;
+      fatalForCron: true;
+      bypassCronDelivery: true;
+      rewriteCount?: number;
+    };
 
 export type EmbeddedAgentRunMeta = {
   durationMs: number;

@@ -34,6 +34,8 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
+  createUnknownToolLoopGuardState,
+  readUnknownToolLoopGuardReport,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -875,6 +877,116 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(blockedResult.role).toBe("assistant");
     expectSingleTextContent(blockedResult.content, '"exec"');
+  });
+
+  it("surfaces an exhausted unknown-tool report on the shared guard state (#92535)", async () => {
+    // The runner reads this report after the attempt completes and converts
+    // it into a fatal cron failure signal so the injected self-debug text
+    // never reaches the user delivery channel.
+    const guardState = createUnknownToolLoopGuardState();
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: " process ", arguments: { command: "echo retry" } },
+          ],
+        },
+      }),
+    );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 2,
+      state: guardState,
+    });
+
+    expect(readUnknownToolLoopGuardReport(guardState)).toBeUndefined();
+
+    // Final messages below the threshold do not trip the report.
+    for (let i = 0; i < 2; i += 1) {
+      const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+      await stream.result();
+    }
+    expect(readUnknownToolLoopGuardReport(guardState)).toBeUndefined();
+
+    // The next attempt crosses the threshold; the guard rewrites the message
+    // and records the exhaustion for external observers.
+    const blockedStream = await Promise.resolve(
+      wrappedFn({} as never, {} as never, {} as never),
+    );
+    const blockedResult = (await blockedStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(blockedResult.role).toBe("assistant");
+    expectSingleTextContent(blockedResult.content, '"process"');
+
+    const report = readUnknownToolLoopGuardReport(guardState);
+    expect(report?.toolName).toBe("process");
+    expect(report?.rewriteCount).toBeGreaterThan(2);
+  });
+
+  it("clears a stale unknown-tool report after a recovered final response", async () => {
+    const guardState = createUnknownToolLoopGuardState();
+    const baseFn = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [
+              { type: "toolCall", name: " process ", arguments: { command: "echo retry" } },
+            ],
+          },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [
+              { type: "toolCall", name: " process ", arguments: { command: "echo retry" } },
+            ],
+          },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "text", text: "Done without the unavailable tool." }],
+          },
+        }),
+      );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 1,
+      state: guardState,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    await firstStream.result();
+
+    const blockedStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    const blockedResult = (await blockedStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expectSingleTextContent(blockedResult.content, '"process"');
+    expect(readUnknownToolLoopGuardReport(guardState)?.toolName).toBe("process");
+
+    const recoveredStream = await Promise.resolve(
+      wrappedFn({} as never, {} as never, {} as never),
+    );
+    const recoveredResult = (await recoveredStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+
+    expectSingleTextContent(recoveredResult.content, "Done without the unavailable tool.");
+    expect(readUnknownToolLoopGuardReport(guardState)).toBeUndefined();
   });
 
   it("leaves repeated unavailable tool calls alone when the unknown-tool guard is disabled", async () => {

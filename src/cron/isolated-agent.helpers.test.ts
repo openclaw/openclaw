@@ -437,4 +437,61 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.embeddedRunError).toBe("Exec failed before SYSTEM_RUN_DENIED could be retried");
   });
+
+  it("sets bypassCronDelivery when the failure signal flags it (#92535)", () => {
+    // Unknown-tool exhaustion produces a fatal failure signal carrying the
+    // canned self-debug text as the assistant message. Cron must not deliver
+    // that text — the outcome surfaces a `bypassCronDelivery` flag so the
+    // run loop short-circuits to the cleanup path used for other fatal
+    // structured payloads.
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: 'I can\'t use the tool "process" here because it isn\'t available. I need to stop retrying it and answer without that tool.',
+        },
+      ],
+      failureSignal: {
+        kind: "tool_unavailable_exhausted",
+        source: "runner",
+        toolName: "process",
+        code: "TOOL_UNAVAILABLE_EXHAUSTED",
+        message: 'Cron run aborted: model exhausted retries on unavailable tool "process".',
+        fatalForCron: true,
+        bypassCronDelivery: true,
+      },
+    });
+
+    expect(result.bypassCronDelivery).toBe(true);
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("tool_unavailable_exhausted");
+    // The fatal signal owns the delivery payload so the self-debug text is
+    // replaced by an isError summary that cron will discard during the
+    // bypass-delivery cleanup.
+    expect(result.deliveryPayloads).toEqual([
+      {
+        text: 'Cron run aborted: model exhausted retries on unavailable tool "process".',
+        isError: true,
+      },
+    ]);
+  });
+
+  it("leaves bypassCronDelivery false for ordinary fatal failure signals", () => {
+    // Other fatal signals (e.g. SYSTEM_RUN_DENIED) still rely on the normal
+    // synthesized-error delivery path; only signals that explicitly opt in
+    // to bypass should suppress dispatch.
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "On it, retrying now." }],
+      failureSignal: {
+        kind: "execution_denied",
+        source: "tool",
+        toolName: "exec",
+        code: "SYSTEM_RUN_DENIED",
+        message: "SYSTEM_RUN_DENIED: approval required",
+        fatalForCron: true,
+      },
+    });
+
+    expect(result.bypassCronDelivery).toBe(false);
+    expect(result.hasFatalErrorPayload).toBe(true);
+  });
 });

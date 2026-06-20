@@ -3461,6 +3461,7 @@ async function runEmbeddedAgentInternal(
           const failureSignal = resolveEmbeddedRunFailureSignal({
             trigger: params.trigger,
             lastToolError: attempt.lastToolError,
+            unknownToolLoopExhausted: attempt.unknownToolLoopExhausted,
           });
 
           // Timeout aborts can leave the run without payloads or with only a

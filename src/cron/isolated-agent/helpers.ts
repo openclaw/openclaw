@@ -22,6 +22,14 @@ export type CronPayloadOutcome = {
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
   hasFatalStructuredErrorPayload: boolean;
+  /**
+   * True when the run produced a fatal signal whose payload must never reach
+   * the user delivery channel (e.g. the embedded runner's unknown-tool loop
+   * guard rewrote the assistant message into self-debug text — #92535). Cron
+   * treats this like `hasFatalStructuredErrorPayload` for delivery dispatch:
+   * skip the announce path and surface the failure to operators only.
+   */
+  bypassCronDelivery: boolean;
   embeddedRunError?: string;
   pendingPresentationWarningError?: string;
 };
@@ -33,6 +41,7 @@ type CronFailureSignal = {
   code?: string;
   message?: string;
   fatalForCron?: boolean;
+  bypassCronDelivery?: boolean;
 };
 
 type NormalizedCronFailureSignal = CronFailureSignal & {
@@ -329,6 +338,11 @@ export function resolveCronPayloadOutcome(params: {
         : [];
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
+  // Bypass cron delivery dispatch entirely when the failure signal explicitly
+  // asks for it (e.g. unknown-tool loop exhaustion — #92535). The injected
+  // self-debug text or runner-internal diagnostic must never reach the user
+  // channel as a normal reply.
+  const bypassCronDelivery = failureSignal?.bypassCronDelivery === true;
   const hasFatalErrorPayload =
     hasFatalStructuredErrorPayload || failureSignal !== undefined || runLevelError !== undefined;
   const structuredErrorText = hasFatalStructuredErrorPayload
@@ -354,6 +368,7 @@ export function resolveCronPayloadOutcome(params: {
       : deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
     hasFatalStructuredErrorPayload,
+    bypassCronDelivery,
     embeddedRunError: structuredErrorText
       ? structuredErrorText
       : failureSignal

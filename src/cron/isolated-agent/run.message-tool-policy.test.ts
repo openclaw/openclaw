@@ -109,6 +109,8 @@ function mockPendingMessagePresentationWarningOutcome() {
     deliveryPayloads: [{ text: "Final cron report" }],
     deliveryPayloadHasStructuredContent: false,
     hasFatalErrorPayload: false,
+    hasFatalStructuredErrorPayload: false,
+    bypassCronDelivery: false,
     embeddedRunError: undefined,
     pendingPresentationWarningError: "⚠️ ✉️ Message failed",
   });
@@ -425,6 +427,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       deliveryPayloadHasStructuredContent: false,
       hasFatalErrorPayload: false,
       hasFatalStructuredErrorPayload: false,
+      bypassCronDelivery: false,
       embeddedRunError: undefined,
     });
     runEmbeddedAgentMock.mockResolvedValue({

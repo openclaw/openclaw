@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  cleanupDirectCronSessionMock,
   countActiveDescendantRunsMock,
   dispatchCronDeliveryMock,
   isHeartbeatOnlyResponseMock,
@@ -160,6 +161,102 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(deliveryRequest.deliveryPayloads).toEqual([
       { text: "SYSTEM_RUN_DENIED: approval required", isError: true },
     ]);
+  });
+
+  it("fails closed without delivering injected self-debug text when the runner exhausts the unknown-tool loop guard (#92535)", async () => {
+    // Real-world reproduction from issue #92535: the model kept calling an
+    // unavailable tool (`process`) until the embedded runner's unknown-tool
+    // loop guard rewrote the assistant message into canned self-debug text
+    // ("I can't use the tool 'process' here because it isn't available...").
+    // The runner now surfaces that condition as a fatal failure signal with
+    // `bypassCronDelivery: true` so cron must NOT dispatch the injected text
+    // to Telegram; the cleanup branch retires the cron session and reports
+    // an operator-facing error instead.
+    usePayloadTextExtraction();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "I can't use the tool \"process\" here because it isn't available. I need to stop retrying it and answer without that tool.",
+        },
+      ],
+      meta: {
+        agentMeta: { usage: { input: 10, output: 20 } },
+        finalAssistantVisibleText:
+          "I can't use the tool \"process\" here because it isn't available. I need to stop retrying it and answer without that tool.",
+        failureSignal: {
+          kind: "tool_unavailable_exhausted",
+          source: "runner",
+          toolName: "process",
+          code: "TOOL_UNAVAILABLE_EXHAUSTED",
+          message:
+            'Cron run aborted: model exhausted retries on unavailable tool "process".',
+          fatalForCron: true,
+          bypassCronDelivery: true,
+        },
+      },
+    });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    // Delivery dispatch must never see the injected self-debug text.
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    // The cron session is cleaned up just like the existing fatal
+    // structured-payload path so direct-delivery sessions do not leak.
+    expect(cleanupDirectCronSessionMock).toHaveBeenCalledWith({
+      job: expect.objectContaining({ id: expect.any(String) }),
+      agentSessionKey: expect.any(String),
+      sessionId: expect.any(String),
+      retireReason: "cron-delete-after-run-fatal-error",
+    });
+    // The run is reported as an error with the operator-facing summary, not
+    // the canned assistant text.
+    expect(result.status).toBe("error");
+    expect(result.error).toBe(
+      'Cron run aborted: model exhausted retries on unavailable tool "process".',
+    );
+    expect(result.delivered).toBe(false);
+    expect(result.deliveryAttempted).toBe(false);
+  });
+
+  it("still delivers ordinary fatal failure signals as synthesized error payloads", async () => {
+    // Regression guard: the bypass branch above must NOT fire for normal
+    // fatal signals (e.g. SYSTEM_RUN_DENIED) that already rely on the
+    // synthesized-error delivery path. Without an explicit
+    // `bypassCronDelivery: true`, dispatch must still be called.
+    usePayloadTextExtraction();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    isHeartbeatOnlyResponseMock.mockReturnValue(true);
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: { usage: { input: 10, output: 20 } },
+        failureSignal: {
+          kind: "execution_denied",
+          source: "tool",
+          toolName: "exec",
+          code: "SYSTEM_RUN_DENIED",
+          message: "SYSTEM_RUN_DENIED: approval required",
+          fatalForCron: true,
+        },
+      },
+    });
+
+    mockRunCronFallbackPassthrough();
+    await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry when descendants were spawned in this run even if they already settled", async () => {

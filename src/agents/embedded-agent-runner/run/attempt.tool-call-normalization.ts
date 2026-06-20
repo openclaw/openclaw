@@ -35,11 +35,55 @@ import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
 
+/**
+ * Observable report describing a single unknown-tool exhaustion event.
+ *
+ * The guard records the unavailable tool name and the rewrite count so cron
+ * delivery can distinguish a genuine assistant reply from the self-debug text
+ * that the guard injects when the model loops on an unavailable tool.
+ */
+export type UnknownToolLoopGuardReport = {
+  toolName: string;
+  rewriteCount: number;
+};
+
 type UnknownToolLoopGuardState = {
   lastUnknownToolName?: string;
   count: number;
   countedMessages: WeakSet<object>;
+  /**
+   * Active exhaustion event surfaced to external observers (e.g. the embedded
+   * run loop) so cron can fail closed instead of delivering the injected
+   * self-debug text as a normal assistant reply.
+   */
+  exhaustedReport?: UnknownToolLoopGuardReport;
 };
+
+function resetUnknownToolLoopGuardState(state: UnknownToolLoopGuardState): void {
+  state.lastUnknownToolName = undefined;
+  state.count = 0;
+  state.exhaustedReport = undefined;
+}
+
+/** Creates a fresh guard state suitable for external observation. */
+export function createUnknownToolLoopGuardState(): UnknownToolLoopGuardState {
+  return {
+    count: 0,
+    countedMessages: new WeakSet<object>(),
+  };
+}
+
+/** Reads the most-recent unknown-tool exhaustion event recorded by the guard. */
+export function readUnknownToolLoopGuardReport(
+  state: UnknownToolLoopGuardState | undefined,
+): UnknownToolLoopGuardReport | undefined {
+  if (!state?.exhaustedReport) {
+    return undefined;
+  }
+  return { ...state.exhaustedReport };
+}
+
+export type { UnknownToolLoopGuardState };
 type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
 function resolveCaseInsensitiveAllowedToolName(
@@ -773,7 +817,11 @@ function classifyToolCallMessage(
   return unknownToolName ? { kind: "unknown", toolName: unknownToolName } : { kind: "incomplete" };
 }
 
-function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void {
+function rewriteUnknownToolLoopMessage(
+  message: unknown,
+  toolName: string,
+  state: UnknownToolLoopGuardState,
+): void {
   if (!message || typeof message !== "object") {
     return;
   }
@@ -783,6 +831,15 @@ function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void
       text: `I can't use the tool "${toolName}" here because it isn't available. I need to stop retrying it and answer without that tool.`,
     },
   ];
+  // Record the exhaustion event so cron can detect the injected self-debug
+  // text and fail closed instead of announcing it as a normal reply (#92535).
+  // `count` is incremented BEFORE rewrite in guardUnknownToolLoopInMessage, so
+  // it already reflects the rewrite attempt.
+  const existing = state.exhaustedReport;
+  if (existing && existing.toolName === toolName && existing.rewriteCount >= state.count) {
+    return;
+  }
+  state.exhaustedReport = { toolName, rewriteCount: state.count };
 }
 
 function guardUnknownToolLoopInMessage(
@@ -800,19 +857,17 @@ function guardUnknownToolLoopInMessage(
   const toolCallState = classifyToolCallMessage(message, params.allowedToolNames);
   if (toolCallState.kind === "allowed") {
     if (params.resetOnAllowedTool === true) {
-      state.lastUnknownToolName = undefined;
-      state.count = 0;
+      resetUnknownToolLoopGuardState(state);
     }
     return false;
   }
   if (toolCallState.kind === "malformed") {
     if (params.rewriteMalformedBlankToolName === true) {
-      rewriteUnknownToolLoopMessage(message, toolCallState.toolName);
+      rewriteUnknownToolLoopMessage(message, toolCallState.toolName, state);
       return true;
     }
     if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
-      state.lastUnknownToolName = undefined;
-      state.count = 0;
+      resetUnknownToolLoopGuardState(state);
     }
     return false;
   }
@@ -822,8 +877,7 @@ function guardUnknownToolLoopInMessage(
   }
   if (toolCallState.kind !== "unknown") {
     if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
-      state.lastUnknownToolName = undefined;
-      state.count = 0;
+      resetUnknownToolLoopGuardState(state);
     }
     return false;
   }
@@ -833,7 +887,7 @@ function guardUnknownToolLoopInMessage(
     // Partial stream events can rewrite after the threshold, but only final
     // messages advance the loop counter.
     if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
-      rewriteUnknownToolLoopMessage(message, unknownToolName);
+      rewriteUnknownToolLoopMessage(message, unknownToolName, state);
     }
     return false;
   }
@@ -841,7 +895,7 @@ function guardUnknownToolLoopInMessage(
   if (message && typeof message === "object") {
     if (state.countedMessages.has(message)) {
       if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
-        rewriteUnknownToolLoopMessage(message, unknownToolName);
+        rewriteUnknownToolLoopMessage(message, unknownToolName, state);
       }
       return true;
     }
@@ -856,7 +910,7 @@ function guardUnknownToolLoopInMessage(
   }
 
   if (state.count > threshold) {
-    rewriteUnknownToolLoopMessage(message, unknownToolName);
+    rewriteUnknownToolLoopMessage(message, unknownToolName, state);
   }
   return true;
 }
@@ -1115,12 +1169,10 @@ function wrapStreamTrimToolCallNames(
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
-  guardOptions?: { unknownToolThreshold?: number },
+  guardOptions?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
 ): StreamFn {
-  const unknownToolGuardState: UnknownToolLoopGuardState = {
-    count: 0,
-    countedMessages: new WeakSet<object>(),
-  };
+  const unknownToolGuardState: UnknownToolLoopGuardState =
+    guardOptions?.state ?? createUnknownToolLoopGuardState();
   return (model, context, streamOptions) => {
     const maybeStream = baseFn(model, context, streamOptions);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {

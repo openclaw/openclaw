@@ -222,6 +222,15 @@ export type EmbeddedRunAttemptResult = {
   clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /**
+   * Set when the unknown-tool loop guard rewrote a final assistant message
+   * into the canned self-debug text. Cron uses this to fail closed instead
+   * of announcing the injected text to the user channel (#92535).
+   */
+  unknownToolLoopExhausted?: {
+    toolName: string;
+    rewriteCount: number;
+  };
   replayMetadata: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;
