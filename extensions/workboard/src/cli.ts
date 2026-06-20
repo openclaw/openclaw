@@ -130,14 +130,26 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .description("List Workboard cards")
     .option("--board <id>", "Board id")
     .option("--status <status>", "Filter by status")
+    .option("--include-archived", "Include archived cards (default false)")
     .option("--json", "Print JSON", false)
-    .action(async (options: JsonOptions & { board?: string; status?: string }) => {
-      let cards = await params.store.list({ boardId: options.board });
-      if (options.status) {
-        cards = cards.filter((card) => card.status === options.status);
-      }
-      writeCards(cards, options);
-    });
+    .action(
+      async (
+        options: JsonOptions & {
+          board?: string;
+          status?: string;
+          includeArchived?: boolean;
+        },
+      ) => {
+        let cards = await params.store.list({ boardId: options.board });
+        if (!options.includeArchived) {
+          cards = cards.filter((card) => !card.metadata?.archivedAt);
+        }
+        if (options.status) {
+          cards = cards.filter((card) => card.status === options.status);
+        }
+        writeCards(cards, options);
+      },
+    );
 
   workboard
     .command("create")
