@@ -491,6 +491,10 @@ function buildAcpCoreDistEntries(): Record<string, string> {
   return buildPackageDistEntriesFromExports("acp-core");
 }
 
+function buildArdCoreDistEntries(): Record<string, string> {
+  return buildPackageDistEntriesFromExports("ard-core");
+}
+
 function buildTerminalCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/terminal-core/src/index.ts",
@@ -746,6 +750,12 @@ export default defineConfig([
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildAcpCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("acp-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildArdCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("ard-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

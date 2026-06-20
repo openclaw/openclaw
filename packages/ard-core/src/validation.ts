@@ -9,6 +9,9 @@ import {
   type ArdIdentifierParts,
   type ArdJsonObject,
   type ArdSearchRequest,
+  type ArdTrustAttestation,
+  type ArdTrustProvenance,
+  type ArdTrustSchema,
   type ArdTrustManifest,
   type ArdValidationResult,
   SUPPORTED_ARD_MCP_MEDIA_TYPES,
@@ -16,6 +19,7 @@ import {
 } from "./types.js";
 
 const IDENTIFIER_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const DNS_LABEL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 
 /** Returns true when a value is a non-array object record. */
 export function isArdRecord(value: unknown): value is ArdJsonObject {
@@ -49,7 +53,7 @@ export function isSupportedArdMcpMediaType(value: unknown): boolean {
 export function parseArdIdentifier(identifier: string): ArdIdentifierParts | null {
   const trimmed = identifier.trim();
   const parts = trimmed.split(":");
-  if (parts.length < 4 || parts[0] !== "urn" || parts[1] !== "ai") {
+  if (parts.length < 4 || parts[0] !== "urn" || parts[1] !== "air") {
     return null;
   }
   const publisher = parts[2];
@@ -57,8 +61,10 @@ export function parseArdIdentifier(identifier: string): ArdIdentifierParts | nul
   if (!publisher || !segments.length) {
     return null;
   }
-  const tokens = [publisher, ...segments];
-  if (tokens.some((token) => !IDENTIFIER_TOKEN_PATTERN.test(token))) {
+  if (!isFullyQualifiedDomainName(publisher)) {
+    return null;
+  }
+  if (segments.some((token) => !IDENTIFIER_TOKEN_PATTERN.test(token))) {
     return null;
   }
   return {
@@ -78,7 +84,7 @@ export function validateArdCatalogEntry(value: unknown): ArdValidationResult<Ard
 
   const identifier = requireString(value, "identifier", errors);
   if (identifier && !parseArdIdentifier(identifier)) {
-    errors.push("identifier must be a valid urn:ai:<publisher>:<namespace>:<name> value");
+    errors.push("identifier must be a valid urn:air:<publisher-fqdn>:<namespace>:<name> value");
   }
 
   const displayName = requireString(value, "displayName", errors);
@@ -230,6 +236,14 @@ function requireString(record: ArdJsonObject, key: string, errors: string[]): st
   return value;
 }
 
+function requireNestedString(value: unknown, key: string, errors: string[]): string | undefined {
+  const normalized = optionalString(value, key, errors);
+  if (!normalized) {
+    errors.push(`${key} must be a non-empty string`);
+  }
+  return normalized;
+}
+
 function optionalString(value: unknown, key: string, errors: string[]): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -283,23 +297,31 @@ function optionalTrustManifest(value: unknown, errors: string[]): ArdTrustManife
     errors.push("trustManifest must be an object");
     return undefined;
   }
-  const signatures = optionalStringArray(value.signatures, "trustManifest.signatures", errors);
-  const attestations = optionalStringArray(
-    value.attestations,
-    "trustManifest.attestations",
+  requireOnlyKeys(
+    value,
+    "trustManifest",
+    ["identity", "identityType", "trustSchema", "attestations", "provenance", "signature"],
     errors,
   );
-  const transparencyLog = optionalString(
-    value.transparencyLog,
-    "trustManifest.transparencyLog",
-    errors,
-  );
-  const metadata = optionalRecord(value.metadata, "trustManifest.metadata", errors);
+  const identity = requireNestedString(value.identity, "trustManifest.identity", errors);
+  const identityType = optionalString(value.identityType, "trustManifest.identityType", errors);
+  if (identityType && !["spiffe", "did", "https", "other"].includes(identityType)) {
+    errors.push("trustManifest.identityType must be spiffe, did, https, or other");
+  }
+  const trustSchema = optionalTrustSchema(value.trustSchema, errors);
+  const attestations = optionalTrustAttestations(value.attestations, errors);
+  const provenance = optionalTrustProvenance(value.provenance, errors);
+  const signature = optionalString(value.signature, "trustManifest.signature", errors);
+  if (!identity) {
+    return undefined;
+  }
   return {
-    ...(signatures ? { signatures } : {}),
-    ...(transparencyLog ? { transparencyLog } : {}),
+    identity,
+    ...(identityType ? { identityType: identityType as ArdTrustManifest["identityType"] } : {}),
+    ...(trustSchema ? { trustSchema } : {}),
     ...(attestations ? { attestations } : {}),
-    ...(metadata ? { metadata } : {}),
+    ...(provenance ? { provenance } : {}),
+    ...(signature ? { signature } : {}),
   };
 }
 
@@ -311,26 +333,151 @@ function optionalCatalogHost(value: unknown, errors: string[]): ArdCatalogHost |
     errors.push("host must be an object");
     return undefined;
   }
-  const federation = optionalString(value.federation, "host.federation", errors);
-  if (federation && !["auto", "referrals", "none"].includes(federation)) {
-    errors.push("host.federation must be auto, referrals, or none");
+  requireOnlyKeys(
+    value,
+    "host",
+    ["displayName", "identifier", "documentationUrl", "logoUrl", "trustManifest"],
+    errors,
+  );
+  const displayName = requireNestedString(value.displayName, "host.displayName", errors);
+  const identifier = optionalString(value.identifier, "host.identifier", errors);
+  const documentationUrl = optionalString(value.documentationUrl, "host.documentationUrl", errors);
+  if (documentationUrl && !isUri(documentationUrl)) {
+    errors.push("host.documentationUrl must be a URI");
   }
-  const url = optionalString(value.url, "host.url", errors);
-  if (url && !isHttpUrl(url)) {
-    errors.push("host.url must be an http or https URL");
+  const logoUrl = optionalString(value.logoUrl, "host.logoUrl", errors);
+  if (logoUrl && !isUri(logoUrl)) {
+    errors.push("host.logoUrl must be a URI");
   }
-  const name = optionalString(value.name, "host.name", errors);
-  const displayName = optionalString(value.displayName, "host.displayName", errors);
-  const description = optionalString(value.description, "host.description", errors);
-  const metadata = optionalRecord(value.metadata, "host.metadata", errors);
+  const trustManifest = optionalTrustManifest(value.trustManifest, errors);
+  if (!displayName) {
+    return undefined;
+  }
   return {
-    ...(name ? { name } : {}),
-    ...(displayName ? { displayName } : {}),
-    ...(url ? { url } : {}),
-    ...(description ? { description } : {}),
-    ...(federation ? { federation: federation as ArdCatalogHost["federation"] } : {}),
-    ...(metadata ? { metadata } : {}),
+    displayName,
+    ...(identifier ? { identifier } : {}),
+    ...(documentationUrl ? { documentationUrl } : {}),
+    ...(logoUrl ? { logoUrl } : {}),
+    ...(trustManifest ? { trustManifest } : {}),
   };
+}
+
+function optionalTrustSchema(value: unknown, errors: string[]): ArdTrustSchema | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isArdRecord(value)) {
+    errors.push("trustManifest.trustSchema must be an object");
+    return undefined;
+  }
+  requireOnlyKeys(
+    value,
+    "trustManifest.trustSchema",
+    ["identifier", "version", "governanceUri", "verificationMethods"],
+    errors,
+  );
+  const identifier = requireNestedString(
+    value.identifier,
+    "trustManifest.trustSchema.identifier",
+    errors,
+  );
+  const version = requireNestedString(value.version, "trustManifest.trustSchema.version", errors);
+  const governanceUri = optionalString(
+    value.governanceUri,
+    "trustManifest.trustSchema.governanceUri",
+    errors,
+  );
+  if (governanceUri && !isUri(governanceUri)) {
+    errors.push("trustManifest.trustSchema.governanceUri must be a URI");
+  }
+  const verificationMethods = optionalStringArray(
+    value.verificationMethods,
+    "trustManifest.trustSchema.verificationMethods",
+    errors,
+  );
+  if (!identifier || !version) {
+    return undefined;
+  }
+  return {
+    identifier,
+    version,
+    ...(governanceUri ? { governanceUri } : {}),
+    ...(verificationMethods ? { verificationMethods } : {}),
+  };
+}
+
+function optionalTrustAttestations(
+  value: unknown,
+  errors: string[],
+): ArdTrustAttestation[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    errors.push("trustManifest.attestations must be an array of objects");
+    return undefined;
+  }
+  const attestations: ArdTrustAttestation[] = [];
+  for (const [index, entry] of value.entries()) {
+    const key = `trustManifest.attestations[${index}]`;
+    if (!isArdRecord(entry)) {
+      errors.push(`${key} must be an object`);
+      continue;
+    }
+    requireOnlyKeys(entry, key, ["type", "uri", "mediaType", "digest"], errors);
+    const type = requireNestedString(entry.type, `${key}.type`, errors);
+    const uri = requireNestedString(entry.uri, `${key}.uri`, errors);
+    if (uri && !isUri(uri)) {
+      errors.push(`${key}.uri must be a URI`);
+    }
+    const mediaType = requireNestedString(entry.mediaType, `${key}.mediaType`, errors);
+    const digest = optionalString(entry.digest, `${key}.digest`, errors);
+    if (type && uri && mediaType) {
+      attestations.push({
+        type,
+        uri,
+        mediaType,
+        ...(digest ? { digest } : {}),
+      });
+    }
+  }
+  return attestations;
+}
+
+function optionalTrustProvenance(
+  value: unknown,
+  errors: string[],
+): ArdTrustProvenance[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    errors.push("trustManifest.provenance must be an array of objects");
+    return undefined;
+  }
+  const provenance: ArdTrustProvenance[] = [];
+  for (const [index, entry] of value.entries()) {
+    const key = `trustManifest.provenance[${index}]`;
+    if (!isArdRecord(entry)) {
+      errors.push(`${key} must be an object`);
+      continue;
+    }
+    requireOnlyKeys(entry, key, ["relation", "sourceId", "sourceDigest"], errors);
+    const relation = requireNestedString(entry.relation, `${key}.relation`, errors);
+    if (relation && !["derivedFrom", "publishedFrom", "copiedFrom"].includes(relation)) {
+      errors.push(`${key}.relation must be derivedFrom, publishedFrom, or copiedFrom`);
+    }
+    const sourceId = requireNestedString(entry.sourceId, `${key}.sourceId`, errors);
+    const sourceDigest = optionalString(entry.sourceDigest, `${key}.sourceDigest`, errors);
+    if (relation && sourceId) {
+      provenance.push({
+        relation: relation as ArdTrustProvenance["relation"],
+        sourceId,
+        ...(sourceDigest ? { sourceDigest } : {}),
+      });
+    }
+  }
+  return provenance;
 }
 
 function optionalSearchFilters(
@@ -376,6 +523,37 @@ function isHttpUrl(value: string): boolean {
     return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
+  }
+}
+
+function isUri(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol.length > 1;
+  } catch {
+    return false;
+  }
+}
+
+function isFullyQualifiedDomainName(value: string): boolean {
+  if (value.length > 253 || !value.includes(".")) {
+    return false;
+  }
+  const labels = value.split(".");
+  return labels.every((label) => DNS_LABEL_PATTERN.test(label));
+}
+
+function requireOnlyKeys(
+  record: ArdJsonObject,
+  key: string,
+  allowedKeys: readonly string[],
+  errors: string[],
+): void {
+  const allowed = new Set(allowedKeys);
+  for (const entryKey of Object.keys(record)) {
+    if (!allowed.has(entryKey)) {
+      errors.push(`${key}.${entryKey} is not supported by the ARD schema`);
+    }
   }
 }
 

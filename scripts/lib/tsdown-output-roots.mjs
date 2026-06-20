@@ -1,5 +1,6 @@
 // Lists package dist roots produced by tsdown builds.
 const TSDOWN_PACKAGE_NAMES = [
+  "ard-core",
   "agent-core",
   "gateway-client",
   "gateway-protocol",

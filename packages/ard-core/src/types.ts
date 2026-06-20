@@ -29,24 +29,45 @@ export type StandardArdMediaType = (typeof STANDARD_ARD_MEDIA_TYPES)[number];
 
 export type SupportedArdMcpMediaType = (typeof SUPPORTED_ARD_MCP_MEDIA_TYPES)[number];
 
-export type ArdFederationMode = "auto" | "referrals" | "none";
-
 export type ArdJsonObject = Record<string, unknown>;
 
+export type ArdTrustIdentityType = "spiffe" | "did" | "https" | "other";
+
+export type ArdTrustSchema = {
+  identifier: string;
+  version: string;
+  governanceUri?: string;
+  verificationMethods?: readonly string[];
+};
+
+export type ArdTrustAttestation = {
+  type: string;
+  uri: string;
+  mediaType: string;
+  digest?: string;
+};
+
+export type ArdTrustProvenance = {
+  relation: "derivedFrom" | "publishedFrom" | "copiedFrom";
+  sourceId: string;
+  sourceDigest?: string;
+};
+
 export type ArdTrustManifest = {
-  signatures?: readonly string[];
-  transparencyLog?: string;
-  attestations?: readonly string[];
-  metadata?: ArdJsonObject;
+  identity: string;
+  identityType?: ArdTrustIdentityType;
+  trustSchema?: ArdTrustSchema;
+  attestations?: readonly ArdTrustAttestation[];
+  provenance?: readonly ArdTrustProvenance[];
+  signature?: string;
 };
 
 export type ArdCatalogHost = {
-  name?: string;
   displayName?: string;
-  url?: string;
-  description?: string;
-  federation?: ArdFederationMode;
-  metadata?: ArdJsonObject;
+  identifier?: string;
+  documentationUrl?: string;
+  logoUrl?: string;
+  trustManifest?: ArdTrustManifest;
 };
 
 export type ArdCatalogEntry = {

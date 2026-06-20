@@ -4,7 +4,7 @@ import type { ArdCatalogEntry } from "./index.js";
 
 const entries: ArdCatalogEntry[] = [
   {
-    identifier: "urn:ai:openclaw:plugins:github",
+    identifier: "urn:air:openclaw.dev:plugins:github",
     displayName: "GitHub",
     type: ARD_MEDIA_TYPE_MCP_SERVER_CARD,
     url: "https://example.test/github/card.json",
@@ -13,7 +13,7 @@ const entries: ArdCatalogEntry[] = [
     representativeQueries: ["review this PR", "fix failing CI"],
   },
   {
-    identifier: "urn:ai:openclaw:plugins:calendar",
+    identifier: "urn:air:openclaw.dev:plugins:calendar",
     displayName: "Calendar",
     type: "application/vnd.openclaw.plugin+json",
     data: { id: "calendar" },
@@ -21,7 +21,7 @@ const entries: ArdCatalogEntry[] = [
     capabilities: ["events"],
   },
   {
-    identifier: "urn:ai:external:agents:ci-monitor",
+    identifier: "urn:air:example.com:agents:ci-monitor",
     displayName: "CI Monitor",
     type: "application/a2a-agent-card+json",
     url: "https://example.test/ci/card.json",
@@ -37,15 +37,15 @@ describe("ard-core search", () => {
     expect(
       result.results.map((entry) => [entry.entry.identifier, entry.score, entry.source]),
     ).toEqual([
-      ["urn:ai:external:agents:ci-monitor", 46, "local"],
-      ["urn:ai:openclaw:plugins:github", 39, "local"],
+      ["urn:air:example.com:agents:ci-monitor", 46, "local"],
+      ["urn:air:openclaw.dev:plugins:github", 39, "local"],
     ]);
   });
 
   it("filters by derived publisher and nested fields", () => {
     const result = searchArdCatalogEntries(entries, {
       filters: {
-        publisher: "openclaw",
+        publisher: "openclaw.dev",
         type: ARD_MEDIA_TYPE_MCP_SERVER_CARD,
       },
     });
