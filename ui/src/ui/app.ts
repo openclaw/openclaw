@@ -726,12 +726,8 @@ export class OpenClawApp extends LitElement {
   @state() logsAtBottom = true;
 
   get routeId(): RouteId {
-    const pathname = typeof window === "undefined" ? "" : window.location.pathname;
-    return (
-      appRouter.routeIdFromPath(pathname, this.basePath) ??
-      appRouter.getState().matches[0]?.routeId ??
-      "chat"
-    );
+    const routeState = appRouter.getState();
+    return routeState.matches[0]?.routeId ?? routeState.pendingMatches[0]?.routeId ?? "chat";
   }
 
   client: GatewayBrowserClient | null = null;
