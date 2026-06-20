@@ -1193,6 +1193,27 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry fallback on EADDRNOTAVAIL and logs diagnostic", async () => {
+    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
+    undiciFetch.mockRejectedValue(fetchError);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+    expectLoggerMessageContaining(loggerWarn, "EADDRNOTAVAIL");
+    expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
+    expectNoLoggerMessageContaining(loggerWarn, "DNS-resolved IP unreachable");
+  });
+
   it("retries sticky fallback when the local network is down during connect", async () => {
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("ENETDOWN"))

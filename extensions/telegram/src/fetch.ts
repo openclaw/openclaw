@@ -462,16 +462,34 @@ class TelegramTransportAttemptUnhealthyError extends Error {
   }
 }
 
+function isLocalSocketAllocationError(codes: Set<string>): boolean {
+  return codes.has("EADDRNOTAVAIL");
+}
+
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
   if (err instanceof TelegramTransportAttemptUnhealthyError) {
     return true;
   }
+  const codes = collectErrorCodes(err);
+
+  // EADDRNOTAVAIL is a local socket allocation failure -- the kernel cannot
+  // assign a source address/port.  Rotating the remote IP cannot fix this, so
+  // any fallback would be wasted work and produce misleading diagnostics.
+  if (isLocalSocketAllocationError(codes)) {
+    log.warn(
+      `telegram transport error: local socket allocation failure (EADDRNOTAVAIL) ` +
+        `-- check ephemeral port range / network extensions; remote IP rotation ` +
+        `will not help (codes=${formatErrorCodes(err)})`,
+    );
+    return false;
+  }
+
   const ctx: TelegramTransportFallbackContext = {
     message:
       err && typeof err === "object" && "message" in err
         ? normalizeLowercaseStringOrEmpty(String(err.message))
         : "",
-    codes: collectErrorCodes(err),
+    codes,
   };
   const hasFetchFailedEnvelope = ctx.message.includes("fetch failed");
   const hasKnownNetworkCode = FALLBACK_RETRY_ERROR_CODES.some((code) => ctx.codes.has(code));
@@ -490,7 +508,7 @@ export type TelegramTransport = {
    * Promote this transport to its next fallback dispatcher before the next
    * request. Returns false when no fallback path exists.
    */
-  forceFallback?: (reason: string) => boolean;
+  forceFallback?: (reason: string, err?: unknown) => boolean;
   /**
    * Release all dispatchers owned by this transport and the TCP sockets they
    * hold. Safe to call multiple times; subsequent calls resolve immediately.
@@ -864,8 +882,12 @@ export function resolveTelegramTransport(
     fetch: resolvedFetch,
     sourceFetch,
     dispatcherAttempts: transportAttempts.map((attempt) => attempt.exportAttempt),
-    forceFallback: (reason: string) =>
-      promoteStickyAttempt(stickyAttemptIndex + 1, new Error("forced fallback"), reason),
+    forceFallback: (reason: string, err?: unknown) => {
+      if (err !== undefined && !shouldUseTelegramTransportFallback(err)) {
+        return false;
+      }
+      return promoteStickyAttempt(stickyAttemptIndex + 1, new Error("forced fallback"), reason);
+    },
     close,
   };
 }
