@@ -1311,6 +1311,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       healthChecks: {
         description:
           "Historical config-audit argv redaction gaps are represented as structured findings.",
+        defaultEnabled: false,
         async detect() {
           const { configAuditScrubToHealthFinding, detectConfigAuditScrubIssue } =
             await import("../commands/doctor-config-audit-scrub.js");
