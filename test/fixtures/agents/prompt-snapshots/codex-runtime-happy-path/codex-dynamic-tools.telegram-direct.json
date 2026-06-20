@@ -1074,9 +1074,6 @@
               "minimum": 1,
               "type": "integer"
             },
-            "resetAncestors": {
-              "type": "boolean"
-            },
             "sessionKey": {
               "type": "string"
             }
