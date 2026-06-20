@@ -505,7 +505,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         {
           hookName: "before_prompt_build",
           handler: async (event) => ({
-            appendContext: `${event.prompt}\n\nhook append marker`,
+            appendContext: `${(event as { prompt: string }).prompt}\n\nhook append marker`,
             prependContext: "hook prefix context",
           }),
         },

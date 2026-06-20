@@ -16,6 +16,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
+import type { CopilotToolBridgeInput } from "./tool-bridge.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
@@ -182,7 +183,7 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
 }
 
 function makeFakePool(sdk: FakeSdk) {
-  const pool: CopilotClientPool = {
+  const pool = {
     acquire: vi.fn(async (key, _options) => ({
       client: sdk.client as unknown as CopilotClient,
       key,
@@ -190,7 +191,7 @@ function makeFakePool(sdk: FakeSdk) {
     dispose: vi.fn(async () => []),
     release: vi.fn(async () => undefined),
     size: vi.fn(() => 0),
-  };
+  } satisfies CopilotClientPool;
   return pool;
 }
 
@@ -324,26 +325,16 @@ describe("runCopilotAttempt", () => {
         session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       },
     });
-    const createToolBridge = vi.fn(
-      async (input: {
-        onToolCompleted?: (completion: {
-          args: Record<string, unknown>;
-          result: unknown;
-          startedAt: number;
-          toolCallId: string;
-          toolName: string;
-        }) => Promise<void>;
-      }) => {
-        await input.onToolCompleted?.({
-          args: { path: "README.md" },
-          result: { content: [{ text: "read result", type: "text" }] },
-          startedAt: Date.now(),
-          toolCallId: "tool-call-1",
-          toolName: "read",
-        });
-        return { sdkTools: [], sourceTools: [] };
-      },
-    );
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      await input.onToolCompleted?.({
+        args: { path: "README.md" },
+        result: { content: [{ text: "read result", type: "text" }] },
+        startedAt: Date.now(),
+        toolCallId: "tool-call-1",
+        toolName: "read",
+      });
+      return { sdkTools: [], sourceTools: [] };
+    });
 
     await runCopilotAttempt(makeParams(), {
       createToolBridge,
