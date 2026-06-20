@@ -4,11 +4,41 @@ import { Type } from "typebox";
 /**
  * Image generation provider capabilities.
  */
+export const ImageProviderCapabilitySupportSchema = Type.Object({
+  maxCount: Type.Optional(Type.Number()),
+  supportsSize: Type.Optional(Type.Boolean()),
+  supportsAspectRatio: Type.Optional(Type.Boolean()),
+  supportsResolution: Type.Optional(Type.Boolean()),
+  enabled: Type.Optional(Type.Boolean()),
+});
+
+export const ImageProviderCapabilityGeometrySchema = Type.Union([
+  Type.Boolean(),
+  Type.Object({
+    sizes: Type.Optional(Type.Array(Type.String())),
+    sizesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
+    aspectRatios: Type.Optional(Type.Array(Type.String())),
+    resolutions: Type.Optional(Type.Array(Type.String())),
+  }),
+]);
+
+export const ImageProviderCapabilityOutputSchema = Type.Union([
+  Type.Boolean(),
+  Type.Object({
+    formats: Type.Optional(Type.Array(Type.String())),
+    qualities: Type.Optional(Type.Array(Type.String())),
+    backgrounds: Type.Optional(Type.Array(Type.String())),
+  }),
+]);
+
+/**
+ * Image generation provider capabilities.
+ */
 export const ImageProviderCapabilitiesSchema = Type.Object({
-  generate: Type.Optional(Type.Boolean()),
-  edit: Type.Optional(Type.Boolean()),
-  geometry: Type.Optional(Type.Union([Type.Boolean(), Type.Object({})])),
-  output: Type.Optional(Type.Array(Type.Unknown())),
+  generate: Type.Union([Type.Boolean(), ImageProviderCapabilitySupportSchema]),
+  edit: Type.Union([Type.Boolean(), ImageProviderCapabilitySupportSchema]),
+  geometry: ImageProviderCapabilityGeometrySchema,
+  output: ImageProviderCapabilityOutputSchema,
 });
 
 /**
@@ -28,8 +58,40 @@ export const ImageProviderSchema = Type.Object({
  */
 export const ImageProvidersResultSchema = Type.Object({
   providers: Type.Array(ImageProviderSchema),
-  active: Type.Optional(Type.String()),
+  active: Type.Union([Type.String(), Type.Null()]),
 });
+
+export type ImageProviderCapabilitySupport = {
+  maxCount?: number;
+  supportsSize?: boolean;
+  supportsAspectRatio?: boolean;
+  supportsResolution?: boolean;
+  enabled?: boolean;
+};
+
+export type ImageProviderCapabilityGeometry =
+  | boolean
+  | {
+      sizes?: string[];
+      sizesByModel?: Record<string, string[]>;
+      aspectRatios?: string[];
+      resolutions?: string[];
+    };
+
+export type ImageProviderCapabilityOutput =
+  | boolean
+  | {
+      formats?: string[];
+      qualities?: string[];
+      backgrounds?: string[];
+    };
+
+export type ImageProviderCapabilities = {
+  generate?: boolean | ImageProviderCapabilitySupport;
+  edit?: boolean | ImageProviderCapabilitySupport;
+  geometry?: ImageProviderCapabilityGeometry;
+  output?: ImageProviderCapabilityOutput;
+};
 
 export type ImageProvider = {
   id: string;
@@ -37,15 +99,10 @@ export type ImageProvider = {
   configured: boolean;
   defaultModel?: string;
   models: string[];
-  capabilities: {
-    generate?: boolean;
-    edit?: boolean;
-    geometry?: boolean | Record<string, unknown>;
-    output?: unknown[];
-  };
+  capabilities: ImageProviderCapabilities;
 };
 
 export type ImageProvidersResult = {
   providers: ImageProvider[];
-  active?: string;
+  active?: string | null;
 };
