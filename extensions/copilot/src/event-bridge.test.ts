@@ -662,6 +662,28 @@ describe("attachEventBridge", () => {
     expect(bridge.isCompacting()).toBe(false);
   });
 
+  it("keeps compaction pending after an abort until the SDK reports completion", async () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    const completion = bridge.awaitCompactionCompletion();
+    session.emit("abort", makeEvent("abort", { reason: "tool yield" }));
+    await flushAsync();
+
+    expect(bridge.isCompacting()).toBe(true);
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: false }),
+    );
+    await completion;
+
+    expect(bridge.isCompacting()).toBe(false);
+  });
+
   it("ignores subagent compaction events when tracking the root session", async () => {
     const session = createFakeSession();
     const onCompactionStart = vi.fn();

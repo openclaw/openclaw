@@ -58,6 +58,7 @@ import { createCopilotToolBridge } from "./tool-bridge.js";
 import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
 
 const SUPPORTED_PROVIDERS = new Set(["github-copilot"]);
+const BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS = 5_000;
 
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
@@ -231,7 +232,7 @@ function deferBackgroundCompactionCleanup(params: {
         timeoutMs: params.timeoutMs,
       });
       if (outcome !== "completed") {
-        void params.session.rpc?.history?.cancelBackgroundCompaction?.().catch(() => undefined);
+        await cancelBackgroundCompactionBeforeTeardown(params.session);
       }
     } catch {
       // Event callbacks are best-effort; cleanup still releases the retained session.
@@ -257,6 +258,29 @@ function deferBackgroundCompactionCleanup(params: {
     }
     return outcome;
   })();
+}
+
+async function cancelBackgroundCompactionBeforeTeardown(session: SessionLike): Promise<void> {
+  const cancelBackgroundCompaction = session.rpc?.history?.cancelBackgroundCompaction;
+  if (!cancelBackgroundCompaction) {
+    return;
+  }
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timeoutId = setTimeout(resolve, BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS);
+  });
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(() => cancelBackgroundCompaction())
+        .catch(() => undefined),
+      deadline,
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 async function awaitCompactionCompletionBeforeDeadline(params: {

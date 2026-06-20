@@ -537,6 +537,40 @@ describe("runCopilotAttempt", () => {
     );
   });
 
+  it("awaits deferred compaction cancellation before tearing down the SDK session", async () => {
+    const controller = new AbortController();
+    const cancellation = createDeferred<{ cancelled: boolean }>();
+    let activeSession: FakeSession | undefined;
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        activeSession = session;
+        session.rpc.history.cancelBackgroundCompaction.mockImplementationOnce(
+          () => cancellation.promise,
+        );
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return undefined;
+        });
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
+      pool: makeFakePool(sdk),
+    });
+
+    expect(result.timedOutDuringCompaction).toBe(true);
+    controller.abort();
+    await vi.waitFor(() => {
+      expect(activeSession?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
+    });
+    expect(activeSession?.disconnect).not.toHaveBeenCalled();
+
+    cancellation.resolve({ cancelled: true });
+    await vi.waitFor(() => {
+      expect(activeSession?.disconnect).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("reports the native prompt hook's effective input through llm_input", async () => {
     const llmInput = vi.fn();
     const onUserPromptSubmitted = vi.fn().mockResolvedValue({

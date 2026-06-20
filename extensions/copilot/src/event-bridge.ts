@@ -226,7 +226,6 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "abort", (event) => {
-    finishCompactionObservation();
     if (!options.isAborted()) {
       streamError = createPromptError(
         "session_aborted",
@@ -310,12 +309,6 @@ export function attachEventBridge(
     }
     const queued = compactionChain.then(callback, callback);
     compactionChain = queued.catch(() => undefined);
-  }
-
-  function finishCompactionObservation(): void {
-    activeCompactionCount = 0;
-    resolveCompactionIdle?.();
-    resolveCompactionIdle = undefined;
   }
 }
 
