@@ -30,9 +30,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
-function writeCodexAppServerBinding(
-  ...args: Parameters<typeof writeRawCodexAppServerBinding>
-) {
+function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -44,13 +42,19 @@ function writeCodexAppServerBinding(
   );
 }
 
+function createLoopDetectionParams(sessionFile: string, workspaceDir: string) {
+  const params = createParams(sessionFile, workspaceDir);
+  params.config = { tools: { loopDetection: { enabled: true } } } as never;
+  return params;
+}
+
 describe("runCodexAppServerAttempt native hook relay", () => {
   it("registers native hook relay config for an enabled Codex turn and cleans it up", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopDetectionParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -93,7 +97,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createLoopDetectionParams(sessionFile, workspaceDir);
     params.messageChannel = "discord";
     params.currentChannelId = "channel:target";
 
@@ -157,7 +161,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const relayFloorMs = 30 * 60_000;
 
     const startedAtMs = Date.now();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopDetectionParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -185,7 +189,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopDetectionParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -250,7 +254,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const explicitTtlMs = 123_456;
 
     const startedAtMs = Date.now();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopDetectionParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -292,19 +296,13 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
-    expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
+    expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.Stop"]).toEqual([]);
     expect(startConfig).not.toHaveProperty("hooks.PermissionRequest");
-    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
-    expect(
-      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,
-    ).toEqual(["pre_tool_use", "post_tool_use", "before_agent_finalize"]);
-
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
-    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
   it("preserves explicit native permission request relay events in app-server approval modes", async () => {
@@ -357,6 +355,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     params.abortSignal = abortController.signal;
 
     const startedAtMs = Date.now();
+    params.config = { tools: { loopDetection: { enabled: true } } } as never;
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: {
         enabled: true,
@@ -397,12 +396,15 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const firstHarness = createStartedThreadHarness();
 
-    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
-      nativeHookRelay: {
-        enabled: true,
-        events: ["pre_tool_use"],
+    const firstRun = runCodexAppServerAttempt(
+      createLoopDetectionParams(sessionFile, workspaceDir),
+      {
+        nativeHookRelay: {
+          enabled: true,
+          events: ["pre_tool_use"],
+        },
       },
-    });
+    );
     await firstHarness.waitForMethod("turn/start");
     await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await firstRun;
@@ -429,7 +431,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     ).resolves.toMatchObject({ exitCode: 0 });
 
     const secondHarness = createResumeHarness();
-    const secondParams = createParams(sessionFile, workspaceDir);
+    const secondParams = createLoopDetectionParams(sessionFile, workspaceDir);
     secondParams.runId = "run-2";
     const secondRun = runCodexAppServerAttempt(secondParams, {
       nativeHookRelay: {
@@ -470,12 +472,15 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const firstHarness = createStartedThreadHarness();
 
-    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
-      nativeHookRelay: {
-        enabled: true,
-        events: ["pre_tool_use"],
+    const firstRun = runCodexAppServerAttempt(
+      createLoopDetectionParams(sessionFile, workspaceDir),
+      {
+        nativeHookRelay: {
+          enabled: true,
+          events: ["pre_tool_use"],
+        },
       },
-    });
+    );
     await firstHarness.waitForMethod("turn/start");
     const firstStartRequest = firstHarness.requests.find(
       (request) => request.method === "thread/start",
@@ -490,7 +495,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     );
 
     const secondHarness = createResumeHarness();
-    const secondParams = createParams(sessionFile, workspaceDir);
+    const secondParams = createLoopDetectionParams(sessionFile, workspaceDir);
     secondParams.runId = "run-2";
     const secondRun = runCodexAppServerAttempt(secondParams, {
       nativeHookRelay: {
@@ -523,7 +528,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createResumeHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopDetectionParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -587,7 +592,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopDetectionParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -641,7 +646,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       return undefined;
     });
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopDetectionParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
