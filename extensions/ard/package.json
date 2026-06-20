@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/ard-plugin",
+  "version": "2026.6.8",
+  "description": "OpenClaw Agent Resource Discovery plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/ard-plugin",
+      "npmSpec": "@openclaw/ard-plugin",
+      "localPath": "extensions/ard",
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.6.8"
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.8"
+    },
+    "build": {
+      "openclawVersion": "2026.6.8",
+      "pluginSdkVersion": "2026.6.8"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

@@ -140,6 +140,24 @@
       }
     },
     {
+      "name": "@openclaw/ard-plugin",
+      "description": "OpenClaw Agent Resource Discovery catalog plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "ard",
+          "label": "Agent Resource Discovery"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/ard-plugin",
+          "npmSpec": "@openclaw/ard-plugin",
+          "defaultChoice": "clawhub",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/google-meet",
       "description": "OpenClaw Google Meet participant plugin",
       "source": "official",

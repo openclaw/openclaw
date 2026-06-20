@@ -389,6 +389,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/ard:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/arcee:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1812,7 +1818,6 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
-  packages/ard-core: {}
 
   packages/gateway-client:
     dependencies:

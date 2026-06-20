@@ -338,6 +338,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/duckduckgo/**"
+"extensions: ard":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/ard/**"
+          - "docs/plugins/ard-discovery.md"
 "extensions: acpx":
   - changed-files:
       - any-glob-to-any-file:

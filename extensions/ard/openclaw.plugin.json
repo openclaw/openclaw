@@ -1,0 +1,13 @@
+{
+  "id": "ard",
+  "name": "Agent Resource Discovery",
+  "description": "Adds Agent Resource Discovery catalog validation and local search primitives.",
+  "activation": {
+    "onStartup": false
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

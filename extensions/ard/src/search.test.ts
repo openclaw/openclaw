@@ -30,7 +30,7 @@ const entries: ArdCatalogEntry[] = [
   },
 ];
 
-describe("ard-core search", () => {
+describe("ard plugin search", () => {
   it("scores matching entries and returns stable relevance order", () => {
     const result = searchArdCatalogEntries(entries, { query: "fix ci" }, "local");
 

@@ -1,4 +1,4 @@
-# Agent Resource Discovery Integration
+# Agent Resource Discovery Plugin
 
 Agent Resource Discovery (ARD) is a catalog and registry format for publishing AI-accessible resources at `/.well-known/ai-catalog.json`. It is discovery metadata, not an execution protocol. OpenClaw should treat ARD as a control-plane input for finding plugins, MCP server cards, A2A agent cards, catalogs, and registries before any install, activation, or tool execution path runs.
 
@@ -7,7 +7,7 @@ Agent Resource Discovery (ARD) is a catalog and registry format for publishing A
 - Publish OpenClaw-owned capabilities through ARD-compatible catalog entries.
 - Ingest remote ARD catalogs and registry search results into a local discovery index.
 - Keep plugin installation, runtime activation, and tool execution behind existing OpenClaw permission and manifest gates.
-- Preserve plugin-agnostic gateway behavior by keeping ARD parsing in a shared core package.
+- Preserve plugin-agnostic gateway behavior by keeping ARD parsing in the bundled ARD plugin.
 
 ## Non Goals
 
@@ -16,17 +16,17 @@ Agent Resource Discovery (ARD) is a catalog and registry format for publishing A
 - ARD relevance scores do not represent safety or trust.
 - ARD catalog ingestion must not materialize plugin runtimes.
 
-## Core Contract
+## Plugin Contract
 
-The shared `@openclaw/ard-core` package owns ARD data contracts, validation, and deterministic local search. It accepts `specVersion: "1.0"` manifests with `entries[]`, validates `urn:ai:<publisher>:<namespace>:<name>` identifiers, requires exactly one of `url` or `data`, and accepts both the current `application/mcp-server-card+json` media type and the legacy `application/mcp-server+json` spelling for MCP server cards.
+The bundled `ard` plugin owns ARD data contracts, validation, and deterministic local search. Its public `api.ts` surface accepts `specVersion: "1.0"` manifests with `entries[]`, validates `urn:air:<publisher>:<namespace>:<name>` identifiers, requires exactly one of `url` or `data`, and accepts both the current `application/mcp-server-card+json` media type and the legacy `application/mcp-server+json` spelling for MCP server cards.
 
-The package intentionally has no network, gateway, install, or runtime dependencies.
+The plugin intentionally has no network, gateway, install, or runtime activation dependencies.
 
 ## Implementation Plan
 
-1. Add ARD core types, validators, media type compatibility, and local search helpers.
+1. Add ARD plugin types, validators, media type compatibility, and local search helpers.
 2. Add a catalog ingestion service that fetches `/.well-known/ai-catalog.json`, validates entries, and stores normalized descriptors in a discovery index without activating plugins.
-3. Add an ARD publisher for local OpenClaw capabilities that emits stable `urn:ai:openclaw:*` identifiers and OpenClaw-specific media types where no standard descriptor exists.
+3. Add an ARD publisher for local OpenClaw capabilities that emits stable `urn:air:openclaw.dev:*` identifiers and OpenClaw-specific media types where no standard descriptor exists.
 4. Add gateway API methods for catalog search and entry inspection. These methods should return metadata only.
 5. Add an explicit install or connect flow that turns a selected ARD entry into an OpenClaw plugin, MCP server, or agent connection using existing trust, permission, and manifest checks.
 6. Add optional registry federation after local catalog ingestion is stable.

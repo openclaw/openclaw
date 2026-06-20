@@ -8,7 +8,7 @@ import {
   validateArdSearchRequest,
 } from "./index.js";
 
-describe("ard-core validation", () => {
+describe("ard plugin validation", () => {
   it("validates and normalizes ARD catalog manifests", () => {
     const result = validateArdCatalogManifest({
       specVersion: "1.0",
