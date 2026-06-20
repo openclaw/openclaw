@@ -23,8 +23,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: openclaw-stable-main-closeout
-  cancel-in-progress: false
+  group: openclaw-stable-main-closeout-${{ github.event_name == 'workflow_dispatch' && (inputs.tag || github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   resolve:
