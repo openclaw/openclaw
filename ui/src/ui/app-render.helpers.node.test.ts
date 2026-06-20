@@ -1128,6 +1128,39 @@ describe("switchChatSession", () => {
     expect(state.sessionKey).toBe("agent:main:review");
   });
 
+  it("keeps sidebar all-agents session refreshes unscoped after row switches", async () => {
+    const state = createChatSessionState({
+      sessionKey: "agent:main:main",
+      sidebarRecentSessionsAllAgents: true,
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          row({ key: "agent:main:main" }),
+          row({ key: "agent:orchestrator:subagent:child", spawnedBy: "agent:orchestrator:main" }),
+        ],
+      },
+    });
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:orchestrator:subagent:child");
+    await Promise.resolve();
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(state, {
+      activeMinutes: 120,
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      showArchived: false,
+    });
+  });
+
   it("refreshes the chat avatar after clearing session-scoped state", async () => {
     const settings = createSettings();
     const state = {

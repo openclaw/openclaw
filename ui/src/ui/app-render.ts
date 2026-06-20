@@ -9,7 +9,6 @@ import {
   hasAbortableSessionRun,
   refreshChat,
   refreshChatCommands,
-  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
@@ -21,6 +20,7 @@ import {
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
+  createSidebarRecentSessionsLoadOverrides,
   createChatSession,
   dismissChatError,
   dismissRealtimeTalkError,
@@ -555,12 +555,7 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
 
 function toggleSidebarRecentSessionsAgentScope(state: AppViewState) {
   state.sidebarRecentSessionsAllAgents = state.sidebarRecentSessionsAllAgents !== true;
-  void loadSessions(state, {
-    ...createChatSessionsLoadOverrides(state),
-    ...(state.sidebarRecentSessionsAllAgents
-      ? {}
-      : scopedAgentListParamsForSession(state, state.sessionKey)),
-  });
+  void loadSessions(state, createSidebarRecentSessionsLoadOverrides(state));
 }
 
 function renderSidebarSessions(state: AppViewState) {
@@ -3854,10 +3849,7 @@ export function renderApp(state: AppViewState) {
                   onOpenSessionCheckpoints: () => {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;
                     state.setTab("sessions" as import("./navigation.ts").Tab);
-                    void loadSessions(state, {
-                      ...createChatSessionsLoadOverrides(state),
-                      ...scopedAgentListParamsForSession(state, state.sessionKey),
-                    });
+                    void loadSessions(state, createSidebarRecentSessionsLoadOverrides(state));
                   },
                   onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
                   onToggleRealtimeTalkOptions: () => {

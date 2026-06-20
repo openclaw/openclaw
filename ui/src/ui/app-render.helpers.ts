@@ -7,7 +7,7 @@ import {
   refreshChat,
   refreshChatAvatar,
   scopedAgentParamsForSession,
-  scopedAgentListParamsForSession,
+  sidebarRecentSessionsListParamsForSession,
 } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -794,11 +794,18 @@ export async function createChatSession(
   return true;
 }
 
-async function refreshSessionOptions(state: AppViewState) {
-  await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
+export function createSidebarRecentSessionsLoadOverrides(state: AppViewState) {
+  return {
     ...createChatSessionsLoadOverrides(state),
-    ...scopedAgentListParamsForSession(state, state.sessionKey),
-  });
+    ...sidebarRecentSessionsListParamsForSession(state, state.sessionKey),
+  };
+}
+
+async function refreshSessionOptions(state: AppViewState) {
+  await loadSessions(
+    state as unknown as Parameters<typeof loadSessions>[0],
+    createSidebarRecentSessionsLoadOverrides(state),
+  );
 }
 
 /** Count cron sessions hidden by the active agent-scoped chat filter. */
