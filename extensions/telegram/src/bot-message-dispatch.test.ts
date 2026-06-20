@@ -637,6 +637,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       chatId: 123,
       thread: { id: 777, scope: "dm" },
       minInitialChars: 30,
+      minInitialDelayMs: 5000,
     });
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
     const delivery = expectDeliverRepliesParams({ thread: { id: 777, scope: "dm" } });
@@ -2598,6 +2599,27 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
     expectDeliveredReply(0, { text: "Branch is up to date" });
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("shows a stable progress placeholder for progress-mode answer activity", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Short" });
+      await replyOptions?.onPartialReply?.({ text: "Short answer" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("Short");
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("Short answer");
+    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
+      telegramHtmlPreview("<b>Shelling</b>"),
+    );
   });
 
   it("replaces Telegram command progress items with matching command output", async () => {
