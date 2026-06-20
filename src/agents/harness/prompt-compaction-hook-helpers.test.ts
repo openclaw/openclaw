@@ -44,4 +44,23 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       promptInputRange: { start: 16, end: 21 },
     });
   });
+
+  it("keeps an empty input range between prepended and appended context", async () => {
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {},
+      beforeAgentStartResult: {
+        appendContext: "appended context",
+        prependContext: "prepended context",
+      },
+    });
+
+    expect(result).toEqual({
+      prompt: "prepended context\n\nappended context",
+      developerInstructions: "base instructions",
+      promptInputRange: { start: 17, end: 17 },
+    });
+  });
 });

@@ -88,7 +88,12 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   ]);
   const prompt =
     joinPresentTextSegments([promptPrefix, params.prompt, promptSuffix]) ?? params.prompt;
-  const promptInputStart = promptPrefix ? promptPrefix.length + 2 : 0;
+  const promptInputStart =
+    params.prompt.length === 0
+      ? (promptPrefix?.length ?? 0)
+      : promptPrefix
+        ? promptPrefix.length + 2
+        : 0;
   return {
     prompt,
     developerInstructions:
