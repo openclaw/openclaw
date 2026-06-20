@@ -106,6 +106,7 @@ export interface HealthCheck {
   readonly kind: "core" | "plugin";
   readonly description: string;
   readonly source?: string;
+  readonly defaultEnabled?: boolean;
   detect(ctx: HealthCheckContext, scope?: HealthCheckScope): Promise<readonly HealthFinding[]>;
   repair?(
     ctx: HealthRepairContext,

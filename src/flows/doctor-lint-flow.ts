@@ -43,6 +43,9 @@ export async function runDoctorLintChecks(
     if (skip.has(c.id)) {
       return false;
     }
+    if (only.size === 0 && c.defaultEnabled === false) {
+      return false;
+    }
     return true;
   });
 
