@@ -150,6 +150,16 @@ const TIMEOUT_BOILERPLATE_PATTERNS = [
   /^(?:error:\s*)?active-memory timeout after \d+ms\b/i,
 ];
 
+const CHITCHAT_PATTERNS = [
+  /^(?:hi|hello|hey|您好|你好)[!!.\s].*(?:help|帮助|assist)/i,
+  /(?:message|消息).*(?:cut off|didn'?t come through|truncated|没有|不完整|未发送)/i,
+  /(?:please|请).*(?:provide|tell|clarify|elaborate|说明|提供|告诉)/i,
+  /(?:what can i|有什么可以|我能.*什么).*(?:help|assist|帮)/i,
+  /(?:current|当前).*(?:date|time|日期|时间)/i,
+  /(?:looks? like|看起来|似乎|好像).*(?:didn'?t|没有|没说|may not)/i,
+  /(?:how can i|需要什么|需要我)/i,
+];
+
 const RECALLED_CONTEXT_LINE_PATTERNS = [
   /^🧩\s*active memory:/i,
   /^🔎\s*active memory debug:/i,
@@ -2535,6 +2545,12 @@ function isTimeoutBoilerplateSummary(value: string): boolean {
   return TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+function isChitchatSummary(value: string): boolean {
+  const lower = value.toLowerCase();
+  const matchCount = CHITCHAT_PATTERNS.filter((pattern) => pattern.test(lower)).length;
+  return matchCount >= 2;
+}
+
 function normalizeActiveSummary(rawReply: string): string | null {
   const trimmed = rawReply.trim();
   if (normalizeNoRecallValue(trimmed)) {
@@ -2544,7 +2560,8 @@ function normalizeActiveSummary(rawReply: string): string | null {
   if (
     !singleLine ||
     normalizeNoRecallValue(singleLine) ||
-    isTimeoutBoilerplateSummary(singleLine)
+    isTimeoutBoilerplateSummary(singleLine) ||
+    isChitchatSummary(singleLine)
   ) {
     return null;
   }
