@@ -479,6 +479,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     config: params.config,
     installId: params.installId,
     ...(normalizedSpec ? { installSpec: normalizedSpec } : {}),
+    ...(entry.metadata?.permissions ? { permissions: entry.metadata.permissions } : {}),
     logger: {
       warn: (message) => warnings.push(message),
     },

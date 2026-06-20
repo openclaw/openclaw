@@ -154,13 +154,25 @@ describe("runInstallPolicy", () => {
     const cwdPath = path.join(sourceDir, "cwd.txt");
     const response = JSON.stringify({ protocolVersion: 1, decision: "allow" });
 
+    const request = baseRequest(sourceDir);
+    request.skill = {
+      installId: request.skill?.installId ?? "clawhub",
+      permissions: {
+        exec: false,
+        tools: ["web_fetch"],
+        read: ["MEMORY.md"],
+        write: ["memory/skills/weather/*"],
+        network: ["api.weather.gov"],
+      },
+    };
+
     const result = await runInstallPolicy({
       config: configWithPolicy(scriptPath, {
         CWD_FILE: cwdPath,
         OUT_FILE: capturePath,
         POLICY_RESPONSE: response,
       }),
-      request: baseRequest(sourceDir),
+      request,
     });
 
     expect(result).toEqual({});
@@ -182,6 +194,16 @@ describe("runInstallPolicy", () => {
       requestedSpecifier: "clawhub:weather@1.0.0",
     });
     expect(captured.origin).toMatchObject({ type: "clawhub", slug: "weather" });
+    expect(captured.skill).toMatchObject({
+      installId: "clawhub",
+      permissions: {
+        exec: false,
+        tools: ["web_fetch"],
+        read: ["MEMORY.md"],
+        write: ["memory/skills/weather/*"],
+        network: ["api.weather.gov"],
+      },
+    });
   });
 
   it("preserves PATH so env shebang policy scripts can start", async () => {

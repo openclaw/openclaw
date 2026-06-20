@@ -113,7 +113,11 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
 | `homepage`                 | —       | URL shown as "Website" in the macOS Skills UI                                    |
 
 For gating fields (`requires.bins`, `requires.env`, etc.) see
-[Skills — Gating](/tools/skills#gating).
+[Skills — Gating](/tools/skills#gating). For audit-only permission declarations,
+use `metadata.openclaw.permissions` with `exec`, `tools`, `read`, `write`, and
+`network` fields. OpenClaw surfaces these declarations in skill status and install
+policy payloads so operators can compare what a skill says it needs against its
+source and provenance before enabling it.
 
 ### Using `{baseDir}`
 
@@ -144,8 +148,15 @@ metadata: { "openclaw": { "requires": { "bins": ["gemini"] }, "primaryEnv": "GEM
     | `requires.anyBins` | At least one binary must exist on `PATH` |
     | `requires.env` | Each env var must exist in the process or config |
     | `requires.config` | Each `openclaw.json` path must be truthy |
+    | `permissions.exec` | Declare whether the skill expects local command execution |
+    | `permissions.tools` | Tool names or groups the skill expects to use |
+    | `permissions.read` / `permissions.write` | Filesystem scopes the skill expects to read or write |
+    | `permissions.network` | Network domains or hosts the skill expects to contact |
     | `os` | Platform filter: `["darwin"]`, `["linux"]`, `["win32"]` |
     | `always` | Set `true` to skip all gates and always include the skill |
+
+    Permission declarations are informational and policy-facing; they do not grant
+    tools, filesystem access, network access, or sandbox bypasses by themselves.
 
     Full reference: [Skills — Gating](/tools/skills#gating).
 

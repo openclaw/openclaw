@@ -2,6 +2,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
+import type { OpenClawManifestPermissions } from "../../shared/frontmatter.js";
 import type { RequirementConfigCheck, Requirements } from "../../shared/requirements.js";
 import { CONFIG_DIR } from "../../utils.js";
 import {
@@ -73,6 +74,7 @@ export type SkillStatusEntry = {
   requirements: Requirements;
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
+  permissions?: OpenClawManifestPermissions;
   install: SkillInstallOption[];
   clawhub?: ClawHubSkillStatusLink;
   skillCard?: LocalSkillCardStatus;
@@ -329,6 +331,7 @@ function buildSkillStatus(
     requirements: required,
     missing,
     configChecks,
+    ...(entry.metadata?.permissions ? { permissions: entry.metadata.permissions } : {}),
     install: normalizeInstallOptions(entry, prefs),
     ...(clawhub ? { clawhub } : {}),
     ...(skillCard ? { skillCard } : {}),

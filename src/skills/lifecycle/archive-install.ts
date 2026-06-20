@@ -1,4 +1,5 @@
 // Archive install helpers extract and validate skill archives during installation.
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
@@ -12,6 +13,7 @@ import {
   type InstallSecurityScanResult,
 } from "../../plugins/install-security-scan.js";
 import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/install-policy.js";
+import { parseFrontmatter, resolveOpenClawMetadata } from "../loading/frontmatter.js";
 
 const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
@@ -96,6 +98,22 @@ async function hasSkillArchiveRoot(
   return false;
 }
 
+async function readSkillArchivePermissions(rootDir: string, rootMarkers: readonly string[]) {
+  for (const candidate of rootMarkers) {
+    const skillFile = path.join(rootDir, candidate);
+    if (!(await pathExists(skillFile))) {
+      continue;
+    }
+    try {
+      const content = await fs.readFile(skillFile, "utf8");
+      return resolveOpenClawMetadata(parseFrontmatter(content))?.permissions;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function scanBlockedFailureKind(
   blocked: NonNullable<InstallSecurityScanResult["blocked"]>,
 ): SkillArchiveInstallFailureKind {
@@ -139,12 +157,8 @@ export async function installExtractedSkillRoot(params: {
   rootMarkers?: readonly string[];
 }): Promise<SkillArchiveInstallResult> {
   try {
-    if (
-      !(await hasSkillArchiveRoot(
-        params.extractedRoot,
-        params.rootMarkers ?? DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS,
-      ))
-    ) {
+    const rootMarkers = params.rootMarkers ?? DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS;
+    if (!(await hasSkillArchiveRoot(params.extractedRoot, rootMarkers))) {
       return installFailure("archive is missing SKILL.md", "invalid-request");
     }
     let targetDir: string;
@@ -162,6 +176,7 @@ export async function installExtractedSkillRoot(params: {
       );
     }
 
+    const permissions = await readSkillArchivePermissions(params.extractedRoot, rootMarkers);
     if (params.policy) {
       const scanResult = await evaluateSkillInstallPolicy({
         config: params.policy.config,
@@ -171,6 +186,7 @@ export async function installExtractedSkillRoot(params: {
         requestedSpecifier: params.policy.requestedSpecifier,
         source: params.policy.source,
         mode: effectiveMode,
+        ...(permissions ? { permissions } : {}),
         skillName: params.slug,
         sourceDir: params.extractedRoot,
       });

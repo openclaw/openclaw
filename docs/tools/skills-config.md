@@ -188,7 +188,10 @@ optional structured `source`, structured `origin`, and `request`. It must write
 one JSON object on stdout: `{ "protocolVersion": 1, "decision": "allow" }` or
 `{ "protocolVersion": 1, "decision": "block", "reason": "..." }`. Non-zero
 exit, timeout, malformed JSON, missing fields, or unsupported protocol versions
-fail closed.
+fail closed. For skills, `skill.permissions` contains the self-declared
+`metadata.openclaw.permissions` manifest when the staged `SKILL.md` provides one.
+The declaration is audit metadata only; policy commands decide whether the
+requested source and provenance are acceptable.
 
 OpenClaw does not execute install policy during normal Gateway startup. Installs
 and updates fail closed when policy is enabled but unavailable. `openclaw doctor`
@@ -226,7 +229,14 @@ Example stdin:
     "requestedSpecifier": "clawhub:weather@1.0.0"
   },
   "skill": {
-    "installId": "clawhub"
+    "installId": "clawhub",
+    "permissions": {
+      "exec": false,
+      "tools": ["web_fetch"],
+      "read": ["MEMORY.md"],
+      "write": ["memory/skills/weather/*"],
+      "network": ["api.weather.gov"]
+    }
   }
 }
 ```

@@ -10,6 +10,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { OpenClawManifestPermissions } from "../shared/frontmatter.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
@@ -1009,6 +1010,7 @@ export type PluginHookBeforeInstallSkillInstallSpec = {
 export type PluginHookBeforeInstallSkill = {
   installId: string;
   installSpec?: PluginHookBeforeInstallSkillInstallSpec;
+  permissions?: OpenClawManifestPermissions;
 };
 
 export type PluginHookBeforeInstallPlugin = {

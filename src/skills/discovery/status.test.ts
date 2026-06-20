@@ -312,6 +312,38 @@ describe("buildWorkspaceSkillStatus", () => {
     ]);
   });
 
+  it("surfaces declared permission manifests in status reports", () => {
+    const entry: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: "weather",
+        description: "test",
+        filePath: "/tmp/weather/SKILL.md",
+        baseDir: "/tmp/weather",
+        source: "test",
+      }),
+      frontmatter: {},
+      metadata: {
+        permissions: {
+          exec: false,
+          tools: ["web_fetch"],
+          read: ["MEMORY.md"],
+          write: ["memory/skills/weather/*"],
+          network: ["api.weather.gov"],
+        },
+      },
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
+
+    expect(report.skills[0]?.permissions).toEqual({
+      exec: false,
+      tools: ["web_fetch"],
+      read: ["MEMORY.md"],
+      write: ["memory/skills/weather/*"],
+      network: ["api.weather.gov"],
+    });
+  });
+
   it("does not expose raw config values in config checks", () => {
     const secret = "discord-token-secret-abc"; // pragma: allowlist secret
     const entry: SkillEntry = {

@@ -9,6 +9,7 @@ import {
   shouldDetachChildForProcessTree,
 } from "../process/child-process-tree.js";
 import { normalizePositiveInt, normalizePositiveTimerMs } from "../secrets/shared.js";
+import type { OpenClawManifestPermissions } from "../shared/frontmatter.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { inspectPathPermissions, safeStat } from "./audit-fs.js";
@@ -94,6 +95,7 @@ export type InstallPolicyRequest = {
   };
   skill?: {
     installId: string;
+    permissions?: OpenClawManifestPermissions;
     installSpec?: {
       id?: string;
       kind: "brew" | "node" | "go" | "uv" | "download";

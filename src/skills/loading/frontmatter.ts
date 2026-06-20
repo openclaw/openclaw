@@ -11,6 +11,7 @@ import {
   resolveOpenClawManifestBlock,
   resolveOpenClawManifestInstall,
   resolveOpenClawManifestOs,
+  resolveOpenClawManifestPermissions,
   resolveOpenClawManifestRequires,
 } from "../../shared/frontmatter.js";
 import type {
@@ -193,6 +194,7 @@ export function resolveOpenClawMetadata(
     return undefined;
   }
   const requires = resolveOpenClawManifestRequires(metadataObj);
+  const permissions = resolveOpenClawManifestPermissions(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
   return {
@@ -203,6 +205,7 @@ export function resolveOpenClawMetadata(
     primaryEnv: readStringValue(metadataObj.primaryEnv),
     os: osRaw.length > 0 ? osRaw : undefined,
     requires,
+    permissions,
     install: install.length > 0 ? install : undefined,
   };
 }
