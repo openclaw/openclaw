@@ -9,7 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createChannelIngressQueue } from "./ingress-queue.js";
+import { createChannelIngressQueue, createStateDirEnv } from "./ingress-queue.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -26,6 +26,23 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
 describe("channel ingress queue", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it("overrides the state dir without copying the full process env", () => {
+    const baseEnv: NodeJS.ProcessEnv = {
+      HOME: "/home/openclaw",
+      PATH: "/usr/local/bin:/usr/bin",
+    };
+    for (let index = 0; index < 10_000; index += 1) {
+      baseEnv[`KUBERNETES_SERVICE_${index}`] = "tcp://10.0.0.1:443";
+    }
+
+    const env = createStateDirEnv("/tmp/openclaw-state", baseEnv);
+
+    expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-state");
+    expect(env.HOME).toBe("/home/openclaw");
+    expect(Object.getPrototypeOf(env)).toBe(baseEnv);
+    expect(Object.keys(env)).toEqual(["OPENCLAW_STATE_DIR"]);
   });
 
   it("deduplicates pending and completed ingress events", async () => {
@@ -284,7 +301,7 @@ describe("channel ingress queue", () => {
       await queue.complete("retry", { completedAt: 27 });
 
       const database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        env: createStateDirEnv(stateDir),
       });
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
       const rows = executeSqliteQuerySync(
