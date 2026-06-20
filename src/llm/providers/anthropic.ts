@@ -99,7 +99,31 @@ function getCacheControl(
 }
 
 // Stealth mode: Mimic Claude Code's tool naming exactly
-const claudeCodeVersion = "2.1.75";
+const FALLBACK_CLAUDE_CODE_VERSION = "2.1.75";
+
+/**
+ * Resolve the installed @anthropic-ai/claude-code version at runtime
+ * so the user-agent header stays accurate after CLI updates.
+ * Falls back to a known-good constant when the package is not resolvable
+ * (e.g. running from source without a global CLI install).
+ */
+function resolveClaudeCodeVersion(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeModule = require("node:module") as typeof import("node:module");
+    const localRequire = nodeModule.createRequire(import.meta.url);
+    const pkgPath = localRequire.resolve("@anthropic-ai/claude-code/package.json");
+    const pkg = localRequire(pkgPath) as { version?: string };
+    if (typeof pkg.version === "string" && pkg.version.length > 0) {
+      return pkg.version;
+    }
+  } catch {
+    // Package not resolvable (e.g. running from source without a global CLI install).
+  }
+  return FALLBACK_CLAUDE_CODE_VERSION;
+}
+
+const claudeCodeVersion = resolveClaudeCodeVersion();
 
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
