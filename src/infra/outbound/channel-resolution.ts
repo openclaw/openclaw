@@ -209,24 +209,16 @@ function channelPluginCanSend(plugin: ChannelPlugin | undefined): boolean {
   if (outbound?.deliveryMode === "gateway") {
     return true;
   }
-  const messageSend = plugin?.message?.send;
-  return Boolean(
-    outbound?.sendText ??
-    outbound?.sendMedia ??
-    outbound?.sendPayload ??
-    outbound?.sendPoll ??
-    outbound?.sendFormattedText ??
-    outbound?.sendFormattedMedia ??
-    messageSend?.text ??
-    messageSend?.media ??
-    messageSend?.payload ??
-    messageSend?.poll,
-  );
+  // Direct/hybrid delivery flows through createPluginHandler (deliver.ts), which
+  // returns null unless a text sender exists, so media/payload/formatted-only
+  // surfaces riding that handler are not independently deliverable and would
+  // later fail with "Outbound not configured". Poll is the one non-text surface
+  // that delivers on its own: sendPoll() (message.ts) routes through the gateway
+  // gated solely by outbound.sendPoll. Gate on exactly those deliverable terms.
+  return Boolean(outbound?.sendText ?? plugin?.message?.send?.text ?? outbound?.sendPoll);
 }
 
-function resolveSendCapablePluginFromRuntimeRegistries(
-  channel: string,
-): ChannelPlugin | undefined {
+function resolveSendCapablePluginFromRuntimeRegistries(channel: string): ChannelPlugin | undefined {
   return resolveValueFromRuntimeRegistries(channel, (plugin) =>
     channelPluginCanSend(plugin) ? plugin : undefined,
   );
