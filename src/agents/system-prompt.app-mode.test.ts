@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
-const base = { workspaceDir: "/tmp/openclaw", ownerNumbers: ["+123"] } as const;
+const base = { workspaceDir: "/tmp/openclaw", ownerNumbers: ["+123"] };
 
 describe('buildAgentSystemPrompt promptMode "app"', () => {
   const full = buildAgentSystemPrompt({ ...base, promptMode: "full" });

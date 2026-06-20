@@ -518,18 +518,21 @@ export async function applyAppBootstrapVariants(
         result.push({ ...file, content, missing: false });
         continue;
       } catch (err) {
-        // Only TRUE absence (ENOENT/ENOTDIR) is a valid "no variant → use canonical" fallback.
-        // Any other error (EACCES/EISDIR/ELOOP/TOCTOU/broken deploy) means the app-safe variant
-        // EXISTS but is unusable — do NOT silently serve the full canonical file to an app
-        // session (it can re-expand/disclose prompt context). Surface it loudly (codex #82 P1).
         const code = (err as NodeJS.ErrnoException | undefined)?.code;
         if (code !== "ENOENT" && code !== "ENOTDIR") {
+          // The app-safe variant EXISTS but is unusable (EACCES/EISDIR/ELOOP/TOCTOU/broken
+          // deploy). FAIL CLOSED: never serve the full canonical file to an app session — it
+          // would re-expand/disclose the slimmed-away prompt context. Drop the file for this
+          // turn and surface the breakage loudly (codex #83 P1). A degraded prompt is the safe
+          // failure mode here; the warning tells ops to fix the deploy.
           warn?.(
             `app bootstrap variant ${variantName} exists but is unreadable (${code ?? "unknown"}); ` +
-              `falling back to full ${file.name} for this app session — fix the deploy`,
+              `DROPPING ${file.name} for this app session (fail-closed) — fix the deploy`,
           );
+          continue;
         }
-        // fall through → keep the canonical file
+        // ENOENT/ENOTDIR → variant genuinely absent → fall back to the canonical file
+        // (correct for canonical files with no `.app.md` variant, e.g. BOOTSTRAP.md).
       }
     }
     result.push(file);

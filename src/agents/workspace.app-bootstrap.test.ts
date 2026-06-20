@@ -63,7 +63,7 @@ describe("applyAppBootstrapVariants (app-user bootstrap shaping)", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("variant exists but is unreadable (EISDIR) → falls back to canonical + WARNS (not silent)", async () => {
+  it("variant exists but is unreadable (EISDIR) → FAIL CLOSED: drops the file, never serves full + warns", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "appboot4-"));
     // AGENTS.app.md is a directory → fs.readFile rejects with EISDIR (variant present, unusable).
     await fs.mkdir(path.join(dir, "AGENTS.app.md"));
@@ -75,12 +75,14 @@ describe("applyAppBootstrapVariants (app-user bootstrap shaping)", () => {
         content: "FULL AGENTS",
         missing: false,
       },
+      { name: "SOUL.md", path: path.join(dir, "SOUL.md"), content: "FULL SOUL", missing: false },
     ];
     const out = await applyAppBootstrapVariants(files, dir, (m) => warnings.push(m));
-    // Functional fallback to the canonical file, but the failure is surfaced — not silent.
-    expect(out[0]?.content).toBe("FULL AGENTS");
-    expect(warnings.some((w) => w.includes("AGENTS.app.md") && w.includes("unreadable"))).toBe(
-      true,
-    );
+    // FAIL CLOSED: the full canonical AGENTS.md must NEVER reach an app session.
+    expect(out.some((f) => f.content === "FULL AGENTS")).toBe(false);
+    expect(out.some((f) => f.name === "AGENTS.md")).toBe(false);
+    // The breakage is surfaced, and unaffected files (SOUL.md, no variant) still pass through.
+    expect(warnings.some((w) => w.includes("AGENTS.app.md") && w.includes("DROPPING"))).toBe(true);
+    expect(out.some((f) => f.name === "SOUL.md" && f.content === "FULL SOUL")).toBe(true);
   });
 });
