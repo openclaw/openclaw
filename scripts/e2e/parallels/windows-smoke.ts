@@ -9,7 +9,7 @@ import {
   currentRunningSnapshotInfo,
   makeTempDir,
   parseMode,
-  parsePositiveInt,
+  parseTcpPort,
   parseProvider,
   readPositiveIntEnv,
   resolveLatestVersion,
@@ -157,7 +157,7 @@ export function parseArgs(argv: string[]): WindowsOptions {
       options.hostIp = value;
     },
     "--host-port": (value) => {
-      options.hostPort = parsePositiveInt(value, "--host-port");
+      options.hostPort = parseTcpPort(value, "--host-port");
       options.hostPortExplicit = true;
     },
     "--install-url": (value) => {
@@ -438,11 +438,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   ): Promise<boolean> => await this.phases.phaseReturns(name, timeoutSeconds, fn);
 
   private log = (text: string): void => this.phases.append(text);
-
-  private guestExec = (
-    args: string[],
-    options: { check?: boolean; timeoutMs?: number } = {},
-  ): string => this.guest.exec(args, options);
 
   private guestPowerShell(
     script: string,

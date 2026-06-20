@@ -15,6 +15,28 @@ function jsonlBytes(value: string): number {
   return jsonlEncoder.encode(value).byteLength;
 }
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 function fetchInputUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;
@@ -242,5 +264,57 @@ describe("OpenAI embedding batch output", () => {
       ["2", [3]],
       ["3", [4]],
     ]);
+  });
+
+  it("bounds batch resource error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"batch status unavailable ".repeat(1024)}tail`, {
+      status: 400,
+      headers: { "Content-Type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    let batchStatusReturned = false;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url.endsWith("/files") && init?.method === "POST") {
+        return jsonResponse({ id: "file-0" });
+      }
+      if (url.endsWith("/batches") && init?.method === "POST") {
+        return jsonResponse({ id: "batch-0", status: "in_progress" });
+      }
+      if (url.endsWith("/batches/batch-0") && !batchStatusReturned) {
+        batchStatusReturned = true;
+        return tracked.response;
+      }
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    await expect(
+      runOpenAiEmbeddingBatches({
+        openAi: {
+          baseUrl: "https://openai-compatible.example/v1",
+          headers: { Authorization: "Bearer test" },
+          model: "text-embedding-3-small",
+          fetchImpl,
+        },
+        agentId: "main",
+        requests: [
+          {
+            custom_id: "0",
+            method: "POST",
+            url: "/v1/embeddings",
+            body: {
+              model: "text-embedding-3-small",
+              input: "payload",
+            },
+          },
+        ],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1000,
+        timeoutMs: 60_000,
+      }),
+    ).rejects.toThrow(/openai batch status failed: 400 batch status unavailable/);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 });

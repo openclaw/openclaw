@@ -1,6 +1,7 @@
 // Gateway model-pricing refresh and normalization.
 // Fetches, normalizes, and schedules cached pricing for model usage estimates.
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
@@ -275,6 +276,12 @@ function toCachedModelPricing(
   };
 }
 
+async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
+  if (response?.bodyUsed !== true) {
+    await response?.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function readPricingJsonObject(
   response: Response,
   source: string,
@@ -283,13 +290,12 @@ async function readPricingJsonObject(
   if (contentLength !== null && contentLength > MAX_PRICING_CATALOG_BYTES) {
     throw new Error(`${source} pricing response too large: ${contentLength} bytes`);
   }
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > MAX_PRICING_CATALOG_BYTES) {
-    throw new Error(`${source} pricing response too large: ${buffer.byteLength} bytes`);
-  }
+  const buffer = await readResponseWithLimit(response, MAX_PRICING_CATALOG_BYTES, {
+    onOverflow: ({ size }) => new Error(`${source} pricing response too large: ${size} bytes`),
+  });
   let payload: unknown;
   try {
-    payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
+    payload = JSON.parse(buffer.toString("utf8")) as unknown;
   } catch {
     throw new Error(`${source} pricing response is malformed JSON`);
   }
@@ -297,6 +303,28 @@ async function readPricingJsonObject(
     throw new Error(`${source} pricing response is not a JSON object`);
   }
   return payload as Record<string, unknown>;
+}
+
+async function fetchPricingJsonObject(params: {
+  fetchImpl: typeof fetch;
+  url: string;
+  source: string;
+  failureLabel: string;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
+  let response: Response | undefined;
+  try {
+    response = await params.fetchImpl(params.url, {
+      headers: { Accept: "application/json" },
+      signal: createPricingFetchSignal(params.signal),
+    });
+    if (!response.ok) {
+      throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
+    }
+    return await readPricingJsonObject(response, params.source);
+  } finally {
+    await cancelUnreadResponseBody(response);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,14 +411,13 @@ async function fetchLiteLLMPricingCatalog(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<LiteLLMPricingCatalog> {
-  const response = await fetchImpl(LITELLM_PRICING_URL, {
-    headers: { Accept: "application/json" },
-    signal: createPricingFetchSignal(signal),
+  const payload = await fetchPricingJsonObject({
+    fetchImpl,
+    url: LITELLM_PRICING_URL,
+    source: "LiteLLM",
+    failureLabel: "LiteLLM pricing fetch failed",
+    signal,
   });
-  if (!response.ok) {
-    throw new Error(`LiteLLM pricing fetch failed: HTTP ${response.status}`);
-  }
-  const payload = await readPricingJsonObject(response, "LiteLLM");
   const catalog: LiteLLMPricingCatalog = new Map();
   for (const [key, value] of Object.entries(payload)) {
     if (!value || typeof value !== "object") {
@@ -1059,14 +1086,13 @@ async function fetchOpenRouterPricingCatalog(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<Map<string, OpenRouterPricingEntry>> {
-  const response = await fetchImpl(OPENROUTER_MODELS_URL, {
-    headers: { Accept: "application/json" },
-    signal: createPricingFetchSignal(signal),
+  const payload = await fetchPricingJsonObject({
+    fetchImpl,
+    url: OPENROUTER_MODELS_URL,
+    source: "OpenRouter",
+    failureLabel: "OpenRouter /models failed",
+    signal,
   });
-  if (!response.ok) {
-    throw new Error(`OpenRouter /models failed: HTTP ${response.status}`);
-  }
-  const payload = await readPricingJsonObject(response, "OpenRouter");
   const entries = Array.isArray(payload.data) ? payload.data : [];
   const catalog = new Map<string, OpenRouterPricingEntry>();
   for (const entry of entries) {

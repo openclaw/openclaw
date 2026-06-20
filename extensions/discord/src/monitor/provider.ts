@@ -90,8 +90,6 @@ let discordProviderSessionRuntimePromise: Promise<DiscordProviderSessionRuntimeM
 let fetchDiscordApplicationIdForTesting: typeof fetchDiscordApplicationId | undefined;
 let createDiscordNativeCommandForTesting: typeof createDiscordNativeCommand | undefined;
 let runDiscordGatewayLifecycleForTesting: typeof runDiscordGatewayLifecycle | undefined;
-let createDiscordGatewayPluginForTesting: typeof createDiscordGatewayPlugin | undefined;
-let createDiscordGatewaySupervisorForTesting: typeof createDiscordGatewaySupervisor | undefined;
 let loadDiscordVoiceRuntimeForTesting: (() => Promise<DiscordVoiceRuntimeModule>) | undefined;
 let loadDiscordProviderSessionRuntimeForTesting:
   | (() => Promise<DiscordProviderSessionRuntimeModule>)
@@ -437,9 +435,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       discordConfig: discordCfg,
       runtime,
       createClient: createClientForTesting ?? ((...args) => new Client(...args)),
-      createGatewayPlugin: createDiscordGatewayPluginForTesting ?? createDiscordGatewayPlugin,
-      createGatewaySupervisor:
-        createDiscordGatewaySupervisorForTesting ?? createDiscordGatewaySupervisor,
+      createGatewayPlugin: createDiscordGatewayPlugin,
+      createGatewaySupervisor: createDiscordGatewaySupervisor,
       createAutoPresenceController: createDiscordAutoPresenceController,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
     });
@@ -642,12 +639,6 @@ export const testing = {
   },
   setRunDiscordGatewayLifecycle(mock?: typeof runDiscordGatewayLifecycle) {
     runDiscordGatewayLifecycleForTesting = mock;
-  },
-  setCreateDiscordGatewayPlugin(mock?: typeof createDiscordGatewayPlugin) {
-    createDiscordGatewayPluginForTesting = mock;
-  },
-  setCreateDiscordGatewaySupervisor(mock?: typeof createDiscordGatewaySupervisor) {
-    createDiscordGatewaySupervisorForTesting = mock;
   },
   setLoadDiscordVoiceRuntime(mock?: () => Promise<DiscordVoiceRuntimeModule>) {
     loadDiscordVoiceRuntimeForTesting = mock;

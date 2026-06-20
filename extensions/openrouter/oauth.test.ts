@@ -24,6 +24,42 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
   });
 }
 
+function boundedTextErrorResponse(body: string, status = 502): {
+  response: Response;
+  cancel: ReturnType<typeof vi.fn>;
+  releaseLock: ReturnType<typeof vi.fn>;
+  text: ReturnType<typeof vi.fn>;
+} {
+  const encoded = new TextEncoder().encode(body);
+  let read = false;
+  const cancel = vi.fn(async () => undefined);
+  const releaseLock = vi.fn();
+  const text = vi.fn(async () => {
+    throw new Error("response.text() should not be called");
+  });
+  const response = {
+    ok: false,
+    status,
+    headers: new Headers(),
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (read) {
+            return { done: true, value: undefined };
+          }
+          read = true;
+          return { done: false, value: encoded };
+        },
+        cancel,
+        releaseLock,
+      }),
+    },
+    text,
+  } as unknown as Response;
+
+  return { response, cancel, releaseLock, text };
+}
+
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;
@@ -178,6 +214,33 @@ describe("OpenRouter OAuth", () => {
         fetchImpl,
       }),
     ).rejects.toThrow("OpenRouter OAuth key exchange failed (400): Invalid code");
+  });
+
+  it("bounds OpenRouter OAuth exchange error bodies without requiring response.text()", async () => {
+    const errorResponse = boundedTextErrorResponse(
+      `${"openrouter denied ".repeat(1024)}tail-marker`,
+      502,
+    );
+    const fetchImpl = vi.fn<typeof fetch>(async () => errorResponse.response);
+
+    let error: unknown;
+    try {
+      await exchangeOpenRouterOAuthCode({
+        code: "bad-code",
+        codeVerifier: "bad-verifier",
+        fetchImpl,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("OpenRouter OAuth key exchange failed (502): openrouter denied");
+    expect(message).not.toContain("tail-marker");
+    expect(errorResponse.text).not.toHaveBeenCalled();
+    expect(errorResponse.cancel).toHaveBeenCalledTimes(1);
+    expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("stores a browser OAuth result as the default OpenRouter API-key profile", async () => {

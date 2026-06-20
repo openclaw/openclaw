@@ -1202,5 +1202,9 @@
   {
     "source": "cohere",
     "target": "cohere"
+  },
+  {
+    "source": "Zalo ClawBot",
+    "target": "Zalo ClawBot"
   }
 ]

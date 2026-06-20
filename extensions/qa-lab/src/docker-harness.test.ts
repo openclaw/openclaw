@@ -90,7 +90,7 @@ describe("qa docker harness", () => {
     expect(compose).toContain(":/opt/openclaw-repo:ro");
     expect(compose).toContain("./state:/opt/openclaw-scaffold:ro");
     expect(compose).toContain(
-      "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/",
+      "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && rm -rf /tmp/openclaw/workspace/repo && ln -s /opt/openclaw-repo /tmp/openclaw/workspace/repo",
     );
     expect(compose).toContain("OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json");
     expect(compose).toContain("OPENCLAW_STATE_DIR: /tmp/openclaw/state");

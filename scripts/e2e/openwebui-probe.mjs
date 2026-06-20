@@ -74,12 +74,16 @@ function createTimeoutError(label, timeoutMs) {
 async function withRequestTimeout(label, timeoutMs, run) {
   const controller = new AbortController();
   const timeoutError = createTimeoutError(label, timeoutMs);
-  const timer = setTimeout(() => {
-    controller.abort(timeoutError);
-  }, timeoutMs);
-  timer.unref?.();
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timer.unref?.();
+  });
   try {
-    return await run(controller.signal);
+    return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
   } catch (error) {
     if (controller.signal.aborted) {
       throw timeoutError;
@@ -90,12 +94,17 @@ async function withRequestTimeout(label, timeoutMs, run) {
   }
 }
 
-async function readBoundedResponseText(response, label, byteLimit = responseBodyMaxBytes) {
-  return await readBoundedResponseTextWithLimit(response, label, byteLimit);
+async function readBoundedResponseText(response, label, timeoutPromise) {
+  return await readBoundedResponseTextWithLimit(
+    response,
+    label,
+    responseBodyMaxBytes,
+    timeoutPromise,
+  );
 }
 
-async function readBoundedResponseJson(response, label) {
-  const body = await readBoundedResponseText(response, label);
+async function readBoundedResponseJson(response, label, timeoutPromise) {
+  const body = await readBoundedResponseText(response, label, timeoutPromise);
   try {
     return JSON.parse(body);
   } catch (error) {
@@ -133,66 +142,125 @@ function sleep(ms) {
   });
 }
 
-async function fetchSignin() {
-  return await withRequestTimeout("Open WebUI signin", controlTimeoutMs, async (signal) => {
-    const response = await fetch(`${baseUrl}/api/v1/auths/signin`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password }),
-      signal,
-    });
-    if (!response.ok) {
-      const body = await readBoundedResponseText(response, "Open WebUI signin");
-      throw new Error(`signin failed: HTTP ${response.status} ${body}`);
-    }
-    return {
-      cookie: getCookieHeader(response),
-      json: await readBoundedResponseJson(response, "Open WebUI signin"),
-    };
-  });
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function fetchModels(authHeaders, attempt) {
+function redactDiagnosticText(text, extraSecrets = []) {
+  let redacted = text;
+  for (const secret of [email, password, ...extraSecrets]) {
+    if (!secret) {
+      continue;
+    }
+    redacted = redacted.replace(new RegExp(escapeRegExp(secret), "g"), "<redacted>");
+    redacted = redacted.replace(
+      new RegExp(escapeRegExp(JSON.stringify(secret).slice(1, -1)), "g"),
+      "<redacted>",
+    );
+  }
+  return redacted;
+}
+
+function cookieSecretValues(cookieHeader) {
+  if (!cookieHeader) {
+    return [];
+  }
+  return cookieHeader
+    .split(";")
+    .map((part) => {
+      const text = part.trim();
+      const separatorIndex = text.indexOf("=");
+      return separatorIndex === -1 ? "" : text.slice(separatorIndex + 1).trim();
+    })
+    .filter(Boolean);
+}
+
+async function fetchSignin() {
+  return await withRequestTimeout(
+    "Open WebUI signin",
+    controlTimeoutMs,
+    async (signal, timeoutPromise) => {
+      const response = await fetch(`${baseUrl}/api/v1/auths/signin`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+        signal,
+      });
+      if (!response.ok) {
+        const body = await readBoundedResponseText(response, "Open WebUI signin", timeoutPromise);
+        throw new Error(`signin failed: HTTP ${response.status} ${redactDiagnosticText(body)}`);
+      }
+      return {
+        cookie: getCookieHeader(response),
+        json: await readBoundedResponseJson(response, "Open WebUI signin", timeoutPromise),
+      };
+    },
+  );
+}
+
+async function fetchModels(authHeaders, attempt, diagnosticSecrets) {
   return await withRequestTimeout(
     `Open WebUI models attempt ${attempt}`,
     controlTimeoutMs,
-    async (signal) => {
+    async (signal, timeoutPromise) => {
       const response = await fetch(`${baseUrl}/api/models`, { headers: authHeaders, signal });
       if (!response.ok) {
+        const text = await readBoundedResponseText(
+          response,
+          `Open WebUI models attempt ${attempt}`,
+          timeoutPromise,
+        );
         return {
           ok: false,
           status: response.status,
-          text: await readBoundedResponseText(response, `Open WebUI models attempt ${attempt}`),
+          text: redactDiagnosticText(text, diagnosticSecrets),
         };
       }
       return {
-        json: await readBoundedResponseJson(response, `Open WebUI models attempt ${attempt}`),
+        json: await readBoundedResponseJson(
+          response,
+          `Open WebUI models attempt ${attempt}`,
+          timeoutPromise,
+        ),
         ok: true,
       };
     },
   );
 }
 
-async function fetchChatCompletion(authHeaders, targetModel) {
-  return await withRequestTimeout("Open WebUI chat completion", chatTimeoutMs, async (signal) => {
-    const response = await fetch(`${baseUrl}/api/chat/completions`, {
-      method: "POST",
-      headers: {
-        ...authHeaders,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: targetModel,
-        messages: [{ role: "user", content: prompt }],
-      }),
-      signal,
-    });
-    if (!response.ok) {
-      const body = await readBoundedResponseText(response, "Open WebUI chat completion");
-      throw new Error(`/api/chat/completions failed: HTTP ${response.status} ${body}`);
-    }
-    return await readBoundedResponseJson(response, "Open WebUI chat completion");
-  });
+async function fetchChatCompletion(authHeaders, targetModel, diagnosticSecrets) {
+  return await withRequestTimeout(
+    "Open WebUI chat completion",
+    chatTimeoutMs,
+    async (signal, timeoutPromise) => {
+      const response = await fetch(`${baseUrl}/api/chat/completions`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: targetModel,
+          messages: [{ role: "user", content: prompt }],
+        }),
+        signal,
+      });
+      if (!response.ok) {
+        const body = await readBoundedResponseText(
+          response,
+          "Open WebUI chat completion",
+          timeoutPromise,
+        );
+        throw new Error(
+          `/api/chat/completions failed: HTTP ${response.status} ${redactDiagnosticText(
+            body,
+            diagnosticSecrets,
+          )}`,
+        );
+      }
+      return await readBoundedResponseJson(response, "Open WebUI chat completion", timeoutPromise);
+    },
+  );
 }
 
 function extractModelIds(modelsJson) {
@@ -216,12 +284,13 @@ const authHeaders = {
   ...buildAuthHeaders(token, signin.cookie),
   accept: "application/json",
 };
+const diagnosticSecrets = [token, signin.cookie, ...cookieSecretValues(signin.cookie)];
 
 let modelIds = [];
 let targetModel = "";
 let lastModelsError = "";
 for (let attempt = 1; attempt <= modelAttempts; attempt += 1) {
-  const modelsResult = await fetchModels(authHeaders, attempt).catch(
+  const modelsResult = await fetchModels(authHeaders, attempt, diagnosticSecrets).catch(
     /** @param {unknown} error */ (error) => {
       lastModelsError = error instanceof Error ? error.message : String(error);
       return undefined;
@@ -252,7 +321,7 @@ if (smokeMode === "models") {
   process.exit(0);
 }
 
-const chatJson = await fetchChatCompletion(authHeaders, targetModel);
+const chatJson = await fetchChatCompletion(authHeaders, targetModel, diagnosticSecrets);
 const reply =
   chatJson?.choices?.[0]?.message?.content ?? chatJson?.message?.content ?? chatJson?.content ?? "";
 if (typeof reply !== "string" || !reply.includes(expectedNonce)) {

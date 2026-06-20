@@ -128,8 +128,19 @@ function spawnInvocation(command, commandArgs, env, platform) {
 }
 
 const cmdMetaCharactersRe = /([()\][%!^"`<>&|;, *?])/g;
-const jsRuntimeEntrypoints = new Set(["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"]);
+const jsRuntimeEntrypoints = new Set([
+  "pnpm",
+  "npm",
+  "npx",
+  "corepack",
+  "node",
+  "yarn",
+  "bun",
+  "bunx",
+]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
+const awsMacosBunEntrypoints = new Set(["bun", "bunx"]);
+const awsMacosBunVersion = "1.3.14";
 const minimumBlacksmithCrabboxVersion = [0, 22, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
@@ -668,6 +679,56 @@ function pathExists(path) {
   }
 }
 
+function crabboxConfigDir() {
+  if (process.platform === "darwin") {
+    return resolve(homedir(), "Library", "Application Support", "crabbox");
+  }
+  if (process.platform === "win32") {
+    return resolve(process.env.APPDATA || resolve(homedir(), "AppData", "Roaming"), "crabbox");
+  }
+  return resolve(process.env.XDG_CONFIG_HOME || resolve(homedir(), ".config"), "crabbox");
+}
+
+function userDisplayPath(path) {
+  const home = homedir();
+  const rel = relative(home, path);
+  if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
+    return `~/${rel}`;
+  }
+  return path;
+}
+
+function blacksmithTestboxPrivateKeyPath(id) {
+  return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
+}
+
+function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
+  if (commandArgs[0] !== "run") {
+    return;
+  }
+  const id = optionValue(commandArgs, "--id");
+  if (!id) {
+    return;
+  }
+  if (!id.startsWith("tbx_")) {
+    return;
+  }
+
+  const keyPath = blacksmithTestboxPrivateKeyPath(id);
+  if (pathExists(keyPath)) {
+    return;
+  }
+
+  console.error(
+    [
+      `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
+      "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+      "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
 function preserveTemporaryCrabboxRuns() {
   if (childCwd === repoRoot) {
     return;
@@ -785,17 +846,27 @@ function commandNeedsAwsMacosPackageManager(commandArgs) {
   if (isChangedGateCommand(commandArgs)) {
     return true;
   }
-  if (commandArgs.length === 1) {
-    return shellCommandWordCandidates(commandArgs[0]).some(commandWordsNeedAwsMacosPackageManager);
-  }
-  return commandWordsNeedAwsMacosPackageManager(normalizedCommandWords(commandArgs));
+  return commandNeedsEntrypoint(commandArgs, awsMacosCorepackEntrypoints);
 }
 
-function commandWordsNeedAwsMacosPackageManager(wordsInput) {
+function commandNeedsAwsMacosBun(commandArgs) {
+  return commandNeedsEntrypoint(commandArgs, awsMacosBunEntrypoints);
+}
+
+function commandNeedsEntrypoint(commandArgs, entrypoints) {
+  if (commandArgs.length === 1) {
+    return shellCommandWordCandidates(commandArgs[0]).some((words) =>
+      commandWordsNeedEntrypoint(words, entrypoints),
+    );
+  }
+  return commandWordsNeedEntrypoint(normalizedCommandWords(commandArgs), entrypoints);
+}
+
+function commandWordsNeedEntrypoint(wordsInput, entrypoints) {
   let words = wordsInput;
   words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
-  if (awsMacosCorepackEntrypoints.has(first)) {
+  if (entrypoints.has(first)) {
     return true;
   }
 
@@ -803,7 +874,9 @@ function commandWordsNeedAwsMacosPackageManager(wordsInput) {
   if (!inlineCommand) {
     return false;
   }
-  return shellCommandWordCandidates(inlineCommand).some(commandWordsNeedAwsMacosPackageManager);
+  return shellCommandWordCandidates(inlineCommand).some((candidateWords) =>
+    commandWordsNeedEntrypoint(candidateWords, entrypoints),
+  );
 }
 
 function isChangedGateCommand(commandArgs) {
@@ -1478,11 +1551,14 @@ function mergeBaseForChangedGate() {
 function remoteGitBootstrapForChangedGate(changedGateBase) {
   const quotedBase = shellQuote(changedGateBase);
   return [
-    "if ! git status --short >/dev/null 2>&1; then",
+    "openclaw_changed_gate_base=${OPENCLAW_CHANGED_GATE_BASE:-" + quotedBase + "};",
+    'if ! command -v git >/dev/null 2>&1; then echo "git is required for OpenClaw remote changed-gate sync" >&2; exit 2; fi;',
+    'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)";',
+    'if ! git status --short >/dev/null 2>&1 || [ "$openclaw_changed_gate_remote_base" != "$openclaw_changed_gate_base" ]; then',
     "rm -rf .git;",
     "git init -q;",
     "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git;",
-    `git fetch -q --depth=1 origin ${quotedBase}:refs/remotes/origin/main;`,
+    'git fetch -q --depth=1 origin "$openclaw_changed_gate_base:refs/remotes/origin/main";',
     "git reset --mixed --quiet refs/remotes/origin/main;",
     "git add -A;",
     "if ! git diff --cached --quiet; then git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit -q --no-gpg-sign -m remote-changed-gate-tree; fi;",
@@ -1668,7 +1744,7 @@ function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
   return normalizedArgs;
 }
 
-function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
+function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {}) {
   const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.15.0";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_macos_js() {",
@@ -1750,6 +1826,42 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
       "pnpm --version >&2;",
     );
   }
+  // Raw AWS macOS boxes skip setup-node-env, so Bun needs its own user-local pin.
+  if (bun) {
+    bootstrap.push(
+      `bun_version=${shellQuote(awsMacosBunVersion)};`,
+      'bun_root="$tool_root/bun-v${bun_version}";',
+      'bun_ready_marker="$bun_root/.openclaw-crabbox-bun-ready";',
+      'export PATH="$bun_root/bin:$PATH";',
+      'if [ ! -x "$bun_root/bin/bun" ] || [ ! -f "$bun_ready_marker" ]; then',
+      'mkdir -p "$tool_root" || { status=$?; return "$status"; };',
+      'bun_install_lock="$tool_root/.bun-${bun_version}.lock";',
+      "bun_lock_acquired=0;",
+      "bun_lock_deadline=$((SECONDS + 300));",
+      "while true; do",
+      'if mkdir "$bun_install_lock" 2>/dev/null; then bun_lock_acquired=1; printf "%s\\n" "$$" >"$bun_install_lock/pid" || { status=$?; rm -rf "$bun_install_lock"; return "$status"; }; break; fi;',
+      'if [ -x "$bun_root/bin/bun" ] && [ -f "$bun_ready_marker" ]; then break; fi;',
+      'if [ "$SECONDS" -ge "$bun_lock_deadline" ]; then',
+      'bun_lock_pid="$(cat "$bun_install_lock/pid" 2>/dev/null || true)";',
+      'if [ -n "$bun_lock_pid" ] && kill -0 "$bun_lock_pid" 2>/dev/null; then echo "timed out waiting for active macOS Bun install lock: $bun_install_lock pid=$bun_lock_pid" >&2; return 1; fi;',
+      'echo "reclaiming stale macOS Bun install lock: $bun_install_lock" >&2;',
+      'rm -rf "$bun_install_lock" || return 1;',
+      "bun_lock_deadline=$((SECONDS + 300));",
+      "fi;",
+      "sleep 1;",
+      "done;",
+      'release_bun_install_lock() { if [ "$bun_lock_acquired" = "1" ]; then rm -rf "$bun_install_lock" 2>/dev/null || true; fi; };',
+      'if [ ! -x "$bun_root/bin/bun" ] || [ ! -f "$bun_ready_marker" ]; then',
+      'rm -rf "$bun_root" || { status=$?; release_bun_install_lock; return "$status"; };',
+      'mkdir -p "$bun_root" || { status=$?; release_bun_install_lock; return "$status"; };',
+      'npm install --global --prefix "$bun_root" "bun@${bun_version}" || { status=$?; release_bun_install_lock; return "$status"; };',
+      'touch "$bun_ready_marker" || { status=$?; release_bun_install_lock; return "$status"; };',
+      "fi;",
+      "release_bun_install_lock;",
+      "fi;",
+      "bun --version >&2 || return 1;",
+    );
+  }
   bootstrap.push("};", "openclaw_crabbox_bootstrap_macos_js");
   return bootstrap.join(" ");
 }
@@ -1775,6 +1887,7 @@ function scopedAwsMacosEnvCommand(commandArgs) {
   return {
     runtimeEntrypoint: targetEntrypoint,
     packageManager: awsMacosCorepackEntrypoints.has(targetEntrypoint),
+    bun: awsMacosBunEntrypoints.has(targetEntrypoint),
     shellCommand: `openclaw_crabbox_env ${shellJoin(commandArgs.slice(1))}`,
   };
 }
@@ -1805,6 +1918,7 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
   const shellCommand = `${remoteAwsMacosJsBootstrap({
     packageManager:
       directScopedEnvCommand?.packageManager || commandNeedsAwsMacosPackageManager(runArgs),
+    bun: directScopedEnvCommand?.bun || commandNeedsAwsMacosBun(runArgs),
   })} && { ${originalShellCommand}\n}`;
 
   if (!hasOption(normalizedArgs, "--shell")) {
@@ -1876,13 +1990,13 @@ function prepareAwsMacosScriptStdinBootstrap(commandArgs, providerName) {
 }
 
 function createAwsMacosScriptStdinWrapper(script) {
-  const packageManager = scriptNeedsAwsMacosPackageManager(script);
+  const requirements = awsMacosScriptBootstrapRequirements(script);
   if (!script.startsWith("#!")) {
-    return `${remoteAwsMacosJsBootstrap({ packageManager })} || exit $?\n${script}`;
+    return `${remoteAwsMacosJsBootstrap(requirements)} || exit $?\n${script}`;
   }
   const delimiterValue = uniqueHereDocDelimiter(script);
   return [
-    `${remoteAwsMacosJsBootstrap({ packageManager })} || exit $?`,
+    `${remoteAwsMacosJsBootstrap(requirements)} || exit $?`,
     'tmp_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-crabbox-script.XXXXXX")" || exit $?',
     'cleanup_openclaw_crabbox_script() { rm -f "$tmp_script"; }',
     "trap cleanup_openclaw_crabbox_script EXIT",
@@ -1895,7 +2009,8 @@ function createAwsMacosScriptStdinWrapper(script) {
   ].join("\n");
 }
 
-function scriptNeedsAwsMacosPackageManager(script) {
+function awsMacosScriptBootstrapRequirements(script) {
+  const requirements = { packageManager: false, bun: false };
   const firstLine = script.match(/^[^\r\n]*/u)?.[0] ?? "";
   if (firstLine.startsWith("#!")) {
     let words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
@@ -1905,11 +2020,13 @@ function scriptNeedsAwsMacosPackageManager(script) {
         words = words.slice(1);
       }
     }
-    if (commandWordsNeedAwsMacosPackageManager(words)) {
-      return true;
-    }
+    requirements.packageManager = commandWordsNeedEntrypoint(words, awsMacosCorepackEntrypoints);
+    requirements.bun = commandWordsNeedEntrypoint(words, awsMacosBunEntrypoints);
+    return requirements;
   }
-  return commandNeedsAwsMacosPackageManager([script]);
+  requirements.packageManager = commandNeedsAwsMacosPackageManager([script]);
+  requirements.bun = commandNeedsAwsMacosBun([script]);
+  return requirements;
 }
 
 function uniqueHereDocDelimiter(script) {
@@ -2287,6 +2404,16 @@ if (provider && !isProviderAdvertised(provider, providers)) {
 }
 
 if (canonicalProvider === "blacksmith-testbox") {
+  if (isWindowsRemoteTarget(normalizedArgs)) {
+    console.error(
+      [
+        "[crabbox] provider=blacksmith-testbox supports Linux Testbox proof only; it cannot run Windows or WSL2 targets.",
+        "[crabbox] use provider=azure or provider=aws for brokered Crabbox Windows/WSL2 proof, provider=parallels for local Windows, or dispatch .github/workflows/windows-testbox-probe.yml for Blacksmith Windows runner probes.",
+      ].join("\n"),
+    );
+    process.exit(2);
+  }
+
   if (!satisfiesMinimumCrabboxVersion(version.text, minimumBlacksmithCrabboxVersion)) {
     console.error(
       [
@@ -2316,6 +2443,7 @@ if (canonicalProvider === "blacksmith-testbox") {
   console.error(
     `[crabbox] provider=blacksmith-testbox ${source}; if Testbox is queued or down, ${fallback}`,
   );
+  enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
 let childCwd = repoRoot;
@@ -2369,7 +2497,7 @@ if (
 ) {
   if (isAwsMacosRemoteTarget(normalizedArgs, provider)) {
     console.error(
-      `[crabbox] provider=aws macOS raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint || "--script-stdin"}; bootstrapping a pinned user-local Node toolchain before the command`,
+      `[crabbox] provider=aws macOS raw boxes may lack Node/Corepack/pnpm/Bun for ${runtimeEntrypoint || "--script-stdin"}; bootstrapping pinned user-local JavaScript tooling before the command`,
     );
   } else {
     const id = optionValue(normalizedArgs, "--id");
@@ -2377,7 +2505,7 @@ if (
       ? `pnpm crabbox:hydrate -- --id ${id}`
       : "pnpm crabbox:warmup, then pnpm crabbox:hydrate -- --id <id>";
     console.error(
-      `[crabbox] warning: provider=aws raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint}; hydrate first (${hydrate}) or pass --provider blacksmith-testbox for OpenClaw CI-like proof; not switching providers automatically`,
+      `[crabbox] warning: provider=aws raw boxes may lack Node/Corepack/pnpm/Bun for ${runtimeEntrypoint}; hydrate first (${hydrate}) or pass --provider blacksmith-testbox for OpenClaw CI-like proof; not switching providers automatically`,
     );
   }
 }

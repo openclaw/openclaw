@@ -100,10 +100,6 @@ type CallGatewayBaseOptions = {
   configPath?: string;
 };
 
-export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
-  scopes: OperatorScope[];
-};
-
 export type CallGatewayCliOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
@@ -452,10 +448,6 @@ export const testing = {
       deps?.loadGatewayTlsRuntime ?? defaultGatewayCallDeps.loadGatewayTlsRuntime;
     gatewayCallDeps.loadDeviceAuthToken =
       deps?.loadDeviceAuthToken ?? defaultGatewayCallDeps.loadDeviceAuthToken;
-  },
-  setCreateGatewayClientForTests(createGatewayClient?: typeof defaultCreateGatewayClient): void {
-    gatewayCallDeps.createGatewayClient =
-      createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
   },
   resetDepsForTests(): void {
     gatewayCallDeps.createGatewayClient = defaultGatewayCallDeps.createGatewayClient;
@@ -1233,12 +1225,6 @@ export async function buildGatewayProbeConnectionDetails(
       ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
       : {}),
   };
-}
-
-export async function callGatewayScoped<T = Record<string, unknown>>(
-  opts: CallGatewayScopedOptions,
-): Promise<T> {
-  return await callGatewayWithScopes(opts, opts.scopes);
 }
 
 export async function callGatewayCli<T = Record<string, unknown>>(

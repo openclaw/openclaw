@@ -15,10 +15,12 @@ import {
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
   resolveDockerPreflightPlatform,
+  runShellCaptureCommand,
   runShellCommand,
   SHELL_CAPTURE_MAX_CHARS,
   tailFile,
 } from "../../scripts/test-docker-all.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
 const limits = {
   resourceLimits: {
@@ -28,6 +30,7 @@ const limits = {
   weightLimit: 2,
 };
 const posixIt = process.platform === "win32" ? it.skip : it;
+const { createTempDir } = createScriptTestHarness();
 
 function activePool({
   count = 0,
@@ -489,6 +492,7 @@ setInterval(() => {}, 1000);
         )} ${JSON.stringify(grandchildPidPath)}`,
         env: process.env,
         label: "timeout-leader-exits",
+        timeoutKillGraceMs: 25,
         timeoutMs: 1_000,
       });
 
@@ -505,6 +509,86 @@ setInterval(() => {}, 1000);
       }
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  posixIt("lets timed-out shell command descendants exit during kill grace", async () => {
+    const root = createTempDir("openclaw-docker-all-grace-");
+    const scriptPath = path.join(root, "leader-exits.mjs");
+    const donePath = path.join(root, "done");
+    const readyPath = path.join(root, "ready");
+    const childScript = [
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+      "process.on('SIGTERM', () => {",
+      `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
+      "});",
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+
+    writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+
+spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: "ignore" });
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const runPromise = runShellCommand({
+      command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
+      env: process.env,
+      label: "timeout-grace",
+      timeoutKillGraceMs: 500,
+      timeoutMs: 500,
+    });
+
+    await waitFor(() => existsSync(readyPath));
+    const result = await runPromise;
+    expect(result).toMatchObject({ timedOut: true });
+    expect(readFileSync(donePath, "utf8")).toBe("done");
+  });
+
+  posixIt("lets timed-out shell capture descendants exit during kill grace", async () => {
+    const root = createTempDir("openclaw-docker-all-capture-grace-");
+    const scriptPath = path.join(root, "leader-exits.mjs");
+    const donePath = path.join(root, "done");
+    const readyPath = path.join(root, "ready");
+    const childScript = [
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+      "process.on('SIGTERM', () => {",
+      `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
+      "});",
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+
+    writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+
+spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: "ignore" });
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const runPromise = runShellCaptureCommand({
+      command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
+      env: process.env,
+      label: "capture-timeout-grace",
+      timeoutKillGraceMs: 500,
+      timeoutMs: 500,
+    });
+
+    await waitFor(() => existsSync(readyPath));
+    const result = await runPromise;
+    expect(result).toMatchObject({ timedOut: true });
+    expect(readFileSync(donePath, "utf8")).toBe("done");
   });
 
   it("describes effective scheduler limits for operator errors", () => {

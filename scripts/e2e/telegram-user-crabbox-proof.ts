@@ -227,10 +227,24 @@ function trimToValue(value: string | undefined) {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
+const positiveIntegerPattern = /^[1-9]\d*$/u;
+
 function parsePositiveInteger(value: string, label: string) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const trimmed = value.trim();
+  if (!positiveIntegerPattern.test(trimmed)) {
     throw new Error(`${label} must be a positive integer.`);
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseTcpPort(value: string, label: string) {
+  const parsed = parsePositiveInteger(value, label);
+  if (parsed > 65_535) {
+    throw new Error(`${label} must be a TCP port from 1 to 65535.`);
   }
   return parsed;
 }
@@ -314,7 +328,7 @@ function parseArgs(argvInput: string[]): Options {
       }
       opts.expect.push(readValue());
     } else if (arg === "--gateway-port") {
-      opts.gatewayPort = parsePositiveInteger(readValue(), "--gateway-port");
+      opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
     } else if (arg === "--id") {
       opts.leaseId = readValue();
     } else if (arg === "--idle-timeout") {
@@ -322,7 +336,7 @@ function parseArgs(argvInput: string[]): Options {
     } else if (arg === "--keep-box") {
       opts.keepBox = true;
     } else if (arg === "--mock-port") {
-      opts.mockPort = parsePositiveInteger(readValue(), "--mock-port");
+      opts.mockPort = parseTcpPort(readValue(), "--mock-port");
     } else if (arg === "--mock-response-file") {
       opts.mockResponseText = fs.readFileSync(resolveRepoPath(process.cwd(), readValue()), "utf8");
     } else if (arg === "--message-id") {
@@ -799,7 +813,7 @@ function waitForOutput(
 }
 
 function killTree(child: ChildProcess | undefined) {
-  if (!child || child.killed || child.exitCode !== null) {
+  if (!child) {
     return;
   }
   if (!child.pid) {
@@ -855,6 +869,9 @@ function sleep(ms: number) {
 }
 
 function waitForChildExit(child: ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
   return new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", resolve);
@@ -1449,9 +1466,9 @@ async function sshRun(
   });
 }
 
-function renderRemoteSetup(params: { tdlibSha256?: string; tdlibUrl?: string }) {
-  const tdlibSha256 = JSON.stringify(params.tdlibSha256 ?? "");
-  const tdlibUrl = JSON.stringify(params.tdlibUrl ?? "");
+export function renderRemoteSetup(params: { tdlibSha256?: string; tdlibUrl?: string }) {
+  const tdlibSha256 = shellQuote(params.tdlibSha256 ?? "");
+  const tdlibUrl = shellQuote(params.tdlibUrl ?? "");
   return `#!/usr/bin/env bash
 set -euo pipefail
 root=${REMOTE_ROOT}
@@ -1603,10 +1620,10 @@ sleep 6
 `;
 }
 
-function renderSelectDesktopChat(params: { chatTitle: string }) {
+export function renderSelectDesktopChat(params: { chatTitle: string }) {
   return `#!/usr/bin/env bash
 set -euo pipefail
-chat_title=${JSON.stringify(params.chatTitle)}
+chat_title=${shellQuote(params.chatTitle)}
 export DISPLAY="\${DISPLAY:-:99}"
 win="$(wmctrl -l | awk 'tolower($0) ~ /telegram/ {print $1; exit}')"
 test -n "$win"
@@ -1625,7 +1642,7 @@ sleep 1
 `;
 }
 
-function renderRemoteProbe(params: {
+export function renderRemoteProbe(params: {
   expect: string[];
   outputPath?: string;
   sutUsername: string;
@@ -1645,12 +1662,12 @@ function renderRemoteProbe(params: {
   for (const expected of params.expect) {
     args.push("--expect", expected);
   }
-  const escapedArgs = args.map((arg) => JSON.stringify(arg)).join(" ");
+  const escapedArgs = args.map(shellQuote).join(" ");
   return `#!/usr/bin/env bash
 set -euo pipefail
 root=${REMOTE_ROOT}
 export TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver"
-export TELEGRAM_USER_DRIVER_SUT_USERNAME=${JSON.stringify(params.sutUsername)}
+export TELEGRAM_USER_DRIVER_SUT_USERNAME=${shellQuote(params.sutUsername)}
 python3 "$root/user-driver.py" ${escapedArgs}
 `;
 }
@@ -1912,7 +1929,7 @@ async function writeRemoteSessionScripts(params: {
     params.inspect,
     `cat >${REMOTE_ROOT}/env.sh <<'EOF'
 export TELEGRAM_USER_DRIVER_STATE_DIR=${REMOTE_ROOT}/user-driver
-export TELEGRAM_USER_DRIVER_SUT_USERNAME=${params.sutUsername}
+export TELEGRAM_USER_DRIVER_SUT_USERNAME=${shellQuote(params.sutUsername)}
 EOF
 `,
   );
@@ -1942,7 +1959,7 @@ async function stopRemoteRecording(root: string, inspect: CrabboxInspect, sessio
     root,
     inspect,
     `set -euo pipefail
-pid_file=${JSON.stringify(session.recorder.pidFile)}
+pid_file=${shellQuote(session.recorder.pidFile)}
 if [ -s "$pid_file" ]; then
   pid="$(cat "$pid_file")"
   kill -INT "$pid" >/dev/null 2>&1 || true

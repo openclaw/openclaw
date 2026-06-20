@@ -24,11 +24,11 @@ import {
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
 } from "./bootstrap-files.js";
-import { buildRunClaudeCliAgentParams } from "./cli-runner.js";
 import {
   createManagedRun,
   mockSuccessfulCliRun,
@@ -50,7 +50,7 @@ import {
   executePreparedCliRun,
   setCliRunnerExecuteTestDeps,
 } from "./cli-runner/execute.js";
-import { buildSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
+import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -273,7 +273,6 @@ async function withTempExecApprovalsFile(
   file: Record<string, unknown>,
   run: () => Promise<void>,
 ): Promise<void> {
-  const originalHome = process.env.HOME;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-exec-approvals-"));
   await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
   await fs.writeFile(
@@ -281,31 +280,18 @@ async function withTempExecApprovalsFile(
     `${JSON.stringify(file)}\n`,
     "utf-8",
   );
-  process.env.HOME = home;
   try {
-    await run();
+    await withEnvAsync({ HOME: home }, run);
   } finally {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
     await fs.rm(home, { recursive: true, force: true });
   }
 }
 
 async function withTempOpenClawHome(run: (home: string) => Promise<void>): Promise<void> {
-  const originalOpenClawHome = process.env.OPENCLAW_HOME;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-home-"));
-  process.env.OPENCLAW_HOME = home;
   try {
-    await run(home);
+    await withEnvAsync({ OPENCLAW_HOME: home }, async () => run(home));
   } finally {
-    if (originalOpenClawHome === undefined) {
-      delete process.env.OPENCLAW_HOME;
-    } else {
-      process.env.OPENCLAW_HOME = originalOpenClawHome;
-    }
     await fs.rm(home, { recursive: true, force: true });
   }
 }
@@ -405,7 +391,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("includes the OpenClaw skills prompt in CLI system prompts", () => {
-    const systemPrompt = buildSystemPrompt({
+    const systemPrompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp",
       modelDisplay: "claude-cli/sonnet",
       tools: [],
@@ -717,104 +703,6 @@ describe("runCliAgent spawn path", () => {
         process.env.CLI_SKILL_API_KEY = previousEnvValue;
       }
     }
-  });
-
-  it("ignores legacy claudeSessionId on the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      model: "opus",
-      timeoutMs: 1_000,
-      runId: "run-claude-legacy-wrapper",
-      claudeSessionId: "c9d7b831-1c31-4d22-80b9-1e50ca207d4b",
-    });
-
-    expect(params.provider).toBe("claude-cli");
-    expect(params.prompt).toBe("hi");
-    expect(params).not.toHaveProperty("cliSessionId");
-    expect(JSON.stringify(params)).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
-  });
-
-  it("forwards channel context through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      cwd: "/tmp/task-repo",
-      prompt: "hi",
-      timeoutMs: 1_000,
-      runId: "run-claude-channel-wrapper",
-      messageChannel: "telegram",
-      messageProvider: "acp",
-      currentChannelId: "telegram:-100123:topic:42",
-      currentThreadTs: "42",
-      currentMessageId: "reply-message-1",
-      senderId: "sender-1",
-      senderIsOwner: true,
-      persistAssistantTranscript: true,
-      storePath: "/tmp/sessions.json",
-      currentInboundEventKind: "room_event",
-    });
-
-    expect(params.messageChannel).toBe("telegram");
-    expect(params.messageProvider).toBe("acp");
-    expect(params.currentChannelId).toBe("telegram:-100123:topic:42");
-    expect(params.currentThreadTs).toBe("42");
-    expect(params.currentMessageId).toBe("reply-message-1");
-    expect(params.senderId).toBe("sender-1");
-    expect(params.senderIsOwner).toBe(true);
-    expect(params.cwd).toBe("/tmp/task-repo");
-    expect(params.persistAssistantTranscript).toBe(true);
-    expect(params.storePath).toBe("/tmp/sessions.json");
-    expect(params.currentInboundEventKind).toBe("room_event");
-  });
-
-  it("forwards explicit message target policy through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      timeoutMs: 1_000,
-      runId: "run-claude-target-policy-wrapper",
-      requireExplicitMessageTarget: true,
-    });
-
-    expect(params.requireExplicitMessageTarget).toBe(true);
-  });
-
-  it("forwards static extra system prompt through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      timeoutMs: 1_000,
-      runId: "run-claude-static-prompt-wrapper",
-      extraSystemPrompt: "dynamic\n\nstatic",
-      extraSystemPromptStatic: "static",
-    });
-
-    expect(params.extraSystemPrompt).toBe("dynamic\n\nstatic");
-    expect(params.extraSystemPromptStatic).toBe("static");
-  });
-
-  it("forwards cron jobId through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      timeoutMs: 1_000,
-      runId: "run-claude-jobid-wrapper",
-      trigger: "cron",
-      jobId: "cron-job-123",
-    });
-
-    expect(params.trigger).toBe("cron");
-    expect(params.jobId).toBe("cron-job-123");
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -3822,7 +3710,7 @@ ${JSON.stringify({
       const { contextFiles } = await realResolveBootstrapContextForRun({
         workspaceDir,
       });
-      const allArgs = buildSystemPrompt({
+      const allArgs = buildCliAgentSystemPrompt({
         workspaceDir,
         modelDisplay: "claude-cli/sonnet",
         contextFiles,

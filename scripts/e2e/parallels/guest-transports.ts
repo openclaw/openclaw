@@ -58,6 +58,28 @@ function throwIfFailed(label: string, result: CommandResult, check: boolean | un
   throw new Error(`${label} failed with exit code ${result.status}`);
 }
 
+const POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS = 30_000;
+
+function appendCommandResult(phases: PhaseRunner, result: CommandResult): void {
+  phases.append(result.stdout);
+  phases.append(result.stderr);
+}
+
+function cleanupPosixGuestScript(phases: PhaseRunner, transportArgs: string[]): void {
+  try {
+    appendCommandResult(
+      phases,
+      run("prlctl", transportArgs, {
+        check: false,
+        quiet: true,
+        timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
+      }),
+    );
+  } catch {
+    // Cleanup must not hide the command failure that made the phase useful.
+  }
+}
+
 export async function runWindowsBackgroundPowerShell(
   options: WindowsBackgroundPowerShellOptions,
 ): Promise<void> {
@@ -77,7 +99,10 @@ $scriptPath = "$base.ps1"
 $logPath = "$base.log"
 $donePath = "$base.done"
 $exitPath = "$base.exit"
-$pidPath = "$base.pid"`;
+$pidPath = "$base.pid"
+function Write-OpenClawUtf8File([string]$Path, [string]$Value) {
+  [System.IO.File]::WriteAllText($Path, $Value, [System.Text.UTF8Encoding]::new($false))
+}`;
   const payload = `$ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 ${pathsScript}
@@ -98,12 +123,12 @@ try {
   & {
 ${options.script}
   } *>&1 | Add-OpenClawBackgroundLog
-  Set-Content -Path $exitPath -Value '0' -Encoding UTF8
+  Write-OpenClawUtf8File $exitPath '0'
 } catch {
   $_ | Add-OpenClawBackgroundLog
-  Set-Content -Path $exitPath -Value '1' -Encoding UTF8
+  Write-OpenClawUtf8File $exitPath '1'
 } finally {
-  Set-Content -Path $donePath -Value 'done' -Encoding UTF8
+  Write-OpenClawUtf8File $donePath 'done'
 }`;
   const writeScript = runCommand(
     "prlctl",
@@ -150,7 +175,7 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
           "-EncodedCommand",
           encodePowerShell(`${pathsScript}
 $process = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -PassThru
-Set-Content -Path $pidPath -Value $process.Id -Encoding UTF8
+Write-OpenClawUtf8File $pidPath ([string]$process.Id)
 'started'`),
         ],
         { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
@@ -354,48 +379,36 @@ export class LinuxGuest {
   ) {}
 
   exec(args: string[], options: GuestExecOptions = {}): string {
-    const result = run(
-      "prlctl",
-      ["exec", this.vmName, "/usr/bin/env", "HOME=/root", "OPENCLAW_ALLOW_ROOT=1", ...args],
-      {
-        check: false,
-        input: options.input,
-        quiet: true,
-        timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
-      },
-    );
+    const result = run("prlctl", this.transportArgs(args), {
+      check: false,
+      input: options.input,
+      quiet: true,
+      timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
+    });
     this.phases.append(result.stdout);
     this.phases.append(result.stderr);
     throwIfFailed("Linux guest command", result, options.check);
     return result.stdout.trim();
   }
 
+  private transportArgs(args: string[]): string[] {
+    return ["exec", this.vmName, "/usr/bin/env", "HOME=/root", "OPENCLAW_ALLOW_ROOT=1", ...args];
+  }
+
   bash(script: string): string {
     const scriptPath = `/tmp/${guestScriptName("sh")}`;
-    const write = run(
-      "prlctl",
-      [
-        "exec",
-        this.vmName,
-        "/usr/bin/env",
-        "HOME=/root",
-        "OPENCLAW_ALLOW_ROOT=1",
-        "dd",
-        `of=${scriptPath}`,
-        "bs=1048576",
-      ],
-      {
+    try {
+      const write = run("prlctl", this.transportArgs(["dd", `of=${scriptPath}`, "bs=1048576"]), {
+        check: false,
         input: `umask 022\n${script}`,
         quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(),
-      },
-    );
-    this.phases.append(write.stdout);
-    this.phases.append(write.stderr);
-    try {
+      });
+      appendCommandResult(this.phases, write);
+      throwIfFailed("Linux guest script write", write, undefined);
       return this.exec(["bash", scriptPath]);
     } finally {
-      this.exec(["rm", "-f", scriptPath], { check: false });
+      cleanupPosixGuestScript(this.phases, this.transportArgs(["/bin/rm", "-f", scriptPath]));
     }
   }
 }
@@ -420,29 +433,31 @@ export class MacosGuest {
     return this.run(args, options).stdout.trim();
   }
 
-  run(args: string[], options: MacosGuestOptions = {}): CommandResult {
-    const envArgs = Object.entries({ PATH: this.input.path, ...options.env }).map(
+  private transportArgs(args: string[], env: Record<string, string> = {}): string[] {
+    const envArgs = Object.entries({ PATH: this.input.path, ...env }).map(
       ([key, value]) => `${key}=${value}`,
     );
     const user = this.input.getUser();
-    const transportArgs =
-      this.input.getTransport() === "sudo"
-        ? [
-            "exec",
-            this.input.vmName,
-            "/usr/bin/sudo",
-            "-H",
-            "-u",
-            user,
-            "/usr/bin/env",
-            `HOME=${this.input.resolveDesktopHome(user)}`,
-            `USER=${user}`,
-            `LOGNAME=${user}`,
-            ...envArgs,
-            ...args,
-          ]
-        : ["exec", this.input.vmName, "--current-user", "/usr/bin/env", ...envArgs, ...args];
-    const result = run("prlctl", transportArgs, {
+    return this.input.getTransport() === "sudo"
+      ? [
+          "exec",
+          this.input.vmName,
+          "/usr/bin/sudo",
+          "-H",
+          "-u",
+          user,
+          "/usr/bin/env",
+          `HOME=${this.input.resolveDesktopHome(user)}`,
+          `USER=${user}`,
+          `LOGNAME=${user}`,
+          ...envArgs,
+          ...args,
+        ]
+      : ["exec", this.input.vmName, "--current-user", "/usr/bin/env", ...envArgs, ...args];
+  }
+
+  run(args: string[], options: MacosGuestOptions = {}): CommandResult {
+    const result = run("prlctl", this.transportArgs(args, options.env), {
       check: false,
       input: options.input,
       quiet: true,
@@ -456,13 +471,13 @@ export class MacosGuest {
 
   sh(script: string, env: Record<string, string> = {}): string {
     const scriptPath = `/tmp/${guestScriptName("sh")}`;
-    this.exec(["/bin/dd", `of=${scriptPath}`, "bs=1048576"], {
-      input: `umask 022\n${script}`,
-    });
     try {
+      this.exec(["/bin/dd", `of=${scriptPath}`, "bs=1048576"], {
+        input: `umask 022\n${script}`,
+      });
       return this.exec(["/bin/bash", scriptPath], { env });
     } finally {
-      this.exec(["/bin/rm", "-f", scriptPath], { check: false });
+      cleanupPosixGuestScript(this.phases, this.transportArgs(["/bin/rm", "-f", scriptPath]));
     }
   }
 }

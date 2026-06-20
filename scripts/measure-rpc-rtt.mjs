@@ -9,6 +9,7 @@ import net from "node:net";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
@@ -16,6 +17,8 @@ const DEFAULT_ITERATIONS = 10;
 export const READY_TIMEOUT_MS = 120_000;
 /** Per-probe timeout used while polling gateway readiness endpoints. */
 export const READY_PROBE_TIMEOUT_MS = 1_000;
+const READY_PROBE_RESPONSE_BODY_MAX_BYTES = 64 * 1024;
+const GATEWAY_FORCE_KILL_GRACE_MS = 250;
 const PARENT_TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 const IS_DIRECT_RUN =
   typeof process.argv[1] === "string" &&
@@ -28,6 +31,7 @@ function usage() {
     "  [--repo-root <openclaw-repo>]",
     "  [--iterations <count>]",
     "  [--methods <comma-separated-methods>]",
+    "  [--help, -h]",
   ].join("\n");
 }
 
@@ -53,11 +57,16 @@ function parsePositiveInt(value, flag) {
 
 export function parseArgs(argv) {
   const args = {
+    help: false,
     iterations: DEFAULT_ITERATIONS,
     methods: DEFAULT_METHODS,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      args.help = true;
+      continue;
+    }
     if (arg === "--output-dir") {
       args.outputDir = readFlagValue(argv, index, arg);
       index += 1;
@@ -82,6 +91,9 @@ export function parseArgs(argv) {
       continue;
     }
     throw new Error(`Unknown argument: ${arg}\n${usage()}`);
+  }
+  if (args.help) {
+    return args;
   }
   if (!args.outputDir) {
     throw new Error(usage());
@@ -125,18 +137,54 @@ function formatErrorMessage(error) {
   return String(error);
 }
 
-async function readyzReportsReady(response) {
+async function readyzReportsReady(response, options = {}) {
   if (!response.ok) {
-    return false;
-  }
-  if (typeof response.json !== "function") {
+    void response.body?.cancel().catch(() => undefined);
     return false;
   }
   try {
-    const body = await response.json();
+    const text = await readBoundedResponseText(
+      response,
+      "RPC RTT /readyz",
+      READY_PROBE_RESPONSE_BODY_MAX_BYTES,
+      options,
+    );
+    const body = JSON.parse(text);
     return body && typeof body === "object" && body.ready === true;
   } catch {
     return false;
+  }
+}
+
+async function fetchReadinessProbe(fetchImpl, url, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutError = Object.assign(new Error(`${url} timed out after ${timeoutMs}ms`), {
+    code: "ETIMEDOUT",
+  });
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    const response = await Promise.race([
+      fetchImpl(url, {
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    return {
+      clearTimeout: () => clearTimeout(timeout),
+      response,
+      signal: controller.signal,
+      timeoutPromise,
+    };
+  } catch (error) {
+    clearTimeout(timeout);
+    throw error;
   }
 }
 
@@ -171,19 +219,34 @@ export async function waitForGatewayReady({
       );
     }
     try {
-      const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, {
-        signal: AbortSignal.timeout(probeTimeoutMs),
-      });
-      if (await readyzReportsReady(response)) {
-        return;
+      const probe = await fetchReadinessProbe(
+        fetchImpl,
+        `http://127.0.0.1:${port}/readyz`,
+        probeTimeoutMs,
+      );
+      try {
+        if (
+          await readyzReportsReady(probe.response, {
+            signal: probe.signal,
+            timeoutPromise: probe.timeoutPromise,
+          })
+        ) {
+          return;
+        }
+      } finally {
+        probe.clearTimeout();
       }
     } catch {
       // The gateway may not have bound the port yet.
     }
     try {
-      await fetchImpl(`http://127.0.0.1:${port}/healthz`, {
-        signal: AbortSignal.timeout(probeTimeoutMs),
-      });
+      const probe = await fetchReadinessProbe(
+        fetchImpl,
+        `http://127.0.0.1:${port}/healthz`,
+        probeTimeoutMs,
+      );
+      void probe.response.body?.cancel().catch(() => undefined);
+      probe.clearTimeout();
     } catch {
       // Liveness is diagnostic only; /readyz is the usable RPC readiness contract.
     }
@@ -320,10 +383,12 @@ export async function stopGateway(child, options = {}) {
     return;
   }
   const killGraceMs = Math.max(0, options.killGraceMs ?? 1_500);
+  const forceKillGraceMs = Math.max(0, options.forceKillGraceMs ?? GATEWAY_FORCE_KILL_GRACE_MS);
   signalGatewayProcess(child, "SIGTERM", options.killProcess);
   const exited = await waitForGatewayExit(child, killGraceMs, options.killProcess);
   if (!exited) {
     signalGatewayProcess(child, "SIGKILL", options.killProcess);
+    await waitForGatewayExit(child, forceKillGraceMs, options.killProcess);
   }
 }
 
@@ -617,19 +682,31 @@ export function createGatewayClient({ WebSocket, openTimeoutMs = 8_000, url }) {
         clearTimeout(timer);
         ws.off?.("open", onOpen);
         ws.off?.("error", onError);
+        ws.off?.("close", onClose);
         callback();
       };
       const onOpen = () => settle(resolve);
       const onError = (error) =>
         settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+      const onClose = (code, reason) =>
+        settle(() => {
+          const text = toText(reason);
+          const suffix = text.length > 0 ? `: ${text}` : "";
+          reject(new Error(`closed before open (${code})${suffix}`));
+        });
       const timer = setTimeout(() => {
         settle(() => {
-          ws.close();
+          if (typeof ws.terminate === "function") {
+            ws.terminate();
+          } else {
+            ws.close();
+          }
           reject(new Error("gateway websocket open timeout"));
         });
       }, openTimeoutMs);
       ws.once("open", onOpen);
       ws.once("error", onError);
+      ws.once("close", onClose);
     });
   const request = async (method, params, timeoutMs = 10_000) =>
     await new Promise((resolve, reject) => {
@@ -643,18 +720,19 @@ export function createGatewayClient({ WebSocket, openTimeoutMs = 8_000, url }) {
         reject(new Error(`timeout waiting for ${method}`));
       }, timeoutMs);
       pending.set(id, { resolve, reject, timeout });
-      ws.send(JSON.stringify({ type: "req", id, method, params }), (error) => {
+      const rejectSendFailure = (error) => {
         if (!error) {
           return;
         }
-        const waiter = pending.get(id);
-        if (!waiter) {
-          return;
-        }
         pending.delete(id);
-        clearTimeout(waiter.timeout);
-        waiter.reject(error instanceof Error ? error : new Error(String(error)));
-      });
+        clearTimeout(timeout);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      try {
+        ws.send(JSON.stringify({ type: "req", id, method, params }), rejectSendFailure);
+      } catch (error) {
+        rejectSendFailure(error);
+      }
     });
   const close = () => {
     rejectPending(new Error("gateway websocket client closed"));
@@ -710,6 +788,10 @@ async function writeSummary({
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    process.stdout.write(`${usage()}\n`);
+    return;
+  }
   const repoRoot = path.resolve(args.repoRoot ?? process.env.OPENCLAW_REPO_ROOT ?? process.cwd());
   const outputDir = path.resolve(args.outputDir);
   await fs.mkdir(outputDir, { recursive: true });

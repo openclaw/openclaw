@@ -128,7 +128,18 @@ export async function startQaLiveLaneGateway(params: {
       },
     };
   } catch (error) {
-    await mock?.stop().catch(() => {});
+    if (mock) {
+      try {
+        await mock.stop();
+      } catch (cleanupError) {
+        const errors: string[] = [];
+        appendLiveLaneIssue(errors, "gateway startup failed", error);
+        appendLiveLaneIssue(errors, "mock provider stop failed", cleanupError);
+        throw new Error(`failed to start QA live lane gateway:\n${errors.join("\n")}`, {
+          cause: cleanupError,
+        });
+      }
+    }
     throw error;
   }
 }

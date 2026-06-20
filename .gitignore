@@ -132,6 +132,8 @@ mantis/
 !.agents/skills/crabbox/**
 !.agents/skills/clawdtributor/
 !.agents/skills/clawdtributor/**
+!.agents/skills/claw-score/
+!.agents/skills/claw-score/**
 !.agents/skills/control-ui-e2e/
 !.agents/skills/control-ui-e2e/**
 !.agents/skills/discord-user-post/

@@ -35,7 +35,7 @@ function userTextMessage(text: string, seq: number) {
 
 function newState(rawMessages: Array<Record<string, unknown>>, options: RawStateOptions = {}) {
   return SessionHistorySseState.fromRawSnapshot({
-    target: { sessionId: "sess-main" },
+    target: { sessionId: "sess-main", sessionKey: "agent:main:main" },
     rawMessages,
     ...options,
   });
@@ -192,7 +192,7 @@ describe("SessionHistorySseState", () => {
 
   test("keeps message-tool mirror pending across projected sessions_send inline history", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
+      target: { sessionId: "sess-main", sessionKey: "agent:main:main" },
       rawMessages: [
         {
           role: "assistant",

@@ -287,6 +287,25 @@ describe("provider auth profile helpers", () => {
         token: "token;proxy-ep=proxy.individual.githubcopilot.com",
       }),
     ]);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.headers).toEqual(
+      expect.objectContaining({
+        Accept: "application/json",
+        Authorization: "Bearer github-token",
+        "Copilot-Integration-Id": "vscode-chat",
+      }),
+    );
+  });
+
+  it("rejects malformed Copilot proxy hints", async () => {
+    vi.resetModules();
+
+    const { deriveCopilotApiBaseUrlFromToken } = await import("./provider-auth.js");
+
+    expect(
+      deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
+    ).toBeNull();
+    expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=://bad;")).toBeNull();
   });
 
   it("rejects Copilot token expiry values outside the supported date range", async () => {
@@ -316,6 +335,30 @@ describe("provider auth profile helpers", () => {
         },
       }),
     ).rejects.toThrow("Copilot token response has invalid expires_at");
+  });
+
+  it("cancels Copilot token exchange error bodies", async () => {
+    vi.resetModules();
+
+    const response = new Response("bad credentials", { status: 401 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchImpl = vi.fn(async () => response);
+
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    await expect(
+      resolveCopilotApiToken({
+        githubToken: "github-token",
+        fetchImpl,
+        cachePath: "/tmp/copilot-token.json",
+        loadJsonFileImpl: () => undefined,
+        saveJsonFileImpl: () => {
+          throw new Error("should not save failed token");
+        },
+      }),
+    ).rejects.toThrow("Copilot token exchange failed: HTTP 401");
+
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("refreshes cached Copilot tokens with out-of-range expiry values", async () => {

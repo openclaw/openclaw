@@ -9,12 +9,11 @@ import {
   collectLegacyPluginDependencyStagingDebrisPaths,
   collectPackageDistContentInventory,
   collectPackageDistContentInventoryErrors,
-  collectPackageDistInventoryErrors,
   LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   collectPackageDistInventory,
   isLegacyPluginDependencyInstallStagePath,
   readPackageDistContentInventoryIfPresent,
+  readPackageDistInventoryIfPresent,
   writePackageDistInventory,
 } from "./package-dist-inventory.js";
 
@@ -28,7 +27,9 @@ describe("package dist inventory", () => {
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
       ]);
-      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toStrictEqual([]);
+      await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toStrictEqual([
+        "dist/current-BR6xv1a1.js",
+      ]);
 
       await fs.rm(currentFile);
       await fs.writeFile(
@@ -37,9 +38,8 @@ describe("package dist inventory", () => {
         "utf8",
       );
 
-      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([
-        "missing packaged dist file dist/current-BR6xv1a1.js",
-        "unexpected packaged dist file dist/stale-CJUAgRQR.js",
+      await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/stale-CJUAgRQR.js",
       ]);
     });
   });
@@ -785,9 +785,9 @@ describe("package dist inventory", () => {
       await fs.mkdir(path.dirname(suffixedStageFile), { recursive: true });
       await fs.writeFile(suffixedStageFile, "{}", "utf8");
 
-      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([
-        "unexpected packaged dist file dist/extensions/brave/.openclaw-install-stage/node_modules/typebox/build/compile/code.mjs",
-        "unexpected packaged dist file dist/extensions/browser/.openclaw-install-stage-AbC123/node_modules/playwright-core/package.json",
+      await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual([
+        "dist/extensions/brave/.openclaw-install-stage",
+        "dist/extensions/browser/.openclaw-install-stage-AbC123",
       ]);
     });
   });
@@ -916,12 +916,10 @@ describe("package dist inventory", () => {
     });
   });
 
-  it("fails closed when the inventory is missing", async () => {
+  it("returns null when the inventory is missing", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-missing-" }, async (packageRoot) => {
       await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([
-        `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
-      ]);
+      await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toBeNull();
     });
   });
 

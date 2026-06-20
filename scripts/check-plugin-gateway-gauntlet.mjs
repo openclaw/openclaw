@@ -289,6 +289,29 @@ function openclawCommand(repoRoot, args) {
   };
 }
 
+function builtEntryPath(repoRoot) {
+  return path.join(repoRoot, "dist", "entry.js");
+}
+
+function selectSlashHelpAliases(plugin, includePluginOwnedCliAliases) {
+  return includePluginOwnedCliAliases
+    ? plugin.cliCommandAliases
+    : plugin.cliCommandAliases.filter((entry) => !isPluginOwnedCliAlias(entry));
+}
+
+function requiresBuiltEntry(options, selectedPlugins) {
+  if (selectedPlugins.length === 0) {
+    return false;
+  }
+  if (!options.skipLifecycle) {
+    return true;
+  }
+  if (options.skipSlashHelp) {
+    return false;
+  }
+  return selectedPlugins.some((plugin) => selectSlashHelpAliases(plugin, true).length > 0);
+}
+
 function sourceOpenclawCommand(repoRoot, args) {
   return {
     command: process.execPath,
@@ -773,9 +796,7 @@ async function runPluginLifecycle(params) {
 
 async function runSlashHelpProbes(params) {
   for (const plugin of params.plugins) {
-    const aliases = params.includePluginOwnedCliAliases
-      ? plugin.cliCommandAliases
-      : plugin.cliCommandAliases.filter((entry) => !isPluginOwnedCliAlias(entry));
+    const aliases = selectSlashHelpAliases(plugin, params.includePluginOwnedCliAliases);
     for (const alias of aliases) {
       process.stderr.write(`[plugin-gauntlet] ${plugin.id} slash-help /${alias.name}\n`);
       params.rows.push(
@@ -898,7 +919,13 @@ async function main() {
     const prebuildFailed = rows.some(
       (row) => row.phase === "prebuild" && (row.status !== 0 || row.timedOut),
     );
-    if (!prebuildFailed && !options.skipLifecycle) {
+    const entryPath = builtEntryPath(repoRoot);
+    const missingSkippedPrebuildEntry =
+      selectedPlugins.length > 0 &&
+      options.skipPrebuild &&
+      requiresBuiltEntry(options, selectedPlugins) &&
+      !fs.existsSync(entryPath);
+    if (!prebuildFailed && !missingSkippedPrebuildEntry && !options.skipLifecycle) {
       await runPluginLifecycle({
         repoRoot,
         outputDir: options.outputDir,
@@ -910,7 +937,7 @@ async function main() {
         skipSlashHelp: options.skipSlashHelp,
       });
     }
-    if (!prebuildFailed && !options.skipSlashHelp) {
+    if (!prebuildFailed && !missingSkippedPrebuildEntry && !options.skipSlashHelp) {
       await runSlashHelpProbes({
         repoRoot,
         outputDir: options.outputDir,
@@ -959,16 +986,22 @@ async function main() {
       (row) => row.status !== 0 || row.timedOut || row.diagnosticFailure,
     );
     const observations = [...metricObservations, ...qaBaselineObservations, ...gatewayObservations];
-    const guardFailures =
-      !hasGauntletWorkRows(rows) && !options.allowEmpty
-        ? [
-            {
-              kind: "empty-run",
-              message:
-                "No lifecycle, slash-help, or QA gauntlet commands ran; remove a skip flag or pass --allow-empty for intentional dry runs.",
-            },
-          ]
-        : [];
+    const guardFailures = [];
+    if (missingSkippedPrebuildEntry) {
+      guardFailures.push({
+        kind: "missing-built-entry",
+        message:
+          `${path.relative(repoRoot, entryPath)} is missing; ` +
+          "run without --skip-prebuild or build the gauntlet runtime first.",
+      });
+    }
+    if (!hasGauntletWorkRows(rows) && !options.allowEmpty && guardFailures.length === 0) {
+      guardFailures.push({
+        kind: "empty-run",
+        message:
+          "No lifecycle, slash-help, or QA gauntlet commands ran; remove a skip flag or pass --allow-empty for intentional dry runs.",
+      });
+    }
     guardFailures.push(...buildObservationGuardFailures(observations, options.failOnObservation));
     const hasFailures = failures.length > 0 || guardFailures.length > 0;
     preserveRunRoot = preserveRunRoot || hasFailures;

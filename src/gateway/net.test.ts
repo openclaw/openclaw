@@ -7,7 +7,6 @@ import {
   __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
-  isLocalInterfaceAddress,
   isLocalishHost,
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
@@ -242,7 +241,7 @@ describe("isTrustedProxyAddress", () => {
   });
 });
 
-describe("isLocalInterfaceAddress", () => {
+describe("resolveLocalInterfaceAddressMatch", () => {
   const snapshot = makeNetworkInterfacesSnapshot({
     lo: [
       { address: "127.0.0.1", family: "IPv4", internal: true },
@@ -260,11 +259,7 @@ describe("isLocalInterfaceAddress", () => {
     { input: "10.42.0.60", expected: false },
     { input: undefined, expected: false },
   ] as const)("returns $expected for $input", ({ input, expected }) => {
-    expect(isLocalInterfaceAddress(input, snapshot)).toBe(expected);
-  });
-
-  it("returns false when interface discovery is unavailable", () => {
-    expect(isLocalInterfaceAddress("10.42.0.59", undefined)).toBe(false);
+    expect(resolveLocalInterfaceAddressMatch(input, snapshot)).toBe(expected);
   });
 
   it("reports an indeterminate match when interface discovery is unavailable", () => {
