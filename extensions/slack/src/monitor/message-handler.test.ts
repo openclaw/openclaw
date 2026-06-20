@@ -42,6 +42,7 @@ function createContext(overrides?: {
       client: {},
     },
     runtime: {},
+    botDisplayName: "",
     markMessageSeen: (channel: string | undefined, ts: string | undefined) =>
       overrides?.markMessageSeen?.(channel, ts) ?? false,
     releaseSeenMessage: (channel: string | undefined, ts: string | undefined) =>

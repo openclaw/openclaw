@@ -882,8 +882,12 @@ export async function prepareSlackMessage(params: {
     return null;
   }
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
-  // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
-  const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
+  // Strip Slack mentions (<@U123>) and bot name prefix before command detection
+  // so "@Labrador /new" and "ada stop" are both recognized.
+  const textForCommandDetection = stripSlackMentionsForCommandDetection(
+    message.text ?? "",
+    ctx.botDisplayName,
+  );
   const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
   const hasAbortRequest = isAbortRequestText(textForCommandDetection);
   const channelUsersAllowlistConfigured =

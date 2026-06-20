@@ -99,6 +99,8 @@ export type SlackMonitorContext = {
   runtime: RuntimeEnv;
 
   botUserId: string;
+  /** Bot display name from auth.test() — used to strip prefix before command detection. */
+  botDisplayName: string;
   botId?: string;
   teamId: string;
   apiAppId: string;
@@ -186,6 +188,7 @@ export function createSlackMonitorContext(params: {
   runtime: RuntimeEnv;
 
   botUserId: string;
+  botDisplayName: string;
   botId?: string;
   teamId: string;
   apiAppId: string;
@@ -602,6 +605,7 @@ export function createSlackMonitorContext(params: {
     app: params.app,
     runtime: params.runtime,
     botUserId: params.botUserId,
+    botDisplayName: params.botDisplayName,
     botId: params.botId,
     teamId: params.teamId,
     apiAppId: params.apiAppId,

@@ -45,9 +45,13 @@ export class SlackRetryableInboundError extends Error {
   }
 }
 
-function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonitorContext["cfg"]) {
+function shouldDebounceSlackMessage(
+  message: SlackMessageEvent,
+  cfg: SlackMonitorContext["cfg"],
+  botDisplayName?: string,
+) {
   const text = message.text ?? "";
-  const textForCommandDetection = stripSlackMentionsForCommandDetection(text);
+  const textForCommandDetection = stripSlackMentionsForCommandDetection(text, botDisplayName);
   return shouldDebounceTextInbound({
     text: textForCommandDetection,
     cfg,
@@ -269,7 +273,7 @@ export function createSlackMessageHandler(params: {
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
     const debounceKey = buildSlackDebounceKey(resolvedMessage, ctx.accountId);
     const conversationKey = buildTopLevelSlackConversationKey(resolvedMessage, ctx.accountId);
-    const canDebounce = debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
+    const canDebounce = debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg, ctx.botDisplayName);
     if (!canDebounce && conversationKey) {
       const pendingKeys = pendingTopLevelDebounceKeys.get(conversationKey);
       if (pendingKeys && pendingKeys.size > 0) {

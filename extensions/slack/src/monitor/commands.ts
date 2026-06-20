@@ -3,14 +3,30 @@ import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contrac
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
- * Strip Slack mentions (<@U123>, <@U123|name>) so command detection works on
- * normalized text. Use in both prepare and debounce gate for consistency.
+ * Strip Slack mentions (<@U123>, <@U123|name>) and optional bot display name
+ * prefix so command detection works on normalized text. Use in both prepare
+ * and debounce gate for consistency.
+ *
+ * "ada stop" with botDisplayName="ada" → "stop" allows abort-trigger matching
+ * even when the user prefixes the bot name without a mention syntax.
  */
-export function stripSlackMentionsForCommandDetection(text: string): string {
-  return (text ?? "")
-    .replace(/<@[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+export function stripSlackMentionsForCommandDetection(
+  text: string,
+  botDisplayName?: string,
+): string {
+  let normalized = (text ?? "").replace(/<@[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (botDisplayName) {
+    const lower = normalized.toLowerCase();
+    const prefix = botDisplayName.toLowerCase();
+    if (lower === prefix) {
+      // bare bot name with no payload drops to empty so downstream treat as no-op
+      return "";
+    }
+    if (lower.startsWith(prefix + " ")) {
+      normalized = normalized.slice(prefix.length + 1).trim();
+    }
+  }
+  return normalized;
 }
 
 function normalizeSlackSlashCommandName(raw: string) {

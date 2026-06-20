@@ -18,6 +18,7 @@ function createTestContext(params?: {
     app: { client: {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
+    botDisplayName: "openclaw",
     botId: "B_BOT",
     teamId: "T_EXPECTED",
     apiAppId: "A_EXPECTED",

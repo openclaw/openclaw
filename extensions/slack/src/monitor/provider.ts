@@ -289,6 +289,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let unregisterHttpHandler: (() => void) | null = null;
 
   let botUserId = "";
+  let botDisplayName = "";
   let botId = "";
   let teamId = "";
   let apiAppId = "";
@@ -298,6 +299,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   try {
     const auth = await app.client.auth.test();
     botUserId = auth.user_id ?? "";
+    botDisplayName = (auth as { user?: string }).user ?? "";
     botId = (auth as { bot_id?: string }).bot_id ?? "";
     teamId = auth.team_id ?? "";
     apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
@@ -331,6 +333,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     app,
     runtime,
     botUserId,
+    botDisplayName,
     botId,
     teamId,
     apiAppId,

@@ -94,6 +94,7 @@ function createTestHandler() {
       accountId: "default",
       app: { client: {} },
       runtime: {},
+      botDisplayName: "",
       markMessageSeen: seenMessages["markMessageSeen"],
       releaseSeenMessage: seenMessages["releaseSeenMessage"],
     } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
