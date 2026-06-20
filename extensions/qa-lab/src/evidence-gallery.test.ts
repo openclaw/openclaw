@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildQaEvidenceGalleryModel,
+  resolveQaEvidenceArtifactFileByIndex,
   resolveQaEvidenceArtifactFile,
   resolveQaEvidenceFile,
 } from "./evidence-gallery.js";
@@ -126,7 +127,7 @@ describe("evidence gallery", () => {
         expect.objectContaining({
           exists: true,
           kind: "runner-result",
-          href: "/api/evidence/artifact?evidencePath=.artifacts%2Fqa-e2e%2Fvitest%2Fqa-evidence.json&artifactPath=runner%2Fresult.json",
+          href: "/api/evidence/artifact?evidencePath=.artifacts%2Fqa-e2e%2Fvitest%2Fqa-evidence.json&entryIndex=0&artifactIndex=0",
           mediaKind: "json",
           preview: '{\n  "ok": true\n}',
         }),
@@ -186,6 +187,10 @@ describe("evidence gallery", () => {
       `absolute artifact ${repoRoot}\nfile://${repoRoot}/trace.log\n`,
       "utf8",
     );
+    const relativeLeakArtifactPath = `nested${repoRoot}/relative.log`;
+    const relativeLeakFile = path.resolve(outputDir, relativeLeakArtifactPath);
+    await fs.mkdir(path.dirname(relativeLeakFile), { recursive: true });
+    await fs.writeFile(relativeLeakFile, "relative artifact\n", "utf8");
     const evidence: QaEvidenceSummaryJson = vitestArtifactEvidence({
       id: "qa-lab.absolute-artifact-path",
       title: "Absolute artifact path",
@@ -202,6 +207,11 @@ describe("evidence gallery", () => {
             ...evidence.entries[0].execution!.artifacts[0],
             kind: `${repoRoot}/log`,
             source: `${repoRoot}/vitest`,
+          },
+          {
+            kind: "log",
+            path: relativeLeakArtifactPath,
+            source: "vitest",
           },
         ],
       },
@@ -228,9 +238,15 @@ describe("evidence gallery", () => {
       preview: "absolute artifact <repo-root>\nfile://<repo-root>/trace.log\n",
       source: "<repo-root>/vitest",
     });
-    expect(artifact?.href).toContain(
-      "artifactPath=%3Crepo-root%3E%2F.artifacts%2Fqa-e2e%2Fvitest%2Fabsolute.log",
-    );
+    expect(artifact?.href).toContain("entryIndex=0&artifactIndex=0");
+    const relativeArtifact = model.entries[0]?.artifacts[1];
+    expect(relativeArtifact).toMatchObject({
+      exists: true,
+      path: expect.stringContaining(".artifacts/qa-e2e/vitest/nested"),
+      preview: "relative artifact\n",
+    });
+    expect(decodeURIComponent(relativeArtifact?.href ?? "")).not.toContain(repoRoot);
+    expect(relativeArtifact?.href).toContain("entryIndex=0&artifactIndex=1");
     expect(model.entries[0]?.sourcePath).toBe("extensions/qa-lab/src/absolute.test.ts");
     expect(model.entries[0]).toMatchObject({
       coverage: [{ id: "<repo-root>/coverage", role: "<repo-root>/role" }],
@@ -247,6 +263,14 @@ describe("evidence gallery", () => {
         repoRoot,
       }),
     ).resolves.toBe(await fs.realpath(artifactPath));
+    await expect(
+      resolveQaEvidenceArtifactFileByIndex({
+        artifactIndex: 1,
+        entryIndex: 0,
+        evidencePath: outputDir,
+        repoRoot,
+      }),
+    ).resolves.toBe(await fs.realpath(relativeLeakFile));
   });
 
   it("detects UX Matrix producer context from suite-level evidence artifacts", async () => {
