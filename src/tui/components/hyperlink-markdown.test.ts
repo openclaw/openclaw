@@ -62,12 +62,15 @@ describe("HyperlinkMarkdown", () => {
     expect(rendered).toEqual(upstream);
   });
 
-  it("keeps wide graphemes within very narrow fenced code width", () => {
-    const markdown = new HyperlinkMarkdown(["```", "👨", "```"].join("\n"), 0, 0, markdownTheme);
+  it("keeps wide grapheme clusters intact within very narrow fenced code width", () => {
+    const family = "👨‍👩‍👧‍👦";
+    const markdown = new HyperlinkMarkdown(["```", family, "```"].join("\n"), 0, 0, markdownTheme);
 
     const rendered = plainLines(markdown.render(3));
 
     expect(rendered.every((line) => visibleWidth(line) <= 3)).toBe(true);
+    expect(rendered).toContain(` ${family}`);
+    expect(rendered).not.toContain("  ‍");
   });
 
   it("matches upstream markdown for fences inside html blocks", () => {

@@ -13,16 +13,17 @@ type RenderToken = (
 
 const CODE_WRAP_TOKEN_RE = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]+/gu;
 const WHITESPACE_RE = /^\s+$/;
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function splitTokenToWidth(token: string, maxWidth: number): string[] {
   const chunks: string[] = [];
   let current = "";
-  for (const char of Array.from(token)) {
-    if (current && visibleWidth(`${current}${char}`) > maxWidth) {
+  for (const { segment } of graphemeSegmenter.segment(token)) {
+    if (current && visibleWidth(`${current}${segment}`) > maxWidth) {
       chunks.push(current);
       current = "";
     }
-    current += char;
+    current += segment;
   }
   if (current || chunks.length === 0) {
     chunks.push(current);
