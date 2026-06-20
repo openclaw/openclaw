@@ -248,7 +248,9 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   let lastBackspaceAt = -1;
 
   return (data: string): string => {
-    if (data !== "\x08" && !matchesKey(data, Key.backspace)) {
+    // Accept \x08 (ASCII BS), \x7f (ASCII DEL — sent by WSL2/Ubuntu and
+    // some Linux terminals for Backspace), and any pi-tui backspace match.
+    if (data !== "\x08" && data !== "\x7f" && !matchesKey(data, Key.backspace)) {
       return data;
     }
     const ts = now();
