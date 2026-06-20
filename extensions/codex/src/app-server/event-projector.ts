@@ -923,6 +923,15 @@ export class CodexAppServerEventProjector {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
+    // FIX #89668: The Codex app-server may ship raw response echoes for
+    // commentary items without a phase field.  When a typed commentary
+    // completion was already echoed, conservatively suppress the paired
+    // raw item even when its phase is absent, so the commentary text
+    // cannot leak into visible assistant output.
+    if (!phase && this.pendingRawCommentaryEchoes > 0) {
+      this.pendingRawCommentaryEchoes -= 1;
+      return;
+    }
     const text = extractRawAssistantText(item);
     if (!text) {
       return;
