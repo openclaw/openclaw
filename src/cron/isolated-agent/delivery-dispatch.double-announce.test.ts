@@ -149,10 +149,10 @@ import {
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import {
   dispatchCronDelivery,
   getCompletedDirectCronDeliveriesCountForTests,
+  queueCronMessageToolDeliveryAwareness,
   resetCompletedDirectCronDeliveriesForTests,
 } from "./delivery-dispatch.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -312,6 +312,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(retireSessionMcpRuntime).mockResolvedValue(true);
     vi.mocked(resolveOutboundSessionRoute).mockResolvedValue(null);
     vi.mocked(ensureOutboundSessionEntry).mockResolvedValue(undefined);
+    vi.mocked(enqueueSystemEvent).mockReset();
     vi.mocked(appendAssistantMessageToSessionTranscript).mockResolvedValue({
       ok: true,
       sessionFile: "session.jsonl",
@@ -337,18 +338,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     // deliveryAttempted must be true so timer does NOT fire enqueueSystemEvent
     expect(state.deliveryAttempted).toBe(true);
     expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(1);
-
-    // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "on it",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
 
     // No announce should have been attempted (subagents still running)
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
@@ -413,6 +402,342 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
+  });
+
+  it("queues message-tool awareness to the resolved thread for implicit thread evidence", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456:thread:42",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+      threadId: "42",
+    });
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery({ threadId: "42" }),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              threadImplicit: true,
+              text: "Threaded cron update.",
+            },
+            verifiedTarget: true,
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "42",
+      }),
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nThreaded cron update.",
+      {
+        sessionKey: "agent:main:telegram:direct:123456:thread:42",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42",
+      },
+    );
+  });
+
+  it("queues message-tool awareness when the target route resolves to the main session", async () => {
+    vi.mocked(resolveOutboundSessionRoute).mockResolvedValue(null);
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery(),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              text: "Main-scoped cron update.",
+            },
+            verifiedTarget: true,
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nMain-scoped cron update.",
+      {
+        sessionKey: "agent:main",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
+  });
+
+  it("keeps same-recipient message-tool awareness separate across channels", async () => {
+    vi.mocked(resolveOutboundSessionRoute)
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:telegram:direct:123456",
+        baseSessionKey: "agent:main:telegram:direct:123456",
+        peer: { kind: "direct", id: "123456" },
+        chatType: "direct",
+        from: "telegram:123456",
+        to: "123456",
+      })
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:openclaw-weixin:direct:123456",
+        baseSessionKey: "agent:main:openclaw-weixin:direct:123456",
+        peer: { kind: "direct", id: "123456" },
+        chatType: "direct",
+        from: "openclaw-weixin:123456",
+        to: "123456",
+      });
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery(),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              text: "Shared cron update.",
+            },
+            verifiedTarget: false,
+          },
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "openclaw-weixin",
+              to: "123456",
+              text: "Shared cron update.",
+            },
+            verifiedTarget: false,
+          },
+        ],
+        verifiedMessageToolDelivery: false,
+        satisfiesSourceDelivery: false,
+        unverifiedMessageToolDelivery: true,
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(2);
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      {
+        sessionKey: "agent:main:openclaw-weixin:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::123456:",
+      },
+    );
+  });
+
+  it("routes session-targeted message-tool awareness to the visible delivery target", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "session:agent:main:main",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery(),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              text: "Session-targeted off-plan update.",
+            },
+            verifiedTarget: false,
+          },
+        ],
+        verifiedMessageToolDelivery: false,
+        satisfiesSourceDelivery: false,
+        unverifiedMessageToolDelivery: true,
+      },
+    });
+
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentSessionKey: "agent:main:main",
+        channel: "telegram",
+        target: "123456",
+      }),
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nSession-targeted off-plan update.",
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
+  });
+
+  it("queues message-tool awareness for verified media-only deliveries", async () => {
+    mockResolvedOutboundRoute();
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery(),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              mediaUrls: ["https://example.test/uploads/weather-map.png?token=secret"],
+            },
+            verifiedTarget: true,
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nweather-map.png",
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
+  });
+
+  it("queues message-tool awareness for explicit off-plan message-tool deliveries", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:openclaw-weixin:direct:user-123",
+      baseSessionKey: "agent:main:openclaw-weixin:direct:user-123",
+      to: "user-123",
+    });
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery({
+        channel: "telegram",
+        to: "123456",
+        accountId: "telegram-bot",
+        threadId: "42",
+      }),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "openclaw-weixin",
+              to: "user-123",
+              text: "386502",
+            },
+            verifiedTarget: false,
+          },
+        ],
+        verifiedMessageToolDelivery: false,
+        satisfiesSourceDelivery: false,
+        unverifiedMessageToolDelivery: true,
+      },
+    });
+
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "openclaw-weixin",
+        target: "user-123",
+        accountId: undefined,
+        threadId: undefined,
+      }),
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\n386502",
+      {
+        sessionKey: "agent:main:openclaw-weixin:direct:user-123",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::user-123:",
+      },
+    );
   });
 
   it("keeps announce fallback when message-tool delivery is not verified for the target", async () => {
@@ -496,18 +821,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     // deliveryAttempted must be true so timer does NOT fire enqueueSystemEvent
     expect(state.deliveryAttempted).toBe(true);
 
-    // Verify timer guard agrees
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "on it, pulling everything together",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
-
     // No direct delivery should have been sent (stale interim suppressed)
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
@@ -577,18 +890,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-
-    // Timer should not fire enqueueSystemEvent (delivered=true)
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "Morning briefing complete.",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("applies TTS directives before direct cron announce delivery and mirrors spoken text", async () => {
@@ -710,6 +1011,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "A scheduled cron job delivered this message to this channel:\nRedacted cron update.",
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
   });
 
   it("preserves all successful text payloads for direct delivery", async () => {
@@ -745,6 +1053,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "A scheduled cron job delivered this message to this channel:\nMorning briefing complete.",
+      {
+        sessionKey: "agent:main",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
   });
 
   it("does not mirror separately when the resolved delivery session is the awareness main session", async () => {
@@ -1000,7 +1315,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
-  it("skips main-session awareness for session-bound cron jobs", async () => {
+  it("queues target-session awareness for session-bound cron jobs without main awareness", async () => {
     const params = makeBaseParams({
       synthesizedText: "Session-bound cron update.",
       sessionTarget: "session:agent:main:main:thread:9999",
@@ -1011,7 +1326,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nSession-bound cron update.",
+      {
+        sessionKey: "agent:main",
+        contextKey: expect.stringMatching(
+          /^cron-direct-delivery:v1:cron:test-job:\d+:telegram::123456:$/,
+        ),
+      },
+    );
   });
 
   it("skips main-session awareness for best-effort deliveries", async () => {
@@ -1045,16 +1368,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryAttempted: true,
     });
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "Yesterday's morning briefing.",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("still delivers when the run started on time but finished more than three hours later", async () => {
@@ -1368,6 +1681,92 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
+  it("queues target-session awareness when direct cron delivery fails", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456:thread:42",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+      threadId: "42",
+    });
+    const deliveryError = new Error(
+      "Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
+    );
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(deliveryError);
+
+    const params = makeBaseParams({
+      synthesizedText: "This delivery will fail.",
+      runStartedAt: 1_000,
+    });
+    params.resolvedDelivery = makeResolvedDelivery({ threadId: "42" });
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      error: String(deliveryError),
+      deliveryAttempted: true,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      [
+        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "Job: Test Job",
+        "Target: telegram:123456 thread 42",
+        "Delivery error: Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
+        "No scheduled message was delivered.",
+      ].join("\n"),
+      {
+        sessionKey: "agent:main:telegram:direct:123456:thread:42",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42:failure",
+      },
+    );
+  });
+
+  it("does not claim no delivery when direct cron delivery partially fails", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    const deliveryError = new Error("second payload failed");
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
+      deliveryParams.onPayloadDeliveryOutcome?.({
+        index: 1,
+        status: "failed",
+        error: deliveryError,
+        sentBeforeError: true,
+        stage: "platform_send",
+      });
+      return [{ channel: "telegram", messageId: "tg-first" }] as never;
+    });
+
+    const params = makeBaseParams({
+      synthesizedText: undefined,
+      runStartedAt: 1_000,
+    });
+    params.deliveryPayloads = [{ text: "First payload." }, { text: "Second payload." }];
+    params.outputText = "Second payload.";
+    params.summary = "Second payload.";
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      error: String(deliveryError),
+      deliveryAttempted: true,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      [
+        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "Job: Test Job",
+        "Target: telegram:123456",
+        "Delivery error: second payload failed",
+        "One or more scheduled message payloads may already have been delivered.",
+      ].join("\n"),
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::failure",
+      },
+    );
+  });
+
   it("surfaces structured direct delivery failures without retry when best-effort is disabled", async () => {
     vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("boom"));
 
@@ -1483,18 +1882,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       // deliveryAttempted must be true so the heartbeat timer does not fire
       // a fallback enqueueSystemEvent with the control-token text.
       expect(state.deliveryAttempted).toBe(true);
-
-      // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
-      expect(
-        shouldEnqueueCronMainSummary({
-          summaryText: controlToken,
-          deliveryRequested: true,
-          delivered: state.result?.delivered,
-          deliveryAttempted: state.result?.deliveryAttempted,
-          suppressMainSummary: false,
-          isCronSystemEvent: () => true,
-        }),
-      ).toBe(false);
     },
   );
 
@@ -1826,17 +2213,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryAttempted: true,
     });
     expect(state.deliveryAttempted).toBe(true);
-
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "  NO_REPLY  ",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("suppresses mixed-case NO_REPLY in text delivery", async () => {
@@ -1848,16 +2224,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       status: "ok",
       delivered: false,
     });
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "No_Reply",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
   });
 
   it("cleans up the direct cron session after a structured silent reply when deleteAfterRun is enabled", async () => {

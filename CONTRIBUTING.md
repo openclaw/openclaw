@@ -107,6 +107,7 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 
 - Test locally with your OpenClaw instance
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
+- When ClawSweeper, Codex, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **Why This Change Was Made**, **User Impact**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes, changelog entries, or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
 - Do not edit `CHANGELOG.md` in contributor PRs. Maintainers or ClawSweeper add the changelog entry when landing user-facing changes.
 - Run tests: `pnpm build && pnpm check && pnpm test`

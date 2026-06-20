@@ -8,6 +8,7 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   resolveArtifactName,
+  requireRunIdFromDispatchOutput,
   validateFullManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
@@ -339,6 +340,15 @@ describe("release candidate checklist", () => {
         "https://github.com/openclaw/openclaw/actions/runs/25922042055\n",
       ),
     ).toBe("25922042055");
+  });
+
+  it("fails closed when gh dispatch output does not include the run url", () => {
+    expect(() =>
+      requireRunIdFromDispatchOutput(
+        "Created workflow_dispatch event for full-release-validation.yml",
+        "full-release-validation.yml",
+      ),
+    ).toThrow("refusing to guess from recent workflow_dispatch runs");
   });
 
   it("falls back to a single compatible artifact from the same run", () => {

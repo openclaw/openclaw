@@ -549,9 +549,10 @@ printf '%s\\n' "$count" >"$TMPDIR/docker-count"
 printf '%s\\n' "$$" >"$TMPDIR/docker.pid"
 printf 'rpc error: code = Unavailable\\n'
 trap 'printf "term\\n" >"$TMPDIR/docker.term"; exit 0' TERM
+mkfifo "$TMPDIR/docker.block"
 printf 'ready\\n' >"$TMPDIR/docker.ready"
 while true; do
-  /bin/sleep 1
+  read -r -t 1 _ <> "$TMPDIR/docker.block" || true
 done
 `,
       );
@@ -600,6 +601,7 @@ docker_build_run e2e-build -t demo-image .
         rmSync(join(workDir, "docker.pid"), { force: true });
         rmSync(join(workDir, "docker.term"), { force: true });
         rmSync(join(workDir, "docker.ready"), { force: true });
+        rmSync(join(workDir, "docker.block"), { force: true });
         rmSync(join(workDir, "docker-count"), { force: true });
         const runner = spawn(join(workDir, "runner.sh"), {
           env: { ...process.env, TMPDIR: workDir },
@@ -2338,6 +2340,26 @@ fi
     expect(updateRestartAuth).toContain(
       'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"',
     );
+  });
+
+  it("keeps upgrade survivor auto-auth success summary set -u safe", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+
+    const summaryDefaultIndex = runner.indexOf('startup_summary="n/a"');
+    const autoAuthIndex = runner.indexOf(
+      'if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then',
+      summaryDefaultIndex,
+    );
+    const manualSummaryIndex = runner.indexOf('startup_summary="${start_seconds}s"', autoAuthIndex);
+    const successIndex = runner.indexOf(
+      "startup=${startup_summary} status=${status_seconds}s",
+      manualSummaryIndex,
+    );
+
+    expect(summaryDefaultIndex).toBeGreaterThan(-1);
+    expect(autoAuthIndex).toBeGreaterThan(summaryDefaultIndex);
+    expect(manualSummaryIndex).toBeGreaterThan(autoAuthIndex);
+    expect(successIndex).toBeGreaterThan(manualSummaryIndex);
   });
 
   it.each([

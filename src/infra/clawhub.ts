@@ -59,7 +59,6 @@ export type ClawHubPackageArtifactSummary = {
   tarballUrl?: string | null;
   legacyDownloadUrl?: string | null;
 };
-export type ClawHubArtifactKind = "legacy-zip" | "npm-pack";
 export type ClawHubArtifactScanState =
   | "pending"
   | "clean"

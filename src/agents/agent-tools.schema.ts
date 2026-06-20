@@ -92,11 +92,3 @@ export function normalizeToolParameters(
     parameters,
   });
 }
-
-/**
- * @deprecated Use normalizeToolParameters with modelProvider instead.
- * This function should only be used for Gemini providers.
- */
-export function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
-  return normalizeToolParameterSchema(schema, { modelProvider: "gemini" });
-}

@@ -66,7 +66,7 @@ async function runQaLabUp(argv: readonly string[], deps: QaLabUpDeps = {}): Prom
   }
 
   const parsePort = (value: string | undefined, flag: string) => {
-    if (!value) {
+    if (value === undefined) {
       return undefined;
     }
     const parsed = parseStrictPositiveInteger(value);

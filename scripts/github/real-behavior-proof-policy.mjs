@@ -289,10 +289,6 @@ function extractMarkdownSections(headingRegex, body = "") {
   return sections;
 }
 
-export function extractEvidenceSections(body = "") {
-  return extractMarkdownSections(/^#{2,6}\s+evidence\b[^\n]*$/im, body);
-}
-
 export function hasAuthoredPullRequestSection(heading, body = "") {
   const headingPattern = new RegExp(`^#{2,6}\\s+${escapeRegex(heading)}\\b[^\\n]*$`, "im");
   return !isMissingValue(extractMarkdownSections(headingPattern, body).at(-1) ?? "");

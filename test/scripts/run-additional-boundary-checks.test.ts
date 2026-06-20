@@ -1,4 +1,5 @@
 // Run Additional Boundary Checks tests cover run additional boundary checks script behavior.
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   BOUNDARY_CHECKS,
   createBoundedOutputBuffer,
   formatCommand,
+  parseCliArgs,
   parseShardSelection,
   parseShardSpec,
   resolveConcurrency,
@@ -29,6 +31,13 @@ function createOutputBuffer() {
   };
 }
 
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, ["scripts/run-additional-boundary-checks.mjs", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+  });
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -36,6 +45,13 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function isProcessZombie(pid: number): boolean {
+  const result = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
+    encoding: "utf8",
+  });
+  return result.status === 0 && result.stdout.trim().startsWith("Z");
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -64,6 +80,32 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     await sleep(25);
   }
   throw new Error(`process still alive: ${pid}`);
+}
+
+async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isProcessAlive(pid) || isProcessZombie(pid)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`process still running: ${pid}`);
+}
+
+async function waitForChildClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("child did not close before timeout"));
+    }, timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
 }
 
 describe("run-additional-boundary-checks", () => {
@@ -132,6 +174,34 @@ describe("run-additional-boundary-checks", () => {
     expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
     expect(() => parseShardSpec("9007199254740993/9007199254740994")).toThrow("Invalid shard spec");
+  });
+
+  it("parses CLI help and shard args before running checks", () => {
+    expect(parseCliArgs(["--help"], {})).toEqual({ help: true, shardSpec: "" });
+    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({ help: false, shardSpec: "2/4" });
+    expect(parseCliArgs(["--shard=3/4"], {})).toEqual({ help: false, shardSpec: "3/4" });
+    expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toEqual({
+      help: false,
+      shardSpec: "4/4",
+    });
+    expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
+    expect(() => parseCliArgs(["--wat"], {})).toThrow("Unknown argument: --wat");
+  });
+
+  it("does not start checks for CLI help or invalid arguments", () => {
+    const help = runCli("--help");
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(help.stdout).not.toContain("::group::");
+    expect(help.stderr).toBe("");
+
+    const unknown = runCli("--wat");
+    expect(unknown.status).toBe(1);
+    expect(unknown.stdout).toBe("");
+    expect(unknown.stderr).toContain("Unknown argument: --wat");
+    expect(unknown.stderr).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(unknown.stderr).not.toContain("::group::");
+    expect(unknown.stderr).not.toContain("pnpm");
   });
 
   it("keeps the raw HTTP/2 import guard in source boundary checks", () => {
@@ -242,6 +312,86 @@ describe("run-additional-boundary-checks", () => {
       } finally {
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
+        }
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "cleans active check descendants on parent signal",
+    async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-signal-"));
+      const readyPath = path.join(tempDir, "ready");
+      const childPidPath = path.join(tempDir, "child.pid");
+      let childPid = 0;
+      let runner: ReturnType<typeof spawn> | undefined;
+      try {
+        const childScript = [
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+        ].join("");
+        const parentScript = [
+          "const { spawn } = require('node:child_process');",
+          "const fs = require('node:fs');",
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+          "fs.writeFileSync(process.env.OPENCLAW_TEST_READY, 'ready');",
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("");
+        const runnerScript = `
+import { runChecks } from ${JSON.stringify(
+          new URL("../../scripts/run-additional-boundary-checks.mjs", import.meta.url).href,
+        )};
+
+await runChecks(
+  [{
+    label: "parent-signal",
+    command: process.execPath,
+    args: ["-e", ${JSON.stringify(parentScript)}],
+  }],
+  {
+    checkTimeoutMs: 30000,
+    concurrency: 1,
+    cwd: process.cwd(),
+    env: process.env,
+    output: { write() { return true; } },
+    outputMaxBytes: 4096,
+  },
+);
+`;
+
+        runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_TEST_CHILD_PID: childPidPath,
+            OPENCLAW_TEST_READY: readyPath,
+          },
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+
+        await waitForFile(readyPath, 2000);
+        childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+        expect(Number.isInteger(childPid)).toBe(true);
+        expect(isProcessAlive(childPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+        await sleep(50);
+        runner.kill("SIGTERM");
+
+        await expect(waitForChildClose(runner, 10_000)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitForNotRunning(childPid, 2000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+        if (runner?.pid && isProcessAlive(runner.pid)) {
+          runner.kill("SIGKILL");
         }
         fs.rmSync(tempDir, { force: true, recursive: true });
       }

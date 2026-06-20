@@ -993,7 +993,10 @@ describe("session accessor file-backed seam", () => {
     expect(updatedEntry?.outputTokens).toBeUndefined();
     expect(updatedEntry?.totalTokens).toBeUndefined();
     expect(updatedEntry?.totalTokensFresh).toBeUndefined();
-    expect(updates).toEqual([{ sessionFile: archived }]);
+    expect(updates).toEqual([
+      { sessionFile: archived },
+      { sessionFile: fs.realpathSync(manualTranscriptPath) },
+    ]);
   });
 
   it("keeps retained messages reachable through an out-of-window label", async () => {

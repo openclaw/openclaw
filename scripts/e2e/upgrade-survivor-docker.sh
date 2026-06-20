@@ -372,6 +372,7 @@ echo "Verifying config and state survived update..."
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 
+startup_summary="n/a"
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Gateway restart was handled by openclaw update."
 else
@@ -387,6 +388,7 @@ else
     openclaw_e2e_print_log "$GATEWAY_LOG" >&2
     exit 1
   fi
+  startup_summary="${start_seconds}s"
 fi
 
 echo "Checking gateway HTTP probes..."
@@ -428,5 +430,5 @@ if [ "$status_seconds" -gt "$STATUS_BUDGET" ]; then
 fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
 
-echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} updateRestartMode=${UPDATE_RESTART_MODE} startup=${start_seconds}s status=${status_seconds}s."
+echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} updateRestartMode=${UPDATE_RESTART_MODE} startup=${startup_summary} status=${status_seconds}s."
 '

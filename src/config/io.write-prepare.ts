@@ -370,6 +370,7 @@ function preserveAuthoredAgentParams(params: {
   if (!isRecord(models)) {
     return next;
   }
+  const nextModels = getPathValue(params.nextConfig, ["agents", "defaults", "models"]);
   for (const [modelId, modelEntry] of Object.entries(models)) {
     if (!isRecord(modelEntry) || !Object.hasOwn(modelEntry, "params")) {
       continue;
@@ -380,6 +381,14 @@ function preserveAuthoredAgentParams(params: {
       "models",
       normalizeAgentModelRefForConfig(modelId) || modelId,
     ];
+    const normalizedModelId = modelPath.at(-1);
+    if (
+      isRecord(nextModels) &&
+      normalizedModelId &&
+      !Object.hasOwn(nextModels, normalizedModelId)
+    ) {
+      continue;
+    }
     const paramsPath = [...modelPath, "params"];
     if (modelPath.at(-1) !== modelId) {
       next = deletePathValue(next, ["agents", "defaults", "models", modelId]);
