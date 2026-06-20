@@ -366,7 +366,7 @@ jobs:
           echo "pnpm=$(pnpm -v)"
           cat <<'EOF'
           commands:
-          - pnpm test ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/chat-responsive.browser.test.ts ui/src/ui/controllers/projects.test.ts ui/src/ui/chat/proposed-plan.test.ts ui/src/ui/chat/grouped-render.test.ts src/gateway/server-methods/tasks.test.ts src/gateway/server.chat.gateway-server-chat.test.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/chat/tool-cards.test.ts
+          - pnpm test ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/chat-responsive.browser.test.ts ui/src/ui/chat/proposed-plan.test.ts ui/src/ui/chat/grouped-render.test.ts src/gateway/server-methods/tasks.test.ts src/gateway/server.chat.gateway-server-chat.test.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/chat/tool-cards.test.ts
           - pnpm tsgo:test:ui
           - node --import tsx scripts/dev/control-ui-chat-work-surface-smoke.ts
           - node --import tsx scripts/dev/control-ui-chat-projects-smoke.ts
@@ -378,7 +378,7 @@ jobs:
           EOF
 
       - name: Run targeted Chat Codex Stack tests
-        run: pnpm test ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/chat-responsive.browser.test.ts ui/src/ui/controllers/projects.test.ts ui/src/ui/chat/proposed-plan.test.ts ui/src/ui/chat/grouped-render.test.ts src/gateway/server-methods/tasks.test.ts src/gateway/server.chat.gateway-server-chat.test.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/chat/tool-cards.test.ts
+        run: pnpm test ui/src/ui/chat/work-snapshot.test.ts ui/src/ui/views/chat.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/app-chat.test.ts ui/src/ui/chat/chat-responsive.browser.test.ts ui/src/ui/chat/proposed-plan.test.ts ui/src/ui/chat/grouped-render.test.ts src/gateway/server-methods/tasks.test.ts src/gateway/server.chat.gateway-server-chat.test.ts ui/src/ui/app-gateway.node.test.ts ui/src/ui/chat/tool-cards.test.ts
 
       - name: Run UI typecheck
         run: pnpm tsgo:test:ui
