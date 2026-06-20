@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { appRouter } from "../app-routes.ts";
 import { i18n } from "../i18n/index.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { ChatProps } from "./views/chat.ts";
@@ -232,6 +233,11 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
 
 beforeEach(async () => {
   await i18n.setLocale("en");
+  await Promise.all(
+    ["config", "chat", "logs", "sessions", "nodes", "workboard"].map((routeId) =>
+      appRouter.loadRouteChunk(routeId),
+    ),
+  );
   localStorageValues.clear();
   quickSettingsProps.current = null;
   chatProps.current = null;

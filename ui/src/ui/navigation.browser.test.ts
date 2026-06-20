@@ -1,11 +1,18 @@
 // Control UI tests cover navigation behavior.
 import { describe, expect, it, vi } from "vitest";
+import { appRouter } from "../app-routes.ts";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
 
 function mountApp(pathname: string) {
   return mountTestApp(pathname);
+}
+
+async function waitForRoute(routeId: string) {
+  await vi.waitFor(() => expect(appRouter.getState().resolvedRouteId).toBe(routeId), {
+    timeout: 6000,
+  });
 }
 
 function nextFrame() {
@@ -187,7 +194,7 @@ describe("control UI routing", () => {
       }
       if (method === "config.get") {
         return {
-          hash: "hash-2",
+          hash: "hash-1",
           config: {
             plugins: {
               slots: {
@@ -444,6 +451,7 @@ describe("control UI routing", () => {
     const link = expectElement(app, 'a.nav-item[href="/config"]', HTMLAnchorElement);
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
+    await waitForRoute("config");
     await app.updateComplete;
     expect(app.routeId).toBe("config");
     expect([...shell.classList]).toEqual(["shell"]);
@@ -542,6 +550,7 @@ describe("control UI routing", () => {
     recent[1]
       ?.querySelector("a.sidebar-recent-session__link")
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await waitForRoute("chat");
     await app.updateComplete;
 
     expect(app.routeId).toBe("chat");
@@ -602,6 +611,7 @@ describe("control UI routing", () => {
 
   it("creates a new chat session from the sidebar", async () => {
     const app = mountApp("/overview");
+    await waitForRoute("overview");
     app.sessionKey = "agent:main:main";
     app.sessionsResult = createSessionsResult([
       { key: "agent:main:main", label: "Main Session" },
@@ -621,6 +631,7 @@ describe("control UI routing", () => {
         return null;
       }),
     } as unknown as typeof app.client;
+    app.sessionsLoading = false;
     await app.updateComplete;
 
     expectButtonWithText(app, "New session").click();

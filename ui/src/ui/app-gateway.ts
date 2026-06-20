@@ -4,8 +4,8 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import type { RouteId } from "../app-routes.ts";
-import { loadCron, refreshActiveRoute } from "../app/active-route.ts";
+import { appRouter, routeLoadContext, type RouteId } from "../app-routes.ts";
+import type { SettingsHost } from "../app/app-host.ts";
 import {
   clearPendingQueueItemsForRun,
   createChatSessionsLoadOverrides,
@@ -769,7 +769,7 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
     agentsError = normalizeStartupRefreshError(err);
   }
   if (refreshAfterAgents) {
-    await refreshActiveRoute(host as unknown as Parameters<typeof refreshActiveRoute>[0]);
+    await appRouter.revalidate(routeLoadContext(host as unknown as SettingsHost));
   } else if (initialRefreshError) {
     throw initialRefreshError;
   }
@@ -1443,7 +1443,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "cron" && host.routeId === "cron") {
-    void loadCron(host as unknown as Parameters<typeof loadCron>[0]);
+    void appRouter.revalidate(routeLoadContext(host as unknown as SettingsHost), "cron");
   }
 
   if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {

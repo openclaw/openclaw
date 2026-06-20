@@ -14,6 +14,13 @@ type ControlUiPerformanceHost = {
   controlUiRoutePaintSeq?: number;
 };
 
+type ControlUiRouteTiming = {
+  seq: number;
+  previousRouteId: RouteId;
+  routeId: RouteId;
+  startedAtMs: number;
+};
+
 export type ControlUiRefreshRun = {
   seq: number;
   routeId: RouteId;
@@ -28,6 +35,7 @@ const VERY_SLOW_RENDER_MS = 50;
 const RESPONSIVENESS_ENTRY_MS = 50;
 const RESPONSIVENESS_EVENT_LOG_LIMIT = 50;
 const RENDER_EVENT_LOG_LIMIT = 50;
+const pendingRouteTimings = new WeakMap<object, ControlUiRouteTiming>();
 
 type ControlUiResponsivenessObserver = {
   disconnect: () => void;
@@ -58,6 +66,21 @@ export function controlUiNowMs(): number {
 
 export function roundedControlUiDurationMs(durationMs: number): number {
   return Math.max(0, Math.round(durationMs));
+}
+
+export function measureControlUiRender<T>(
+  host: ControlUiPerformanceHost,
+  surface: string,
+  payload: Record<string, unknown>,
+  render: () => T,
+): T {
+  const startedAtMs = controlUiNowMs();
+  const result = render();
+  recordControlUiRenderTiming(host, surface, {
+    ...payload,
+    durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
+  });
+  return result;
 }
 
 function runAfterMicrotask(callback: () => void): void {
@@ -135,34 +158,51 @@ function keepLatestBufferedEventsForType(
   });
 }
 
-export function scheduleControlUiRouteVisibleTiming(
+export function beginControlUiRouteTiming(
   host: ControlUiPerformanceHost,
   previousRouteId: RouteId,
   routeId: RouteId,
 ) {
   const seq = (host.controlUiRoutePaintSeq ?? 0) + 1;
   host.controlUiRoutePaintSeq = seq;
-  const startedAtMs = controlUiNowMs();
+  pendingRouteTimings.set(host, {
+    seq,
+    previousRouteId,
+    routeId,
+    startedAtMs: controlUiNowMs(),
+  });
   host.requestUpdate?.();
+}
 
+export function completeControlUiRouteTiming(host: ControlUiPerformanceHost, routeId: RouteId) {
+  const timing = pendingRouteTimings.get(host);
+  if (!timing || timing.routeId !== routeId) {
+    return;
+  }
+  pendingRouteTimings.delete(host);
   const record = () => {
     if (
       host.isConnected === false ||
-      host.controlUiRoutePaintSeq !== seq ||
+      host.controlUiRoutePaintSeq !== timing.seq ||
       host.routeId !== routeId
     ) {
       return;
     }
     recordControlUiPerformanceEvent(host, "control-ui.routeId.visible", {
-      previousRouteId,
+      previousRouteId: timing.previousRouteId,
       routeId,
-      durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
+      durationMs: roundedControlUiDurationMs(controlUiNowMs() - timing.startedAtMs),
     });
   };
 
   void Promise.resolve(host.updateComplete)
     .catch(() => undefined)
     .then(() => runAfterPaint(record));
+}
+
+export function cancelControlUiRouteTiming(host: ControlUiPerformanceHost) {
+  pendingRouteTimings.delete(host);
+  host.controlUiRoutePaintSeq = (host.controlUiRoutePaintSeq ?? 0) + 1;
 }
 
 export function scheduleControlUiAfterPaint(
