@@ -13,6 +13,7 @@ let starting: Promise<ExtensionBridgeHandle> | null = null;
 
 export async function ensureExtensionBridge(opts: {
   port?: number;
+  authToken?: string;
   identity?: { nodeId?: string; nodeIntegrated?: boolean };
   onWarn?: (m: string) => void;
   onAgentRequest?: (payload: { message: string; sessionKey?: string }) => Promise<void>;
@@ -22,6 +23,7 @@ export async function ensureExtensionBridge(opts: {
   const port = opts.port ?? DEFAULT_EXTENSION_BRIDGE_PORT;
   starting = startExtensionBridgeServer({
     port,
+    authToken: opts.authToken,
     identity: opts.identity,
     logger: { info: (m) => opts.onWarn?.(m), warn: (m) => opts.onWarn?.(m) },
     onAgentRequest: opts.onAgentRequest,

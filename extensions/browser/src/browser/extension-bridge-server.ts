@@ -91,6 +91,14 @@ interface ExtMessage {
 export function startExtensionBridgeServer(opts: {
   port: number;
   host?: string;
+  /**
+   * Configured gateway auth token. When set, the extension relay handshake must
+   * present a matching HMAC (see the extension's deriveRelayToken) on the
+   * /extension?token= query or the connection is rejected, so a local process
+   * without the token cannot impersonate the extension. Omitted on a tokenless
+   * loopback gateway, where the bridge stays trusted-local.
+   */
+  authToken?: string;
   identity?: BridgeIdentity;
   logger?: { info?: (m: string) => void; warn?: (m: string) => void };
   /**
@@ -265,11 +273,68 @@ export function startExtensionBridgeServer(opts: {
   server.on("upgrade", (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       const url = req.url || "";
-      if (url === "/extension" || url.startsWith("/extension?")) handleExtension(ws);
+      if (url === "/extension" || url.startsWith("/extension?")) validateAndHandleExtension(ws, url);
       else if (url.startsWith("/devtools/browser/")) handlePwBrowser(ws as PwSocket);
       else ws.close();
     });
   });
+
+  // Gate the extension relay on the configured gateway token. The extension
+  // dials /extension?token=HMAC-SHA256(gatewayToken, "openclaw-extension-relay-v1:"
+  // + port) (see deriveRelayToken). When a token is configured we require a
+  // matching HMAC; with none configured the loopback bridge stays trusted-local.
+  function validateAndHandleExtension(ws: WebSocket, reqUrl: string): void {
+    if (!opts.authToken) {
+      handleExtension(ws);
+      return;
+    }
+    let provided = "";
+    try {
+      provided = new URL(reqUrl, "ws://" + host + ":" + port).searchParams.get("token") || "";
+    } catch {
+      provided = "";
+    }
+    void verifyRelayToken(opts.authToken, port, provided)
+      .then((ok) => {
+        if (ok) {
+          handleExtension(ws);
+          return;
+        }
+        warn("extension relay token rejected");
+        try {
+          ws.close(1008, "unauthorized");
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(() => {
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+      });
+  }
+
+  // Recompute the extension's deriveRelayToken HMAC server-side and compare in
+  // constant time. WebCrypto mirrors the extension exactly (same key + message).
+  async function verifyRelayToken(authToken: string, p: number, provided: string): Promise<boolean> {
+    if (!provided) return false;
+    const enc = new TextEncoder();
+    const key = await globalThis.crypto.subtle.importKey(
+      "raw",
+      enc.encode(authToken),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const sig = await globalThis.crypto.subtle.sign("HMAC", key, enc.encode("openclaw-extension-relay-v1:" + p));
+    const expected = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (provided.length !== expected.length) return false;
+    let diff = 0;
+    for (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
+    return diff === 0;
+  }
 
   // extension relay protocol
   function handleExtension(ws: WebSocket): void {

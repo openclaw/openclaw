@@ -2,6 +2,7 @@
  * Browser server lifecycle helpers for relay setup and profile shutdown.
  */
 import { emitNodeGatewayEvent } from "openclaw/plugin-sdk/gateway-runtime";
+import { getRuntimeConfig } from "../config/config.js";
 import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { ensureExtensionBridge, stopExtensionBridge } from "./extension-bridge-manager.js";
@@ -40,6 +41,10 @@ export async function ensureExtensionRelayForProfiles(params: {
   try {
     await ensureExtensionBridge({
       onWarn: params.onWarn,
+      // Require the extension to present the configured gateway token (as an HMAC)
+      // before it can drive the browser or originate turns; undefined on a
+      // tokenless loopback gateway, where the bridge stays trusted-local.
+      authToken: getRuntimeConfig().gateway?.auth?.token,
       // Originate node-attributed turns when this process is a paired node-host.
       // emitNodeGatewayEvent throws if no node connection is registered (e.g. a
       // gateway-only deployment), which the bridge surfaces to the side panel so

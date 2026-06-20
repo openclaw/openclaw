@@ -33,11 +33,13 @@ export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 export { resolveGatewayAuth } from "../gateway/auth.js";
 export { rawDataToString } from "../infra/ws.js";
 export { GatewayClient } from "../gateway/client.js";
-export {
-  emitNodeGatewayEvent,
-  hasNodeGatewayEventEmitter,
-  registerNodeGatewayEventEmitter,
-} from "../node-host/node-event-emitter.js";
+// Host-internal primitive: lets first-party node-aware plugins (e.g. the bundled
+// browser bridge) originate node-attributed gateway events. The emitter
+// registration/teardown side (registerNodeGatewayEventEmitter /
+// hasNodeGatewayEventEmitter) is deliberately NOT re-exported here — it is a
+// node-host runtime concern, not a plugin-facing API, so third-party plugins
+// cannot install their own node event emitter.
+export { emitNodeGatewayEvent } from "../node-host/node-event-emitter.js";
 export { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 export {
   createOperatorApprovalsGatewayClient,

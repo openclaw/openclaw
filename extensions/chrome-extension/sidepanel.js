@@ -1,7 +1,6 @@
 import { getOrCreateIdentity, buildDeviceBlock } from "./device-identity.js";
 
 const DEFAULT_GATEWAY = "http://127.0.0.1:18789";
-const DEFAULT_TOKEN = "test-token-for-container";
 
 // Local OpenClaw endpoints to probe when none is configured. An OpenClaw
 // gateway (or a node exposing the operator endpoint) greets every WS with a
@@ -186,7 +185,8 @@ async function connect() {
   // gateway runs with loopback auth). Remote endpoints still need one.
   if (!gatewayToken) {
     if (isLoopback) {
-      gatewayToken = DEFAULT_TOKEN;
+      // Trusted loopback gateway runs with loopback auth: connect with no token
+      // (auth is omitted below) rather than sending a fixed placeholder credential.
     } else {
       setWsStatus("err", "No token");
       addMessage(
