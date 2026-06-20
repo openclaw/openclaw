@@ -75,8 +75,14 @@ explicitly to `tools.exec.safeBinTrustedDirs`.
 ### Shell chaining, wrappers, and multiplexers
 
 Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment
-satisfies the allowlist (including safe bins or skill auto-allow). Redirections
-remain unsupported in allowlist mode. Command substitution (`$()` / backticks) is
+satisfies the allowlist (including safe bins or skill auto-allow). Stream-only
+redirections that touch no filesystem are allowlist-analyzable: stdout/stderr to
+`/dev/null` (`>/dev/null`, `1>/dev/null`, `2>/dev/null`) and standard-stream
+duplication (`2>&1`, `1>&2`) are auto-allowed when every command segment also
+passes the allowlist or safe-bin check; every other redirection still requires
+approval (file writes and appends, file reads, stderr-to-file, the `&>`
+shorthand, descriptor close `>&-`, and any target other than `/dev/null` or
+descriptors 1/2). Command substitution (`$()` / backticks) is
 rejected during allowlist parsing, including inside double quotes; use single
 quotes if you need literal `$()` text.
 
