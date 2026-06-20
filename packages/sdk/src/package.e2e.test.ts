@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
@@ -33,6 +34,10 @@ type PackedPackage = {
   manifest: PackageManifest;
   tarball: string;
 };
+
+function cwdToPath(cwd: string | URL): string {
+  return typeof cwd === "string" ? cwd : fileURLToPath(cwd);
+}
 
 function runCommand(
   command: string,
@@ -123,9 +128,8 @@ function runPnpmCommand(
     pnpmArgs: args,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const cwd = typeof spec.options.cwd === "string" ? spec.options.cwd : options.cwd;
   return runCommand(spec.command, spec.args, {
-    cwd,
+    cwd: cwdToPath(spec.options.cwd ?? options.cwd),
     env: spec.options.env,
     shell: spec.options.shell,
     timeoutMs: options.timeoutMs,
