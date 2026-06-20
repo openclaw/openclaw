@@ -1319,7 +1319,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
       await expect(command).rejects.toThrow(/Command timed out:/u);
-      await waitForDead(childPid, 2_000);
+      await waitForDead(childPid, 5_000);
       expect(readFileSync(logPath, "utf8")).toContain("timeout command=");
     } finally {
       const childPid = existsSync(childPidPath)

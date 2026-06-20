@@ -28,6 +28,7 @@ type PackageManifest = {
   name: string;
   version: string;
   dependencies?: Record<string, string>;
+  files?: string[];
   [key: string]: unknown;
 };
 
