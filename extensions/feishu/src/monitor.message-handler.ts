@@ -61,6 +61,42 @@ function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
     : undefined;
 }
 
+function formatParseFailureDetail(value: unknown): string {
+  if (!isRecord(value)) {
+    return `value is not a record (type=${typeof value})`;
+  }
+  const keys = Object.keys(value).join(", ") || "(empty object)";
+  const sender = value.sender;
+  const message = value.message;
+  if (!isRecord(sender)) {
+    return `missing or invalid sender (keys: ${keys})`;
+  }
+  if (!isRecord(message)) {
+    return `missing or invalid message (keys: ${keys})`;
+  }
+  const senderId = sender.sender_id;
+  if (!isRecord(senderId)) {
+    return `missing or invalid sender.sender_id (sender keys: ${Object.keys(sender).join(", ") || "(empty)"})`;
+  }
+  const msgKeys: string[] = [];
+  if (!readString(message.message_id)) {
+    msgKeys.push("message_id");
+  }
+  if (!readString(message.chat_id)) {
+    msgKeys.push("chat_id");
+  }
+  if (!normalizeFeishuChatType(message.chat_type)) {
+    msgKeys.push(`chat_type=${String(message.chat_type)}`);
+  }
+  if (!readString(message.message_type)) {
+    msgKeys.push("message_type");
+  }
+  if (!readString(message.content)) {
+    msgKeys.push("content");
+  }
+  return `missing message fields: ${msgKeys.join(", ")} (chat_id=${readString(message.chat_id) || "(missing)"})`;
+}
+
 function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | null {
   if (!isRecord(value)) {
     return null;
@@ -320,7 +356,8 @@ export function createFeishuMessageReceiveHandler({
   return async (data) => {
     const event = parseFeishuMessageEventPayload(data);
     if (!event) {
-      error(`feishu[${accountId}]: ignoring malformed message event payload`);
+      const detail = formatParseFailureDetail(data);
+      error(`feishu[${accountId}]: ignoring malformed message event payload — ${detail}`);
       return;
     }
     const messageId = event.message?.message_id?.trim();
