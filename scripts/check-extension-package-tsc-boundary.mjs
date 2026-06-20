@@ -450,6 +450,20 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
         await waitForProcessGroupExit(STEP_POST_FORCE_KILL_WAIT_MS);
       }
     };
+    const rejectCanceledStep = async () => {
+      signalChild("SIGKILL");
+      await waitAfterForceKill();
+      rejectPromise(
+        toLintErrorObject(
+          attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
+            kind: "canceled",
+            elapsedMs: Date.now() - startedAt,
+            note: "canceled after sibling failure",
+          }),
+          "Step canceled after sibling failure",
+        ),
+      );
+    };
     const abortSignal = abortController?.signal;
     const abortListener = () => {
       signalChild("SIGTERM");
@@ -457,6 +471,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
     abortSignal?.addEventListener("abort", abortListener, { once: true });
     const teardownProcessCleanup = installVitestProcessGroupCleanup({
       child,
+      forceSignal: "SIGKILL",
       onSignal: (signal) => {
         forwardedSignal ??= signal;
       },
@@ -517,16 +532,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       cleanup();
       settled = true;
       if (error.name === "AbortError" && abortController?.signal.aborted) {
-        rejectPromise(
-          toLintErrorObject(
-            attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
-              kind: "canceled",
-              elapsedMs: Date.now() - startedAt,
-              note: "canceled after sibling failure",
-            }),
-            "Step canceled after sibling failure",
-          ),
-        );
+        void rejectCanceledStep();
         return;
       }
       const stdoutText = formatCapturedStepOutput(stdout);
@@ -561,7 +567,14 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       cleanup();
       settled = true;
       if (forwardedSignal) {
-        process.kill(process.pid, forwardedSignal);
+        signalChild("SIGKILL");
+        void waitAfterForceKill().finally(() => {
+          process.kill(process.pid, forwardedSignal);
+        });
+        return;
+      }
+      if (abortController?.signal.aborted) {
+        void rejectCanceledStep();
         return;
       }
       if (code === 0) {

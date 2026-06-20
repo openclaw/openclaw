@@ -42,6 +42,7 @@ describe("gateway restart benchmark script", () => {
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
+    expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
     expect(testing.parsePositiveInt("5", 1, "--restarts")).toBe(5);
     expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
     expect(
@@ -71,6 +72,26 @@ describe("gateway restart benchmark script", () => {
       "--restarts requires a value",
     );
     expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
+  });
+
+  it("rejects unknown benchmark CLI args before checking platform or running cases", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--wat"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stderr).not.toContain("\n    at ");
   });
 
   it("guards the SIGUSR1 restart benchmark on Windows", () => {

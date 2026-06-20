@@ -552,7 +552,9 @@ function trackGatewayChild(child) {
 function trackCommandChild(child) {
   activeCommandChildren.add(child);
   const untrack = () => {
-    activeCommandChildren.delete(child);
+    if (!processTreeIsAlive(child)) {
+      activeCommandChildren.delete(child);
+    }
   };
   child.once("error", untrack);
   child.once("close", untrack);
@@ -639,14 +641,32 @@ function processTreeIsAlive(child) {
   }
 }
 
-function signalChildProcessTree(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function defaultRunTaskkill(command, args, options) {
+  return childProcess.spawnSync(command, args, options);
+}
+
+export function signalChildProcessTree(
+  child,
+  signal,
+  { platform = process.platform, runTaskkill = defaultRunTaskkill } = {},
+) {
+  if (platform !== "win32" && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {
       // Non-detached callers may not own a process group keyed by child.pid; keep
       // the legacy direct-child kill path as the fallback.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
     }
   }
   try {

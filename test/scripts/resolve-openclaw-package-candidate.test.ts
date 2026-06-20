@@ -278,9 +278,7 @@ describe("resolve-openclaw-package-candidate", () => {
     ).resolves.toBe(path.join(dir, "openclaw-current.tgz"));
     await expect(missing(path.join(dir, "openclaw-9999.1.1.tgz"))).resolves.toBe(true);
     await expect(readFile(path.join(dir, "openclaw-C:evil.tgz"), "utf8")).resolves.toBe("unsafe");
-    await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe(
-      "current",
-    );
+    await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe("current");
   });
 
   it("bounds captured command stderr tails on failures", async () => {
@@ -350,6 +348,63 @@ describe("resolve-openclaw-package-candidate", () => {
         process.kill(childPid, "SIGKILL");
       }
     }
+  });
+
+  it("rejects timed-out package runner commands when descendants exit cleanly", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-runner-timeout-clean-"));
+    tempDirs.push(dir);
+    const childPidPath = path.join(dir, "child.pid");
+    const readyPath = path.join(dir, "child.ready");
+    const cleanupPath = path.join(dir, "child.cleanup");
+
+    const childScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {",
+      "  fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_CLEANUP, 'clean');",
+      "  setTimeout(() => process.exit(0), 75);",
+      "});",
+      "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_READY, 'ready');",
+      "setInterval(() => {}, 1000);",
+    ].join("");
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {`,
+      "  stdio: 'ignore',",
+      "  env: {",
+      "    ...process.env,",
+      "    OPENCLAW_TEST_CHILD_CLEANUP: process.env.OPENCLAW_TEST_CHILD_CLEANUP,",
+      "    OPENCLAW_TEST_CHILD_READY: process.env.OPENCLAW_TEST_CHILD_READY,",
+      "  },",
+      "});",
+      "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+      "process.on('SIGTERM', () => process.exit(0));",
+      "setInterval(() => {}, 1000);",
+    ].join("");
+
+    const startedAt = Date.now();
+    const timeoutAssertion = expect(
+      runCommandForTest(process.execPath, ["-e", parentScript], {
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_CHILD_CLEANUP: cleanupPath,
+          OPENCLAW_TEST_CHILD_PID: childPidPath,
+          OPENCLAW_TEST_CHILD_READY: readyPath,
+        },
+        killAfterMs: 1000,
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(/timed out after 1000ms/u);
+
+    await waitForFile(readyPath, 2_000);
+    await timeoutAssertion;
+
+    expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
+    expect(Date.now() - startedAt).toBeLessThan(1_700);
   });
 
   it("forwards external termination to package runner process groups", async () => {

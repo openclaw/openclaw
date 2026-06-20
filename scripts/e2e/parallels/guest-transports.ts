@@ -99,7 +99,10 @@ $scriptPath = "$base.ps1"
 $logPath = "$base.log"
 $donePath = "$base.done"
 $exitPath = "$base.exit"
-$pidPath = "$base.pid"`;
+$pidPath = "$base.pid"
+function Write-OpenClawUtf8File([string]$Path, [string]$Value) {
+  [System.IO.File]::WriteAllText($Path, $Value, [System.Text.UTF8Encoding]::new($false))
+}`;
   const payload = `$ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 ${pathsScript}
@@ -120,12 +123,12 @@ try {
   & {
 ${options.script}
   } *>&1 | Add-OpenClawBackgroundLog
-  Set-Content -Path $exitPath -Value '0' -Encoding UTF8
+  Write-OpenClawUtf8File $exitPath '0'
 } catch {
   $_ | Add-OpenClawBackgroundLog
-  Set-Content -Path $exitPath -Value '1' -Encoding UTF8
+  Write-OpenClawUtf8File $exitPath '1'
 } finally {
-  Set-Content -Path $donePath -Value 'done' -Encoding UTF8
+  Write-OpenClawUtf8File $donePath 'done'
 }`;
   const writeScript = runCommand(
     "prlctl",
@@ -172,7 +175,7 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
           "-EncodedCommand",
           encodePowerShell(`${pathsScript}
 $process = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -PassThru
-Set-Content -Path $pidPath -Value $process.Id -Encoding UTF8
+Write-OpenClawUtf8File $pidPath ([string]$process.Id)
 'started'`),
         ],
         { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },

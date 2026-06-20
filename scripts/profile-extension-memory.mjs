@@ -18,6 +18,15 @@ const DEFAULT_TOP = 10;
 const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
 const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
 const RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+const PARENT_SIGNAL_EXIT_CODES = new Map([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+]);
+const activeCaseChildren = new Set();
+const parentSignalHandlers = new Map();
+let parentSignalHandlersInstalled = false;
+let parentSignalShutdownStarted = false;
 
 function printHelp() {
   console.log(`Usage: node scripts/profile-extension-memory.mjs [options]
@@ -194,10 +203,12 @@ export async function runCase({
       ["--import", hookPath, "--input-type=module", "--eval", body],
       {
         cwd: repoRoot,
+        detached: process.platform !== "win32",
         env,
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    trackActiveCaseChild(child);
 
     let stdout = createOutputCapture();
     let stderr = createOutputCapture();
@@ -207,7 +218,7 @@ export async function runCase({
     let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      signalChildProcessTree(child, "SIGKILL");
     }, timeoutMs);
     timer.unref?.();
 
@@ -217,6 +228,7 @@ export async function runCase({
       }
       settled = true;
       clearTimeout(timer);
+      untrackActiveCaseChild(child);
       resolve(result);
     }
 
@@ -243,19 +255,131 @@ export async function runCase({
       });
     });
     child.on("close", (code, signal) => {
-      const stderrText = formatCapturedOutput(stderr);
-      settle({
-        name,
-        code,
-        signal,
-        timedOut,
-        error: null,
-        stdout: formatCapturedOutput(stdout),
-        stderr: stderrText,
-        maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
-      });
+      void (async () => {
+        if (timedOut) {
+          await waitForChildProcessTreeExit(child, 1_000);
+        }
+        const stderrText = formatCapturedOutput(stderr);
+        settle({
+          name,
+          code,
+          signal,
+          timedOut,
+          error: null,
+          stdout: formatCapturedOutput(stdout),
+          stderr: stderrText,
+          maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
+        });
+      })();
     });
   });
+}
+
+function signalChildProcessTree(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      child.kill(signal);
+      return;
+    }
+  }
+  child.kill(signal);
+}
+
+async function waitForChildProcessTreeExit(child, timeoutMs) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return true;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!childProcessTreeIsAlive(child)) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+  return !childProcessTreeIsAlive(child);
+}
+
+function childProcessTreeIsAlive(child) {
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function trackActiveCaseChild(child) {
+  activeCaseChildren.add(child);
+  installParentSignalHandlers();
+}
+
+function untrackActiveCaseChild(child) {
+  activeCaseChildren.delete(child);
+  if (activeCaseChildren.size === 0) {
+    removeParentSignalHandlers();
+  }
+}
+
+function installParentSignalHandlers() {
+  if (parentSignalHandlersInstalled) {
+    return;
+  }
+  parentSignalHandlersInstalled = true;
+  for (const signal of PARENT_SIGNAL_EXIT_CODES.keys()) {
+    const handler = () => handleParentSignal(signal);
+    parentSignalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+}
+
+function removeParentSignalHandlers() {
+  if (!parentSignalHandlersInstalled || parentSignalShutdownStarted) {
+    return;
+  }
+  removeInstalledParentSignalHandlers();
+}
+
+function removeInstalledParentSignalHandlers() {
+  if (!parentSignalHandlersInstalled) {
+    return;
+  }
+  parentSignalHandlersInstalled = false;
+  for (const [signal, handler] of parentSignalHandlers) {
+    process.off(signal, handler);
+  }
+  parentSignalHandlers.clear();
+}
+
+function handleParentSignal(signal) {
+  if (parentSignalShutdownStarted) {
+    for (const child of activeCaseChildren) {
+      signalChildProcessTree(child, "SIGKILL");
+    }
+    return;
+  }
+  parentSignalShutdownStarted = true;
+  void cleanupActiveCaseChildrenForParentSignal(signal);
+}
+
+async function cleanupActiveCaseChildrenForParentSignal(signal) {
+  const children = [...activeCaseChildren];
+  for (const child of children) {
+    signalChildProcessTree(child, signal);
+  }
+  await Promise.all(children.map((child) => waitForChildProcessTreeExit(child, 1_000)));
+  for (const child of children) {
+    if (childProcessTreeIsAlive(child)) {
+      signalChildProcessTree(child, "SIGKILL");
+    }
+  }
+  await Promise.all(children.map((child) => waitForChildProcessTreeExit(child, 1_000)));
+  removeInstalledParentSignalHandlers();
+  process.exit(PARENT_SIGNAL_EXIT_CODES.get(signal) ?? 1);
 }
 
 function buildImportBody(entryFiles, label) {

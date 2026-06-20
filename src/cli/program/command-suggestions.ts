@@ -15,13 +15,6 @@ function uniqueSortedCommandNames(commands: Iterable<string>): string[] {
   );
 }
 
-export function getKnownCliCommandNames(): string[] {
-  return uniqueSortedCommandNames([
-    ...getCoreCliCommandNames(),
-    ...getSubCliEntries().map((entry) => entry.name),
-  ]);
-}
-
 export function levenshteinDistance(left: string, right: string): number {
   if (left === right) {
     return 0;
@@ -52,25 +45,32 @@ export function levenshteinDistance(left: string, right: string): number {
   return previous[right.length] ?? 0;
 }
 
-export function suggestCliCommands(
-  input: string,
-  candidates: Iterable<string> = getKnownCliCommandNames(),
-): string[] {
+export function formatCliCommandSuggestions(input: string): string | undefined {
   const normalizedInput = input.trim().toLowerCase();
   if (!normalizedInput) {
-    return [];
+    return undefined;
   }
 
-  const knownCommands = uniqueSortedCommandNames(candidates);
+  const knownCommands = uniqueSortedCommandNames([
+    ...getCoreCliCommandNames(),
+    ...getSubCliEntries().map((entry) => entry.name),
+  ]);
   const explicitAlias = EXPLICIT_COMMAND_ALIASES.get(normalizedInput);
   if (explicitAlias && knownCommands.includes(explicitAlias)) {
-    return [explicitAlias];
+    return formatCliSuggestionLines([explicitAlias]);
   }
+  const suggestions = findCliCommandSuggestions(normalizedInput, knownCommands);
+  if (suggestions.length === 0) {
+    return undefined;
+  }
+  return formatCliSuggestionLines(suggestions);
+}
 
-  const maxDistance = Math.max(1, Math.floor(normalizedInput.length * 0.4));
-  return knownCommands
-    .map((command) => ({ command, distance: levenshteinDistance(normalizedInput, command) }))
-    .filter(({ command, distance }) => command !== normalizedInput && distance <= maxDistance)
+function findCliCommandSuggestions(input: string, candidates: readonly string[]): string[] {
+  const maxDistance = Math.max(1, Math.floor(input.length * 0.4));
+  return candidates
+    .map((command) => ({ command, distance: levenshteinDistance(input, command) }))
+    .filter(({ command, distance }) => command !== input && distance <= maxDistance)
     .toSorted(
       (left, right) => left.distance - right.distance || left.command.localeCompare(right.command),
     )
@@ -78,11 +78,7 @@ export function suggestCliCommands(
     .map(({ command }) => command);
 }
 
-export function formatCliCommandSuggestions(input: string): string | undefined {
-  const suggestions = suggestCliCommands(input);
-  if (suggestions.length === 0) {
-    return undefined;
-  }
+function formatCliSuggestionLines(suggestions: readonly string[]): string {
   const commandLines = suggestions
     .map((command) => `  ${formatCliCommand(`openclaw ${command}`)}`)
     .join("\n");

@@ -24,6 +24,7 @@ export const ARTIFACT_TARBALL_SCAN_MAX_ENTRIES = 10_000;
 const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
+const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -195,7 +196,7 @@ function run(command, args, options = {}) {
     });
     let timedOut = false;
     let killTimer;
-    let timeoutReject;
+    let forceKillAt;
     const killChild = (signal) => {
       if (useProcessGroup && child.pid) {
         try {
@@ -209,11 +210,13 @@ function run(command, args, options = {}) {
     };
     const terminateChild = () => {
       killChild("SIGTERM");
+      const killAfterMs = options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS;
+      forceKillAt = Date.now() + killAfterMs;
       killTimer = setTimeout(() => {
         killTimer = undefined;
+        forceKillAt = undefined;
         killChild("SIGKILL");
-        timeoutReject?.();
-      }, options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS);
+      }, killAfterMs);
     };
     const timeout =
       options.timeoutMs === undefined
@@ -244,6 +247,7 @@ function run(command, args, options = {}) {
       }
       if (killTimer && !timedOut) {
         clearTimeout(killTimer);
+        forceKillAt = undefined;
       }
       ACTIVE_CHILD_KILLERS.delete(killChild);
       if (
@@ -261,7 +265,13 @@ function run(command, args, options = {}) {
           `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`,
         );
         if (killTimer) {
-          timeoutReject = () => reject(timeoutError);
+          void finishTimedOutProcessTree(child, {
+            forceKillAt,
+            killChild,
+            killTimer,
+            killAfterMs: options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS,
+            useProcessGroup,
+          }).then(() => reject(timeoutError), reject);
           return;
         }
         reject(timeoutError);
@@ -284,6 +294,54 @@ function run(command, args, options = {}) {
       reject(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}${detail}`));
     });
   });
+}
+
+async function finishTimedOutProcessTree(
+  child,
+  { forceKillAt, killAfterMs, killChild, killTimer, useProcessGroup },
+) {
+  const graceRemainingMs =
+    forceKillAt === undefined ? killAfterMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForProcessTreeExit(child, graceRemainingMs, useProcessGroup);
+  }
+  clearTimeout(killTimer);
+  if (processTreeIsAlive(child, useProcessGroup)) {
+    killChild("SIGKILL");
+    await waitForProcessTreeExit(child, killAfterMs, useProcessGroup);
+  }
+}
+
+function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function processTreeIsAlive(child, useProcessGroup) {
+  if (!child || typeof child.pid !== "number") {
+    return false;
+  }
+  if (!useProcessGroup) {
+    return !childHasExited(child);
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForProcessTreeExit(child, timeoutMs, useProcessGroup) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!processTreeIsAlive(child, useProcessGroup)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !processTreeIsAlive(child, useProcessGroup);
 }
 
 function appendBoundedCommandOutput(buffer, chunk, maxChars) {

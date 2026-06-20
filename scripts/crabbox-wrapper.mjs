@@ -679,6 +679,56 @@ function pathExists(path) {
   }
 }
 
+function crabboxConfigDir() {
+  if (process.platform === "darwin") {
+    return resolve(homedir(), "Library", "Application Support", "crabbox");
+  }
+  if (process.platform === "win32") {
+    return resolve(process.env.APPDATA || resolve(homedir(), "AppData", "Roaming"), "crabbox");
+  }
+  return resolve(process.env.XDG_CONFIG_HOME || resolve(homedir(), ".config"), "crabbox");
+}
+
+function userDisplayPath(path) {
+  const home = homedir();
+  const rel = relative(home, path);
+  if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
+    return `~/${rel}`;
+  }
+  return path;
+}
+
+function blacksmithTestboxPrivateKeyPath(id) {
+  return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
+}
+
+function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
+  if (commandArgs[0] !== "run") {
+    return;
+  }
+  const id = optionValue(commandArgs, "--id");
+  if (!id) {
+    return;
+  }
+  if (!id.startsWith("tbx_")) {
+    return;
+  }
+
+  const keyPath = blacksmithTestboxPrivateKeyPath(id);
+  if (pathExists(keyPath)) {
+    return;
+  }
+
+  console.error(
+    [
+      `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
+      "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+      "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
 function preserveTemporaryCrabboxRuns() {
   if (childCwd === repoRoot) {
     return;
@@ -1541,11 +1591,7 @@ function injectRemoteChangedGateEnvironment(commandArgs) {
 }
 
 function markShellChangedGateAsRemoteChild(command) {
-  const missingEnv = remoteChangedGateEnv.filter((assignment) => !command.includes(assignment));
-  if (missingEnv.length === 0) {
-    return command;
-  }
-  return `export ${missingEnv.join(" ")}; ${command}`;
+  return `export ${remoteChangedGateEnv.join(" ")}; ${command}`;
 }
 
 function markDirectChangedGateAsRemoteChild(commandArgs) {
@@ -2393,6 +2439,7 @@ if (canonicalProvider === "blacksmith-testbox") {
   console.error(
     `[crabbox] provider=blacksmith-testbox ${source}; if Testbox is queued or down, ${fallback}`,
   );
+  enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
 let childCwd = repoRoot;
@@ -2509,23 +2556,23 @@ const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.pla
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
   stdio: "inherit",
+  detached: process.platform !== "win32",
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
+const childKillGraceMs = 5_000;
+let childForceKillTimer;
+let childTreeShutdownStarted = false;
 if (fullCheckout) {
   try {
     stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout, {
       intervalMs: fullCheckoutKeepaliveIntervalMsValue,
       onMissing: () => {
-        if (!child.killed) {
-          child.kill("SIGTERM");
-        }
+        void exitAfterChildTreeTermination(child, "SIGTERM", 1);
       },
     });
   } catch (error) {
-    if (!child.killed) {
-      child.kill("SIGTERM");
-    }
+    signalChildProcessTree(child, "SIGTERM");
     cleanupOnce();
     throw error;
   }
@@ -2537,17 +2584,17 @@ const signalExitCodes = new Map([
   ["SIGTERM", 143],
 ]);
 for (const signal of signalExitCodes.keys()) {
-  process.once(signal, () => {
-    if (!child.killed) {
-      child.kill(signal);
-    }
-    cleanupOnce();
-    process.exit(signalExitCodes.get(signal) ?? 1);
+  process.on(signal, () => {
+    void exitAfterChildTreeTermination(child, signal, signalExitCodes.get(signal) ?? 1);
   });
 }
 process.once("exit", cleanupOnce);
 
 child.on("exit", (code, signal) => {
+  clearChildForceKillTimer();
+  if (childTreeShutdownStarted) {
+    return;
+  }
   let fullCheckoutAvailable = true;
   if (fullCheckout) {
     fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
@@ -2561,6 +2608,10 @@ child.on("exit", (code, signal) => {
 });
 
 child.on("error", (error) => {
+  clearChildForceKillTimer();
+  if (childTreeShutdownStarted) {
+    return;
+  }
   if (fullCheckout) {
     assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
   }
@@ -2568,3 +2619,81 @@ child.on("error", (error) => {
   console.error(`[crabbox] failed to execute ${displayBinary}: ${error.message}`);
   process.exit(2);
 });
+
+async function exitAfterChildTreeTermination(childProcess, signal, exitCode) {
+  if (childTreeShutdownStarted) {
+    signalChildProcessTree(childProcess, "SIGKILL");
+    return;
+  }
+  childTreeShutdownStarted = true;
+  signalChildProcessTree(childProcess, signal);
+  await waitForChildTreeExit(childProcess, childKillGraceMs);
+  if (childProcessTreeIsAlive(childProcess)) {
+    signalChildProcessTree(childProcess, "SIGKILL");
+  }
+  await waitForChildTreeExit(childProcess, childKillGraceMs);
+  cleanupOnce();
+  process.exit(exitCode);
+}
+
+function signalChildProcessTree(childProcess, signal) {
+  if (
+    process.platform === "win32" &&
+    (childProcess.exitCode !== null || childProcess.signalCode !== null)
+  ) {
+    return;
+  }
+  try {
+    if (process.platform !== "win32" && typeof childProcess.pid === "number") {
+      process.kill(-childProcess.pid, signal);
+    } else {
+      childProcess.kill(signal);
+    }
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      try {
+        childProcess.kill(signal);
+      } catch {}
+    }
+  }
+  if (signal !== "SIGKILL" && !childForceKillTimer) {
+    childForceKillTimer = setTimeout(() => {
+      childForceKillTimer = undefined;
+      signalChildProcessTree(childProcess, "SIGKILL");
+    }, childKillGraceMs);
+    childForceKillTimer.unref?.();
+  }
+}
+
+function clearChildForceKillTimer() {
+  if (childForceKillTimer) {
+    clearTimeout(childForceKillTimer);
+    childForceKillTimer = undefined;
+  }
+}
+
+function childProcessTreeIsAlive(childProcess) {
+  if (process.platform === "win32" || typeof childProcess.pid !== "number") {
+    return childProcess.exitCode === null && childProcess.signalCode === null;
+  }
+  try {
+    process.kill(-childProcess.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForChildTreeExit(childProcess, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!childProcessTreeIsAlive(childProcess)) {
+      clearChildForceKillTimer();
+      return true;
+    }
+    await new Promise((done) => {
+      setTimeout(done, 50);
+    });
+  }
+  return !childProcessTreeIsAlive(childProcess);
+}

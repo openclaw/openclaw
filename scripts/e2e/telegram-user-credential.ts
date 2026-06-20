@@ -324,7 +324,7 @@ async function hydratePayloadFromLease(params: {
   const credentialId = requireString(params.acquired, "credentialId");
   const leaseToken = requireString(params.acquired, "leaseToken");
   const chunks: string[] = [];
-  let serializedLength = 0;
+  let serializedBytes = 0;
   for (let index = 0; index < marker.chunkCount; index += 1) {
     const chunk = await postBroker({
       action: "payload-chunk",
@@ -340,14 +340,14 @@ async function hydratePayloadFromLease(params: {
       },
     });
     const data = requireString(chunk, "data");
-    serializedLength += data.length;
-    if (serializedLength > marker.byteLength) {
+    serializedBytes += Buffer.byteLength(data, "utf8");
+    if (serializedBytes > marker.byteLength) {
       throw new Error("Chunked payload exceeded declared byteLength.");
     }
     chunks.push(data);
   }
   const serialized = chunks.join("");
-  if (serializedLength !== marker.byteLength) {
+  if (serializedBytes !== marker.byteLength) {
     throw new Error("Chunked payload length mismatch.");
   }
   return parseTelegramUserQaCredentialPayload(JSON.parse(serialized));
@@ -640,4 +640,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   await main();
 }
 
-export { optionalPositiveInteger, parseChunkedPayloadMarker };
+export { hydratePayloadFromLease, optionalPositiveInteger, parseChunkedPayloadMarker };
