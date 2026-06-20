@@ -733,10 +733,13 @@ function isPersistedSessionRow(row: SessionsListResult["sessions"][number]): boo
 }
 
 function isFallbackMainSessionKey(state: AppViewState, sessionKey: string): boolean {
+  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const mainKey = resolveUiConfiguredMainKey(state);
+  if (normalizedSessionKey === mainKey) {
+    return true;
+  }
   const parsed = parseAgentSessionKey(sessionKey);
-  return Boolean(
-    parsed && normalizeLowercaseStringOrEmpty(parsed.rest) === resolveUiConfiguredMainKey(state),
-  );
+  return Boolean(parsed && normalizeLowercaseStringOrEmpty(parsed.rest) === mainKey);
 }
 
 function resolveNewChatParentSessionKey(
