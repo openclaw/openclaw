@@ -561,6 +561,29 @@ function isExplicitTestFileArg(arg) {
   return EXPLICIT_TEST_FILE_RE.test(arg) && isExplicitFileTargetArg(arg);
 }
 
+function isDelegableBroadProjectRouterTarget(arg, cwd) {
+  const relative = toRepoRelativeArg(arg, cwd).replace(/\/+$/u, "");
+  return (
+    relative === "test/scripts" ||
+    relative === "test/scripts/*.test.ts" ||
+    relative === "test/scripts/**/*.test.ts"
+  );
+}
+
+function isExplicitProjectRouterTargetArg(arg, cwd = process.cwd(), fsImpl = fs) {
+  if (!isPathLikeExplicitFileArg(arg)) {
+    return false;
+  }
+  if (GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return isDelegableBroadProjectRouterTarget(arg, cwd);
+  }
+  if (isExplicitFileTargetArg(arg)) {
+    return true;
+  }
+  const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
+  return fsImpl.existsSync(filePath) && isDelegableBroadProjectRouterTarget(arg, cwd);
+}
+
 function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg) {
   const files = [];
   for (let index = 0; index < argv.length; index += 1) {
@@ -580,6 +603,12 @@ function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg
     }
   }
   return files;
+}
+
+function collectExplicitProjectRouterTargetArgs(argv, cwd = process.cwd(), fsImpl = fs) {
+  return collectExplicitFileTargetArgs(argv, (arg) =>
+    isExplicitProjectRouterTargetArg(arg, cwd, fsImpl),
+  );
 }
 
 function collectExplicitTestFileArgs(argv) {
@@ -701,9 +730,9 @@ function hasNonRunVitestSubcommand(argv) {
 }
 
 /**
- * Delegates default or explicit-file runs to the repo test-projects runner.
+ * Delegates explicit path runs to the repo test-projects runner.
  */
-export function resolveTestProjectsDelegationArgs(argv) {
+export function resolveTestProjectsDelegationArgs(argv, cwd = process.cwd()) {
   if (
     hasExplicitVitestConfigArg(argv) ||
     hasAlternateVitestRootArg(argv) ||
@@ -712,7 +741,7 @@ export function resolveTestProjectsDelegationArgs(argv) {
     hasNonRunVitestSubcommand(argv) ||
     hasExplicitDisabledRunFlag(argv) ||
     hasSeparateVitestOptionValueArg(argv) ||
-    collectExplicitFileTargetArgs(argv).length === 0
+    collectExplicitProjectRouterTargetArgs(argv, cwd).length === 0
   ) {
     return null;
   }

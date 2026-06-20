@@ -697,6 +697,32 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toEqual([]);
   });
 
+  it("calls exec approval Gateway RPCs with protocol params", async () => {
+    const transport = new FakeTransport({
+      "exec.approval.list": { approvals: [] },
+      "exec.approval.resolve": { ok: true },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
+    await expect(
+      oc.approvals.respond("approval-123", { id: "stale-approval", decision: "allow-once" }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(transport.calls).toEqual([
+      {
+        method: "exec.approval.list",
+        options: undefined,
+        params: undefined,
+      },
+      {
+        method: "exec.approval.resolve",
+        options: undefined,
+        params: { id: "approval-123", decision: "allow-once" },
+      },
+    ]);
+  });
+
   it("does not request after close races event pump startup", async () => {
     const transport = new ClosingEventPumpTransport({
       "agents.list": { agents: [] },

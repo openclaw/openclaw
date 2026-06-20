@@ -1,6 +1,14 @@
 // Create Dmg tests cover create dmg script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -213,6 +221,23 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
     expect(log).not.toContain("/Volumes/");
     expect(log).not.toContain(sibling);
+  });
+
+  it("creates a caller-provided output directory before finalizing the DMG", () => {
+    const app = makeValidApp();
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
+    tempDirs.push(root);
+    const outputDir = path.join(root, "nested", "artifacts");
+    const output = path.join(outputDir, "OpenClaw.dmg");
+    const tools = makeFakeDmgTools();
+
+    const result = runScript([app, output], tools.env);
+
+    expect(result.status).toBe(0);
+    expect(existsSync(outputDir)).toBe(true);
+    expect(readFileSync(output, "utf8")).toBe("converted");
+    const log = readFileSync(tools.hdiutilLog, "utf8");
+    expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
   });
 
   it("preserves an existing output when image creation fails", () => {

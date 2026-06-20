@@ -156,8 +156,9 @@ export function createSessionsListTool(opts?: {
       const titleTargets: Array<{
         row: SessionListRow;
         titleEntry: SessionEntry;
+        sessionEntry: { sessionFile?: string; sessionId: string };
         sessionId: string;
-        sessionFile?: string;
+        sessionKey: string;
         agentId: string;
       }> = [];
 
@@ -356,8 +357,16 @@ export function createSessionsListTool(opts?: {
               subject: readStringValue((entry as { subject?: unknown }).subject),
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
+            sessionEntry: {
+              sessionId,
+              ...(sessionFile ? { sessionFile } : {}),
+            },
             sessionId,
-            ...(sessionFile ? { sessionFile } : {}),
+            sessionKey: resolveInternalSessionKey({
+              key,
+              alias,
+              mainKey,
+            }),
             agentId: resolvedAgentId,
           });
         }
@@ -385,8 +394,9 @@ export function createSessionsListTool(opts?: {
             const target = titleTargets[next];
             const fields = await readSessionTitleFieldsFromTranscriptAsync({
               agentId: target.agentId,
-              sessionFile: target.sessionFile,
+              sessionEntry: target.sessionEntry,
               sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
               storePath,
             });
             if (includeDerivedTitles && !target.row.derivedTitle) {

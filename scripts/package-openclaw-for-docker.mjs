@@ -357,6 +357,30 @@ async function newestOpenClawTarball(outputDir, packOutput) {
   return path.join(outputDir, packed);
 }
 
+async function cleanPackedOpenClawTarballs(outputDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(outputDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      entries = [];
+    } else {
+      throw error;
+    }
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawFileName(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
+      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
+  );
+}
+
 export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
   const runCaptureImpl = options.runCaptureImpl ?? runCapture;
   const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
@@ -365,6 +389,7 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   await prepareChangelog(sourceDir);
   let packOutput;
   try {
+    await cleanPackedOpenClawTarballs(outputDir);
     packOutput = await runCaptureImpl(
       "npm",
       ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],

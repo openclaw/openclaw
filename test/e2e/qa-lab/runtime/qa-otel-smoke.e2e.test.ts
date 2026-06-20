@@ -1,7 +1,7 @@
 // QA OTEL Smoke tests cover QA Lab telemetry evidence.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection as createNetConnection } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -499,6 +499,65 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(output.text()).toContain("COLLECTOR_TAIL_MARKER");
     expect(output.text()).toContain("...");
     expect(output.text()).not.toContain("DO_NOT_RETAIN_COLLECTOR_PREFIX");
+  });
+
+  it("streams gateway stdout artifact records without requiring them in the tail", async () => {
+    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-stdout-stream-"));
+    const logPath = path.join(tempRoot, "gateway.stdout.log");
+    const capture = testing.createStdoutDiagnosticLogCapture();
+    const record = {
+      signal: "openclaw.diagnostic.log",
+      ts: "2026-06-18T00:00:00.000Z",
+      "service.name": "openclaw-qa-lab-otel-smoke",
+      severityText: "INFO",
+      severityNumber: 9,
+      body: "early log",
+      attributes: {},
+    };
+    try {
+      writeFileSync(
+        logPath,
+        `${JSON.stringify(record)}\n${"x".repeat(256 * 1024)}\nGATEWAY_STDOUT_TAIL\n`,
+      );
+
+      await testing.appendUtf8FileToStdoutDiagnosticCapture(logPath, capture);
+      capture.flush();
+
+      expect(capture.records).toEqual([record]);
+      expect(capture.lines).toHaveLength(1);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps gateway stdout artifact fallback parsing bounded", async () => {
+    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-stdout-artifact-"));
+    const outputDir = path.join(tempRoot, "output");
+    const artifactDir = path.join(outputDir, "artifacts", "gateway-runtime");
+    const record = {
+      signal: "openclaw.diagnostic.log",
+      ts: "2026-06-18T00:00:00.000Z",
+      "service.name": "openclaw-qa-lab-otel-smoke",
+      severityText: "INFO",
+      severityNumber: 9,
+      body: "tail log",
+      attributes: {},
+    };
+    try {
+      mkdirSync(artifactDir, { recursive: true });
+      writeFileSync(
+        path.join(artifactDir, "gateway.stdout.log"),
+        `${JSON.stringify(record)}\n${"x".repeat(256 * 1024)}\n`,
+      );
+      const capture = testing.createStdoutDiagnosticLogCapture();
+
+      await testing.appendGatewayStdoutArtifactLogs({ capture, outputDir });
+
+      expect(capture.records).toEqual([record]);
+      expect(capture.lines).toHaveLength(1);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
   });
 
   it("times out and kills a wedged QA suite child with a detached gateway", async () => {

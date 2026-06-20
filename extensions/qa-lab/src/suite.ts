@@ -27,6 +27,10 @@ import {
   normalizeQaProviderMode,
   type QaProviderMode,
 } from "./model-selection.js";
+import {
+  parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv,
+  sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
+} from "./progress-format.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
@@ -124,20 +128,6 @@ export type QaSuiteRunParams = {
   captureRuntimeParityCell?: boolean;
 };
 
-function parseQaSuiteBooleanEnv(value: string | undefined): boolean | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  return undefined;
-}
-
 function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
   const override = parseQaSuiteBooleanEnv(env.OPENCLAW_QA_SUITE_PROGRESS);
   if (override !== undefined) {
@@ -212,20 +202,6 @@ async function waitForQaLabReadyOrStopOwned(params: {
     }
     throw error;
   }
-}
-
-function sanitizeQaSuiteProgressValue(value: string): string {
-  let normalized = "";
-  for (const char of value) {
-    const code = char.codePointAt(0);
-    if (code === undefined) {
-      continue;
-    }
-    const isControl = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-    normalized += isControl ? " " : char;
-  }
-  normalized = normalized.replace(/\s+/gu, " ").trim();
-  return normalized.length > 0 ? normalized : "<empty>";
 }
 
 function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {

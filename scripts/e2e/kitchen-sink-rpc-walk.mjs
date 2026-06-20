@@ -85,6 +85,15 @@ export function shouldPrintHelp(argv) {
   return argv.some((arg) => arg === "--help" || arg === "-h");
 }
 
+export function validateCliArgs(argv) {
+  for (const arg of argv) {
+    if (arg === "--help" || arg === "-h") {
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+}
+
 export function readPositiveInt(raw, fallback, label = "value") {
   const text = String(raw || "").trim();
   if (!text) {
@@ -980,7 +989,7 @@ export async function readBoundedResponseText(response, byteLimit, timeoutPromis
   const contentLength = response.headers?.get?.("content-length");
   if (contentLength && /^\d+$/u.test(contentLength)) {
     const parsedContentLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedContentLength) && parsedContentLength > resolvedByteLimit) {
+    if (!Number.isSafeInteger(parsedContentLength) || parsedContentLength > resolvedByteLimit) {
       await response.body?.cancel?.().catch(() => undefined);
       throw createFetchBodyTooLargeError(resolvedByteLimit);
     }
@@ -996,25 +1005,31 @@ export async function readBoundedResponseText(response, byteLimit, timeoutPromis
   }
   const chunks = [];
   let totalBytes = 0;
-  for (;;) {
-    const read = reader.read();
-    const { done, value } = await withOptionalTimeout(
-      read,
-      timeoutPromise?.catch((error) => {
-        cancelReaderSoon(reader);
-        throw error;
-      }),
-    );
-    if (done) {
-      break;
+  try {
+    for (;;) {
+      const read = reader.read();
+      const { done, value } = await withOptionalTimeout(
+        read,
+        timeoutPromise?.catch((error) => {
+          cancelReaderSoon(reader);
+          throw error;
+        }),
+      );
+      if (done) {
+        break;
+      }
+      const chunk = Buffer.from(value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > resolvedByteLimit) {
+        await reader.cancel().catch(() => undefined);
+        throw createFetchBodyTooLargeError(resolvedByteLimit);
+      }
+      chunks.push(chunk);
     }
-    const chunk = Buffer.from(value);
-    totalBytes += chunk.byteLength;
-    if (totalBytes > resolvedByteLimit) {
-      await reader.cancel().catch(() => undefined);
-      throw createFetchBodyTooLargeError(resolvedByteLimit);
-    }
-    chunks.push(chunk);
+  } finally {
+    try {
+      reader.releaseLock?.();
+    } catch {}
   }
   return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
@@ -1873,12 +1888,14 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     if (hasMalformedProcessTreeRows(malformedRows, rootTreeRows)) {
       return null;
     }
+    const rootRow = rootTreeRows.find((row) => row.processId === safePid) ?? null;
     const descendants = rootTreeRows.filter((row) => row.processId !== safePid);
-    const commandMatches = descendants.filter((row) =>
+    const matchesCommandNeedles = (row) =>
       commandLineNeedles.every((needle) =>
         row.command.toLowerCase().includes(needle.toLowerCase()),
-      ),
-    );
+      );
+    const commandMatches = descendants.filter(matchesCommandNeedles);
+    const rootCommandMatches = rootRow && matchesCommandNeedles(rootRow) ? [rootRow] : [];
     const gatewayTitleMatches = descendants.filter((row) =>
       row.command.toLowerCase().includes("openclaw-gateway"),
     );
@@ -1887,7 +1904,9 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
         ? commandMatches
         : gatewayTitleMatches.length > 0
           ? gatewayTitleMatches
-          : descendants,
+          : descendants.length > 0
+            ? descendants
+            : rootCommandMatches,
     );
     if (!selected) {
       return null;
@@ -2587,9 +2606,16 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (shouldPrintHelp(process.argv.slice(2))) {
+  const argv = process.argv.slice(2);
+  if (shouldPrintHelp(argv)) {
     process.stdout.write(usage());
   } else {
+    try {
+      validateCliArgs(argv);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
     await main();
   }
 }

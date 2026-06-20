@@ -1534,6 +1534,28 @@ function getGuardedFetchCall(fetchMock: typeof fetchWithSsrFGuardMock): GuardedF
   return (fetchMock.mock.calls.at(0)?.[0] as GuardedFetchCall | undefined) ?? { url: "" };
 }
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 async function createOllamaTestStream(params: {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
@@ -2684,12 +2706,14 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("surfaces non-2xx HTTP response as status-prefixed error", async () => {
+  it("surfaces bounded non-2xx HTTP response text as a status-prefixed error", async () => {
+    const tracked = cancelTrackedResponse(`${"Service Unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      statusText: "Service Unavailable",
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("Service Unavailable", {
-        status: 503,
-        statusText: "Service Unavailable",
-      }),
+      response: tracked.response,
       release: vi.fn(async () => undefined),
     });
     try {
@@ -2705,6 +2729,10 @@ describe("createOllamaStreamFn", () => {
       // The error message must start with the HTTP status code so that
       // extractLeadingHttpStatus can parse it for failover/retry logic.
       expect(errorEvent.error.errorMessage).toMatch(/^503\b/);
+      expect(errorEvent.error.errorMessage).toContain("Service Unavailable");
+      expect(errorEvent.error.errorMessage).not.toContain("tail");
+      expect(tracked.wasCanceled()).toBe(true);
+      expect(textSpy).not.toHaveBeenCalled();
     } finally {
       fetchWithSsrFGuardMock.mockReset();
     }
