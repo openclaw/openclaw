@@ -77,7 +77,7 @@ function extractPageInfo(fullPath) {
   const headings = [];
   let inFence = false;
   for (const line of body.split("\n")) {
-    if (/^```/.test(line)) {
+    if (line.startsWith("```")) {
       inFence = !inFence;
       continue;
     }
