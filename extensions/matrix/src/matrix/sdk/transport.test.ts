@@ -195,6 +195,142 @@ describe("performMatrixRequest", () => {
       "MockAgent",
     );
   });
+
+  it("rejects oversized JSON responses via content-length before buffering the body", async () => {
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            headers: new Headers({
+              "content-type": "application/json",
+              "content-length": String(16 * 1024 * 1024),
+            }),
+            arrayBuffer,
+          }) as unknown as Response,
+      ),
+    );
+
+    await expect(
+      performMatrixRequest({
+        homeserver: "http://127.0.0.1:8008",
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/client/v3/account/whoami",
+        timeoutMs: 5000,
+        maxBytes: 1024,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toThrow("Matrix JSON response exceeds configured size limit");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("applies streaming byte limits when JSON responses omit content-length", async () => {
+    const chunk = new Uint8Array(768);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(chunk);
+        controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(
+      performMatrixRequest({
+        homeserver: "http://127.0.0.1:8008",
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/client/v3/account/whoami",
+        timeoutMs: 5000,
+        maxBytes: 1024,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toThrow(
+      "Matrix JSON response exceeds configured size limit (1536 bytes > 1024 bytes)",
+    );
+  });
+
+  it("uses the configured idle-timeout error for stalled JSON downloads", async () => {
+    vi.useFakeTimers();
+    try {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+        },
+      });
+      stubRuntimeFetch(
+        vi.fn(
+          async () =>
+            new Response(stream, {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+        ),
+      );
+
+      const requestPromise = performMatrixRequest({
+        homeserver: "http://127.0.0.1:8008",
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/client/v3/account/whoami",
+        timeoutMs: 5000,
+        maxBytes: 1024,
+        readIdleTimeoutMs: 50,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+
+      const rejection = expect(requestPromise).rejects.toThrow(
+        "Matrix media download stalled: no data received for 50ms",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 5_000);
+
+  it("returns full JSON bodies that stay under the byte limit", async () => {
+    const payload = JSON.stringify({ ok: true, items: [1, 2, 3] });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+        controller.close();
+      },
+    });
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const result = await performMatrixRequest({
+      homeserver: "http://127.0.0.1:8008",
+      accessToken: "token",
+      method: "GET",
+      endpoint: "/_matrix/client/v3/account/whoami",
+      timeoutMs: 5000,
+      maxBytes: 1024,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    expect(result.text).toBe(payload);
+    expect(result.buffer.toString("utf8")).toBe(payload);
+  });
 });
 
 describe("createMatrixGuardedFetch", () => {

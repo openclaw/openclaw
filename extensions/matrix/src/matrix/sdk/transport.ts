@@ -14,6 +14,12 @@ import {
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
+// Default ceiling for non-raw JSON control-plane responses (whoami, receipts,
+// directory search, key-backup status, generic doRequest). Matrix homeservers
+// are untrusted, so bound the body the same way the raw media path is bounded
+// instead of buffering an unbounded stream via response.text().
+const MATRIX_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+
 type QueryValue =
   | string
   | number
@@ -342,11 +348,27 @@ export async function performMatrixRequest(params: {
         buffer: bytes,
       };
     }
-    const text = await response.text();
+    const jsonMaxBytes = params.maxBytes ?? MATRIX_JSON_RESPONSE_MAX_BYTES;
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const length = parseMediaContentLength(contentLength);
+      if (length !== null && length > jsonMaxBytes) {
+        throw new Error(
+          `Matrix JSON response exceeds configured size limit (${length} bytes > ${jsonMaxBytes} bytes)`,
+        );
+      }
+    }
+    const buffer = await readResponseWithLimit(response, jsonMaxBytes, {
+      onOverflow: ({ maxBytes, size }) =>
+        new Error(
+          `Matrix JSON response exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
+        ),
+      chunkTimeoutMs: params.readIdleTimeoutMs,
+    });
     return {
       response,
-      text,
-      buffer: Buffer.from(text, "utf8"),
+      text: buffer.toString("utf8"),
+      buffer,
     };
   } finally {
     await release();
