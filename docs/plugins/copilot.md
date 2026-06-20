@@ -79,9 +79,9 @@ Pin one model (or one provider) to the harness:
 {
   agents: {
     defaults: {
-      model: "github-copilot/gpt-5.5",
+      model: "github-copilot/auto",
       models: {
-        "github-copilot/gpt-5.5": {
+        "github-copilot/auto": {
           agentRuntime: { id: "copilot" },
         },
       },
@@ -94,6 +94,10 @@ Both routes are equivalent. Use `agentRuntime.id` on a single model entry
 when only that model should be routed through the harness; set
 `agentRuntime.id` on a provider when every model under that provider should
 use it.
+
+`github-copilot/auto` is the portable starting point. Named Copilot models are
+account- and organization-policy-dependent, so only pin one after confirming
+that the authenticated Copilot CLI exposes it.
 
 ## Supported providers
 
