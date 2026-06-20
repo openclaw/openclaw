@@ -413,6 +413,39 @@ describe("cron view", () => {
     expect(onCancelEdit).toHaveBeenCalledTimes(1);
   });
 
+  it("wires quick-create model selection into the draft", () => {
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn();
+
+    render(
+      renderCronQuickCreate({
+        open: true,
+        step: "how",
+        draft: { ...createDefaultDraft(), model: "openai/gpt-5.2" },
+        modelSuggestions: ["openai/gpt-5.2", "anthropic/claude-sonnet-4.6"],
+        onDraftChange,
+        onStepChange: () => undefined,
+        onCreate: () => undefined,
+        onCancel: () => undefined,
+      }),
+      container,
+    );
+
+    const model = getElement(container, "#cron-quick-create-model", HTMLInputElement);
+    expect(model.value).toBe("openai/gpt-5.2");
+    expect(model.getAttribute("list")).toBe("cron-quick-create-model-suggestions");
+    expect(
+      Array.from(container.querySelectorAll("#cron-quick-create-model-suggestions option")).map(
+        (option) => option.getAttribute("value"),
+      ),
+    ).toEqual(["openai/gpt-5.2", "anthropic/claude-sonnet-4.6"]);
+
+    model.value = "openai/gpt-5.5";
+    model.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onDraftChange).toHaveBeenCalledWith({ model: "openai/gpt-5.5" });
+  });
+
   it("shows webhook delivery details for jobs", () => {
     const container = document.createElement("div");
     const job = {
@@ -438,8 +471,38 @@ describe("cron view", () => {
     );
     expect(details).toEqual([
       { label: "Prompt", value: "do it" },
+      { label: "Model", value: "Default" },
       { label: "Delivery", value: "webhook (https://example.invalid/cron)" },
     ]);
+    expect(
+      Array.from(container.querySelectorAll(".cron-job-chips .chip")).map((chip) =>
+        chip.textContent?.trim(),
+      ),
+    ).toContain("Model: Default");
+  });
+
+  it("shows configured cron job models in job details", () => {
+    const container = document.createElement("div");
+    const job = {
+      ...createJob("job-model"),
+      sessionTarget: "isolated" as const,
+      payload: { kind: "agentTurn" as const, message: "do it", model: "openai/gpt-5.2" },
+    };
+
+    render(renderCron(createProps({ jobs: [job] })), container);
+
+    const details = Array.from(container.querySelectorAll(".cron-job-detail-section")).map(
+      (section) => ({
+        label: section.querySelector(".cron-job-detail-label")?.textContent?.trim(),
+        value: section.querySelector(".cron-job-detail-value")?.textContent?.trim(),
+      }),
+    );
+    expect(details).toContainEqual({ label: "Model", value: "openai/gpt-5.2" });
+    expect(
+      Array.from(container.querySelectorAll(".cron-job-chips .chip")).map((chip) =>
+        chip.textContent?.trim(),
+      ),
+    ).toContain("Model: openai/gpt-5.2");
   });
 
   it("renders a stale cron job with no payload", () => {

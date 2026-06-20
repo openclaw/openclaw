@@ -17,6 +17,7 @@ export type CronQuickCreateProps = {
   open: boolean;
   step: CronQuickCreateStep;
   draft: CronQuickCreateDraft;
+  modelSuggestions?: readonly string[];
   onDraftChange: (patch: Partial<CronQuickCreateDraft>) => void;
   onStepChange: (step: CronQuickCreateStep) => void;
   onCreate: () => void;
@@ -29,6 +30,7 @@ export type CronQuickCreateStep = "what" | "when" | "how";
 export type CronQuickCreateDraft = {
   prompt: string;
   name: string;
+  model: string;
   schedulePreset: SchedulePresetId | "custom";
   deliveryPreset: DeliveryPresetId;
 };
@@ -121,6 +123,7 @@ export function createDefaultDraft(): CronQuickCreateDraft {
   return {
     prompt: "",
     name: "",
+    model: "",
     schedulePreset: "every-morning",
     deliveryPreset: "notify",
   };
@@ -148,6 +151,11 @@ export function draftToCronFormPatch(draft: CronQuickCreateDraft): Partial<CronF
     payloadText: draft.prompt,
     enabled: true,
   };
+
+  const model = draft.model.trim();
+  if (model) {
+    patch.payloadModel = model;
+  }
 
   // Schedule
   switch (draft.schedulePreset) {
@@ -326,6 +334,22 @@ function renderHowStep(props: CronQuickCreateProps) {
     <div class="cqc-body">
       <h3 class="cqc-body__heading">${t("cron.quickCreate.howHeading")}</h3>
       <p class="cqc-body__hint muted">${t("cron.quickCreate.howHint")}</p>
+      <div class="cqc-field">
+        <label class="cqc-field__label" for="cron-quick-create-model">
+          ${t("cron.form.model")}
+        </label>
+        <input
+          id="cron-quick-create-model"
+          class="cqc-input"
+          type="text"
+          list="cron-quick-create-model-suggestions"
+          placeholder=${t("cron.form.modelPlaceholder")}
+          .value=${props.draft.model}
+          @input=${(e: Event) =>
+            props.onDraftChange({ model: (e.target as HTMLInputElement).value })}
+        />
+        <div class="cron-help">${t("cron.form.modelHelp")}</div>
+      </div>
       <div class="cqc-delivery-options">
         ${DELIVERY_PRESETS.map(
           (preset) => html`
@@ -396,6 +420,17 @@ export function renderCronQuickCreate(props: CronQuickCreateProps) {
             ? renderWhenStep(props)
             : renderHowStep(props)}
       </section>
+      ${renderQuickCreateModelSuggestions(props.modelSuggestions)}
     </div>
   `;
+}
+
+function renderQuickCreateModelSuggestions(options: readonly string[] | undefined) {
+  const clean = Array.from(new Set((options ?? []).map((value) => value.trim()).filter(Boolean)));
+  if (clean.length === 0) {
+    return nothing;
+  }
+  return html`<datalist id="cron-quick-create-model-suggestions">
+    ${clean.map((value) => html`<option value=${value}></option>`)}
+  </datalist>`;
 }
