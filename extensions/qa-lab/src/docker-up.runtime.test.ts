@@ -183,6 +183,7 @@ describe("runQaDockerUp", () => {
   it("falls back to the container IP when the host gateway port is unreachable", async () => {
     const calls: string[] = [];
     const fetchCalls: string[] = [];
+    const hostGatewayCancel = vi.fn(async () => {});
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
     const repoRoot = path.resolve("/repo/openclaw");
     const composeFile = path.join(outputDir, "docker-compose.qa.yml");
@@ -214,6 +215,9 @@ describe("runQaDockerUp", () => {
           },
           fetchImpl: vi.fn(async (input: string) => {
             fetchCalls.push(input);
+            if (input === "http://127.0.0.1:18889/healthz") {
+              return { ok: false, body: { cancel: hostGatewayCancel } };
+            }
             return {
               ok:
                 input === "http://127.0.0.1:43124/healthz" ||
@@ -237,6 +241,7 @@ describe("runQaDockerUp", () => {
         "http://192.168.165.4:18789/healthz",
       ]);
       expect(result.gatewayUrl).toBe("http://192.168.165.4:18789/");
+      expect(hostGatewayCancel).toHaveBeenCalledTimes(1);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

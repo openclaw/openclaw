@@ -165,6 +165,45 @@ describe("credential lease runtime", () => {
     expect(chunkRequest.leaseToken).toBe("lease-chunked");
   });
 
+  it("validates chunked convex payload length as utf8 bytes", async () => {
+    const serialized = JSON.stringify({
+      groupId: "-100123",
+      driverToken: "driv\u00e9r",
+      sutToken: "sut",
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "ok",
+          credentialId: "cred-utf8",
+          leaseToken: "lease-utf8",
+          payload: {
+            __openclawQaCredentialPayloadChunksV1: true,
+            byteLength: Buffer.byteLength(serialized, "utf8"),
+            chunkCount: 1,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", data: serialized }));
+
+    const lease = await acquireQaCredentialLease({
+      kind: "telegram",
+      source: "convex",
+      role: "ci",
+      env: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+        OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+      },
+      fetchImpl,
+      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+      parsePayload: (payload) =>
+        payload as { groupId: string; driverToken: string; sutToken: string },
+    });
+
+    expect(lease.payload.driverToken).toBe("driv\u00e9r");
+  });
+
   it("defaults convex credential role to maintainer outside CI", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
       jsonResponse({

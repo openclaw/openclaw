@@ -43,7 +43,13 @@ function runCommand(
     const stderr: string[] = [];
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
+      env: {
+        ...process.env,
+        CI: process.env.CI ?? "true",
+        npm_config_audit: "false",
+        npm_config_fund: "false",
+        PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timer = setTimeout(() => {

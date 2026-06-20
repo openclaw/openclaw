@@ -608,6 +608,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   let timedOut = false;
   let settled = false;
   let lastOutputAt = Date.now();
+  let forceKillAt = null;
 
   const useProcessGroup = timeoutMs !== null && process.platform !== "win32";
   const child = spawn(invocation.command, invocation.args, {
@@ -661,11 +662,15 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   }
 
   async function finishTimedOutProcessTree() {
-    if (!processTreeAlive()) {
-      return;
+    const graceRemainingMs =
+      forceKillAt === null ? TERMINATION_GRACE_MS : Math.max(0, forceKillAt - Date.now());
+    if (graceRemainingMs > 0) {
+      await waitForProcessTreeExit(graceRemainingMs);
     }
-    signalChild("SIGKILL");
-    await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+    if (processTreeAlive()) {
+      signalChild("SIGKILL");
+      await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+    }
   }
 
   child.stdout?.on("data", (chunk) => {
@@ -704,6 +709,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
           timedOut = true;
           stderr.write(`[tsdown-build] timeout after ${timeoutMs}ms${pidText}; sending SIGTERM\n`);
           signalChild("SIGTERM");
+          forceKillAt = Date.now() + TERMINATION_GRACE_MS;
           setTimeout(() => {
             if (!settled) {
               stderr.write(`[tsdown-build] forcing SIGKILL${pidText}\n`);

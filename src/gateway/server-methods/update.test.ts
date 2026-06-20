@@ -806,7 +806,9 @@ describe("update.run post-core plugin finalize", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGlobalInstallSurface();
 
-    await captureUpdateRunPayload();
+    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
     expect(runPostCoreFinalizeAfterGatewayUpdateMock).not.toHaveBeenCalled();

@@ -14,8 +14,6 @@ import {
   fetchClawHubSkillCard,
   fetchClawHubSkillSecurityVerdicts,
   fetchClawHubPackageArtifact,
-  fetchClawHubPackageReadiness,
-  fetchClawHubPackageSecurity,
   fetchClawHubSkillVerification,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
@@ -625,33 +623,6 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("ClawHub /api/v1/skills/agentreceipt/verify failed (404): not found");
   });
 
-  it("fetches typed package readiness reports", async () => {
-    let requestedUrl = "";
-    await expect(
-      fetchClawHubPackageReadiness({
-        name: "@openclaw/diagnostics-otel",
-        fetchImpl: async (input) => {
-          requestedUrl = input instanceof Request ? input.url : String(input);
-          return new Response(
-            JSON.stringify({
-              package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
-              phase: "legacy-zip-only",
-              blockers: [],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        },
-      }),
-    ).resolves.toEqual({
-      package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
-      phase: "legacy-zip-only",
-      blockers: [],
-    });
-    expect(new URL(requestedUrl).pathname).toBe(
-      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/readiness",
-    );
-  });
-
   it("fetches typed package artifact resolver reports", async () => {
     let requestedUrl = "";
     await expect(
@@ -689,40 +660,6 @@ describe("clawhub helpers", () => {
     });
     expect(new URL(requestedUrl).pathname).toBe(
       "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/artifact",
-    );
-  });
-
-  it("fetches typed package security reports", async () => {
-    let requestedUrl = "";
-    await expect(
-      fetchClawHubPackageSecurity({
-        name: "@openclaw/diagnostics-otel",
-        version: "2026.3.22",
-        fetchImpl: async (input) => {
-          requestedUrl = input instanceof Request ? input.url : String(input);
-          return new Response(
-            JSON.stringify({
-              releaseId: "rel_demo",
-              state: "approved",
-              reasonCode: "clean",
-              createdAt: 1774256733107,
-              scanState: "clean",
-              moderationState: "approved",
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        },
-      }),
-    ).resolves.toEqual({
-      releaseId: "rel_demo",
-      state: "approved",
-      reasonCode: "clean",
-      createdAt: 1774256733107,
-      scanState: "clean",
-      moderationState: "approved",
-    });
-    expect(new URL(requestedUrl).pathname).toBe(
-      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",
     );
   });
 

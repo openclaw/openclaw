@@ -257,6 +257,155 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+  it("collects external speech and web-fetch plugins selected by config", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "groq/llama-3.3-70b-versatile",
+          },
+        },
+        messages: {
+          tts: {
+            provider: "gradium",
+            providers: {
+              inworld: {},
+            },
+          },
+        },
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["firecrawl", "gradium", "groq", "inworld"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects an external media-understanding plugin selected only by media config", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        tools: {
+          media: {
+            audio: {
+              models: [{ provider: "groq", model: "whisper-large-v3-turbo" }],
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["groq"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects an external speech plugin selected only by voiceModel", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: { primary: "gradium/tts-default" },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["gradium"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects env-only web provider plugins before auto-detection", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {},
+      env: {
+        EXA_API_KEY: "exa-key",
+        FIRECRAWL_API_KEY: "firecrawl-key",
+      },
+    });
+
+    expect(result.pluginIds).toEqual(["exa", "firecrawl"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("does not collect env-only web provider plugins when search is disabled", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+            },
+            fetch: {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: {
+        EXA_API_KEY: "exa-key",
+        FIRECRAWL_API_KEY: "firecrawl-key",
+      },
+    });
+
+    expect(result.pluginIds).toEqual([]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects Firecrawl for env-only web fetch when search is disabled", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-key",
+      },
+    });
+
+    expect(result.pluginIds).toEqual(["firecrawl"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects env-only external provider plugins before model discovery", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {},
+      env: {
+        GROQ_API_KEY: "groq-key",
+        MODELSTUDIO_API_KEY: "qwen-key",
+      },
+    });
+
+    expect(result.pluginIds).toEqual(["groq", "qwen"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
   it("collects provider plugins from documented external provider aliases", async () => {
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
       {

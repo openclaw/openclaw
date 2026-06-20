@@ -66,10 +66,6 @@ export function resolveMemoryWikiImportRunsDir(vaultRoot: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "import-runs");
 }
 
-export function resolveMemoryWikiImportRunRecordPath(vaultRoot: string, runId: string): string {
-  return path.join(resolveMemoryWikiImportRunsDir(vaultRoot), `${runId}.json`);
-}
-
 function resolveVaultRootKey(vaultRoot: string): string {
   return createHash("sha256").update(path.resolve(vaultRoot), "utf8").digest("hex").slice(0, 32);
 }

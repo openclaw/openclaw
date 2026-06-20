@@ -768,23 +768,6 @@ export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean>
   return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
 }
 
-export async function reconcileWorkspaceBootstrapCompletion(
-  dir: string,
-): Promise<WorkspaceBootstrapCompletionReconcileResult> {
-  const resolvedDir = resolveUserPath(dir);
-  const statePath = resolveWorkspaceStatePath(resolvedDir);
-  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const state = await readWorkspaceSetupStateForDir(resolvedDir, {
-    persistLegacyMigration: true,
-  });
-  return await reconcileWorkspaceBootstrapCompletionState({
-    dir: resolvedDir,
-    bootstrapPath,
-    statePath,
-    state,
-  });
-}
-
 async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,
@@ -1242,14 +1225,6 @@ async function resolveExtraBootstrapPatternPaths(
     }
   }
   return matches.length > 0 ? matches : [pattern];
-}
-
-export async function loadExtraBootstrapFiles(
-  dir: string,
-  extraPatterns: string[],
-): Promise<WorkspaceBootstrapFile[]> {
-  const loaded = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
-  return loaded.files;
 }
 
 export async function loadExtraBootstrapFilesWithDiagnostics(

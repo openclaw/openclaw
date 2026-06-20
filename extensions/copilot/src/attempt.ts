@@ -763,14 +763,8 @@ function createSessionConfig(
     onPermissionRequest: createPermissionBridge(permissionPolicy),
     // `onUserInputRequest` is intentionally NOT registered: per the SDK
     // contract, omitting the handler hides the `ask_user` tool from the
-    // model entirely. This is the MVP posture — interactive ask_user
-    // requires routing the request to the OpenClaw channel/TUI prompt
-    // path (mirroring extensions/codex/src/app-server/user-input-bridge.ts),
-    // which is tracked as a follow-up. With the handler absent, agents
-    // running under this harness must make best-judgment decisions from
-    // the initial prompt rather than asking clarifying questions
-    // mid-turn. See user-input-bridge.ts for the dormant policy
-    // scaffolding the follow-up will reuse.
+    // model entirely. Interactive ask_user will need a real channel/TUI
+    // prompt bridge before this runtime can expose the handler.
     // SessionHooks: only set when the host actually supplied handlers.
     // createHooksBridge returns undefined for an empty config so we
     // never install an empty hooks subsystem. See hooks-bridge.ts for
@@ -779,8 +773,6 @@ function createSessionConfig(
     // Session-level telemetry opt-out: only propagate when the host
     // explicitly set a boolean. undefined means "use SDK default"
     // (enabled for GitHub auth; disabled when a BYOK provider is set).
-    // Client-level OTel config is plumbed via runtime.ts /
-    // telemetry-bridge.ts.
     ...(typeof params.enableSessionTelemetry === "boolean"
       ? { enableSessionTelemetry: params.enableSessionTelemetry }
       : {}),

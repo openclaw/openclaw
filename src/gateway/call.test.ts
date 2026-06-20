@@ -208,7 +208,6 @@ const {
   buildGatewayProbeConnectionDetails,
   callGateway,
   callGatewayCli,
-  callGatewayScoped,
   formatGatewayClientRequestErrorJson,
   formatGatewayTransportErrorJson,
   isGatewayTransportError,
@@ -757,10 +756,10 @@ describe("callGateway url resolution", () => {
   it("passes explicit scopes through, including empty arrays", async () => {
     setLocalLoopbackGatewayConfig();
 
-    await callGatewayScoped({ method: "health", scopes: ["operator.read"] });
+    await callGateway({ method: "health", scopes: ["operator.read"] });
     expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
 
-    await callGatewayScoped({ method: "health", scopes: [] });
+    await callGateway({ method: "health", scopes: [] });
     expect(lastClientOptions?.scopes).toStrictEqual([]);
   });
 

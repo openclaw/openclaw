@@ -23,8 +23,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: openclaw-stable-main-closeout
-  cancel-in-progress: false
+  group: openclaw-stable-main-closeout-${{ github.event_name == 'workflow_dispatch' && (inputs.tag || github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   resolve:
@@ -43,6 +43,30 @@ jobs:
       should_closeout: ${{ steps.inputs.outputs.should_closeout }}
       tag: ${{ steps.inputs.outputs.tag }}
     steps:
+      - name: Install GitHub API backoff helper
+        run: |
+          cat > "$RUNNER_TEMP/github-api-backoff.sh" <<'BASH'
+          gh_with_retry() {
+            local attempt output status lower_output
+            for attempt in 1 2 3 4 5; do
+              if output="$(gh "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              status=$?
+              lower_output="${output,,}"
+              if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              echo "::warning::GitHub API throttled stable closeout on attempt ${attempt}; retrying after backoff." >&2
+              sleep $((attempt * attempt * 5))
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+          BASH
+
       - name: Checkout pushed main
         if: ${{ github.event_name == 'push' }}
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -63,8 +87,12 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "push" ]]; then
+            sleep 45
+          fi
+          . "$RUNNER_TEMP/github-api-backoff.sh"
+          if [[ "$EVENT_NAME" == "push" ]]; then
             main_ref="$TRIGGER_SHA"
-            tag="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
+            tag="$(gh_with_retry release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
               --json tagName,isPrerelease,publishedAt \
               --jq '[.[] | select(.isPrerelease | not) | select(.tagName | test("^v[0-9]{4}\\.[0-9]+\\.[0-9]+(-[0-9]+)?$"))] | sort_by(.publishedAt) | last | .tagName // empty')"
             if [[ -z "$tag" ]]; then
@@ -88,8 +116,27 @@ jobs:
           if [[ "$release_package_version" =~ ^(.+)-[0-9]+$ ]]; then
             fallback_package_version="${BASH_REMATCH[1]}"
           fi
-          tag_package_version="$(gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag" \
-            --jq '.content' | tr -d '\n' | base64 --decode | jq -r '.version // empty')"
+          tag_package_content="$RUNNER_TEMP/tag-package-content.b64"
+          tag_package_read=false
+          for attempt in 1 2 3; do
+            if gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag" \
+              --jq '.content' > "$tag_package_content"; then
+              tag_package_read=true
+              break
+            fi
+            if [[ "$attempt" != "3" ]]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          if [[ "$tag_package_read" != "true" ]]; then
+            echo "Stable closeout could not read package.json for $tag from GitHub API." >&2
+            exit 1
+          fi
+          if ! tag_package_json="$(tr -d '\n' < "$tag_package_content" | base64 --decode)"; then
+            echo "Stable closeout package.json content for $tag was not valid base64." >&2
+            exit 1
+          fi
+          tag_package_version="$(jq -r '.version // empty' <<<"$tag_package_json")"
           fallback_correction=false
           evidence_source_tag="$tag"
           if [[ "$release_package_version" != "$fallback_package_version" &&
@@ -107,7 +154,7 @@ jobs:
           closeout_checksum_asset="${closeout_asset}.sha256"
           closeout_dir="$RUNNER_TEMP/release-closeout-evidence"
           mkdir -p "$closeout_dir"
-          gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+          gh_with_retry release download "$tag" --repo "$GITHUB_REPOSITORY" \
             --pattern "$closeout_asset" --pattern "$closeout_checksum_asset" --dir "$closeout_dir" || true
           closeout_json_path="$closeout_dir/$closeout_asset"
           closeout_checksum_path="$closeout_dir/$closeout_checksum_asset"
@@ -163,8 +210,11 @@ jobs:
           fi
           evidence_dir="$RUNNER_TEMP/release-postpublish-evidence"
           mkdir -p "$evidence_dir"
-          if ! gh release download "$evidence_source_tag" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$evidence_asset" --pattern "$evidence_checksum_asset" --dir "$evidence_dir"; then
+          gh_with_retry release download "$evidence_source_tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$evidence_asset" --pattern "$evidence_checksum_asset" --dir "$evidence_dir" || true
+          evidence_path="$evidence_dir/$evidence_asset"
+          evidence_checksum_path="$evidence_dir/$evidence_checksum_asset"
+          if [[ ! -f "$evidence_path" || ! -f "$evidence_checksum_path" ]]; then
             if [[ "$EVENT_NAME" == "push" ]]; then
               echo "Stable closeout skipped: $evidence_source_tag predates immutable postpublish evidence." >&2
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
@@ -173,7 +223,6 @@ jobs:
             echo "Stable closeout is required for $tag, but immutable postpublish evidence from $evidence_source_tag is missing." >&2
             exit 1
           fi
-          evidence_path="$evidence_dir/$evidence_asset"
           if ! (
             cd "$evidence_dir"
             sha256sum --strict --status -c "$evidence_checksum_asset"
@@ -253,6 +302,30 @@ jobs:
             exit 1
           fi
 
+      - name: Install GitHub API backoff helper
+        run: |
+          cat > "$RUNNER_TEMP/github-api-backoff.sh" <<'BASH'
+          gh_with_retry() {
+            local attempt output status lower_output
+            for attempt in 1 2 3 4 5; do
+              if output="$(gh "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              status=$?
+              lower_output="${output,,}"
+              if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              echo "::warning::GitHub API throttled stable closeout on attempt ${attempt}; retrying after backoff." >&2
+              sleep $((attempt * attempt * 5))
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+          BASH
+
       - name: Verify release workflow evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -260,7 +333,8 @@ jobs:
           RELEASE_PUBLISH_RUN_ID: ${{ needs.resolve.outputs.release_publish_run_id }}
         run: |
           set -euo pipefail
-          gh run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+          . "$RUNNER_TEMP/github-api-backoff.sh"
+          gh_with_retry run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --json workflowName,event,status,conclusion \
             > "$RUNNER_TEMP/full-release-validation-run.json"
           node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" <<'NODE'
@@ -277,7 +351,7 @@ jobs:
             }
           }
           NODE
-          gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+          gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --json workflowName,event,status,conclusion \
             > "$RUNNER_TEMP/release-publish-run.json"
           node --input-type=module - "$RUNNER_TEMP/release-publish-run.json" <<'NODE'
@@ -298,7 +372,7 @@ jobs:
           manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
           rm -rf "$manifest_dir"
           mkdir -p "$manifest_dir"
-          gh run download "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+          gh_with_retry run download "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --name "full-release-validation-${FULL_RELEASE_VALIDATION_RUN_ID}" \
             --dir "$manifest_dir"
           tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
@@ -327,7 +401,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$CLOSEOUT_DIR"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+          . "$RUNNER_TEMP/github-api-backoff.sh"
+          gh_with_retry release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json tagName,isDraft,isPrerelease,assets \
             > "$CLOSEOUT_DIR/github-release.json"
           node scripts/verify-stable-main-closeout.mjs \
@@ -353,21 +428,23 @@ jobs:
           CLOSEOUT_DIR: ${{ runner.temp }}/openclaw-stable-main-closeout
         run: |
           set -euo pipefail
+          . "$RUNNER_TEMP/github-api-backoff.sh"
           release_version="${RELEASE_TAG#v}"
           attach_or_verify() {
             local source_path="$1"
             local asset_name="$2"
             local existing_dir="$CLOSEOUT_DIR/existing-${asset_name}"
             mkdir -p "$existing_dir"
-            if gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --pattern "$asset_name" --dir "$existing_dir"; then
+            gh_with_retry release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$asset_name" --dir "$existing_dir" || true
+            if [[ -f "$existing_dir/$asset_name" ]]; then
               cmp --silent "$source_path" "$existing_dir/$asset_name" || {
                 echo "Existing release asset $asset_name differs from closeout evidence." >&2
                 exit 1
               }
               return
             fi
-            gh release upload "$RELEASE_TAG" "$source_path#$asset_name" --repo "$GITHUB_REPOSITORY"
+            gh_with_retry release upload "$RELEASE_TAG" "$source_path#$asset_name" --repo "$GITHUB_REPOSITORY"
           }
           attach_or_verify \
             "$CLOSEOUT_DIR/stable-main-closeout.json" \

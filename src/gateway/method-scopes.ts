@@ -175,6 +175,17 @@ export function authorizeOperatorScopesForMethod(
     return missingScope ? { allowed: false, missingScope } : { allowed: true };
   }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;
+  return authorizeOperatorScopesForRequiredScope(requiredScope, scopes);
+}
+
+/** Checks a method registry's already-resolved static scope against presented operator scopes. */
+export function authorizeOperatorScopesForRequiredScope(
+  requiredScope: OperatorScope,
+  scopes: readonly string[],
+): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return { allowed: true };
+  }
   if (requiredScope === READ_SCOPE) {
     if (scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)) {
       return { allowed: true };

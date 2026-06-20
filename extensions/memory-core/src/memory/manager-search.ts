@@ -159,7 +159,7 @@ export async function searchVector(params: {
     // which runs in ~O(log N + k) via the vec0 index, instead of the previous
     // full-table scan over vec_distance_cosine(). Keep vec_distance_cosine() in
     // the SELECT so `score = 1 - dist` stays in the cosine [0, 1] range the
-    // downstream merge/minScore pipeline expects. (chunks_vec is created with
+    // downstream merge/minScore pipeline expects. (memory_index_chunks_vec is created with
     // sqlite-vec's default L2 distance, so v.distance cannot be used directly
     // for scoring.)
     const qBlob = vectorToBlob(params.queryVec);
@@ -170,7 +170,7 @@ export async function searchVector(params: {
             `       c.source,\n` +
             `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
             `  FROM ${params.vectorTable} v\n` +
-            `  JOIN chunks c ON c.id = v.id\n` +
+            `  JOIN memory_index_chunks c ON c.id = v.id\n` +
             ` WHERE v.embedding MATCH ? AND k = ? AND ${vectorModelFilter}${params.sourceFilterVec.sql}\n` +
             ` ORDER BY dist ASC\n` +
             ` LIMIT ?`,
@@ -198,7 +198,7 @@ export async function searchVector(params: {
       const matchingChunkCount = readCount(
         params.db
           .prepare(
-            `SELECT COUNT(*) AS count FROM chunks c WHERE ${vectorModelFilter}${params.sourceFilterVec.sql}`,
+            `SELECT COUNT(*) AS count FROM memory_index_chunks c WHERE ${vectorModelFilter}${params.sourceFilterVec.sql}`,
           )
           .get(...providerModels, ...params.sourceFilterVec.params) as
           | { count?: number | bigint }
@@ -257,7 +257,7 @@ async function searchChunksByEmbedding(params: {
   // below. The rowid cursor keeps memory bounded without OFFSET rescans.
   const stmt = params.db.prepare(
     `SELECT rowid, id, path, start_line, end_line, text, embedding, source\n` +
-      `  FROM chunks\n` +
+      `  FROM memory_index_chunks\n` +
       ` WHERE ${modelFilter} AND rowid > ?${params.sourceFilter.sql}\n` +
       ` ORDER BY rowid ASC\n` +
       ` LIMIT ?`,
@@ -348,7 +348,7 @@ export async function searchKeyword(params: {
 
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
-  const liveChunkClause = ` AND EXISTS (SELECT 1 FROM chunks c WHERE c.id = ${params.ftsTable}.id)`;
+  const liveChunkClause = ` AND EXISTS (SELECT 1 FROM memory_index_chunks c WHERE c.id = ${params.ftsTable}.id)`;
   const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
 

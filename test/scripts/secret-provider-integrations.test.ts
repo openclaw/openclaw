@@ -1,5 +1,5 @@
 // Secret Provider Integrations tests cover secret provider integrations script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,42 @@ function makeTempDir(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-provider-proof-"));
   tempDirs.push(root);
   return root;
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  throw new Error("condition was not met before timeout");
+}
+
+async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
+  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("child did not close before timeout"));
+      }, timeoutMs);
+      child.once("close", (code, signal) => {
+        clearTimeout(timeout);
+        resolve({ code, signal });
+      });
+    },
+  );
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function writeStallingOpenClaw(
@@ -491,6 +527,208 @@ describe("secret provider integration proof harness", () => {
     const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
     expect(sizeAfterWait).toBe(sizeAfterReturn);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves timeout kill grace for descendants after the leader exits",
+    async () => {
+      const root = makeTempDir();
+      const cleanupPath = path.join(root, "command-descendant-cleanup.txt");
+      const descendantPidPath = path.join(root, "command-descendant.pid");
+      const scriptPath = path.join(root, "spawn-cleaning-descendant.mjs");
+      const descendantScript = [
+        "import fs from 'node:fs';",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {",
+        `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(
+          cleanupPath,
+        )}, "clean"); process.exit(0); }, 75);`,
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      fs.writeFileSync(
+        scriptPath,
+        [
+          "import childProcess from 'node:child_process';",
+          "import { setTimeout as delay } from 'node:timers/promises';",
+          `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "await delay(60_000);",
+          "",
+        ].join("\n"),
+      );
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=timeout-grace-${Date.now()}`
+      );
+      let descendantPid = 0;
+
+      try {
+        const command = proof.runCommand(process.execPath, [scriptPath], {
+          timeoutMs: 150,
+        });
+
+        await waitFor(() => fs.existsSync(descendantPidPath));
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        await expect(command).rejects.toThrow(/command timed out/u);
+        expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
+        expect(isProcessAlive(descendantPid)).toBe(false);
+      } finally {
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "aborts command process groups after the leader exits before stdio closes",
+    async () => {
+      const root = makeTempDir();
+      const scriptPath = path.join(root, "leader-exits-stdout-held.mjs");
+      const descendantPidPath = path.join(root, "descendant.pid");
+      let descendantPid = 0;
+      fs.writeFileSync(
+        scriptPath,
+        [
+          "import childProcess from 'node:child_process';",
+          "import fs from 'node:fs';",
+          "const descendant = childProcess.spawn(process.execPath, [",
+          "  '--input-type=module',",
+          "  '--eval',",
+          "  \"process.on('SIGTERM', () => process.exit(0)); setInterval(() => process.stdout.write('tick\\\\n'), 20);\",",
+          "], { stdio: ['ignore', 'inherit', 'ignore'] });",
+          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+          "process.exit(0);",
+          "",
+        ].join("\n"),
+      );
+      const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=abort-${Date.now()}`);
+      const controller = new AbortController();
+      const command = proof.runCommand(process.execPath, [scriptPath], {
+        signal: controller.signal,
+        timeoutMs: 5_000,
+      });
+
+      try {
+        await waitFor(() => fs.existsSync(descendantPidPath));
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 50);
+        });
+        controller.abort();
+
+        await expect(command).rejects.toThrow("command aborted");
+        await waitFor(() => !isProcessAlive(descendantPid));
+      } finally {
+        await command.catch(() => {});
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("aborts non-detached commands", async () => {
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=abort-direct-${Date.now()}`
+    );
+    const controller = new AbortController();
+    const command = proof.runCommand(
+      process.execPath,
+      ["--input-type=module", "--eval", "setInterval(() => {}, 1000);"],
+      {
+        detached: false,
+        signal: controller.signal,
+        timeoutMs: 5_000,
+      },
+    );
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    controller.abort();
+
+    await expect(command).rejects.toThrow("command aborted");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "cleans active command process groups before parent signal exit",
+    async () => {
+      const root = makeTempDir();
+      const scriptPath = path.join(root, "spawn-descendant-parent-signal.mjs");
+      const runnerPath = path.join(root, "runner.mjs");
+      const descendantPidPath = path.join(root, "descendant.pid");
+      const readyPath = path.join(root, "ready");
+      let descendantPid = 0;
+      let runner: ReturnType<typeof spawn> | undefined;
+      const descendantScript = [
+        "import fs from 'node:fs';",
+        "process.on('SIGTERM', () => {});",
+        "process.on('SIGHUP', () => {});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      fs.writeFileSync(
+        scriptPath,
+        [
+          "import childProcess from 'node:child_process';",
+          "import fs from 'node:fs';",
+          "const descendant = childProcess.spawn(process.execPath, [",
+          "  '--input-type=module',",
+          `  '--eval', ${JSON.stringify(descendantScript)},`,
+          "], { stdio: 'ignore' });",
+          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        runnerPath,
+        [
+          `const proof = await import(${JSON.stringify(
+            `${pathToFileURL(proofScriptPath).href}?case=parent-signal-${Date.now()}`,
+          )});`,
+          `await proof.runCommand(process.execPath, [${JSON.stringify(scriptPath)}], { timeoutMs: 30_000 });`,
+          "",
+        ].join("\n"),
+      );
+
+      try {
+        runner = spawn(process.execPath, [runnerPath], {
+          cwd: process.cwd(),
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        await waitFor(() => fs.existsSync(readyPath) && fs.existsSync(descendantPidPath));
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await expect(waitForChildClose(runner, 5_000)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitFor(() => !isProcessAlive(descendantPid));
+      } finally {
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+        if (runner?.pid && isProcessAlive(runner.pid)) {
+          runner.kill("SIGKILL");
+        }
+      }
+    },
+  );
 
   it("detects startup secret leaks after the retained output cap", () => {
     const root = makeTempDir();

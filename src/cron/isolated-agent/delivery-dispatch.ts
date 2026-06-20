@@ -1219,6 +1219,12 @@ export async function dispatchCronDelivery(
 
   if (params.deliveryRequested && !params.skipHeartbeatDelivery && !sourceDeliverySatisfied) {
     if (!params.resolvedDelivery.ok) {
+      // The target could not be resolved (e.g. a keyless implicit cron whose
+      // inherited shared-bucket target was refused). We never send here, so a
+      // deleteAfterRun cron must still retire its session/transcript before
+      // returning — otherwise the one-shot session leaks. Safe no-op for
+      // non-deleteAfterRun / non-cron sessions (see cleanupDirectCronSession).
+      await cleanupDirectCronSessionIfNeeded();
       if (!params.deliveryBestEffort) {
         return {
           result: failDeliveryTarget(params.resolvedDelivery.error.message),

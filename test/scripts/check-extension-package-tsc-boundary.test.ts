@@ -522,10 +522,9 @@ describe("check-extension-package-tsc-boundary", () => {
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
       let childPid = 0;
-      const childScript = [
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-      ].join("");
+      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
+        "",
+      );
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         "const fs = require('node:fs');",
@@ -535,16 +534,11 @@ describe("check-extension-package-tsc-boundary", () => {
       ].join("");
 
       try {
-        const failurePromise = runNodeStepAsync(
-          "hung-step-group",
-          ["--eval", parentScript],
-          100,
-          {
-            spawnImpl(command: string, args: string[], options: unknown) {
-              return spawn(command, args, options as Parameters<typeof spawn>[2]);
-            },
+        const failurePromise = runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100, {
+          spawnImpl(command: string, args: string[], options: unknown) {
+            return spawn(command, args, options as Parameters<typeof spawn>[2]);
           },
-        ).then(
+        }).then(
           () => {
             throw new Error("expected hung-step-group to time out");
           },
@@ -591,6 +585,72 @@ describe("check-extension-package-tsc-boundary", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
+
+  it.skipIf(process.platform === "win32")(
+    "force-kills aborted async node step process groups",
+    async () => {
+      const { rootDir: root } = createTempExtensionRoot("abort-group");
+      const childPidPath = path.join(root, "child.pid");
+      let childPid = 0;
+      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
+        "",
+      );
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const failAfterSiblingStartsScript = [
+        "const fs = require('node:fs');",
+        `const childPidPath = ${JSON.stringify(childPidPath)};`,
+        "const deadlineAt = Date.now() + 2_000;",
+        "const wait = () => {",
+        "  if (fs.existsSync(childPidPath)) {",
+        "    setTimeout(() => process.exit(2), 150);",
+        "    return;",
+        "  }",
+        "  if (Date.now() >= deadlineAt) {",
+        "    process.exit(2);",
+        "    return;",
+        "  }",
+        "  setTimeout(wait, 10);",
+        "};",
+        "wait();",
+      ].join("");
+
+      try {
+        const command = runNodeStepsWithConcurrency(
+          [
+            {
+              label: "fail-fast",
+              args: ["--eval", failAfterSiblingStartsScript],
+              timeoutMs: 5_000,
+            },
+            {
+              label: "aborted-step-group",
+              args: ["--eval", parentScript],
+              timeoutMs: 60_000,
+            },
+          ],
+          2,
+        );
+
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+
+        await expect(command).rejects.toThrow("fail-fast");
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
 
   it("passes successful step timing metadata to onSuccess handlers", async () => {
     const elapsedTimes: number[] = [];

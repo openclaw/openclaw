@@ -187,6 +187,206 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     expect(attemptSignalReason).toBeInstanceOf(PostCompactionLoopPersistedError);
   });
 
+  it("releases the lane after a post-compaction abort when the backend ignores cancellation", async () => {
+    vi.useFakeTimers();
+    let settleIgnoredAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
+    let resolveAttemptAborted: (() => void) | undefined;
+    const attemptAbortedPromise = new Promise<void>((resolve) => {
+      resolveAttemptAborted = resolve;
+    });
+    try {
+      const overflowError = makeOverflowError();
+      let attemptAborted = false;
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({ promptError: overflowError }),
+      );
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+        const { abortSignal, onToolOutcome } = attemptParams as {
+          abortSignal?: AbortSignal;
+          onToolOutcome?: ToolOutcomeObserver;
+        };
+        for (let i = 0; i < 3; i += 1) {
+          await executeWrappedToolOutcome(
+            "gateway",
+            { action: "lookup", path: "x" },
+            "identical-result",
+            onToolOutcome,
+          );
+        }
+        attemptAborted = abortSignal?.aborted ?? false;
+        resolveAttemptAborted?.();
+        return await new Promise((resolve) => {
+          settleIgnoredAttempt = resolve;
+        });
+      });
+      mockedCompactDirect.mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted session",
+          firstKeptEntryId: "entry-5",
+          tokensBefore: 150000,
+        }),
+      );
+
+      const run = runEmbeddedAgent({
+        ...baseParams,
+        runId: "run-post-compaction-abort-lane-release",
+        timeoutMs: 48 * 60 * 60 * 1000,
+      });
+      let settled = false;
+      void run
+        .finally(() => {
+          settled = true;
+        })
+        .catch(() => {});
+
+      await attemptAbortedPromise;
+      expect(attemptAborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(settled).toBe(true);
+      await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+    } finally {
+      settleIgnoredAttempt?.(makeAttemptResult());
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a native lane alive while a tool is still running", async () => {
+    vi.useFakeTimers();
+    let settleAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
+    let resolveAttemptStarted: (() => void) | undefined;
+    const attemptStarted = new Promise<void>((resolve) => {
+      resolveAttemptStarted = resolve;
+    });
+    try {
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+        const { onAttemptTimeoutArmed } = attemptParams as {
+          onAttemptTimeoutArmed?: () => void;
+        };
+        resolveAttemptStarted?.();
+        onAttemptTimeoutArmed?.();
+        return await new Promise((resolve) => {
+          settleAttempt = resolve;
+        });
+      });
+
+      const run = runEmbeddedAgent({
+        ...baseParams,
+        runId: "run-native-tool-heartbeat",
+        timeoutMs: 1,
+        agentHarnessRuntimeOverride: "openclaw",
+      });
+      let settled = false;
+      void run
+        .finally(() => {
+          settled = true;
+        })
+        .catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(0);
+      await attemptStarted;
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(settled).toBe(false);
+      settleAttempt?.(makeAttemptResult());
+      await expect(run).resolves.toMatchObject({ meta: { aborted: false } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases a native lane when a timed-out attempt ignores cancellation", async () => {
+    vi.useFakeTimers();
+    let settleAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
+    let resolveAttemptStarted: (() => void) | undefined;
+    const attemptStarted = new Promise<void>((resolve) => {
+      resolveAttemptStarted = resolve;
+    });
+    try {
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+        const { onAttemptTimeoutArmed, onAttemptTimeout } = attemptParams as {
+          onAttemptTimeoutArmed?: () => void;
+          onAttemptTimeout?: (reason: Error) => void;
+        };
+        resolveAttemptStarted?.();
+        onAttemptTimeoutArmed?.();
+        onAttemptTimeout?.(new Error("attempt timed out"));
+        return await new Promise((resolve) => {
+          settleAttempt = resolve;
+        });
+      });
+
+      const run = runEmbeddedAgent({
+        ...baseParams,
+        runId: "run-native-timeout-lane-release",
+        timeoutMs: 48 * 60 * 60 * 1000,
+        agentHarnessRuntimeOverride: "openclaw",
+      });
+      let settled = false;
+      void run
+        .finally(() => {
+          settled = true;
+        })
+        .catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(0);
+      await attemptStarted;
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(settled).toBe(true);
+      await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+    } finally {
+      settleAttempt?.(makeAttemptResult());
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases a native lane when an explicit abort ignores cancellation", async () => {
+    vi.useFakeTimers();
+    let settleAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
+    let resolveAttemptStarted: (() => void) | undefined;
+    const attemptStarted = new Promise<void>((resolve) => {
+      resolveAttemptStarted = resolve;
+    });
+    try {
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+        const { onAttemptTimeoutArmed, onAttemptAbort } = attemptParams as {
+          onAttemptTimeoutArmed?: () => void;
+          onAttemptAbort?: () => void;
+        };
+        resolveAttemptStarted?.();
+        onAttemptTimeoutArmed?.();
+        onAttemptAbort?.();
+        return await new Promise((resolve) => {
+          settleAttempt = resolve;
+        });
+      });
+
+      const run = runEmbeddedAgent({
+        ...baseParams,
+        runId: "run-native-abort-lane-release",
+        timeoutMs: 48 * 60 * 60 * 1000,
+        agentHarnessRuntimeOverride: "openclaw",
+      });
+      let settled = false;
+      void run
+        .finally(() => {
+          settled = true;
+        })
+        .catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(0);
+      await attemptStarted;
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(settled).toBe(true);
+      await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+    } finally {
+      settleAttempt?.(makeAttemptResult());
+      vi.useRealTimers();
+    }
+  });
+
   it("does not abort when the result hash changes across post-compaction attempts (progress was made)", async () => {
     const overflowError = makeOverflowError();
     // Attempt 1: overflow → triggers compaction.

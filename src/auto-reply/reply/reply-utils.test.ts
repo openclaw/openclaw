@@ -9,7 +9,6 @@ import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
-  hasTemplateVariables,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
 import {
@@ -1437,14 +1436,5 @@ describe("extractShortModelName", () => {
     for (const [input, expected] of cases) {
       expect(extractShortModelName(input), input).toBe(expected);
     }
-  });
-});
-
-describe("hasTemplateVariables", () => {
-  it("handles empty, static, and repeated variable checks", () => {
-    expect(hasTemplateVariables("")).toBe(false);
-    expect(hasTemplateVariables("[{model}]")).toBe(true);
-    expect(hasTemplateVariables("[{model}]")).toBe(true);
-    expect(hasTemplateVariables("[Claude]")).toBe(false);
   });
 });

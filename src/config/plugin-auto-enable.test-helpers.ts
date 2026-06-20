@@ -40,7 +40,12 @@ export function makeRegistry(
     activation?: { onAgentHarnesses?: string[] };
     autoEnableWhenConfiguredProviders?: string[];
     modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
-    contracts?: { webSearchProviders?: string[]; webFetchProviders?: string[]; tools?: string[] };
+    contracts?: {
+      speechProviders?: string[];
+      webSearchProviders?: string[];
+      webFetchProviders?: string[];
+      tools?: string[];
+    };
     providers?: string[];
     cliBackends?: string[];
     origin?: PluginOrigin;

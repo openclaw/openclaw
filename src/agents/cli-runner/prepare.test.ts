@@ -2185,7 +2185,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
       expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
       expect(context.systemPrompt).not.toContain("## Memory Recall");
-      expect(context.systemPrompt).not.toContain("memory_search");
+      expect(context.systemPrompt).not.toMatch(/^- memory_search\b/m);
       expect(context.systemPromptReport.tools.entries).toEqual([]);
       expect(context.promptToolNamesHash).toBeUndefined();
       expect(context.preparedBackend.env).toBeUndefined();

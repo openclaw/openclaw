@@ -35,6 +35,31 @@ const signalChild = (child, signal) => {
   }
 };
 
+const processGroupAlive = (child) => {
+  if (process.platform === "win32" || !child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+};
+
+const waitForProcessGroupExit = async (child, timeout) => {
+  const deadlineAt = Date.now() + timeout;
+  while (Date.now() < deadlineAt) {
+    if (!processGroupAlive(child)) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  return !processGroupAlive(child);
+};
+
 const runWithTimeout = async (timeout, command, commandArgs) => {
   const killGrace = parsePositiveNumber(
     process.env.OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS ??
@@ -48,6 +73,7 @@ const runWithTimeout = async (timeout, command, commandArgs) => {
   });
   let timedOut = false;
   let killTimer;
+  let killDeadlineAt = 0;
 
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -57,6 +83,7 @@ const runWithTimeout = async (timeout, command, commandArgs) => {
   const timeoutTimer = setTimeout(() => {
     timedOut = true;
     signalChild(child, "SIGTERM");
+    killDeadlineAt = Date.now() + killGrace;
     killTimer = setTimeout(() => signalChild(child, "SIGKILL"), killGrace);
     killTimer.unref();
   }, timeout);
@@ -71,11 +98,20 @@ const runWithTimeout = async (timeout, command, commandArgs) => {
   });
 
   clearTimeout(timeoutTimer);
-  clearTimeout(killTimer);
   if (timedOut) {
+    const remainingGraceMs = Math.max(0, killDeadlineAt - Date.now());
+    if (remainingGraceMs > 0) {
+      await waitForProcessGroupExit(child, remainingGraceMs);
+    }
+    if (processGroupAlive(child)) {
+      signalChild(child, "SIGKILL");
+      await waitForProcessGroupExit(child, 100);
+    }
+    clearTimeout(killTimer);
     console.error(`command timed out after ${timeout}ms: ${command}`);
     process.exit(1);
   }
+  clearTimeout(killTimer);
   if (result.error) {
     console.error(`command failed: ${command}: ${result.error.message}`);
     process.exit(1);

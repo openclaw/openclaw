@@ -1,8 +1,8 @@
 // Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -13,6 +13,7 @@ import {
 import {
   freshLaneTimeoutMs,
   NpmUpdateSmoke,
+  parseRegistryPackageMetadata,
   parseArgs,
   spawnLoggedCommand,
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
@@ -59,12 +60,26 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   throw new Error(`timeout waiting for pid ${pid} to exit`);
 }
 
+async function waitFor(predicate: () => boolean, label: string, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+  }
+  throw new Error(`timeout waiting for ${label}`);
+}
+
 function decodePowerShellFromArgs(args: string[]): string {
   const encoded = args[args.indexOf("-EncodedCommand") + 1];
   return encoded ? Buffer.from(encoded, "base64").toString("utf16le") : "";
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -121,6 +136,71 @@ describe("parallels npm update smoke", () => {
     expect(stopCalls).toBe(1);
   });
 
+  it("removes uploaded guest update scripts when chmod fails", () => {
+    const root = makeTempDir();
+    const logPath = path.join(root, "prlctl.log");
+    const prlctlPath = path.join(root, "prlctl");
+    writeFileSync(
+      prlctlPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+log_path=${JSON.stringify(logPath)}
+printf '%s\\n' "$*" >>"$log_path"
+args=" $* "
+if [[ "$args" == *" /usr/bin/tee /tmp/openclaw-parallels-npm-update-linux-"* ]]; then
+  cat >/dev/null
+  exit 0
+fi
+if [[ "$args" == *" /bin/chmod 755 /tmp/openclaw-parallels-npm-update-linux-"* ]]; then
+  echo "chmod denied" >&2
+  exit 7
+fi
+if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-npm-update-linux-"* ]]; then
+  printf 'cleanup\\n' >>"$log_path"
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(prlctlPath, 0o755);
+
+    withEnv(
+      {
+        OPENAI_API_KEY: "test-key",
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      () => {
+        const smoke = new NpmUpdateSmoke({
+          ...TEST_AUTH,
+          json: false,
+          packageSpec: "openclaw@latest",
+          platforms: new Set<Platform>(["linux"]),
+          provider: "openai",
+          updateTarget: "local-main",
+        });
+        const writeGuestScript = Reflect.get(smoke, "writeGuestScript") as (
+          vm: string,
+          script: string,
+          prefix: string,
+        ) => string;
+
+        expect(() =>
+          writeGuestScript.call(
+            smoke,
+            "Linux VM",
+            "echo update",
+            "openclaw-parallels-npm-update-linux",
+          ),
+        ).toThrow("failed to chmod guest script");
+      },
+    );
+
+    const log = readFileSync(logPath, "utf8");
+    expect(log).toContain("/bin/chmod 755 /tmp/openclaw-parallels-npm-update-linux-");
+    expect(log).toContain("/bin/rm -f /tmp/openclaw-parallels-npm-update-linux-");
+    expect(log.match(/^cleanup$/gm)).toHaveLength(1);
+  });
+
   it("has a one-command beta validation mode with fresh target coverage", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -142,6 +222,35 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("this.updateTargetEffective = targetUrl");
     expect(script).toContain("this.freshTargetSpec = targetUrl");
     expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
+  });
+
+  it("accepts keyed and nested npm metadata for published update targets", () => {
+    expect(
+      parseRegistryPackageMetadata(
+        JSON.stringify({
+          version: "2026.5.20-beta.1",
+          "dist.tarball": "https://registry.example/openclaw-keyed.tgz",
+          gitHead: "abcdef0123456789",
+        }),
+      ),
+    ).toEqual({
+      version: "2026.5.20-beta.1",
+      tarball: "https://registry.example/openclaw-keyed.tgz",
+      gitHead: "abcdef0123456789",
+    });
+
+    expect(
+      parseRegistryPackageMetadata(
+        JSON.stringify({
+          version: "2026.5.20-beta.1",
+          dist: { tarball: "https://registry.example/openclaw-nested.tgz" },
+        }),
+      ),
+    ).toEqual({
+      version: "2026.5.20-beta.1",
+      tarball: "https://registry.example/openclaw-nested.tgz",
+      gitHead: "",
+    });
   });
 
   it("guards beta validation against cross-version harness checkouts", () => {
@@ -206,6 +315,35 @@ describe("parallels npm update smoke", () => {
     expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-linux-gateway.log >&2");
     expect(scripts).not.toContain('cat "$output_file"');
     expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
+  });
+
+  it("passes platform model timeouts to POSIX update agent turns", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.5.3-beta.2",
+      updateTarget: "2026.5.3-beta.2",
+    };
+    withEnv(
+      {
+        OPENCLAW_PARALLELS_LINUX_MODEL_TIMEOUT_S: undefined,
+        OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: undefined,
+        OPENCLAW_PARALLELS_MODEL_TIMEOUT_S: undefined,
+      },
+      () => {
+        expect(macosUpdateScript(input)).toContain("--timeout 1800 --json");
+        expect(linuxUpdateScript(input)).toContain("--timeout 900 --json");
+      },
+    );
+    withEnv(
+      {
+        OPENCLAW_PARALLELS_LINUX_MODEL_TIMEOUT_S: "321",
+        OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: "654",
+      },
+      () => {
+        expect(macosUpdateScript(input)).toContain("--timeout 654 --json");
+        expect(linuxUpdateScript(input)).toContain("--timeout 321 --json");
+      },
+    );
   });
 
   it("streams fresh lane logs instead of retaining them in memory", async () => {
@@ -280,6 +418,146 @@ describe("parallels npm update smoke", () => {
     await waitForDead(descendantPid, 2000);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "lets fresh lane descendants exit during timeout kill grace",
+    async () => {
+      const root = makeTempDir();
+      const logPath = path.join(root, "fresh.log");
+      const scriptPath = path.join(root, "graceful-fresh-lane.mjs");
+      const readyPath = path.join(root, "ready");
+      const donePath = path.join(root, "done");
+      const descendantScript = [
+        "import { writeFileSync } from 'node:fs';",
+        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "process.on('SIGTERM', () => {",
+        `  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      writeFileSync(
+        scriptPath,
+        [
+          "import { spawn } from 'node:child_process';",
+          `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const command = spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
+        timeoutKillGraceMs: 500,
+        timeoutLabel: "fresh lane grace test",
+        timeoutMs: 500,
+      });
+
+      await waitFor(() => existsSync(readyPath), "fresh lane descendant readiness");
+      await expect(command).resolves.toBe(124);
+      expect(readFileSync(donePath, "utf8")).toBe("done");
+    },
+  );
+
+  it("clears update stream timers when spawning the guest command fails", async () => {
+    vi.useFakeTimers();
+    const smoke = withEnv(
+      { OPENAI_API_KEY: "test-key" },
+      () =>
+        new NpmUpdateSmoke({
+          ...TEST_AUTH,
+          json: false,
+          packageSpec: "openclaw@latest",
+          platforms: new Set<Platform>(["linux"]),
+          provider: "openai",
+          updateTarget: "local-main",
+        }),
+    );
+    const runStreamingToJobLog = Reflect.get(smoke, "runStreamingToJobLog") as (
+      command: string,
+      args: string[],
+      timeoutMs: number,
+      ctx: {
+        append(chunk: string | Uint8Array): void;
+        logPath: string;
+        signal: AbortSignal;
+      },
+    ) => Promise<number>;
+
+    await expect(
+      runStreamingToJobLog.call(smoke, "openclaw-definitely-missing-command", [], 60 * 60 * 1000, {
+        append: () => undefined,
+        logPath: "",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "lets update stream descendants exit during timeout kill grace",
+    async () => {
+      const root = makeTempDir();
+      const scriptPath = path.join(root, "stream-update-grace.mjs");
+      const readyPath = path.join(root, "stream-ready");
+      const donePath = path.join(root, "stream-done");
+      const smoke = withEnv(
+        { OPENAI_API_KEY: "test-key" },
+        () =>
+          new NpmUpdateSmoke({
+            ...TEST_AUTH,
+            json: false,
+            packageSpec: "openclaw@latest",
+            platforms: new Set<Platform>(["linux"]),
+            provider: "openai",
+            updateTarget: "local-main",
+          }),
+      );
+      const runStreamingToJobLog = Reflect.get(smoke, "runStreamingToJobLog") as (
+        command: string,
+        args: string[],
+        timeoutMs: number,
+        ctx: {
+          append(chunk: string | Uint8Array): void;
+          logPath: string;
+          signal: AbortSignal;
+        },
+      ) => Promise<number>;
+      const descendantScript = [
+        "import { writeFileSync } from 'node:fs';",
+        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "process.on('SIGTERM', () => {",
+        `  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      writeFileSync(
+        scriptPath,
+        [
+          "import { spawn } from 'node:child_process';",
+          `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const command = runStreamingToJobLog.call(smoke, process.execPath, [scriptPath], 500, {
+        append: () => undefined,
+        logPath: path.join(root, "update.log"),
+        signal: new AbortController().signal,
+      });
+
+      await waitFor(() => existsSync(readyPath), "update stream descendant readiness");
+      await expect(command).resolves.toBe(124);
+      expect(readFileSync(donePath, "utf8")).toBe("done");
+    },
+  );
+
   it("runs Windows updates through a detached done-file runner", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
     const transports = readFileSync(GUEST_TRANSPORTS_PATH, "utf8");
@@ -293,9 +571,13 @@ describe("parallels npm update smoke", () => {
 
   it("cleans timed-out Windows background work and reads bounded log chunks", async () => {
     const decodedCommands: string[] = [];
-    const fakeRun: typeof hostCommandRun = (_command, args) => {
+    const inputs: string[] = [];
+    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
       const decoded = decodePowerShellFromArgs(args);
       decodedCommands.push(decoded);
+      if (options?.input) {
+        inputs.push(String(options.input));
+      }
       if (decoded.includes("Start-Process")) {
         return { status: 0, stderr: "", stdout: "started\n" };
       }
@@ -315,7 +597,13 @@ describe("parallels npm update smoke", () => {
     ).rejects.toThrow("windows background timeout timed out");
 
     const commands = decodedCommands.join("\n---\n");
+    const payloads = inputs.join("\n---\n");
     expect(commands).toContain("$pidPath");
+    expect(commands).toContain("function Write-OpenClawUtf8File");
+    expect(commands).toContain("[System.Text.UTF8Encoding]::new($false)");
+    expect(payloads).toContain("Write-OpenClawUtf8File $exitPath '0'");
+    expect(payloads).toContain("Write-OpenClawUtf8File $donePath 'done'");
+    expect(commands).toContain("Write-OpenClawUtf8File $pidPath ([string]$process.Id)");
     expect(commands).toContain("Start-Process -FilePath powershell.exe");
     expect(commands).toContain("-PassThru");
     expect(commands).toContain("[System.IO.File]::Open($logPath");
@@ -327,6 +615,9 @@ describe("parallels npm update smoke", () => {
     expect(commands).toContain(
       "Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath",
     );
+    expect(`${commands}\n${payloads}`).not.toContain("Set-Content -Path $exitPath");
+    expect(`${commands}\n${payloads}`).not.toContain("Set-Content -Path $donePath");
+    expect(commands).not.toContain("Set-Content -Path $pidPath");
     expect(commands).not.toContain("ReadAllBytes");
   });
 

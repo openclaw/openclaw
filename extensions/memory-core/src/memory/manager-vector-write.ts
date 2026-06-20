@@ -16,7 +16,7 @@ export function replaceMemoryVectorRow(params: {
   embedding: number[];
   tableName?: string;
 }): void {
-  const tableName = params.tableName ?? "chunks_vec";
+  const tableName = params.tableName ?? "memory_index_chunks_vec";
   try {
     params.db.prepare(`DELETE FROM ${tableName} WHERE id = ?`).run(params.id);
   } catch {}

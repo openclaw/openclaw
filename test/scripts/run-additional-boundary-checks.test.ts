@@ -1,4 +1,5 @@
 // Run Additional Boundary Checks tests cover run additional boundary checks script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   BOUNDARY_CHECKS,
   createBoundedOutputBuffer,
   formatCommand,
+  parseCliArgs,
   parseShardSelection,
   parseShardSpec,
   resolveConcurrency,
@@ -27,6 +29,13 @@ function createOutputBuffer() {
     },
     text: () => chunks.join(""),
   };
+}
+
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, ["scripts/run-additional-boundary-checks.mjs", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+  });
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -132,6 +141,34 @@ describe("run-additional-boundary-checks", () => {
     expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
     expect(() => parseShardSpec("9007199254740993/9007199254740994")).toThrow("Invalid shard spec");
+  });
+
+  it("parses CLI help and shard args before running checks", () => {
+    expect(parseCliArgs(["--help"], {})).toEqual({ help: true, shardSpec: "" });
+    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({ help: false, shardSpec: "2/4" });
+    expect(parseCliArgs(["--shard=3/4"], {})).toEqual({ help: false, shardSpec: "3/4" });
+    expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toEqual({
+      help: false,
+      shardSpec: "4/4",
+    });
+    expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
+    expect(() => parseCliArgs(["--wat"], {})).toThrow("Unknown argument: --wat");
+  });
+
+  it("does not start checks for CLI help or invalid arguments", () => {
+    const help = runCli("--help");
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(help.stdout).not.toContain("::group::");
+    expect(help.stderr).toBe("");
+
+    const unknown = runCli("--wat");
+    expect(unknown.status).toBe(1);
+    expect(unknown.stdout).toBe("");
+    expect(unknown.stderr).toContain("Unknown argument: --wat");
+    expect(unknown.stderr).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(unknown.stderr).not.toContain("::group::");
+    expect(unknown.stderr).not.toContain("pnpm");
   });
 
   it("keeps the raw HTTP/2 import guard in source boundary checks", () => {

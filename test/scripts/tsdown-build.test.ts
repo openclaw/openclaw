@@ -651,6 +651,7 @@ describe("runTsdownBuildInvocation", () => {
     async () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-");
       const childPidPath = path.join(rootDir, "child.pid");
+      const timeoutMs = 1_000;
       let childPid = 0;
       const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
       const parentScript = [
@@ -680,17 +681,84 @@ describe("runTsdownBuildInvocation", () => {
             env: {
               ...process.env,
               OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
-              OPENCLAW_TSDOWN_TIMEOUT_MS: "50",
+              OPENCLAW_TSDOWN_TIMEOUT_MS: String(timeoutMs),
             },
           },
         );
 
-        await waitForFile(childPidPath, 2_000);
+        await waitForFile(childPidPath, timeoutMs);
         childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
         expect(isProcessAlive(childPid)).toBe(true);
         const result = await runPromise;
 
         expect(result.timedOut).toBe(true);
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves timeout grace when descendant processes exit cleanly",
+    async () => {
+      const rootDir = createTempDir("openclaw-tsdown-timeout-clean-");
+      const readyPath = path.join(rootDir, "child.ready");
+      const cleanupPath = path.join(rootDir, "child.cleanup");
+      const childPidPath = path.join(rootDir, "child.pid");
+      const childScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {",
+        "  setTimeout(() => {",
+        `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
+        "    process.exit(0);",
+        "  }, 75);",
+        "});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      let childPid = 0;
+
+      try {
+        const output = createWriteSink();
+        const startedAt = Date.now();
+        const runPromise = runTsdownBuildInvocation(
+          {
+            command: process.execPath,
+            args: ["-e", parentScript],
+            options: {
+              stdio: ["ignore", "pipe", "pipe"],
+              shell: false,
+              env: process.env,
+            },
+          },
+          {
+            stdout: output.sink,
+            stderr: output.sink,
+            env: {
+              ...process.env,
+              OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
+              OPENCLAW_TSDOWN_TIMEOUT_MS: "1000",
+            },
+          },
+        );
+
+        await waitForFile(readyPath, 2_000);
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        const result = await runPromise;
+
+        expect(result.timedOut).toBe(true);
+        expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
+        expect(Date.now() - startedAt).toBeLessThan(1_700);
         await waitForDead(childPid, 2_000);
       } finally {
         if (childPid && isProcessAlive(childPid)) {

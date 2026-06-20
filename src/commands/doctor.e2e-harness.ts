@@ -225,6 +225,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/plugins/installs.json",
       hasLegacy: false,
     },
+    debugProxyCaptureSidecar: {
+      sourcePath: "/tmp/state/debug-proxy/capture.sqlite",
+      blobDir: "/tmp/state/debug-proxy/blobs",
+      hasLegacy: false,
+    },
     stateSchema: {
       hasLegacy: false,
       preview: [],

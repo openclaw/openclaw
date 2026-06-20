@@ -333,7 +333,6 @@ export const editMessageReplyMarkupSpy: AnyAsyncMock = grammySpies.editMessageRe
 export const deleteMessageSpy: AnyAsyncMock = grammySpies.deleteMessageSpy;
 export const setMessageReactionSpy: AnyAsyncMock = grammySpies.setMessageReactionSpy;
 export const setMyCommandsSpy: AnyAsyncMock = grammySpies.setMyCommandsSpy;
-export const getMeSpy: AnyAsyncMock = grammySpies.getMeSpy;
 export const getChatSpy: AnyAsyncMock = grammySpies.getChatSpy;
 export const sendMessageSpy: AnyAsyncMock = grammySpies.sendMessageSpy;
 export const sendAnimationSpy: AnyAsyncMock = grammySpies.sendAnimationSpy;
@@ -616,8 +615,8 @@ beforeEach(() => {
   setMyCommandsSpy.mockResolvedValue(undefined);
   getChatSpy.mockReset();
   getChatSpy.mockResolvedValue(undefined);
-  getMeSpy.mockReset();
-  getMeSpy.mockResolvedValue({
+  grammySpies.getMeSpy.mockReset();
+  grammySpies.getMeSpy.mockResolvedValue({
     username: "openclaw_bot",
     has_topics_enabled: true,
   });

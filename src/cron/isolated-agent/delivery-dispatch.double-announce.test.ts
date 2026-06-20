@@ -1175,6 +1175,79 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
   });
 
+  it("cleans up the direct cron session when delivery target resolution is refused (deleteAfterRun)", async () => {
+    // A keyless implicit cron whose inherited shared-bucket target is refused
+    // (resolvedDelivery.ok=false, issue #91613 fail-closed path) must still
+    // retire its session/transcript when deleteAfterRun is enabled — otherwise
+    // the one-shot session leaks.
+    const params = makeBaseParams({ synthesizedText: "refused report" });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("refusing inherited shared-bucket delivery target"),
+    };
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expectResultFields(state.result, {
+      status: "error",
+      errorKind: "delivery-target",
+    });
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:cron:test-job",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("cleans up the direct cron session when refused delivery is best-effort (deleteAfterRun)", async () => {
+    // Same fail-closed refusal, best-effort variant: dispatch returns status:ok
+    // (warn-logs instead of failing the run) but the deleteAfterRun session must
+    // still be retired.
+    const params = makeBaseParams({
+      synthesizedText: "refused report",
+      deliveryBestEffort: true,
+    });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("refusing inherited shared-bucket delivery target"),
+    };
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expectResultFields(state.result, {
+      status: "ok",
+    });
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:cron:test-job",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
   it("text delivery fires exactly once (no double-deliver)", async () => {
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 

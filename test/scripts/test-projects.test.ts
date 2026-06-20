@@ -302,7 +302,7 @@ describe("scripts/test-projects changed-target routing", () => {
     });
     expect(resolveChangedTestTargetPlan(["scripts/github/real-behavior-proof-check.mjs"])).toEqual({
       mode: "targets",
-      targets: ["test/scripts/real-behavior-proof-check.test.ts"],
+      targets: ["test/vitest/vitest.tooling.config.ts"],
     });
   });
 
@@ -1610,8 +1610,14 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("includes the isolated tooling shard for broad shell helper targets", () => {
-    expect(buildVitestRunPlans(["test/scripts"], process.cwd())).toEqual([
+  it("chunks the broad shell helper tooling shard after isolated targets", () => {
+    const plans = buildVitestRunPlans(["test/scripts"], process.cwd());
+    expect(plans.slice(0, 3)).toEqual([
+      expect.objectContaining({
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        includePatterns: expect.arrayContaining(["test/scripts/arg-utils.test.ts"]),
+        watchMode: false,
+      }),
       {
         config: "test/vitest/vitest.tooling-docker.config.ts",
         forwardedArgs: [],
@@ -1624,13 +1630,19 @@ describe("scripts/test-projects changed-target routing", () => {
         includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
         watchMode: false,
       },
-      {
-        config: "test/vitest/vitest.tooling.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["test/scripts/**/*.test.ts"],
-        watchMode: false,
-      },
     ]);
+    const toolingPlans = plans.slice(3);
+    const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
+
+    expect(toolingPlans.length).toBeGreaterThan(1);
+    expect(
+      toolingPlans.every((plan) => plan.config === "test/vitest/vitest.tooling.config.ts"),
+    ).toBe(true);
+    expect(toolingPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 60)).toBe(true);
+    expect(toolingTargets).toContain("test/scripts/run-opengrep.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
+    expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
   });
 
   it("routes the src scripts test root to the tooling shard", () => {
@@ -1722,8 +1734,14 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("includes the isolated tooling shard for broad shell helper globs", () => {
-    expect(buildVitestRunPlans(["test/scripts/*.test.ts"], process.cwd())).toEqual([
+  it("chunks broad shell helper globs after isolated targets", () => {
+    const plans = buildVitestRunPlans(["test/scripts/*.test.ts"], process.cwd());
+    expect(plans.slice(0, 3)).toEqual([
+      expect.objectContaining({
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        includePatterns: expect.arrayContaining(["test/scripts/arg-utils.test.ts"]),
+        watchMode: false,
+      }),
       {
         config: "test/vitest/vitest.tooling-docker.config.ts",
         forwardedArgs: [],
@@ -1736,13 +1754,19 @@ describe("scripts/test-projects changed-target routing", () => {
         includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
         watchMode: false,
       },
-      {
-        config: "test/vitest/vitest.tooling.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["test/scripts/*.test.ts"],
-        watchMode: false,
-      },
     ]);
+    const toolingPlans = plans.slice(3);
+    const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
+
+    expect(toolingPlans.length).toBeGreaterThan(1);
+    expect(
+      toolingPlans.every((plan) => plan.config === "test/vitest/vitest.tooling.config.ts"),
+    ).toBe(true);
+    expect(toolingPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 60)).toBe(true);
+    expect(toolingTargets).toContain("test/scripts/run-opengrep.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
+    expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
   });
 
   it("keeps broad shell helper watch targets in one tooling shard", () => {
@@ -1918,6 +1942,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/helpers/temp-dir.ts": "export const tempDir = 'x';\n",
         "test/helpers/temp-dir.test.ts":
           "import { tempDir } from './temp-dir.js';\nvoid tempDir;\n",
+        "test/scripts/bench-cli-startup.test.ts":
+          "import { tempDir } from '../helpers/temp-dir.js';\nvoid tempDir;\n",
         "src/foo.test.ts":
           "import { tempDir } from '../test/helpers/temp-dir.js';\nvoid tempDir;\n",
       },
@@ -1926,7 +1952,11 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     );
 
-    expect(targets).toEqual(["test/helpers/temp-dir.test.ts", "src/foo.test.ts"]);
+    expect(targets).toEqual([
+      "test/helpers/temp-dir.test.ts",
+      "src/foo.test.ts",
+      "test/scripts/bench-cli-startup.test.ts",
+    ]);
   });
 
   it("keeps the broad changed run available for shared test helpers", () => {
