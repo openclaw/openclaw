@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
@@ -76,4 +77,30 @@ describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
       assertCreateProposalDoesNotPatchExistingSkills({ workspaceDir, content }),
     ).not.toThrow();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects configured trusted symlink workspace skill refs",
+    async () => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-workshop-symlink-root-");
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-symlink-skills-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await writeSkill({
+        dir: path.join(targetSkillsDir, "shared-skill"),
+        name: "shared-skill",
+        description: "Shared skill target",
+        body: "# Shared Skill\n\nExisting workflow.\n",
+      });
+      const config = { skills: { load: { allowSymlinkTargets: [targetSkillsDir] } } };
+
+      expect(() =>
+        assertCreateProposalDoesNotPatchExistingSkills({
+          workspaceDir,
+          config,
+          content: "Patch `skills/shared-skill/SKILL.md`.",
+        }),
+      ).toThrow(
+        "action=create cannot propose changes to existing workspace skills: skills/shared-skill/",
+      );
+    },
+  );
 });

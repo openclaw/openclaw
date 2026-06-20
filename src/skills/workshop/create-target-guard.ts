@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-safety.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 
@@ -9,6 +10,7 @@ const WORKSPACE_SKILL_PATH_REFERENCE_PATTERN =
 
 export function assertCreateProposalDoesNotPatchExistingSkills(params: {
   workspaceDir: string;
+  config?: OpenClawConfig;
   content: string;
 }): void {
   const existingSkillRefs = collectExistingWorkspaceSkillRefs(params);
@@ -24,10 +26,14 @@ export function assertCreateProposalDoesNotPatchExistingSkills(params: {
 
 function collectExistingWorkspaceSkillRefs(params: {
   workspaceDir: string;
+  config?: OpenClawConfig;
   content: string;
 }): string[] {
   const workspaceDir = path.resolve(params.workspaceDir);
-  const skillDirs = loadWorkspaceSkillEntries(workspaceDir, { workspaceOnly: true })
+  const skillDirs = loadWorkspaceSkillEntries(workspaceDir, {
+    config: params.config,
+    workspaceOnly: true,
+  })
     .map((entry) => path.resolve(entry.skill.baseDir))
     .toSorted((a, b) => b.length - a.length);
   const refs = new Set<string>();

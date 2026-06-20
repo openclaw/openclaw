@@ -255,6 +255,7 @@ export async function proposeCreateSkill(
   }
   assertCreateProposalDoesNotPatchExistingSkills({
     workspaceDir: input.workspaceDir,
+    config: input.config,
     content: input.content,
   });
 
@@ -421,6 +422,7 @@ export async function reviseSkillProposal(
     if (record.kind === "create") {
       assertCreateProposalDoesNotPatchExistingSkills({
         workspaceDir: input.workspaceDir,
+        config: input.config,
         content: input.content,
       });
     }

@@ -207,6 +207,55 @@ describe("skill workshop proposals", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "rejects create and revise proposals that target trusted symlink workspace skills",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-target-guard-skills-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await writeSkill({
+        dir: path.join(targetSkillsDir, "shared-skill"),
+        name: "shared-skill",
+        description: "Shared skill target",
+        body: "# Shared Skill\n\nExisting workflow.\n",
+      });
+      const config = { skills: { load: { allowSymlinkTargets: [targetSkillsDir] } } };
+
+      await expect(
+        proposeCreateSkill({
+          workspaceDir,
+          config,
+          name: "shared-skill-hardening",
+          description: "Improve existing shared skill workflows",
+          content: "Patch `skills/shared-skill/SKILL.md` instead of creating a sibling.\n",
+        }),
+      ).rejects.toThrow(
+        "action=create cannot propose changes to existing workspace skills: skills/shared-skill/",
+      );
+
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        name: "new-helper",
+        description: "New helper workflow",
+        content: "# New Helper\n\nUse this as a new skill.\n",
+      });
+      await expect(
+        reviseSkillProposal({
+          workspaceDir,
+          config,
+          proposalId: proposal.record.id,
+          content: "Patch `skills/shared-skill/SKILL.md` instead of creating a sibling.\n",
+        }),
+      ).rejects.toThrow(
+        "action=create cannot propose changes to existing workspace skills: skills/shared-skill/",
+      );
+      await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+        record: { proposedVersion: "v1" },
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "applies updates through opted-in trusted workspace skills symlink targets",
     async () => {
       const workspaceDir = await makeWorkspace();

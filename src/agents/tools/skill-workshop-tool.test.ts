@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -258,6 +259,53 @@ describe("skill_workshop tool", () => {
       `Revised skill proposal ${(result.details as { id: string }).id} (pending) for weather-planner.`,
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects create and revise calls that target trusted symlink workspace skills",
+    async () => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-symlink-");
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-tool-target-skills-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await writeSkill({
+        dir: path.join(targetSkillsDir, "shared-skill"),
+        name: "shared-skill",
+        description: "Shared skill target",
+        body: "# Shared Skill\n\nExisting workflow.\n",
+      });
+      const tool = createSkillWorkshopTool({
+        workspaceDir,
+        config: { skills: { load: { allowSymlinkTargets: [targetSkillsDir] } } },
+        agentId: "main",
+      });
+
+      await expect(
+        tool.execute("call-create", {
+          action: "create",
+          name: "Shared Skill Hardening",
+          description: "Improve the existing shared skill",
+          proposal_content: "Patch `skills/shared-skill/SKILL.md` instead of creating a sibling.\n",
+        }),
+      ).rejects.toThrow(
+        "action=create cannot propose changes to existing workspace skills: skills/shared-skill/",
+      );
+
+      const proposal = await tool.execute("call-safe-create", {
+        action: "create",
+        name: "New Helper",
+        description: "Create a new helper skill",
+        proposal_content: "# New Helper\n\nUse this as a new skill.\n",
+      });
+      await expect(
+        tool.execute("call-revise", {
+          action: "revise",
+          proposal_id: (proposal.details as { id: string }).id,
+          proposal_content: "Patch `skills/shared-skill/SKILL.md` instead of creating a sibling.\n",
+        }),
+      ).rejects.toThrow(
+        "action=create cannot propose changes to existing workspace skills: skills/shared-skill/",
+      );
+    },
+  );
 
   it("applies, rejects, and quarantines proposals through the workshop service", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
