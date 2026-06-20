@@ -7,6 +7,10 @@ vi.mock("../../tts/tts.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
+vi.mock("../../infra/os-summary.js", () => ({
+  resolveOsRuntimeName: vi.fn(() => "macos 26.5.1"),
+}));
+
 describe("buildCliAgentSystemPrompt", () => {
   afterEach(() => {
     clearPluginCommands();
@@ -105,6 +109,17 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("agent=main");
     expect(prompt).toContain("session=agent:main:telegram:direct:peer");
     expect(prompt).toContain("sessionId=session-123");
+  });
+
+  it("uses the resolved OS runtime name in prompt metadata", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("os=macos 26.5.1");
+    expect(prompt).not.toContain("os=Darwin 25.5.0");
   });
 
   it("includes Telegram rich text guidance for CLI final replies", () => {

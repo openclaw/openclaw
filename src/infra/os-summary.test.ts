@@ -11,7 +11,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-import { resolveOsSummary } from "./os-summary.js";
+import { resolveOsRuntimeName, resolveOsSummary } from "./os-summary.js";
 
 type OsSummaryCase = {
   name: string;
@@ -93,5 +93,33 @@ describe("resolveOsSummary", () => {
       });
     }
     expect(resolveOsSummary()).toEqual(expected);
+  });
+});
+
+describe("resolveOsRuntimeName", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("uses the macOS product version instead of the Darwin kernel release", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.5.0");
+    spawnSyncMock.mockReturnValue({
+      stdout: "26.5.1\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+
+    expect(resolveOsRuntimeName()).toBe("macos 26.5.1");
+  });
+
+  it("keeps non-darwin runtime names on os metadata", () => {
+    vi.spyOn(os, "platform").mockReturnValue("linux");
+    vi.spyOn(os, "release").mockReturnValue("6.8.0");
+
+    expect(resolveOsRuntimeName()).toBe("linux 6.8.0");
   });
 });

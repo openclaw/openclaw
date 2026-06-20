@@ -11,11 +11,34 @@ type OsSummary = {
 };
 
 const cachedOsSummaryByKey = new Map<string, OsSummary>();
+const cachedOsRuntimeNameByKey = new Map<string, string>();
 
 function macosVersion(): string {
   const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
   const out = normalizeOptionalString(res.stdout) ?? "";
   return out || os.release();
+}
+
+/** Resolves the OS name/release text used before a separate architecture field. */
+export function resolveOsRuntimeName(): string {
+  const platform = os.platform();
+  const release = os.release();
+  const cacheKey = `${platform}\0${release}`;
+  const cached = cachedOsRuntimeNameByKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const runtimeName = (() => {
+    if (platform === "darwin") {
+      return `macos ${macosVersion()}`;
+    }
+    if (platform === "win32") {
+      return `windows ${release}`;
+    }
+    return `${platform} ${release}`;
+  })();
+  cachedOsRuntimeNameByKey.set(cacheKey, runtimeName);
+  return runtimeName;
 }
 
 /** Resolves a compact OS label for diagnostics, logs, and environment summaries. */
@@ -30,15 +53,7 @@ export function resolveOsSummary(): OsSummary {
   if (cached) {
     return cached;
   }
-  const label = (() => {
-    if (platform === "darwin") {
-      return `macos ${macosVersion()} (${arch})`;
-    }
-    if (platform === "win32") {
-      return `windows ${release} (${arch})`;
-    }
-    return `${platform} ${release} (${arch})`;
-  })();
+  const label = `${resolveOsRuntimeName()} (${arch})`;
   const summary = { platform, arch, release, label };
   cachedOsSummaryByKey.set(cacheKey, summary);
   return summary;
