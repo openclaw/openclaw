@@ -45,6 +45,7 @@ export type HeartbeatStatus = {
 export type StatusSummary = {
   runtimeVersion?: string | null;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
+  sessionStoreRuntime?: import("../config/sessions/postgres-runtime-client.js").PostgresSessionStoreRuntimeMetricsSummary;
   linkChannel?: {
     id: ChannelId;
     label: string;

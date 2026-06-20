@@ -1,6 +1,8 @@
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
+import type { StatusSummary } from "../../commands/status.types.js";
+import { getPostgresSessionStoreRuntimeMetricsSummary } from "../../config/sessions/postgres-runtime-client.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -87,12 +89,23 @@ function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
 }): HealthSummary {
-  return {
+  return mergeSessionStoreRuntimeMetrics({
     ...params.cached,
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
     modelPricing: getGatewayModelPricingHealth({
       enabled: params.cached.modelPricing?.state !== "disabled",
     }),
+  });
+}
+
+function mergeSessionStoreRuntimeMetrics<T extends HealthSummary | StatusSummary>(payload: T): T {
+  const sessionStoreRuntime = getPostgresSessionStoreRuntimeMetricsSummary({ limit: 20 });
+  if (!sessionStoreRuntime) {
+    return payload;
+  }
+  return {
+    ...payload,
+    sessionStoreRuntime,
   };
 }
 
@@ -137,7 +150,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     try {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      respond(true, snap, undefined);
+      respond(true, mergeSessionStoreRuntimeMetrics(snap), undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
@@ -151,6 +164,6 @@ export const healthHandlers: GatewayRequestHandlers = {
     if (context.getEventLoopHealth) {
       status.eventLoop = context.getEventLoopHealth();
     }
-    respond(true, status, undefined);
+    respond(true, mergeSessionStoreRuntimeMetrics(status), undefined);
   },
 };

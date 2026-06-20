@@ -47,10 +47,13 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
   loadSessionStore,
+  loadSessionStoreAsync,
+  readRecentTranscriptChunkWindow,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveStorePath,
+  type SessionStoreAdapter,
   type SessionEntry,
   type SessionStoreTarget,
   type SessionScope,
@@ -90,6 +93,7 @@ import {
   readRecentSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionTitleFieldsFromTranscript,
+  transcriptJsonlRecordsToMessages,
 } from "./session-utils.fs.js";
 import type {
   GatewayAgentRow,
@@ -117,6 +121,7 @@ export {
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
+  transcriptJsonlRecordsToMessages,
   visitSessionMessagesAsync,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
@@ -783,6 +788,57 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string }
   };
 }
 
+export async function loadSessionEntryAsync(sessionKey: string, opts?: { agentId?: string }) {
+  const cfg = getRuntimeConfig();
+  const key = normalizeOptionalString(sessionKey) ?? "";
+  const target = await resolveGatewaySessionStoreTargetAsync({
+    cfg,
+    key,
+    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+  });
+  const storePath = target.storePath;
+  const store = await loadSessionStoreAsync(storePath);
+  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
+  return {
+    cfg,
+    storePath,
+    store,
+    entry: freshestMatch?.entry,
+    canonicalKey: target.canonicalKey,
+    legacyKey,
+  };
+}
+
+export async function readRecentSessionMessagesFromTranscriptChunks(params: {
+  adapter: SessionStoreAdapter;
+  storePath: string;
+  sessionKey: string;
+  maxMessages: number;
+  maxChunks?: number;
+  transcriptPath?: string;
+}): Promise<unknown[] | null> {
+  if (!params.adapter.listTranscriptChunks) {
+    return null;
+  }
+  const maxMessages = Math.max(0, Math.floor(params.maxMessages));
+  if (maxMessages === 0) {
+    return [];
+  }
+  const maxChunks =
+    typeof params.maxChunks === "number" && Number.isFinite(params.maxChunks)
+      ? Math.max(1, Math.floor(params.maxChunks))
+      : Math.max(1, maxMessages);
+  const window = await readRecentTranscriptChunkWindow({
+    adapter: params.adapter,
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    limit: maxChunks,
+    ...(params.transcriptPath ? { transcriptPath: params.transcriptPath } : {}),
+  });
+  return transcriptJsonlRecordsToMessages(window.lines, { maxMessages });
+}
+
 export function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
@@ -1192,6 +1248,56 @@ function resolveGatewaySessionStoreLookup(params: {
   };
 }
 
+async function resolveGatewaySessionStoreLookupAsync(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  canonicalKey: string;
+  agentId: string;
+  initialStore?: Record<string, SessionEntry>;
+}): Promise<{
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  match: { entry: SessionEntry; key: string } | undefined;
+}> {
+  const scanTargets = buildGatewaySessionStoreScanTargets(params);
+  const candidates = resolveGatewaySessionStoreCandidates(params.cfg, params.agentId);
+  const fallback = candidates[0] ?? {
+    agentId: params.agentId,
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
+  };
+  let selectedStorePath = fallback.storePath;
+  let selectedStore = params.initialStore ?? (await loadSessionStoreAsync(fallback.storePath));
+  let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
+  let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
+
+  for (let index = 1; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (!candidate) {
+      continue;
+    }
+    const store = await loadSessionStoreAsync(candidate.storePath);
+    const match = findFreshestStoreMatch(store, ...scanTargets);
+    if (!match) {
+      continue;
+    }
+    const updatedAt = match.entry.updatedAt ?? 0;
+    // Mirror combined-store merge behavior so follow-up mutations target the
+    // same backing store that won the listing merge when ids collide.
+    if (!selectedMatch || updatedAt >= selectedUpdatedAt) {
+      selectedStorePath = candidate.storePath;
+      selectedStore = store;
+      selectedMatch = match;
+      selectedUpdatedAt = updatedAt;
+    }
+  }
+
+  return {
+    storePath: selectedStorePath,
+    store: selectedStore,
+    match: selectedMatch,
+  };
+}
+
 function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -1236,6 +1342,83 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
       continue;
     }
     const store = loadSessionStore(target.storePath);
+    const match = findFreshestStoreMatch(store, ...lookupSeeds);
+    if (!match) {
+      continue;
+    }
+    if (!best || (match.entry.updatedAt ?? 0) >= (best.match.entry.updatedAt ?? 0)) {
+      best = { storePath: target.storePath, store, match };
+    }
+  }
+  if (!best) {
+    return null;
+  }
+
+  const storeKeys = new Set<string>([canonicalKey]);
+  if (params.key !== canonicalKey) {
+    storeKeys.add(params.key);
+  }
+  storeKeys.add(best.match.key);
+  if (params.scanLegacyKeys !== false) {
+    for (const seed of lookupSeeds) {
+      storeKeys.add(seed);
+      for (const legacyKey of findStoreKeysIgnoreCase(best.store, seed)) {
+        storeKeys.add(legacyKey);
+      }
+    }
+  }
+  return {
+    agentId: legacyAgentId,
+    storePath: best.storePath,
+    canonicalKey,
+    storeKeys: Array.from(storeKeys),
+  };
+}
+
+async function resolveExplicitDeletedLegacyMainStoreTargetAsync(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  scanLegacyKeys?: boolean;
+}): Promise<{
+  agentId: string;
+  storePath: string;
+  canonicalKey: string;
+  storeKeys: string[];
+} | null> {
+  const parsed = parseAgentSessionKey(params.key);
+  const legacyAgentId = normalizeAgentId(parsed?.agentId);
+  if (
+    !parsed ||
+    legacyAgentId !== DEFAULT_AGENT_ID ||
+    listAgentIds(params.cfg).includes(legacyAgentId)
+  ) {
+    return null;
+  }
+
+  // Only preserve agent:main:* when it is backed by a discovered deleted-main store.
+  // Shared-store legacy aliases should continue remapping to the configured default agent.
+  const canonicalKey = resolveStoredSessionKeyForAgentStore({
+    cfg: params.cfg,
+    agentId: legacyAgentId,
+    sessionKey: params.key,
+  });
+  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: legacyAgentId });
+  const legacyAgentMainKey = `agent:${legacyAgentId}:main`;
+  const lookupSeeds = Array.from(
+    new Set([params.key, canonicalKey, agentMainKey, legacyAgentMainKey]),
+  );
+  let best:
+    | {
+        storePath: string;
+        store: Record<string, SessionEntry>;
+        match: { entry: SessionEntry; key: string };
+      }
+    | undefined;
+  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
+    if (target.agentId !== legacyAgentId) {
+      continue;
+    }
+    const store = await loadSessionStoreAsync(target.storePath);
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
       continue;
@@ -1341,7 +1524,85 @@ export function resolveGatewaySessionStoreTarget(params: {
   };
 }
 
-export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+export async function resolveGatewaySessionStoreTargetAsync(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  agentId?: string;
+  scanLegacyKeys?: boolean;
+  store?: Record<string, SessionEntry>;
+}): Promise<{
+  agentId: string;
+  storePath: string;
+  canonicalKey: string;
+  storeKeys: string[];
+}> {
+  const key = normalizeOptionalString(params.key) ?? "";
+  const explicitDeletedMainTarget = await resolveExplicitDeletedLegacyMainStoreTargetAsync({
+    cfg: params.cfg,
+    key,
+    scanLegacyKeys: params.scanLegacyKeys,
+  });
+  if (explicitDeletedMainTarget) {
+    return explicitDeletedMainTarget;
+  }
+
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: key,
+  });
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  const agentId =
+    canonicalKey === "global" && requestedAgentId
+      ? normalizeAgentId(requestedAgentId)
+      : resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const { storePath, store } = await resolveGatewaySessionStoreLookupAsync({
+    cfg: params.cfg,
+    key,
+    canonicalKey,
+    agentId,
+    initialStore: params.store,
+  });
+
+  if (canonicalKey === "global" || canonicalKey === "unknown") {
+    const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];
+    return { agentId, storePath, canonicalKey, storeKeys };
+  }
+
+  const storeKeys = new Set<string>();
+  storeKeys.add(canonicalKey);
+  if (key && key !== canonicalKey) {
+    storeKeys.add(key);
+  }
+  if (params.scanLegacyKeys !== false) {
+    // Scan the on-disk store for case variants of every target to find
+    // legacy mixed-case entries (e.g. "agent:ops:MAIN" when canonical is "agent:ops:work").
+    const scanTargets = buildGatewaySessionStoreScanTargets({
+      cfg: params.cfg,
+      key,
+      canonicalKey,
+      agentId,
+    });
+    for (const seed of scanTargets) {
+      for (const legacyKey of findStoreKeysIgnoreCase(store, seed)) {
+        storeKeys.add(legacyKey);
+      }
+    }
+  }
+  return {
+    agentId,
+    storePath,
+    canonicalKey,
+    storeKeys: Array.from(storeKeys),
+  };
+}
+
+export {
+  canUseCombinedSessionStoreWindowForGateway,
+  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayAsync,
+  loadCombinedSessionStoreWindowForGatewayAsync,
+  resolveCombinedSessionStoreWindowDecisionForGateway,
+} from "../config/sessions/combined-store-gateway.js";
 
 export function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;

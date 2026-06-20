@@ -92,15 +92,18 @@ import {
   archiveFileOnDisk,
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayAsync,
+  loadCombinedSessionStoreWindowForGatewayAsync,
   loadGatewaySessionRow,
   loadSessionEntry,
+  loadSessionEntryAsync,
   migrateAndPruneGatewaySessionStoreKey,
   readRecentSessionMessagesWithStatsAsync,
   readRecentSessionTranscriptLines,
   readSessionMessageCountAsync,
   readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
+  resolveCombinedSessionStoreWindowDecisionForGateway,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionDisplayModelIdentityRef,
@@ -252,6 +255,57 @@ function resolveOptionalInitialSessionMessage(params: {
     return params.message;
   }
   return undefined;
+}
+
+const SESSIONS_LIST_DEFAULT_LIMIT = 100;
+
+function normalizeSessionsListLimit(limit: unknown): number {
+  return typeof limit === "number" && Number.isFinite(limit)
+    ? Math.max(1, Math.floor(limit))
+    : SESSIONS_LIST_DEFAULT_LIMIT;
+}
+
+function normalizeSessionsListOffset(offset: unknown): number {
+  return typeof offset === "number" && Number.isFinite(offset)
+    ? Math.max(0, Math.floor(offset))
+    : 0;
+}
+
+function resolveSessionsListUpdatedAfter(activeMinutes: unknown): number | undefined {
+  if (typeof activeMinutes !== "number" || !Number.isFinite(activeMinutes)) {
+    return undefined;
+  }
+  return Date.now() - Math.max(1, Math.floor(activeMinutes)) * 60_000;
+}
+
+function normalizeSessionsListLabel(label: unknown): string | undefined {
+  const normalized = typeof label === "string" ? label.trim() : "";
+  return normalized ? normalized : undefined;
+}
+
+function resolveBoundedSessionListWindowDecision(params: {
+  cfg: OpenClawConfig;
+  listParams: Record<string, unknown>;
+  configuredAgentsOnly: boolean;
+}) {
+  const p = params.listParams;
+  return resolveCombinedSessionStoreWindowDecisionForGateway(params.cfg, {
+    agentId: typeof p.agentId === "string" ? p.agentId : undefined,
+    configuredAgentsOnly: params.configuredAgentsOnly,
+    spawnedBy: typeof p.spawnedBy === "string" ? p.spawnedBy : undefined,
+    search: typeof p.search === "string" ? p.search : undefined,
+  });
+}
+
+type BoundedSessionStoreWindow = Awaited<
+  ReturnType<typeof loadCombinedSessionStoreWindowForGatewayAsync>
+>;
+
+function isBoundedSessionStoreWindow(value: {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+}): value is BoundedSessionStoreWindow {
+  return "limitApplied" in value;
 }
 
 function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: boolean }): boolean {
@@ -891,24 +945,47 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = context.getRuntimeConfig();
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
+    const boundedWindowDecision = resolveBoundedSessionListWindowDecision({
+      cfg,
+      listParams: p as Record<string, unknown>,
+      configuredAgentsOnly,
+    });
+    const useBoundedWindow = boundedWindowDecision.allowed;
+    const boundedWindowDeniedReason =
+      boundedWindowDecision.allowed === false ? boundedWindowDecision.reason : undefined;
     const payload = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list",
       async () => {
-        const { storePath, store } = measureDiagnosticsTimelineSpanSync(
+        const loaded = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.store_load",
           () =>
-            loadCombinedSessionStoreForGateway(cfg, {
-              agentId: p.agentId,
-            }),
+            useBoundedWindow
+              ? loadCombinedSessionStoreWindowForGatewayAsync(cfg, {
+                  limit: normalizeSessionsListLimit(p.limit),
+                  offset: normalizeSessionsListOffset(p.offset),
+                  agentId: p.agentId,
+                  configuredAgentsOnly,
+                  updatedAfter: resolveSessionsListUpdatedAfter(p.activeMinutes),
+                  label: normalizeSessionsListLabel(p.label),
+                  includeGlobal: p.includeGlobal,
+                  includeUnknown: p.includeUnknown,
+                })
+              : loadCombinedSessionStoreForGatewayAsync(cfg, {
+                  agentId: p.agentId,
+                }),
           {
             config: cfg,
             phase: "sessions.list",
             attributes: {
               agentId: p.agentId ?? null,
               configuredAgentsOnly,
+              boundedWindow: useBoundedWindow,
+              boundedWindowDeniedReason: boundedWindowDeniedReason ?? null,
             },
           },
         );
+        const { storePath, store } = loaded;
+        const boundedWindow = isBoundedSessionStoreWindow(loaded) ? loaded : undefined;
         const listStore = configuredAgentsOnly
           ? filterSessionStoreToConfiguredAgents(cfg, store)
           : store;
@@ -928,21 +1005,40 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               storePath,
               store: listStore,
               modelCatalog,
-              opts: p,
+              opts: useBoundedWindow
+                ? {
+                    ...p,
+                    offset: 0,
+                    limit: normalizeSessionsListLimit(p.limit),
+                  }
+                : p,
             }),
           {
             config: cfg,
             phase: "sessions.list",
             attributes: {
-              storeEntries: Object.keys(listStore).length,
+              storeEntries: boundedWindow?.totalCount ?? Object.keys(listStore).length,
+              boundedWindow: useBoundedWindow,
+              boundedWindowDeniedReason: boundedWindowDeniedReason ?? null,
             },
           },
         );
+        const projectedResult =
+          useBoundedWindow && boundedWindow
+            ? {
+                ...result,
+                totalCount: boundedWindow.totalCount,
+                limitApplied: boundedWindow.limitApplied,
+                offset: boundedWindow.offset > 0 ? boundedWindow.offset : undefined,
+                nextOffset: boundedWindow.nextOffset ?? null,
+                hasMore: boundedWindow.hasMore,
+              }
+            : result;
         const sessions = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.active_run_flags",
           () => {
             const activeSessionKeys = collectTrackedActiveSessionRunKeys(context);
-            return result.sessions.map((session) =>
+            return projectedResult.sessions.map((session) =>
               Object.assign({}, session, {
                 hasActiveRun: activeSessionKeys.has(session.key),
               }),
@@ -957,7 +1053,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           },
         );
         return {
-          ...result,
+          ...projectedResult,
           sessions,
         };
       },
@@ -967,6 +1063,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         attributes: {
           agentId: p.agentId ?? null,
           configuredAgentsOnly,
+          boundedWindow: useBoundedWindow,
+          boundedWindowDeniedReason: boundedWindowDeniedReason ?? null,
         },
       },
     );
@@ -1131,7 +1229,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
   },
-  "sessions.describe": ({ params, respond, context }) => {
+  "sessions.describe": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
     }
@@ -1139,10 +1237,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg);
-    const store = loadSessionStore(storePath);
-    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+    const { cfg, storePath, store, entry, canonicalKey } = await loadSessionEntryAsync(key);
     if (!entry) {
       respond(true, { session: null }, undefined);
       return;
@@ -1151,7 +1246,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       cfg,
       storePath,
       store,
-      key: target.canonicalKey,
+      key: canonicalKey,
       entry,
       includeDerivedTitles: params.includeDerivedTitles,
       includeLastMessage: params.includeLastMessage,
@@ -2166,7 +2261,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
     }
   },
-  "sessions.get": async ({ params, respond, context }) => {
+  "sessions.get": async ({ params, respond }) => {
     const p = params;
     const key = requireSessionKey(p.key ?? p.sessionKey, respond);
     if (!key) {
@@ -2177,12 +2272,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ? Math.max(1, Math.floor(p.limit))
         : 200;
 
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(
-      key,
-      context.getRuntimeConfig(),
-    );
-    const store = loadSessionStore(storePath);
-    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+    const { storePath, entry } = await loadSessionEntryAsync(key);
     if (!entry?.sessionId) {
       respond(true, { messages: [] }, undefined);
       return;

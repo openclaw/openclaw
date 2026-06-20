@@ -38,6 +38,9 @@ export type PluginHealthSummary = {
 export type ModelPricingHealthSummary =
   import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
 
+export type SessionStoreRuntimeHealthSummary =
+  import("../config/sessions/postgres-runtime-client.js").PostgresSessionStoreRuntimeMetricsSummary;
+
 export type HealthSummary = {
   ok: true;
   ts: number;
@@ -45,6 +48,7 @@ export type HealthSummary = {
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
   modelPricing?: ModelPricingHealthSummary;
+  sessionStoreRuntime?: SessionStoreRuntimeHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];
   channelLabels: Record<string, string>;

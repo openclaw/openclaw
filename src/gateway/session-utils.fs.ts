@@ -322,25 +322,28 @@ function normalizeTailEntryString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
+function parsedTranscriptRecordToTailRecord(parsed: unknown): TailTranscriptRecord | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const record = parsed as Record<string, unknown>;
+  return {
+    ...(normalizeTailEntryString(record.id) ? { id: normalizeTailEntryString(record.id) } : {}),
+    ...(record.parentId === null
+      ? { parentId: null }
+      : normalizeTailEntryString(record.parentId)
+        ? { parentId: normalizeTailEntryString(record.parentId) }
+        : {}),
+    record,
+  };
+}
+
 function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
   if (isOversizedTranscriptLine(line)) {
     return buildOversizedTranscriptRecord(line);
   }
   try {
-    const parsed = JSON.parse(line) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    return {
-      ...(normalizeTailEntryString(record.id) ? { id: normalizeTailEntryString(record.id) } : {}),
-      ...(record.parentId === null
-        ? { parentId: null }
-        : normalizeTailEntryString(record.parentId)
-          ? { parentId: normalizeTailEntryString(record.parentId) }
-          : {}),
-      record,
-    };
+    return parsedTranscriptRecordToTailRecord(JSON.parse(line) as unknown);
   } catch {
     return null;
   }
@@ -443,6 +446,22 @@ function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number)
     return entry ? [entry] : [];
   });
   return transcriptRecordsToMessages(selectActiveTranscriptRecords(entries)).slice(-maxMessages);
+}
+
+export function transcriptJsonlRecordsToMessages(
+  records: readonly unknown[],
+  opts?: { maxMessages?: number },
+): unknown[] {
+  const entries = records.flatMap((record) => {
+    const entry = parsedTranscriptRecordToTailRecord(record);
+    return entry ? [entry] : [];
+  });
+  const messages = transcriptRecordsToMessages(selectActiveTranscriptRecords(entries));
+  const maxMessages =
+    typeof opts?.maxMessages === "number" && Number.isFinite(opts.maxMessages)
+      ? Math.max(0, Math.floor(opts.maxMessages))
+      : undefined;
+  return maxMessages === undefined ? messages : messages.slice(-maxMessages);
 }
 
 function visitTranscriptLines(filePath: string, visit: (line: string) => void): void {

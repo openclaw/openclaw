@@ -15,6 +15,7 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/paths.js";
+import { installPostgresSessionStoreRuntimeAdapterFactory } from "../../config/sessions/postgres-runtime-client.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
@@ -512,6 +513,25 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
 
   const startupTrace = createGatewayCliStartupTrace();
 
+  let sessionStoreRuntimeCleanup: () => Promise<void> = async () => {};
+  try {
+    const sessionStoreRuntime = await startupTrace.measure("cli.session-store-runtime", () =>
+      installPostgresSessionStoreRuntimeAdapterFactory(),
+    );
+    sessionStoreRuntimeCleanup = sessionStoreRuntime.cleanup;
+    if (sessionStoreRuntime.enabled) {
+      gatewayLog.info(
+        `session-store backend postgres configured for ${sessionStoreRuntime.redactedConnectionString}`,
+      );
+    }
+  } catch (err) {
+    defaultRuntime.error(
+      `Invalid Postgres session-store runtime config: ${formatErrorMessage(err)}`,
+    );
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
+    return;
+  }
+
   // The heaviest part of gateway startup is loading the server module tree
   // (channels, plugins, HTTP stack, etc.). Show a spinner so the user sees
   // progress instead of a silent 15-20 s pause (especially on Windows/NTFS).
@@ -864,6 +884,8 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
       `Gateway failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for diagnostics.`,
     );
     defaultRuntime.exit(1);
+  } finally {
+    await sessionStoreRuntimeCleanup();
   }
 }
 

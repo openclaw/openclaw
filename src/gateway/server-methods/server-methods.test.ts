@@ -5,6 +5,19 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  installPostgresSessionStoreRuntimeAdapterFactory,
+  type PgModuleLike,
+  type PgPoolLike,
+} from "../../config/sessions/postgres-runtime-client.js";
+import { SESSION_STORE_POSTGRES_URL_ENV } from "../../config/sessions/postgres-runtime-config.js";
+import {
+  resolveSessionStoreAdapter,
+  SESSION_STORE_BACKEND_ENV,
+  SESSION_STORE_GATEWAY_ID_ENV,
+  SESSION_STORE_SCHEMA_ENV,
+  SESSION_STORE_TENANT_ID_ENV,
+} from "../../config/sessions/store-async.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
@@ -32,6 +45,48 @@ import { logsHandlers } from "./logs.js";
 vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
+
+function postgresRuntimeMetricsEnv(overrides: Record<string, string | undefined> = {}) {
+  return {
+    [SESSION_STORE_BACKEND_ENV]: "postgres",
+    [SESSION_STORE_TENANT_ID_ENV]: "type0",
+    [SESSION_STORE_GATEWAY_ID_ENV]: "type0-producer",
+    [SESSION_STORE_SCHEMA_ENV]: "openclaw_session_store_health_test",
+    [SESSION_STORE_POSTGRES_URL_ENV]:
+      "postgres://openclaw_session_store:secret@session-db.local:5432/openclaw_sessions",
+    ...overrides,
+  };
+}
+
+class RuntimeMetricsFakePool implements PgPoolLike {
+  ended = false;
+  queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
+
+  constructor(readonly options: Record<string, unknown>) {}
+
+  async query(sql: string, values?: readonly unknown[]) {
+    this.queries.push({ sql, ...(values ? { values } : {}) });
+    if (sql.startsWith("select $1")) {
+      return { rows: [{ ok: true }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  }
+
+  async end() {
+    this.ended = true;
+  }
+}
+
+function runtimeMetricsFakePgModule(pools: RuntimeMetricsFakePool[]): PgModuleLike {
+  return {
+    Pool: class extends RuntimeMetricsFakePool {
+      constructor(options: Record<string, unknown>) {
+        super(options);
+        pools.push(this);
+      }
+    },
+  };
+}
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -2689,6 +2744,40 @@ describe("gateway healthHandlers.status scope handling", () => {
     });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
+
+  it("includes Postgres session-store runtime metrics when the runtime adapter is installed", async () => {
+    const env = postgresRuntimeMetricsEnv();
+    const pools: RuntimeMetricsFakePool[] = [];
+    const installed = await installPostgresSessionStoreRuntimeAdapterFactory({
+      env,
+      loadPg: () => runtimeMetricsFakePgModule(pools),
+    });
+    try {
+      const adapter = resolveSessionStoreAdapter({ env });
+      await adapter.listEntries("/state/sessions.json", { limit: 1 });
+
+      const respond = await runHealthStatus(["operator.read"]);
+
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        sessionStoreRuntime: expect.objectContaining({
+          backend: "postgres",
+          totalOperations: 1,
+          failedOperations: 0,
+          recentOperations: [
+            expect.objectContaining({
+              operation: "listEntries",
+              ok: true,
+              entryCount: 0,
+              totalCount: 0,
+              hasMore: false,
+            }),
+          ],
+        }),
+      });
+    } finally {
+      await installed.cleanup();
+    }
+  });
 });
 
 describe("gateway healthHandlers.health cache freshness", () => {
@@ -2907,6 +2996,73 @@ describe("gateway healthHandlers.health cache freshness", () => {
       probe: false,
       includeSensitive: false,
     });
+  });
+
+  it("merges Postgres session-store runtime metrics into cached health responses", async () => {
+    const env = postgresRuntimeMetricsEnv();
+    const pools: RuntimeMetricsFakePool[] = [];
+    const installed = await installPostgresSessionStoreRuntimeAdapterFactory({
+      env,
+      loadPg: () => runtimeMetricsFakePgModule(pools),
+    });
+    try {
+      const adapter = resolveSessionStoreAdapter({ env });
+      await adapter.listEntries("/state/sessions.json", { limit: 1 });
+
+      const cached = {
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      };
+      const respond = vi.fn();
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+      await healthHandlers.health({
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      });
+
+      const payload = mockCallArg(respond, 0, 1);
+      expectRecordFields(payload, {
+        sessionStoreRuntime: expect.objectContaining({
+          backend: "postgres",
+          totalOperations: 1,
+          failedOperations: 0,
+          recentOperations: [
+            expect.objectContaining({
+              operation: "listEntries",
+              ok: true,
+              entryCount: 0,
+              totalCount: 0,
+              hasMore: false,
+            }),
+          ],
+        }),
+      });
+      expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+      expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+        probe: false,
+        includeSensitive: false,
+      });
+    } finally {
+      await installed.cleanup();
+    }
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {

@@ -158,6 +158,12 @@
       "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
       "risk": ["parser", "untrusted-files"]
     },
+    "pg": {
+      "owner": "core:session-store-postgres",
+      "class": "optional-runtime",
+      "activation": ["OPENCLAW_SESSION_STORE_BACKEND=postgres"],
+      "risk": ["database-client", "network", "session-store-hot-path"]
+    },
     "proxy-agent": {
       "owner": "core:proxy",
       "class": "core-runtime",
