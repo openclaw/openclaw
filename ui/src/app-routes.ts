@@ -1,7 +1,21 @@
 import type { SettingsAppHost, SettingsHost } from "./app/app-host.ts";
+import { page as activityPage } from "./pages/activity/route.ts";
+import { page as agentsPage } from "./pages/agents/route.ts";
+import { page as channelsPage } from "./pages/channels/route.ts";
+import { page as chatPage } from "./pages/chat/route.ts";
+import { pages as configPages } from "./pages/config/route.ts";
+import { page as cronPage } from "./pages/cron/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
+import { page as dreamsPage } from "./pages/dreams/route.ts";
+import { page as instancesPage } from "./pages/instances/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
+import { page as nodesPage } from "./pages/nodes/route.ts";
+import { page as overviewPage } from "./pages/overview/route.ts";
+import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
+import { page as skillsPage } from "./pages/skills/route.ts";
+import { page as usagePage } from "./pages/usage/route.ts";
+import { page as workboardPage } from "./pages/workboard/route.ts";
 // Application route catalog consumed by the generic router.
 import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "./router/index.ts";
 import type { PageDefinition } from "./router/index.ts";
@@ -16,42 +30,35 @@ export type RouteRenderContext = {
   state: AppViewState;
 };
 
+export function routeLoadContext(host: SettingsHost): RouteLoadContext {
+  return { host, app: host as SettingsAppHost };
+}
+
 type AppRouteModule = {
   render: (context: RouteRenderContext) => unknown;
+  shell?: "chat" | "page";
+  header?: boolean;
+  contentClass?: string;
 };
 
-const simpleRoute = <const TRouteId extends string>(id: TRouteId, path: string) => ({
-  id,
-  path,
-});
-
 export const APP_ROUTE_TREE = [
-  simpleRoute("agents", "/agents"),
-  simpleRoute("activity", "/activity"),
-  simpleRoute("overview", "/overview"),
-  simpleRoute("workboard", "/workboard"),
-  simpleRoute("channels", "/channels"),
-  simpleRoute("instances", "/instances"),
-  simpleRoute("sessions", "/sessions"),
-  simpleRoute("usage", "/usage"),
-  simpleRoute("cron", "/cron"),
-  simpleRoute("skills", "/skills"),
+  agentsPage,
+  activityPage,
+  overviewPage,
+  workboardPage,
+  channelsPage,
+  instancesPage,
+  sessionsPage,
+  usagePage,
+  cronPage,
+  skillsPage,
   skillWorkshopPage,
-  simpleRoute("nodes", "/nodes"),
-  simpleRoute("chat", "/chat"),
-  simpleRoute("config", "/config"),
-  simpleRoute("communications", "/communications"),
-  simpleRoute("appearance", "/appearance"),
-  simpleRoute("automation", "/automation"),
-  simpleRoute("mcp", "/mcp"),
-  simpleRoute("infrastructure", "/infrastructure"),
-  simpleRoute("ai-agents", "/ai-agents"),
+  nodesPage,
+  chatPage,
+  ...configPages,
+  dreamsPage,
   debugPage,
   logsPage,
-  {
-    ...simpleRoute("dreams", "/dreaming"),
-    aliases: ["/dreams"],
-  },
 ] as const;
 
 export type RouteId = (typeof APP_ROUTE_TREE)[number]["id"];
@@ -84,7 +91,10 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
-  const normalized = normalizePath(pathname);
+  const normalizedPath = normalizePath(pathname);
+  const normalized = normalizedPath.toLowerCase().endsWith("/index.html")
+    ? normalizePath(normalizedPath.slice(0, -"/index.html".length))
+    : normalizedPath;
   if (normalized === "/") {
     return "";
   }

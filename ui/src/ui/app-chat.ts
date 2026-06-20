@@ -2087,7 +2087,7 @@ function clearCachedChatMessagesForSession(host: ChatHost, sessionKey: string) {
   clearChatMessagesFromCache(host.chatMessagesBySession, host, { sessionKey });
 }
 
-async function clearChatHistory(host: ChatHost) {
+export async function clearChatHistory(host: ChatHost) {
   if (!host.client || !host.connected) {
     return;
   }

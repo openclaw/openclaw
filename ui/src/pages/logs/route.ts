@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { definePage } from "../../router/index.ts";
@@ -16,6 +17,12 @@ export const page = definePage({
   component: () =>
     import("../../ui/views/logs.ts").then((module) => ({
       render: ({ state }: LogsRenderContext) => html`
+        <section class="content-header">
+          <div>
+            <div class="page-title">${titleForRoute("logs")}</div>
+            <div class="page-sub">${subtitleForRoute("logs")}</div>
+          </div>
+        </section>
         <section class="content--logs">
           ${renderSettingsWorkspace(
             state,
@@ -40,14 +47,16 @@ export const page = definePage({
           )}
         </section>
       `,
+      header: true,
     })),
-  onEnter: ({ host }: LogsLoadContext) =>
-    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]),
-  onLeave: ({ host }: LogsLoadContext) =>
-    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]),
   load: async ({ host, app }: LogsLoadContext) => {
-    host.logsAtBottom = true;
     await loadLogs(app, { reset: true });
     scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
   },
+  onEnter: ({ host }: LogsLoadContext) => {
+    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+    host.logsAtBottom = true;
+  },
+  onLeave: ({ host }: LogsLoadContext) =>
+    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]),
 });
