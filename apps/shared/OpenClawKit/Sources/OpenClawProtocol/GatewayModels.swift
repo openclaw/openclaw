@@ -1649,7 +1649,7 @@ public struct SessionsListParams: Codable, Sendable {
         includeglobal: Bool?,
         includeunknown: Bool?,
         configuredagentsonly: Bool?,
-        allagents: Bool?,
+        allagents: Bool? = nil,
         includederivedtitles: Bool?,
         includelastmessage: Bool?,
         label: String?,

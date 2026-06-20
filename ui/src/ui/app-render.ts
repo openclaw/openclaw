@@ -528,22 +528,33 @@ function isSidebarSessionForSelectedAgent(
   return isSessionKeyTiedToAgent(row.key, selectedAgentId, resolveSidebarDefaultAgentId(state));
 }
 
-function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
+// Exported for unit tests. Filters the Control UI's left Recent Sessions
+// sidebar. When `sessionsAllAgents` is on, opts out of the strict per-agent
+// + subagent filters so cross-agent child-spawned rows surface here too,
+// mirroring the `sessions.list allAgents` cross-agent visibility path
+// (issue #95295). Archived / global / unknown / cron rows stay filtered
+// either way.
+export function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
   const selectedAgentId = resolveSidebarSelectedAgentId(state);
   const shouldFilterByAgent =
     normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
+  const allAgents = state.sessionsAllAgents;
   return (state.sessionsResult?.sessions ?? [])
-    .filter(
-      (row) =>
-        !row.archived &&
-        row.kind !== "global" &&
-        row.kind !== "unknown" &&
-        row.kind !== "cron" &&
-        !isCronSessionKey(row.key) &&
-        !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy &&
-        (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
-    )
+    .filter((row) => {
+      if (row.archived) return false;
+      if (row.kind === "global" || row.kind === "unknown" || row.kind === "cron") {
+        return false;
+      }
+      if (isCronSessionKey(row.key)) return false;
+      // allAgents: surface cross-agent child-spawned rows in the sidebar too.
+      if (allAgents) return true;
+      if (isSubagentSessionKey(row.key)) return false;
+      if (row.spawnedBy) return false;
+      if (shouldFilterByAgent && !isSidebarSessionForSelectedAgent(state, row, selectedAgentId)) {
+        return false;
+      }
+      return true;
+    })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 5);
 }
