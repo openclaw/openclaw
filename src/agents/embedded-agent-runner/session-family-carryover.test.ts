@@ -406,7 +406,7 @@ describe("session family carryover", () => {
       { role: "user", content: [{ type: "text", text: "current ask" }], timestamp: 1 },
     ];
     const transformedMessages: AgentMessage[] = [
-      { role: "assistant", content: [{ type: "text", text: "prepared context" }], timestamp: 2 },
+      { role: "user", content: [{ type: "text", text: "prepared context" }], timestamp: 2 },
     ];
     let transformContext:
       | ((messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>)
