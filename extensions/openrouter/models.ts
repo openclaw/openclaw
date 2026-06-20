@@ -13,21 +13,37 @@ const OPENROUTER_MISTRAL_MODEL_PREFIXES = [
   "voxtral-",
 ] as const;
 const OPENROUTER_MODEL_PREFIX = "openrouter/";
-// Known OpenRouter-native model identifiers that the API expects with the
-// `openrouter/` prefix intact. Short model refs not matching these patterns
-// get the prefix stripped for API calls (e.g. openrouter/deepseek-v4-flash →
-// deepseek-v4-flash, #95198).
-const OPENROUTER_NATIVE_IDS = new Set(["auto", "auto:free", "auto:lowest-latency", "fusion"]);
-const OPENROUTER_NATIVE_ID_PREFIXES = ["hunter-alpha"] as const;
+// When OpenRouter adds new native routing identifiers they must be added here.
+// Current set derived from the public OpenRouter /models endpoint.
+// See #95198 and the provider-normalizer contract in openrouter/index.ts.
+const OPENROUTER_NATIVE_ROUTE_IDS = new Set([
+  "auto",
+  "auto:free",
+  "auto:lowest-latency",
+  "bodybuilder",
+  "free",
+  "fusion",
+  "owl-alpha",
+  "pareto-code",
+]);
+const OPENROUTER_NATIVE_ROUTE_ID_PREFIXES = ["hunter-alpha"] as const;
 
-function isOpenRouterNativeModelId(unprefixed: string): boolean {
-  if (OPENROUTER_NATIVE_IDS.has(unprefixed)) {
+function isOpenRouterNativeRouteId(unprefixed: string): boolean {
+  if (OPENROUTER_NATIVE_ROUTE_IDS.has(unprefixed)) {
     return true;
   }
-  return OPENROUTER_NATIVE_ID_PREFIXES.some(
+  return OPENROUTER_NATIVE_ROUTE_ID_PREFIXES.some(
     (prefix) => unprefixed === prefix || unprefixed.startsWith(`${prefix}:`),
   );
 }
+
+// Short convenience refs that must expand to their namespaced upstream slugs
+// before the API call. Without this, `openrouter/deepseek-v4-flash` would be
+// sent as-is and rejected with HTTP 400 model_not_found (#95198).
+const OPENROUTER_SHORT_TO_UPSTREAM_SLUG = new Map<string, string>([
+  ["deepseek-v4-flash", "deepseek/deepseek-v4-flash"],
+  ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
+]);
 
 export function normalizeOpenRouterModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
@@ -49,12 +65,20 @@ export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefi
   }
   const unprefixed = normalized.slice(OPENROUTER_MODEL_PREFIX.length);
   // `openrouter/` is both a provider qualifier and an upstream namespace.
-  // Strip it when the remainder is a provider-namespaced API model id
-  // (e.g. openrouter/anthropic/claude-sonnet-4.6 → anthropic/claude-sonnet-4.6)
-  // or a short-form model ref that isn't a known OpenRouter-native identifier
-  // (e.g. openrouter/deepseek-v4-flash → deepseek-v4-flash, #95198).
-  if (unprefixed.includes("/") || !isOpenRouterNativeModelId(unprefixed)) {
+  // Three cases after stripping the prefix:
+  // 1. Known short ref (deepseek-v4-flash) → expand to namespaced upstream slug.
+  // 2. Contains "/" (anthropic/claude-sonnet-4.6) → strip prefix, keep remainder.
+  // 3. Everything else → preserve prefix (native OpenRouter route id or
+  //    unrecognized ref; stripping could break future native ids, #95198).
+  const upstreamSlug = OPENROUTER_SHORT_TO_UPSTREAM_SLUG.get(unprefixed);
+  if (upstreamSlug) {
+    return upstreamSlug;
+  }
+  if (unprefixed.includes("/")) {
     return unprefixed;
+  }
+  if (isOpenRouterNativeRouteId(unprefixed)) {
+    return normalized;
   }
   return normalized;
 }
