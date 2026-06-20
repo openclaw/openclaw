@@ -1094,7 +1094,11 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("eyJheaderabcd.eyJpayloadabcd.signatureabcd123456");
     expect(serialized).not.toContain("abcd-efgh-ijkl-mnop");
     expect(serialized).not.toContain("qrst-uvwx-yzab-cdef");
-    expect(serialized).toContain("main-test-case-name");
+    // `main-test-case-name` is an all-word 4-4-4-4 token in the `text` field.  The same `text`
+    // value also contains a JWT secret (eyJ…), so the secret-context sweep fires fail-closed and
+    // masks it.  This is intentionally stricter than Tier 2 precision: a value known to contain
+    // a secret is high-risk context.
+    expect(serialized).not.toContain("main-test-case-name");
   });
 
   it("preserves benign bare access and refresh fields", () => {
@@ -1265,6 +1269,58 @@ describe("redactSecrets", () => {
         "kxbv-qwfn-zptl-mrqd",
       );
     }
+  });
+
+  // Secret-context sweep regressions (upstream line 1326-1327: restore `redacted !== value` leg)
+  it("masks an all-word app-password token when the value already contains another secret (secret-context sweep)", () => {
+    // `main-test-case-name` is all dictionary words — Tier 2 wordlist precision would normally
+    // let it through in a generic field.  But when the value ALSO contains a known secret
+    // (sk-... pattern here), the secret-context sweep fires fail-closed: every 4-4-4-4 token
+    // is masked regardless of wordlist or field tier.
+    const valueWithSecret =
+      "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and also main-test-case-name here";
+    expect(redactSensitiveFieldValue("message", valueWithSecret)).not.toContain(
+      "main-test-case-name",
+    );
+  });
+
+  it("does NOT mask an all-word app-password token when no other secret is present (Tier 2 precision preserved)", () => {
+    // Same field key, same all-word token — but no other secret in the value.
+    // Tier 2 wordlist precision must still apply: main-test-case-name stays unmasked.
+    expect(redactSensitiveFieldValue("message", "identifier is main-test-case-name")).toContain(
+      "main-test-case-name",
+    );
+  });
+
+  it("masks all 4-4-4-4 tokens in a value containing an AIza secret (secret-context sweep, generic field)", () => {
+    // AIza... Google API key triggers normal secret redaction → secret-context sweep fires
+    // fail-closed, catching help-desk-team-page (all dictionary words) as well.
+    const valueWithGoogleKey =
+      "config AIzaSyD-very-real-looking-google-api-key-123 route help-desk-team-page";
+    const result = redactSensitiveFieldValue("detail", valueWithGoogleKey);
+    expect(result).not.toContain("AIzaSyD-very-real-looking");
+    expect(result).not.toContain("help-desk-team-page");
+  });
+
+  it("does NOT mask kebab identifier in generic field when no secret is present (Tier 2 precision unchanged)", () => {
+    // Baseline: without another secret, Tier 2 wordlist precision is in effect.
+    expect(redactSensitiveFieldValue("detail", "route help-desk-team-page")).toContain(
+      "help-desk-team-page",
+    );
+  });
+
+  it("explicit fail-closed field still masks all-word token regardless of secret-context (Tier 1 unchanged)", () => {
+    // Tier 1 was already fail-closed before this change; verify it still is.
+    expect(redactSensitiveFieldValue("appSpecificPassword", "main-test-case-name")).not.toContain(
+      "main-test-case-name",
+    );
+  });
+
+  it("io.audit abcd-efgh-ijkl-mnop token still masked in errorMessage (Tier 2 unchanged)", () => {
+    // Non-dictionary segments → wordlist precision masks it even without secret-context.
+    expect(
+      redactSensitiveFieldValue("errorMessage", "payload contained abcd-efgh-ijkl-mnop"),
+    ).not.toContain("abcd-efgh-ijkl-mnop");
   });
 });
 

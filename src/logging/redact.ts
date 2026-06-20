@@ -1295,7 +1295,20 @@ function looksLikeKebabIdentifier(candidate: string): boolean {
 // `localText` passed by replacePatternBounded is the per-chunk string; using it (not the
 // closed-over full `text`) keeps the 50-char context window correct when large inputs are
 // split into 16 KiB chunks.
-function redactAppSpecificPasswords(text: string, fieldKey?: string): string {
+function redactAppSpecificPasswords(
+  text: string,
+  fieldKey?: string,
+  forceFailClosed?: boolean,
+): string {
+  // Secret-context sweep: when the caller signals that another secret was already found in this
+  // value (forceFailClosed=true), bypass all tier logic and mask every 4-4-4-4 token
+  // unconditionally.  A value that already contains a known secret is high-risk context; no
+  // wordlist or proximity anchor exception is appropriate.
+  if (forceFailClosed) {
+    return replacePatternBounded(text, APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
+      redactMatch(match, [token], APP_SPECIFIC_PASSWORD_RE),
+    );
+  }
   const fieldIsExplicitCredential =
     fieldKey !== undefined && STRUCTURED_APP_PASSWORD_FIELD_RE.test(fieldKey);
   const fieldIsGeneric =
@@ -1423,13 +1436,18 @@ function redactSensitiveFieldValueWithOptions(
   const redacted = redactText(value, resolved.patterns, {
     redactFormBodies: resolved.redactFormBodies,
   });
-  // Always attempt the app-password sweep; the function's own context gate decides whether
-  // any given candidate is masked (field-key anchor or nearby apple/icloud text anchor).
-  const appRedacted = redactAppSpecificPasswords(redacted, key);
+  // Secret-context sweep: if another secret was already detected in this value (redacted !==
+  // value), run the app-password sweep in fail-closed mode — every 4-4-4-4 token is masked with
+  // no wordlist or proximity-anchor exception.  A value already known to contain a secret is
+  // high-risk context; the tier gates would only allow masking less, not more.
+  // If no other secret was found (redacted === value), the normal 3-tier logic applies (field-key
+  // anchor or wordlist/context guards), preserving precision for benign kebab identifiers.
+  const secretContextFound = redacted !== value;
+  const appRedacted = redactAppSpecificPasswords(redacted, key, secretContextFound);
   if (appRedacted !== value) {
     return appRedacted;
   }
-  if (redacted !== value) {
+  if (secretContextFound) {
     return redacted;
   }
   if (isSensitiveFieldKey(key)) {
