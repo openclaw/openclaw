@@ -1044,7 +1044,6 @@ export class OpenClawApp extends LitElement {
       (browserLocation?.search ?? routeState.resolvedLocation?.search) === location.search &&
       (browserLocation?.hash ?? routeState.resolvedLocation?.hash) === location.hash;
     this.routeId = next;
-    this.requestUpdate();
     void appRouter
       .navigate(
         next,
@@ -1058,11 +1057,9 @@ export class OpenClawApp extends LitElement {
       .then(
         () => {
           this.routeId = next;
-          this.requestUpdate();
         },
         () => {
           this.routeId = previousRouteId;
-          this.requestUpdate();
         },
       );
     if (next !== "chat") {
