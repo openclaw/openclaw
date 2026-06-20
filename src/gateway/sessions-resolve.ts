@@ -1,5 +1,5 @@
 // Gateway sessions.resolve implementation helper.
-// Resolves key/sessionId/label selectors into one canonical session key.
+// Resolves key/sessionId/title/label selectors into one canonical session key.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -10,10 +10,14 @@ import {
 import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
+import {
+  getSessionTitleFromEntry,
+  parseSessionLabel,
+  parseSessionTitle,
+  sessionTitlesEqual,
+} from "../sessions/session-label.js";
 import {
   filterAndSortSessionEntries,
-  listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
@@ -44,7 +48,6 @@ function noSessionFoundResult(params: { p: SessionsResolveParams; message: strin
   } as const;
 }
 
-/** Rejects sessions whose owning agent no longer exists in config (#65524). */
 function validateSessionAgentExists(
   cfg: OpenClawConfig,
   key: string,
@@ -99,6 +102,23 @@ function findVisibleSessionIdMatches(params: {
   );
 }
 
+function findVisibleTitleMatches(params: {
+  cfg: OpenClawConfig;
+  store: Record<string, SessionEntry>;
+  p: SessionsResolveParams;
+  title: string;
+}): Array<[string, SessionEntry]> {
+  const entries = filterAndSortSessionEntries({
+    cfg: params.cfg,
+    store: params.store,
+    now: Date.now(),
+    opts: resolveSessionVisibilityFilterOptions(params.p),
+  });
+  return entries
+    .filter(([, entry]) => sessionTitlesEqual(getSessionTitleFromEntry(entry), params.title))
+    .slice(0, 2);
+}
+
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
@@ -109,27 +129,29 @@ export async function resolveSessionKeyFromResolveParams(params: {
   const hasKey = key.length > 0;
   const sessionId = normalizeOptionalString(p.sessionId) ?? "";
   const hasSessionId = sessionId.length > 0;
+  const hasTitle = (normalizeOptionalString(p.title) ?? "").length > 0;
   const hasLabel = (normalizeOptionalString(p.label) ?? "").length > 0;
-  const selectionCount = [hasKey, hasSessionId, hasLabel].filter(Boolean).length;
+  const selectionCount = [hasKey, hasSessionId, hasTitle, hasLabel].filter(Boolean).length;
   if (selectionCount > 1) {
     return {
       ok: false,
       error: errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "Provide either key, sessionId, or label (not multiple)",
+        "Provide either key, sessionId, title, or label (not multiple)",
       ),
     };
   }
   if (selectionCount === 0) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Either key, sessionId, or label is required"),
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Either key, sessionId, title, or label is required",
+      ),
     };
   }
 
   if (hasKey) {
-    // Key lookups may hit legacy store aliases. Migrate/prune before returning
-    // the canonical key so later calls operate on one store identity.
     const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
     const store = target.store;
     if (store[target.canonicalKey]) {
@@ -192,8 +214,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasSessionId) {
-    // sessionId can collide across stores; delegate selection so exact key
-    // matches and ambiguity rules stay shared with other session-id callers.
     const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
     const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
@@ -222,49 +242,39 @@ export async function resolveSessionKeyFromResolveParams(params: {
     return { ok: true, key: selection.sessionKey };
   }
 
-  const parsedLabel = parseSessionLabel(p.label);
-  if (!parsedLabel.ok) {
+  const parsed = hasTitle ? parseSessionTitle(p.title) : parseSessionLabel(p.label);
+  if (!parsed.ok) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, parsedLabel.error),
+      error: errorShape(ErrorCodes.INVALID_REQUEST, parsed.error),
     };
   }
+  const selectorName = hasTitle ? "title" : "label";
+  const title = "title" in parsed ? parsed.title : parsed.label;
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-  const list = listSessionsFromStore({
-    cfg,
-    storePath,
-    store,
-    opts: {
-      includeGlobal: p.includeGlobal === true,
-      includeUnknown: p.includeUnknown === true,
-      label: parsedLabel.label,
-      agentId: p.agentId,
-      spawnedBy: p.spawnedBy,
-      limit: 2,
-    },
-  });
-  if (list.sessions.length === 0) {
+  const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+  const matches = findVisibleTitleMatches({ cfg, store, p, title });
+  if (matches.length === 0) {
     return noSessionFoundResult({
       p,
-      message: `No session found with label: ${parsedLabel.label}`,
+      message: `No session found with ${selectorName}: ${title}`,
     });
   }
-  if (list.sessions.length > 1) {
-    const keys = list.sessions.map((s) => s.key).join(", ");
+  if (matches.length > 1) {
+    const keys = matches.map(([key]) => key).join(", ");
     return {
       ok: false,
       error: errorShape(
         ErrorCodes.INVALID_REQUEST,
-        `Multiple sessions found with label: ${parsedLabel.label} (${keys})`,
+        `Multiple sessions found with ${selectorName}: ${title} (${keys})`,
       ),
     };
   }
 
-  const labelKey = list.sessions[0].key;
-  const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
-  if (agentCheckLabel) {
-    return agentCheckLabel;
+  const [matchedKey, matchedEntry] = matches[0];
+  const agentCheckTitle = validateSessionAgentExists(cfg, matchedKey, matchedEntry);
+  if (agentCheckTitle) {
+    return agentCheckTitle;
   }
-  return { ok: true, key: list.sessions[0].key };
+  return { ok: true, key: matchedKey };
 }
