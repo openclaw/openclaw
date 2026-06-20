@@ -1212,6 +1212,76 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("keeps the isolated run successful when post-run delivery fails", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: "Final cron report",
+      outputText: "Final cron report",
+      synthesizedText: "Final cron report",
+      deliveryPayload: { text: "Final cron report" },
+      deliveryPayloads: [{ text: "Final cron report" }],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      (params: {
+        withRunSession: (result: {
+          status: "error";
+          summary: string;
+          outputText: string;
+          error: string;
+          deliveryAttempted: true;
+        }) => unknown;
+      }) => ({
+        result: params.withRunSession({
+          status: "error",
+          summary: "Final cron report",
+          outputText: "Final cron report",
+          error: "Message failed",
+          deliveryAttempted: true,
+        }),
+        delivered: false,
+        deliveryAttempted: true,
+        summary: "Final cron report",
+        outputText: "Final cron report",
+        synthesizedText: "Final cron report",
+        deliveryPayloads: [{ text: "Final cron report" }],
+      }),
+    );
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        id: "delivery-failure-after-success",
+        name: "Delivery Failure After Success",
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.error).toBe("Message failed");
+    expect(result.delivered).toBe(false);
+    expect(result.deliveryAttempted).toBe(true);
+    expectDeliveryFields(result.delivery, {
+      intended: { channel: "messagechat", to: "123", source: "explicit" },
+      resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
+      fallbackUsed: true,
+      delivered: false,
+    });
+    expect(result.diagnostics?.summary).toBe("Message failed");
+    expect(result.diagnostics?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "delivery",
+          severity: "error",
+          message: "Message failed",
+        }),
+      ]),
+    );
+  });
+
   it("rewrites generic message provider to resolved channel in delivery trace", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
