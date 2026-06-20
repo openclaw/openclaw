@@ -1,14 +1,14 @@
-// Schema-level tests for logging.file minimum-length validation.
+// Schema-level tests for logging.file blank-value compatibility.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("logging.file config", () => {
-  it("rejects empty string for logging.file", () => {
+  it("keeps an empty logging.file validation-compatible", () => {
+    // Blank persisted values must not fail schema validation: the runtime
+    // trim/fallback treats them as unset, and rejecting here would break
+    // startup for configs that previously stored an empty file path.
     const res = validateConfigObject({ logging: { file: "" } });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("logging.file");
-    }
+    expect(res.ok).toBe(true);
   });
 
   it("accepts a non-empty logging.file", () => {
