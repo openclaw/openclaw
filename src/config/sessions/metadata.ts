@@ -38,6 +38,19 @@ const mergeOrigin = (
   if (next?.to) {
     merged.to = next.to;
   }
+  // A channel switch (provider or surface change) means previously-known native
+  // channel identity no longer applies: DMs on channels like Telegram do not carry
+  // a nativeChannelId, so without resetting the stale prior-channel value (e.g. a
+  // Slack channel id) would persist for the whole new-channel session.
+  const channelChanged =
+    existing !== undefined &&
+    ((next?.provider !== undefined && next.provider !== existing.provider) ||
+      (next?.surface !== undefined && next.surface !== existing.surface));
+  if (channelChanged) {
+    delete merged.nativeChannelId;
+    delete merged.nativeDirectUserId;
+    delete merged.threadId;
+  }
   if (next?.nativeChannelId) {
     merged.nativeChannelId = next.nativeChannelId;
   }
