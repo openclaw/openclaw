@@ -678,6 +678,26 @@ describe("attachEventBridge", () => {
     expect(bridge.hasObservedSessionIdle()).toBe(true);
   });
 
+  it("ignores subagent idle events while waiting for the root session", async () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    const idle = bridge.awaitSessionIdle();
+    session.emit("session.idle", {
+      ...makeEvent("session.idle", {}),
+      agentId: "subagent-1",
+    });
+    await flushAsync();
+    expect(bridge.hasObservedSessionIdle()).toBe(false);
+
+    session.emit("session.idle", makeEvent("session.idle", {}));
+    await idle;
+    expect(bridge.hasObservedSessionIdle()).toBe(true);
+  });
+
   it("keeps compaction pending after an abort until the SDK reports completion", async () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {

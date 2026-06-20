@@ -224,7 +224,10 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "session.idle", () => {
+  registerListener(session, unsubscribeFns, "session.idle", (event) => {
+    if (!isRootCompactionEvent(event)) {
+      return;
+    }
     observedSessionIdle = true;
     resolveSessionIdle?.();
     resolveSessionIdle = undefined;
