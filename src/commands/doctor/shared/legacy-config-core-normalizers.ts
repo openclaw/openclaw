@@ -60,6 +60,33 @@ export function normalizeLegacyBrowserConfig(
     );
   }
 
+  const rawProfiles = browser.profiles;
+  if (isRecord(rawProfiles)) {
+    const profiles = { ...rawProfiles };
+    let profilesChanged = false;
+    for (const [profileName, rawProfile] of Object.entries(rawProfiles)) {
+      if (!isRecord(rawProfile)) {
+        continue;
+      }
+      const rawDriver = normalizeOptionalString(rawProfile.driver) ?? "";
+      if (rawDriver !== "extension") {
+        continue;
+      }
+      profiles[profileName] = {
+        ...rawProfile,
+        driver: "existing-session",
+      };
+      profilesChanged = true;
+      changes.push(
+        `Moved browser.profiles.${profileName}.driver "extension" → "existing-session" (Chrome MCP attach).`,
+      );
+    }
+    if (profilesChanged) {
+      browser.profiles = profiles;
+      browserChanged = true;
+    }
+  }
+
   const rawSsrFPolicy = browser.ssrfPolicy;
   if (isRecord(rawSsrFPolicy) && "allowPrivateNetwork" in rawSsrFPolicy) {
     const legacyAllowPrivateNetwork = rawSsrFPolicy.allowPrivateNetwork;

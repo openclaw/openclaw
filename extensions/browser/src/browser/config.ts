@@ -521,7 +521,7 @@ export function resolveProfile(
   const driver =
     profile.driver === "existing-session"
       ? "existing-session"
-      : profile.driver === "extension"
+      : profile.driver === "extension-bridge"
         ? "extension"
         : "openclaw";
   const headless = profile.headless ?? resolved.headless;

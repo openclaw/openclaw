@@ -669,7 +669,7 @@ export const OpenClawSchema = z
                     z.literal("openclaw"),
                     z.literal("clawd"),
                     z.literal("existing-session"),
-                    z.literal("extension"),
+                    z.literal("extension-bridge"),
                   ])
                   .optional(),
                 headless: z.boolean().optional(),
@@ -681,7 +681,7 @@ export const OpenClawSchema = z
               .refine(
                 (value) =>
                   value.driver === "existing-session" ||
-                  value.driver === "extension" ||
+                  value.driver === "extension-bridge" ||
                   value.cdpPort ||
                   value.cdpUrl,
                 {

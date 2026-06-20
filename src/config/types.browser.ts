@@ -12,11 +12,11 @@ export type BrowserProfileConfig = {
   mcpArgs?: string[];
   /**
    * Profile driver (default: openclaw).
-   * - "extension": drive the user's real Chrome via the bundled OpenClaw
+   * - "extension-bridge": drive the user's real Chrome via the bundled OpenClaw
    *   extension. The node launches a local CDP bridge the extension dials into,
    *   and this profile attaches to it as a loopback existing-session.
    */
-  driver?: "openclaw" | "clawd" | "existing-session" | "extension";
+  driver?: "openclaw" | "clawd" | "existing-session" | "extension-bridge";
   /** If true, launch this profile in headless mode. Falls back to browser.headless. */
   headless?: boolean;
   /** Browser executable path for this profile. Falls back to browser.executablePath. */
