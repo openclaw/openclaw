@@ -505,6 +505,34 @@ describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
     });
   });
 
+  it("fails closed when the facade activation runtime lacks the allowlist marker", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        "export function checkFacadeActivation() { return true; }\n",
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([
+        "installed package facade activation runtime 'dist/facade-activation-check.runtime.js' is missing ALWAYS_ALLOWED_RUNTIME_DIR_NAMES for bundled runtime facade verification.",
+      ]);
+    });
+  });
+
+  it("fails closed when the allowlist marker is not statically parseable", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        "// ALWAYS_ALLOWED_RUNTIME_DIR_NAMES is intentionally absent as a declaration.\n",
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([
+        "installed package facade activation runtime 'dist/facade-activation-check.runtime.js' could not be parsed for bundled runtime facade verification: ALWAYS_ALLOWED_RUNTIME_DIR_NAMES must be declared with new Set([...]).",
+      ]);
+    });
+  });
+
   it("ignores oversized non-facade root dist files", () => {
     withInstalledPackageRoot((packageRoot) => {
       writeInstalledFile(

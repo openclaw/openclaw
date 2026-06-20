@@ -845,7 +845,10 @@ function extractAlwaysAllowedRuntimeFacadeDirNames(source: string): ParsedString
     }
   }
 
-  return { ok: true, values: [] };
+  return {
+    ok: false,
+    error: "ALWAYS_ALLOWED_RUNTIME_DIR_NAMES must be declared with new Set([...]).",
+  };
 }
 
 function isSafeBundledRuntimeFacadeDirName(value: string): boolean {
@@ -871,7 +874,9 @@ export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: st
     }
     const source = readFileSync(filePath, "utf8");
     if (!source.includes("ALWAYS_ALLOWED_RUNTIME_DIR_NAMES")) {
-      continue;
+      return [
+        `installed package facade activation runtime '${relativePath}' is missing ALWAYS_ALLOWED_RUNTIME_DIR_NAMES for bundled runtime facade verification.`,
+      ];
     }
     const parsed = extractAlwaysAllowedRuntimeFacadeDirNames(source);
     if (!parsed.ok) {
