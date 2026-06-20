@@ -391,6 +391,74 @@ describe("secret provider integration proof harness", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "cleans PTY configure descendants before timeout failure",
+    async () => {
+      const root = makeTempDir();
+      const fakeOpenClaw = path.join(root, "fake-openclaw-pty-timeout.mjs");
+      const descendantPidPath = path.join(root, "descendant.pid");
+      const readyPath = path.join(root, "ready");
+      let descendantPid = 0;
+      const previousEntry = process.env.OPENCLAW_ENTRY;
+      const descendantScript = [
+        "import fs from 'node:fs';",
+        "process.on('SIGHUP', () => {});",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      fs.writeFileSync(
+        fakeOpenClaw,
+        [
+          "#!/usr/bin/env node",
+          "import childProcess from 'node:child_process';",
+          "import fs from 'node:fs';",
+          "const descendant = childProcess.spawn(process.execPath, [",
+          "  '--input-type=module',",
+          `  '--eval', ${JSON.stringify(descendantScript)},`,
+          "], { stdio: 'ignore' });",
+          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      process.env.OPENCLAW_ENTRY = fakeOpenClaw;
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=pty-timeout-${Date.now()}`
+      );
+
+      try {
+        const result = proof.runPtySecretsConfigurePreset(
+          {
+            env: {
+              ...process.env,
+              OPENCLAW_ENTRY: fakeOpenClaw,
+            },
+          },
+          { timeoutKillGraceMs: 50, timeoutMs: 2_000 },
+        );
+        result.catch(() => {});
+        await waitFor(() => fs.existsSync(readyPath) && fs.existsSync(descendantPidPath));
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        await expect(result).rejects.toThrow("secrets configure preset timed out");
+        await waitFor(() => !isProcessAlive(descendantPid));
+      } finally {
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+        if (previousEntry === undefined) {
+          delete process.env.OPENCLAW_ENTRY;
+        } else {
+          process.env.OPENCLAW_ENTRY = previousEntry;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "fails mandatory commands that exit by signal",
     async () => {
       const proof = await import(

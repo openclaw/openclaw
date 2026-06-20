@@ -456,6 +456,32 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+  it("signals Windows runtime child process trees with taskkill", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    runtimeSmoke.signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    runtimeSmoke.signalChildProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")("stops runtime gateway process groups", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS: "50",
