@@ -454,10 +454,9 @@ function buildAggregateToolResultReplacements(params: {
   }
 
   const aggregateOverflowChars = totalChars - params.aggregateBudgetChars;
-  // Live prompt projection and its matching pressure estimate use a coarse
-  // reduction quantum to avoid shaving exactly the current overflow on every
-  // appended tool result. Persisted recovery paths leave the ratio undefined so
-  // session/transcript rewrites still perform the minimum exact reduction.
+  // Live prompt projection uses a coarse reduction quantum and takes each
+  // selected old result to its stable floor, avoiding progressive shaving when
+  // newer tail output is appended. Persisted recovery leaves the ratio undefined.
   const aggregateReductionQuantumChars =
     params.aggregateReductionQuantumRatio !== undefined
       ? Math.max(1, Math.ceil(params.aggregateBudgetChars * params.aggregateReductionQuantumRatio))
@@ -482,7 +481,10 @@ function buildAggregateToolResultReplacements(params: {
       continue;
     }
 
-    const requestedReduction = Math.min(reducibleChars, remainingReduction);
+    const requestedReduction =
+      params.aggregateReductionQuantumRatio !== undefined
+        ? reducibleChars
+        : Math.min(reducibleChars, remainingReduction);
     const targetChars = Math.max(minTruncatedTextChars, candidate.textLength - requestedReduction);
     const truncatedMessage = truncateToolResultMessage(candidate.message, targetChars, {
       minKeepChars,
@@ -663,7 +665,6 @@ export function estimateToolResultReductionPotential(params: {
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
-    aggregateReductionQuantumRatio: AGGREGATE_REDUCTION_QUANTUM_RATIO,
   });
   const maxReducibleChars = plan.oversizedReducibleChars + plan.aggregateReducibleChars;
 

@@ -320,7 +320,7 @@ describe("estimateToolResultReductionPotential", () => {
     );
   });
 
-  it("matches live prompt aggregate quantum in reduction estimates", () => {
+  it("keeps persisted recovery estimates exact instead of using live prompt headroom", () => {
     const messages: AgentMessage[] = [
       makeToolResult("x".repeat(5_000), "call_1"),
       makeToolResult("y".repeat(5_000), "call_2"),
@@ -336,7 +336,7 @@ describe("estimateToolResultReductionPotential", () => {
 
     expect(estimate.aggregateBudgetChars).toBe(12_000);
     expect(estimate.totalToolResultChars).toBe(15_000);
-    expect(estimate.aggregateReducibleChars).toBeGreaterThan(3_000);
+    expect(estimate.aggregateReducibleChars).toBe(3_000);
   });
 
   it("lets tiny caps drive aggregate recovery estimates without the old floor", () => {
