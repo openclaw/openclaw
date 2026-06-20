@@ -37,7 +37,9 @@ describe("resolveOsSummary", () => {
       expected: {
         platform: "darwin",
         arch: "arm64",
-        release: "24.0.0",
+        // On darwin, release uses sw_vers -productVersion, not os.release()
+        // (kernel 24.0.0 → macOS 15.4). #95145
+        release: "15.4",
         label: "macos 15.4 (arm64)",
       },
     },

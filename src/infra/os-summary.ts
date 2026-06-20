@@ -21,7 +21,11 @@ function macosVersion(): string {
 /** Resolves a compact OS label for diagnostics, logs, and environment summaries. */
 export function resolveOsSummary(): OsSummary {
   const platform = os.platform();
-  const release = platform === "darwin" ? macosVersion() : os.release();
+  // On darwin, os.release() returns the Darwin kernel version (e.g. "25.5.0"),
+  // not the macOS product version ("26.5.1"). Use macosVersion() which calls
+  // sw_vers -productVersion to get the actual macOS version. (#95145)
+  const darwinProductVersion = platform === "darwin" ? macosVersion() : null;
+  const release = darwinProductVersion ?? os.release();
   const arch = os.arch();
   const cacheKey = `${platform}\0${release}\0${arch}`;
   // Cache by stable os.* facts; darwin's sw_vers lookup is comparatively slow
@@ -32,7 +36,7 @@ export function resolveOsSummary(): OsSummary {
   }
   const label = (() => {
     if (platform === "darwin") {
-      return `macos ${macosVersion()} (${arch})`;
+      return `macos ${darwinProductVersion} (${arch})`;
     }
     if (platform === "win32") {
       return `windows ${release} (${arch})`;
