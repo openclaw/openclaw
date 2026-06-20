@@ -925,13 +925,8 @@ export async function startGatewayServer(
       hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
       getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
       pluginRegistry,
-      getPluginRouteRegistry: () => {
-        // Merge HTTP routes from the active plugin registry so deferred
-        // runtime-loaded workspace plugins are discoverable. (#94572)
-        const active = getPluginRegistryState()?.activeRegistry;
-        if (!active?.httpRoutes?.length) return pluginRegistry;
-        return { ...pluginRegistry, httpRoutes: [...(pluginRegistry.httpRoutes ?? []), ...active.httpRoutes] };
-      },
+      getPluginRouteRegistry: () =>
+        getPluginRegistryState()?.activeRegistry ?? pluginRegistry,
       getGatewayRequestContext: () => currentPluginRegistryGatewayContext,
       pinChannelRegistry: !minimalTestGateway,
       deps,
