@@ -2006,6 +2006,45 @@ describe("chat slash menu accessibility", () => {
     ).toHaveLength(1);
   });
 
+  it("ignores a stale native InputEvent replay after send cleared the host draft", () => {
+    for (const inputType of ["insertText", "insertReplacementText", ""]) {
+      let draft = "";
+      const container = document.createElement("div");
+      const onDraftChange = vi.fn((next: string) => {
+        draft = next;
+      });
+      const onSend = vi.fn(() => {
+        draft = "";
+      });
+      const renderWithDraft = () => {
+        render(
+          renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+          container,
+        );
+      };
+
+      renderWithDraft();
+      inputDraft(container, "submitted message");
+      container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      expect(textarea?.value).toBe("");
+
+      // The real composer replays the submitted value through a native
+      // InputEvent, not a generic Event; it must still be suppressed.
+      textarea!.value = "submitted message";
+      textarea!.dispatchEvent(
+        new InputEvent("input", { bubbles: true, data: "submitted message", inputType }),
+      );
+
+      expect(draft).toBe("");
+      expect(textarea?.value).toBe("");
+      expect(
+        onDraftChange.mock.calls.filter(([value]) => value === "submitted message"),
+      ).toHaveLength(1);
+    }
+  });
+
   it("accepts same-text re-entry from a real InputEvent", () => {
     let draft = "";
     const container = document.createElement("div");

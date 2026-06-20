@@ -33,13 +33,13 @@ import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
-import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
   resolveControlUiRealtimeTalkProviderTransports,
   type RealtimeTalkCatalogProvider,
 } from "../chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -623,6 +623,30 @@ function shouldIgnoreClearedSubmittedDraftReplay(
     mirror.hostDraft === "" &&
     pending.text === value &&
     pending.inputVersion === mirror.inputVersion
+  );
+}
+
+// A stale composer replay re-delivers the just-submitted text through a native
+// `input`/`InputEvent` after send already cleared the host draft (observed on
+// Windows Chrome/Edge). Deliberate same-text re-entry instead arrives as an
+// explicit paste/drop insertion — fresh typing advances `inputVersion`, so it is
+// never confused with a replay. Only those user-initiated insertions are exempt
+// from stale-replay suppression; every other input (including native
+// `InputEvent` replays with `insertText`/`insertReplacementText`/empty
+// `inputType`) stays eligible so the submitted text cannot reappear.
+const DELIBERATE_COMPOSER_REENTRY_INPUT_TYPES = new Set([
+  "insertFromPaste",
+  "insertFromPasteAsQuotation",
+  "insertFromDrop",
+  "insertFromYank",
+]);
+
+function isDeliberateComposerReentry(e: Event): boolean {
+  return (
+    typeof InputEvent !== "undefined" &&
+    e instanceof InputEvent &&
+    typeof e.inputType === "string" &&
+    DELIBERATE_COMPOSER_REENTRY_INPUT_TYPES.has(e.inputType)
   );
 }
 
@@ -2475,9 +2499,12 @@ export function renderChat(props: ChatProps) {
   };
   const handleInput = (e: Event) => {
     const target = e.target as HTMLTextAreaElement;
-    const staleReplayEvent = typeof InputEvent !== "undefined" ? !(e instanceof InputEvent) : false;
+    const isCompositionInput =
+      vs.composerComposing ||
+      (typeof InputEvent !== "undefined" && e instanceof InputEvent && e.isComposing);
     if (
-      staleReplayEvent &&
+      !isCompositionInput &&
+      !isDeliberateComposerReentry(e) &&
       shouldIgnoreClearedSubmittedDraftReplay(props, target.value, draftMirror)
     ) {
       draftMirror.pendingClearedSubmittedDraft = null;
