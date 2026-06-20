@@ -171,6 +171,9 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
           recoverableOpenTagText = undefined;
           hiddenInlineCodeState = createInlineCodeState();
           hiddenFenceState = undefined;
+          // Re-enter the loop immediately so buffered visible text after the
+          // close tag is emitted without waiting for the next push() or flush().
+          continue;
         }
       } else {
         if (reasoningDepth === 0) {

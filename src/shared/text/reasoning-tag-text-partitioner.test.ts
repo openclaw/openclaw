@@ -256,6 +256,35 @@ describe("createReasoningTagTextPartitioner", () => {
     ]);
   });
 
+  it("emits visible text immediately after reasoning close tag without waiting for next push", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    // Enter reasoning mode
+    expect(partitioner.push("<thinking>hidden")).toEqual([
+      { kind: "thinking", text: "hidden" },
+    ]);
+
+    // Close tag + visible text in same chunk should emit visible text immediately
+    expect(partitioner.push("</thinking>\n\nhello")).toEqual([
+      { kind: "text", text: "\n\nhello" },
+    ]);
+
+    // Nothing left in buffer
+    expect(partitioner.hasPending()).toBe(false);
+    expect(partitioner.flush()).toEqual([]);
+  });
+
+  it("emits visible text immediately after nested reasoning close tag", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    expect(partitioner.push("<thinking>outer <thinking>inner</thinking> between</thinking>\n\nfinal")).toEqual([
+      { kind: "thinking", text: "outer inner between" },
+      { kind: "text", text: "\n\nfinal" },
+    ]);
+    expect(partitioner.hasPending()).toBe(false);
+    expect(partitioner.flush()).toEqual([]);
+  });
+
   it("keeps buffered unclosed reasoning hidden after strict mode is marked", () => {
     const partitioner = createReasoningTagTextPartitioner();
 
