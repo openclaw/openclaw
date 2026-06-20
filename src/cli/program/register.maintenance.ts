@@ -82,7 +82,7 @@ export function registerMaintenanceCommands(program: Command) {
       }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { doctorCommand } = await import("../../commands/doctor.js");
-        await doctorCommand(defaultRuntime, {
+        const result = await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
           repair: Boolean(opts.repair) || Boolean(opts.fix),
@@ -94,7 +94,10 @@ export function registerMaintenanceCommands(program: Command) {
           postUpgrade: Boolean(opts.postUpgrade),
           json: Boolean(opts.json),
         });
-        defaultRuntime.exit(0);
+        // Only the top-level `openclaw doctor` CLI translates an invalid final
+        // config into a non-zero exit. Embedded callers (update finalization)
+        // invoke doctorCommand directly and keep their own exit policy.
+        defaultRuntime.exit(result.finalConfigInvalid ? 1 : 0);
       });
     });
 

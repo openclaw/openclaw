@@ -66,11 +66,10 @@ describe("registerMaintenanceCommands doctor action", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    doctorCommand.mockResolvedValue({ finalConfigInvalid: false });
   });
 
   it("exits with code 0 after successful doctor run", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-
     await runMaintenanceCli(["doctor", "--non-interactive", "--yes", "--allow-exec"]);
 
     expect(doctorCommand).toHaveBeenCalledTimes(1);
@@ -80,6 +79,15 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.yes).toBe(true);
     expect(options.allowExec).toBe(true);
     expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("exits non-zero when the doctor run reports an invalid final config (#77804)", async () => {
+    doctorCommand.mockResolvedValue({ finalConfigInvalid: true });
+
+    await runMaintenanceCli(["doctor", "--non-interactive"]);
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.exit).not.toHaveBeenCalledWith(0);
   });
 
   it("exits with code 1 when doctor fails", async () => {
@@ -93,8 +101,6 @@ describe("registerMaintenanceCommands doctor action", () => {
   });
 
   it("maps --fix to repair=true", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-
     await runMaintenanceCli(["doctor", "--fix"]);
 
     expect(doctorCommand).toHaveBeenCalledTimes(1);
