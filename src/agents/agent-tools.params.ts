@@ -138,11 +138,11 @@ const HALLUCINATED_DOC_EXTENSIONS_RE =
  */
 export function normalizeHallucinatedDocumentExtension(filePath: string): string {
   const match = filePath.match(HALLUCINATED_DOC_EXTENSIONS_RE);
-  if (!match) return filePath;
+  if (!match) { return filePath; }
   const hallucinated = match[1].toLowerCase();
   const corrected = HALLUCINATED_DOC_EXTENSIONS.get(`.${hallucinated}`);
-  if (!corrected) return filePath;
-  return filePath.slice(0, match.index!) + corrected;
+  if (!corrected) { return filePath; }
+  return filePath.slice(0, match.index ?? 0) + corrected;
 }
 
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
@@ -242,10 +242,10 @@ export function wrapToolParamValidation(
         if (normRecord) {
           for (const key of pathKeys) {
             const value = normRecord[key];
-            if (typeof value !== "string") continue;
+            if (typeof value !== "string") { continue; }
             const corrected = normalizeHallucinatedDocumentExtension(value);
             if (corrected !== value) {
-              if (normalizedParams === params) normalizedParams = { ...normRecord };
+              if (normalizedParams === params) { normalizedParams = { ...normRecord }; }
               (normalizedParams as Record<string, unknown>)[key] = corrected;
             }
           }
