@@ -20,6 +20,14 @@ const originalDiscordMessagingActionRuntime = { ...discordMessagingActionRuntime
 const originalDiscordGuildActionRuntime = { ...discordGuildActionRuntime };
 const originalDiscordModerationActionRuntime = { ...discordModerationActionRuntime };
 
+type DiscordSendMessageOptions = {
+  mediaAccess?: unknown;
+  mediaUrl?: string;
+  mediaLocalRoots?: string[];
+  mediaReadFile?: unknown;
+  filename?: string;
+};
+
 type DiscordChannelInfoTest = {
   id: string;
   type: number;
@@ -33,11 +41,13 @@ const discordSendMocks = {
   banMemberDiscord: vi.fn(async () => ({})),
   canManageGuildRoleDiscord: vi.fn(async () => true),
   canManageGuildMemberRoleDiscord: vi.fn(async () => true),
-  createChannelDiscord: vi.fn(async () => ({
-    id: "new-channel",
-    name: "test",
-    type: 0,
-  })),
+  createChannelDiscord: vi.fn(
+    async (_params: { guildId?: string; name?: string }, _options?: unknown) => ({
+      id: "new-channel",
+      name: "test",
+      type: 0,
+    }),
+  ),
   createScheduledEventDiscord: vi.fn(async () => ({ id: "event-1" })),
   createThreadDiscord: vi.fn(async () => ({})),
   deleteChannelDiscord: vi.fn(async () => ({ ok: true, channelId: "C1" })),
@@ -73,12 +83,19 @@ const discordSendMocks = {
   removeRoleDiscord: vi.fn(async () => ({ ok: true })),
   searchMessagesDiscord: vi.fn(async () => ({})),
   sendDiscordComponentMessage: vi.fn(async () => ({})),
-  sendMessageDiscord: vi.fn(async () => ({})),
+  sendMessageDiscord: vi.fn(
+    async (_channelId: string, _content?: string, _options?: DiscordSendMessageOptions) => ({}),
+  ),
   sendPollDiscord: vi.fn(async () => ({})),
   sendStickerDiscord: vi.fn(async () => ({})),
   sendVoiceMessageDiscord: vi.fn(async () => ({})),
   setChannelPermissionDiscord: vi.fn(async () => ({ ok: true })),
-  timeoutMemberDiscord: vi.fn(async () => ({})),
+  timeoutMemberDiscord: vi.fn(
+    async (
+      _params: { guildId?: string; userId?: string; durationMinutes?: number },
+      _options?: unknown,
+    ) => ({}),
+  ),
   unpinMessageDiscord: vi.fn(async () => ({})),
 };
 
@@ -1609,10 +1626,12 @@ describe("handleDiscordGuildAction", () => {
       cfg,
       accountId: "work",
     });
-    const details = result.details as Record<string, unknown>;
-    expect(details.ok).toBe(true);
-    expect(details.status).toBe("online");
-    expect(details.activities).toEqual([]);
+    const details = result.details as
+      | { ok?: boolean; status?: string; activities?: unknown[] }
+      | undefined;
+    expect(details?.ok).toBe(true);
+    expect(details?.status).toBe("online");
+    expect(details?.activities).toEqual([]);
   });
 });
 

@@ -185,6 +185,7 @@ export function createPluginLoadResult(
     trustedToolPolicies: [],
     toolMetadata: [],
     controlUiDescriptors: [],
+    controlUiEntryPoints: [],
     runtimeLifecycles: [],
     agentEventSubscriptions: [],
     sessionSchedulerJobs: [],

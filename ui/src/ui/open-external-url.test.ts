@@ -1,6 +1,11 @@
 // Control UI tests cover open external url behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openExternalUrlSafe, resolveSafeExternalUrl } from "./open-external-url.ts";
+import {
+  navigateReservedExternalWindow,
+  openExternalUrlSafe,
+  reserveExternalWindow,
+  resolveSafeExternalUrl,
+} from "./open-external-url.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -86,6 +91,60 @@ describe("resolveSafeExternalUrl", () => {
 });
 
 describe("openExternalUrlSafe", () => {
+  it("reserves a blank external window and clears opener synchronously", () => {
+    const openedLikeProxy = {
+      opener: { postMessage: () => void 0 },
+    } as unknown as WindowProxy;
+    const openMock = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => openedLikeProxy as unknown as Window);
+
+    const opened = reserveExternalWindow();
+
+    expect(openMock).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(opened).toBe(openedLikeProxy);
+    expect(openedLikeProxy.opener).toBeNull();
+  });
+
+  it("navigates a reserved window to a safe URL", () => {
+    const assignMock = vi.fn();
+    const closeMock = vi.fn();
+    const openedLikeProxy = {
+      opener: { postMessage: () => void 0 },
+      location: { assign: assignMock },
+      close: closeMock,
+    } as unknown as WindowProxy;
+
+    expect(
+      navigateReservedExternalWindow(openedLikeProxy, "/plugin", {
+        baseHref: "https://openclaw.ai/chat",
+      }),
+    ).toBe(true);
+
+    expect(assignMock).toHaveBeenCalledWith("https://openclaw.ai/plugin");
+    expect(closeMock).not.toHaveBeenCalled();
+    expect(openedLikeProxy.opener).toBeNull();
+  });
+
+  it("closes a reserved window for unsafe URLs", () => {
+    const assignMock = vi.fn();
+    const closeMock = vi.fn();
+    const openedLikeProxy = {
+      opener: { postMessage: () => void 0 },
+      location: { assign: assignMock },
+      close: closeMock,
+    } as unknown as WindowProxy;
+
+    expect(
+      navigateReservedExternalWindow(openedLikeProxy, "javascript:alert(1)", {
+        baseHref: "https://openclaw.ai/chat",
+      }),
+    ).toBe(false);
+
+    expect(assignMock).not.toHaveBeenCalled();
+    expect(closeMock).toHaveBeenCalled();
+  });
+
   it("nulls opener when window.open returns a proxy-like object", () => {
     const openedLikeProxy = {
       opener: { postMessage: () => void 0 },

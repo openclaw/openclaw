@@ -396,6 +396,7 @@ export const pt_BR: TranslationMap = {
     control: "Controle",
     agent: "Agente",
     settings: "Configurações",
+    plugins: "Plugins",
     expand: "Expandir barra lateral",
     collapse: "Recolher barra lateral",
     resize: "Redimensionar barra lateral",

@@ -66,6 +66,10 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import {
+  loadPluginUiEntryPoints,
+  type PluginUiEntryPointsState,
+} from "./controllers/plugin-ui-entry-points.ts";
+import {
   applySessionsChangedEvent,
   loadSessions,
   subscribeSessions,
@@ -120,6 +124,7 @@ type GatewayHost = {
   presenceEntries: PresenceEntry[];
   presenceError: string | null;
   presenceStatus: StatusSummary | null;
+  pluginUiEntryPoints: PluginUiEntryPointsState["pluginUiEntryPoints"];
   agentsLoading: boolean;
   agentsList: AgentsListResult | null;
   agentsError: string | null;
@@ -901,6 +906,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
         }
         void loadHealthState(host as unknown as HealthState);
+        void loadPluginUiEntryPoints(host as unknown as PluginUiEntryPointsState);
         // Re-run push reconciliation now that the gateway client is available.
         void host.reconcileWebPushState?.();
         void verifyPendingUpdateVersion(host, client);

@@ -6829,6 +6829,52 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
     }
 }
 
+public struct PluginControlUiEntryPoint: Codable, Sendable {
+    public let id: String
+    public let pluginid: String
+    public let pluginname: String?
+    public let surface: String
+    public let label: String
+    public let path: String
+    public let openmode: AnyCodable?
+    public let description: String?
+    public let requiredscopes: [String]?
+
+    public init(
+        id: String,
+        pluginid: String,
+        pluginname: String?,
+        surface: String,
+        label: String,
+        path: String,
+        openmode: AnyCodable?,
+        description: String?,
+        requiredscopes: [String]?)
+    {
+        self.id = id
+        self.pluginid = pluginid
+        self.pluginname = pluginname
+        self.surface = surface
+        self.label = label
+        self.path = path
+        self.openmode = openmode
+        self.description = description
+        self.requiredscopes = requiredscopes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case pluginid = "pluginId"
+        case pluginname = "pluginName"
+        case surface
+        case label
+        case path
+        case openmode = "openMode"
+        case description
+        case requiredscopes = "requiredScopes"
+    }
+}
+
 public struct PluginsSessionActionFailureResult: Codable, Sendable {
     public let ok: Bool
     public let error: String
@@ -6996,6 +7042,78 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case ok
         case descriptors
+    }
+}
+
+public struct PluginsUiEntryPointLaunchParams: Codable, Sendable {
+    public let id: String
+    public let pluginid: String
+    public let path: String
+    public let sessionkey: String?
+    public let contexttokens: Double?
+
+    public init(
+        id: String,
+        pluginid: String,
+        path: String,
+        sessionkey: String?,
+        contexttokens: Double?)
+    {
+        self.id = id
+        self.pluginid = pluginid
+        self.path = path
+        self.sessionkey = sessionkey
+        self.contexttokens = contexttokens
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case pluginid = "pluginId"
+        case path
+        case sessionkey = "sessionKey"
+        case contexttokens = "contextTokens"
+    }
+}
+
+public struct PluginsUiEntryPointLaunchResult: Codable, Sendable {
+    public let ok: Bool
+    public let path: String
+    public let expiresinms: Double
+
+    public init(
+        ok: Bool,
+        path: String,
+        expiresinms: Double)
+    {
+        self.ok = ok
+        self.path = path
+        self.expiresinms = expiresinms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case path
+        case expiresinms = "expiresInMs"
+    }
+}
+
+public struct PluginsUiEntryPointsParams: Codable, Sendable {}
+
+public struct PluginsUiEntryPointsResult: Codable, Sendable {
+    public let ok: Bool
+    public let entrypoints: [PluginControlUiEntryPoint]
+
+    public init(
+        ok: Bool,
+        entrypoints: [PluginControlUiEntryPoint])
+    {
+        self.ok = ok
+        self.entrypoints = entrypoints
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case entrypoints = "entryPoints"
     }
 }
 

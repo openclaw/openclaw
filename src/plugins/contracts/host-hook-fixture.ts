@@ -20,6 +20,13 @@ export function registerHostHookFixture(api: OpenClawPluginApi) {
     description: "Generic Control UI descriptor for workflow state",
     placement: "session-sidebar",
   });
+  api.session.controls.registerControlUiEntryPoint({
+    id: "workflow-app",
+    surface: "app-nav",
+    label: "Workflow App",
+    description: "Generic Control UI entry point for workflow state",
+    path: "/plugins/host-hook-fixture/",
+  });
   api.lifecycle.registerRuntimeLifecycle({
     id: "workflow-cleanup",
     description: "Generic cleanup hook for plugin-owned workflow state",

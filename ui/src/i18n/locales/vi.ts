@@ -396,6 +396,7 @@ export const vi: TranslationMap = {
     control: "Điều khiển",
     agent: "Agent",
     settings: "Cài đặt",
+    plugins: "Plugin",
     expand: "Mở rộng thanh bên",
     collapse: "Thu gọn thanh bên",
     resize: "Thay đổi kích thước thanh bên",

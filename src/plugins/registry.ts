@@ -29,6 +29,7 @@ import {
 } from "../context-engine/registry.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
+import { canonicalizePathForSecurity } from "../gateway/security-path.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -96,6 +97,7 @@ import {
   normalizePluginHostHookId,
   type PluginAgentEventSubscriptionRegistration,
   type PluginControlUiDescriptor,
+  type PluginControlUiEntryPoint,
   type PluginRuntimeLifecycleRegistration,
   type PluginSessionActionRegistration,
   type PluginSessionSchedulerJobRegistration,
@@ -253,6 +255,7 @@ export type {
   PluginCliBackendRegistration,
   PluginCliRegistration,
   PluginCommandRegistration,
+  PluginControlUiEntryPointRegistryRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
   PluginAgentHarnessRegistration,
@@ -1940,6 +1943,61 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     "run",
     "settings",
   ]);
+  const controlUiEntryPointSurfaces = new Set<PluginControlUiEntryPoint["surface"]>(["app-nav"]);
+  const controlUiEntryPointOpenModes = new Set<NonNullable<PluginControlUiEntryPoint["openMode"]>>([
+    "in-app",
+    "same-window",
+    "new-window",
+  ]);
+
+  const hasControlCharacter = (value: string): boolean => {
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      if (code <= 0x1f || code === 0x7f) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const normalizeControlUiEntryPointPath = (pluginId: string, value: unknown): string | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const pathValue = value.trim();
+    if (
+      !pathValue ||
+      !pathValue.startsWith("/") ||
+      pathValue.startsWith("//") ||
+      pathValue.includes("\\") ||
+      pathValue.includes("?") ||
+      pathValue.includes("#") ||
+      hasControlCharacter(pathValue) ||
+      /^(?:[a-z][a-z0-9+.-]*:)/i.test(pathValue)
+    ) {
+      return null;
+    }
+    if (/%(?:2f|5c)/i.test(pathValue)) {
+      return null;
+    }
+    const pluginRoot = `/plugins/${pluginId}`;
+    if (pathValue !== pluginRoot && !pathValue.startsWith(`${pluginRoot}/`)) {
+      return null;
+    }
+    const canonicalPluginRoot = canonicalizePathForSecurity(pluginRoot).canonicalPath;
+    const canonical = canonicalizePathForSecurity(pathValue);
+    if (
+      canonical.malformedEncoding ||
+      canonical.decodePassLimitReached ||
+      !canonical.candidates.every(
+        (candidate) =>
+          candidate === canonicalPluginRoot || candidate.startsWith(`${canonicalPluginRoot}/`),
+      )
+    ) {
+      return null;
+    }
+    return pathValue;
+  };
 
   const registerSessionExtension = (
     record: PluginRecord,
@@ -2258,6 +2316,86 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         label,
         ...(description !== undefined ? { description } : {}),
         ...(placement !== undefined ? { placement } : {}),
+        ...(requiredScopes !== undefined
+          ? { requiredScopes: requiredScopes as OperatorScope[] }
+          : {}),
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerControlUiEntryPoint = (
+    record: PluginRecord,
+    entryPoint: PluginControlUiEntryPoint,
+  ) => {
+    const id = normalizeHostHookString(entryPoint.id);
+    const label = normalizeHostHookString(entryPoint.label);
+    const description = normalizeOptionalHostHookString(entryPoint.description);
+    const requiredScopes = normalizeHostHookStringList(entryPoint.requiredScopes);
+    const surface = typeof entryPoint.surface === "string" ? entryPoint.surface : "";
+    const entryPointPath = normalizeControlUiEntryPointPath(record.id, entryPoint.path);
+    const openMode =
+      entryPoint.openMode === undefined || entryPoint.openMode === null
+        ? "in-app"
+        : typeof entryPoint.openMode === "string"
+          ? entryPoint.openMode
+          : "";
+    if (
+      !id ||
+      !label ||
+      !controlUiEntryPointSurfaces.has(surface as PluginControlUiEntryPoint["surface"]) ||
+      !controlUiEntryPointOpenModes.has(
+        openMode as NonNullable<PluginControlUiEntryPoint["openMode"]>,
+      ) ||
+      !entryPointPath ||
+      description === "" ||
+      requiredScopes === null
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          "control UI entry point registration requires id, surface, label, plugin-owned path, and valid optional fields",
+      });
+      return;
+    }
+    if (requiredScopes !== undefined) {
+      const unknownScope = requiredScopes.find((scope) => !isOperatorScope(scope));
+      if (unknownScope !== undefined) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `control UI entry point requiredScopes contains unknown operator scope: ${unknownScope}`,
+        });
+        return;
+      }
+    }
+    const existing = (registry.controlUiEntryPoints ?? []).find(
+      (entry) => entry.pluginId === record.id && entry.entryPoint.id === id,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `control UI entry point already registered: ${id}`,
+      });
+      return;
+    }
+    (registry.controlUiEntryPoints ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      entryPoint: {
+        ...entryPoint,
+        id,
+        surface: surface as PluginControlUiEntryPoint["surface"],
+        label,
+        path: entryPointPath,
+        openMode: openMode as NonNullable<PluginControlUiEntryPoint["openMode"]>,
+        ...(description !== undefined ? { description } : {}),
         ...(requiredScopes !== undefined
           ? { requiredScopes: requiredScopes as OperatorScope[] }
           : {}),
@@ -2975,6 +3113,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerToolMetadata: (metadata) => registerToolMetadata(record, metadata),
               registerControlUiDescriptor: (descriptor) =>
                 registerControlUiDescriptor(record, descriptor),
+              registerControlUiEntryPoint: (entryPoint) =>
+                registerControlUiEntryPoint(record, entryPoint),
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),
@@ -3299,6 +3439,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTrustedToolPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
+    registerControlUiEntryPoint,
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
     registerSessionSchedulerJob,

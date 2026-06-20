@@ -1327,6 +1327,23 @@
   margin-top: 14px;
 }
 
+.plugin-ui-entry-frame-shell {
+  min-height: 0;
+  height: calc(100vh - 140px);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.plugin-ui-entry-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+}
+
 /* Content header */
 .content-header {
   display: flex;

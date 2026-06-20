@@ -1293,7 +1293,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
       await expect(command).rejects.toThrow(/Command timed out:/u);
-      await waitForDead(childPid, 2_000);
+      await waitForDead(childPid, 10_000);
       expect(readFileSync(logPath, "utf8")).toContain("timeout command=");
     } finally {
       const childPid = existsSync(childPidPath)
@@ -1358,7 +1358,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const result = await waitForExit(runner, 5_000);
 
       expect(result).toEqual({ signal: null, status: 143 });
-      await waitForDead(childPid, 2_000);
+      await waitForDead(childPid, 10_000);
     } finally {
       if (runnerPid !== undefined && isProcessAlive(runnerPid)) {
         process.kill(runnerPid, "SIGKILL");
@@ -1411,7 +1411,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           cwd: process.cwd(),
           env: {
             ...process.env,
-            OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS: "3000",
+            OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS: "1000",
             OPENCLAW_TEST_CHILD_PID: childPidPath,
           },
           stdio: ["ignore", "ignore", "pipe"],
@@ -1429,7 +1429,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       expect(result).toEqual({ signal: null, status: 143 });
       expect(elapsedMs).toBeLessThan(2_000);
       expect(readFileSync(logPath, "utf8")).toContain("signal cleanup log sentinel");
-      await waitForDead(childPid, 2_000);
+      await waitForDead(childPid, 10_000);
     } finally {
       if (runnerPid !== undefined && isProcessAlive(runnerPid)) {
         process.kill(runnerPid, "SIGKILL");

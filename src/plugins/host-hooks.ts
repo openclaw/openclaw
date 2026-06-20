@@ -113,6 +113,16 @@ export type PluginControlUiDescriptor = {
   requiredScopes?: OperatorScope[];
 };
 
+export type PluginControlUiEntryPoint = {
+  id: string;
+  surface: "app-nav";
+  label: string;
+  path: string;
+  openMode?: "in-app" | "same-window" | "new-window";
+  description?: string;
+  requiredScopes?: OperatorScope[];
+};
+
 export type PluginSessionActionContext = {
   pluginId: string;
   actionId: string;

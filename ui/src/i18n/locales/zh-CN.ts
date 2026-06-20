@@ -393,6 +393,7 @@ export const zh_CN: TranslationMap = {
     control: "控制",
     agent: "代理",
     settings: "设置",
+    plugins: "插件",
     expand: "展开侧边栏",
     collapse: "折叠侧边栏",
     resize: "调整侧边栏大小",

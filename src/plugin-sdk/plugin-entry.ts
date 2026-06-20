@@ -149,6 +149,7 @@ export type PluginAgentTurnPrepareEvent = import("../plugins/types.js").PluginAg
 export type PluginAgentTurnPrepareResult =
   import("../plugins/types.js").PluginAgentTurnPrepareResult;
 export type PluginControlUiDescriptor = import("../plugins/types.js").PluginControlUiDescriptor;
+export type PluginControlUiEntryPoint = import("../plugins/types.js").PluginControlUiEntryPoint;
 export type PluginHeartbeatPromptContributionEvent =
   import("../plugins/types.js").PluginHeartbeatPromptContributionEvent;
 export type PluginHeartbeatPromptContributionResult =

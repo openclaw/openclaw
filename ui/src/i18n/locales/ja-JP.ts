@@ -399,6 +399,7 @@ export const ja_JP: TranslationMap = {
     control: "コントロール",
     agent: "エージェント",
     settings: "設定",
+    plugins: "プラグイン",
     expand: "サイドバーを展開",
     collapse: "サイドバーを折りたたむ",
     resize: "サイドバーのサイズを変更",

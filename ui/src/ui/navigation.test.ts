@@ -8,6 +8,7 @@ import {
   isSettingsTab,
   normalizeBasePath,
   normalizePath,
+  pathForPluginUiEntryPoint,
   pathForTab,
   subtitleForTab,
   tabFromPath,
@@ -168,6 +169,47 @@ describe("pathForTab", () => {
   it("prepends base path", () => {
     expect(pathForTab("chat", "/ui")).toBe("/ui/chat");
     expect(pathForTab("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
+  });
+});
+
+describe("pathForPluginUiEntryPoint", () => {
+  it("builds same-origin plugin-owned paths", () => {
+    expect(
+      pathForPluginUiEntryPoint({
+        pluginId: "notes-plugin",
+        path: "/plugins/notes-plugin/",
+      }),
+    ).toBe("/plugins/notes-plugin/");
+    expect(
+      pathForPluginUiEntryPoint({
+        pluginId: "notes-plugin",
+        path: "/plugins/notes-plugin/",
+        basePath: "/ui",
+      }),
+    ).toBe("/plugins/notes-plugin/");
+  });
+
+  it("rejects external, contextual, or cross-plugin paths", () => {
+    const badPaths = [
+      "https://example.com/session",
+      "//example.com/session",
+      "javascript:alert(1)",
+      "data:text/html,hi",
+      "/plugins/other-plugin/",
+      "/plugins/notes-plugin/?session=agent:main:main",
+      "/plugins/notes-plugin/#session",
+      "/plugins/notes-plugin/%2F%2Fexample.com",
+      "/plugins/notes-plugin/%2e%2e/other-plugin/",
+      "/plugins/other-plugin/%2e%2e/notes-plugin/",
+    ];
+    for (const path of badPaths) {
+      expect(
+        pathForPluginUiEntryPoint({
+          pluginId: "notes-plugin",
+          path,
+        }),
+      ).toBeNull();
+    }
   });
 });
 

@@ -38,6 +38,36 @@ function expectButtonWithText(app: ReturnType<typeof mountApp>, text: string): H
   return button;
 }
 
+function capturePluginUiBridgePorts(app: ReturnType<typeof mountApp>) {
+  const ports: MessagePort[] = [];
+  const target = app as unknown as {
+    postPluginUiBridgeConnect(targetWindow: Window, port: MessagePort): void;
+  };
+  vi.spyOn(target, "postPluginUiBridgeConnect").mockImplementation((_targetWindow, port) => {
+    ports.push(port);
+  });
+  return ports;
+}
+
+function expectLatestPluginUiBridgePort(ports: MessagePort[]): MessagePort {
+  const port = ports.at(-1);
+  expect(port).toBeInstanceOf(MessagePort);
+  return port as MessagePort;
+}
+
+function collectPluginUiBridgeResponses(port: MessagePort): unknown[] {
+  const responses: unknown[] = [];
+  port.addEventListener("message", (event: MessageEvent) => {
+    responses.push(event.data);
+  });
+  port.start();
+  return responses;
+}
+
+function postPluginUiBridgeMessage(port: MessagePort, message: unknown) {
+  port.postMessage(message);
+}
+
 function createSessionsResult(sessions: Array<Record<string, unknown>>) {
   return {
     ts: 0,
@@ -103,6 +133,259 @@ describe("control UI routing", () => {
       HTMLAnchorElement,
     );
     expect(breadcrumb.getAttribute("href")).toBe("/ui/overview");
+  });
+
+  it("uses the plugin name as the breadcrumb current segment for in-app plugin entry points", async () => {
+    const app = mountApp("/channels");
+    app.activePluginUiEntryPoint = {
+      id: "notes-plugin-entry",
+      pluginId: "notes-plugin",
+      pluginName: "Session Search",
+      surface: "app-nav",
+      label: "Sessions",
+      path: "/plugins/notes-plugin/",
+      openMode: "in-app",
+    };
+    app.activePluginUiEntryPointSrc = "/plugins/notes-plugin/?__openclaw_plugin_entry=test";
+    await app.updateComplete;
+
+    const current = expectElement(
+      app,
+      "dashboard-header .dashboard-header__breadcrumb-current",
+      HTMLSpanElement,
+    );
+    expect(current.textContent?.trim()).toBe("Session Search");
+  });
+
+  it("reserves new-window plugin entry point tabs before launch tokens resolve", async () => {
+    const app = mountApp("/chat");
+    let resolveLaunch: (value: unknown) => void = () => {};
+    const launchResult = new Promise((resolve) => {
+      resolveLaunch = resolve;
+    });
+    const request = vi.fn(() => launchResult);
+    const assign = vi.fn();
+    const close = vi.fn();
+    const opened = {
+      opener: window,
+      location: { assign },
+      close,
+    } as unknown as WindowProxy;
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(opened);
+    app.client = { request, stop: vi.fn() } as unknown as NonNullable<typeof app.client>;
+    app.pluginUiEntryPoints = [
+      {
+        id: "notes-plugin-entry",
+        pluginId: "notes-plugin",
+        pluginName: "Notes",
+        surface: "app-nav",
+        label: "Notes",
+        path: "/plugins/notes-plugin/",
+        openMode: "new-window",
+      },
+    ];
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const pluginLink = expectElement(app, "a.nav-item--plugin", HTMLAnchorElement);
+    pluginLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(openSpy).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(request).toHaveBeenCalledWith(
+      "plugins.uiEntryPointLaunch",
+      expect.objectContaining({
+        id: "notes-plugin-entry",
+        pluginId: "notes-plugin",
+        path: "/plugins/notes-plugin/",
+      }),
+    );
+    expect(assign).not.toHaveBeenCalled();
+
+    resolveLaunch({
+      ok: true,
+      path: "/plugins/notes-plugin/?__openclaw_plugin_entry=abc",
+      expiresInMs: 60_000,
+    });
+    await nextFrame();
+
+    expect(assign).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^http:\/\/localhost(?::\d+)?\/plugins\/notes-plugin\/\?__openclaw_plugin_entry=abc$/,
+      ),
+    );
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("proxies sandboxed in-app plugin requests through a per-frame message port", async () => {
+    const app = mountApp("/channels");
+    const ports = capturePluginUiBridgePorts(app);
+    app.activePluginUiEntryPoint = {
+      id: "notes-plugin-entry",
+      pluginId: "notes-plugin",
+      pluginName: "Notes",
+      surface: "app-nav",
+      label: "Notes",
+      path: "/plugins/notes-plugin/",
+      openMode: "in-app",
+    };
+    app.activePluginUiEntryPointSrc = "/plugins/notes-plugin/?__openclaw_plugin_entry=test";
+    const fetchSpy = vi.fn(async () => new Response("pong", { status: 201 }));
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+    await app.updateComplete;
+
+    const frame = expectElement(app, "iframe.plugin-ui-entry-frame", HTMLIFrameElement);
+    const frameWindow = frame.contentWindow;
+    if (!frameWindow) {
+      throw new Error("Expected plugin iframe contentWindow");
+    }
+    const framePostMessage = vi
+      .spyOn(frameWindow, "postMessage")
+      .mockImplementation(() => undefined);
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-popups");
+    frame.dispatchEvent(new Event("load"));
+    const bridgePort = expectLatestPluginUiBridgePort(ports);
+    const responses = collectPluginUiBridgeResponses(bridgePort);
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: {
+          type: "openclaw.pluginUi.request",
+          id: "req-1",
+          path: "/plugins/notes-plugin/api/search",
+          init: {
+            method: "POST",
+            headers: {
+              "content-type": "text/plain",
+              authorization: "Bearer should-not-forward",
+              "x-openclaw-scopes": "operator.admin",
+            },
+            body: "query",
+          },
+        },
+      }),
+    );
+    await nextFrame();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    postPluginUiBridgeMessage(bridgePort, {
+      type: "openclaw.pluginUi.request",
+      id: "req-1",
+      path: "/plugins/notes-plugin/api/search",
+      init: {
+        method: "POST",
+        headers: {
+          "content-type": "text/plain",
+          authorization: "Bearer should-not-forward",
+          "x-openclaw-scopes": "operator.admin",
+        },
+        body: "query",
+      },
+    });
+    await nextFrame();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe("/plugins/notes-plugin/api/search");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    expect((init.headers as Headers).get("content-type")).toBe("text/plain");
+    expect((init.headers as Headers).get("authorization")).toBeNull();
+    expect((init.headers as Headers).get("x-openclaw-scopes")).toBeNull();
+    expect(init.body).toBe("query");
+    await vi.waitFor(() =>
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          type: "openclaw.pluginUi.response",
+          id: "req-1",
+          ok: true,
+          status: 201,
+          body: "pong",
+        }),
+      ),
+    );
+    expect(framePostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "openclaw.pluginUi.response",
+        id: "req-1",
+        ok: true,
+        status: 201,
+        body: "pong",
+      }),
+      "*",
+    );
+
+    fetchSpy.mockClear();
+    postPluginUiBridgeMessage(bridgePort, {
+      type: "openclaw.pluginUi.request",
+      id: "req-2",
+      path: "/plugins/other-plugin/api/search",
+    });
+    await nextFrame();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          type: "openclaw.pluginUi.response",
+          id: "req-2",
+          ok: false,
+          status: 400,
+        }),
+      ),
+    );
+
+    fetchSpy.mockClear();
+    postPluginUiBridgeMessage(bridgePort, {
+      type: "openclaw.pluginUi.request",
+      id: "req-encoded-sibling",
+      path: "/plugins/notes-plugin/%2e%2e/other-plugin/api/search",
+    });
+    await nextFrame();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          type: "openclaw.pluginUi.response",
+          id: "req-encoded-sibling",
+          ok: false,
+          status: 400,
+        }),
+      ),
+    );
+
+    fetchSpy.mockClear();
+    frame.dispatchEvent(new Event("load"));
+    const currentBridgePort = expectLatestPluginUiBridgePort(ports);
+    const currentResponses = collectPluginUiBridgeResponses(currentBridgePort);
+    postPluginUiBridgeMessage(bridgePort, {
+      type: "openclaw.pluginUi.request",
+      id: "req-stale",
+      path: "/plugins/notes-plugin/api/search",
+    });
+    await nextFrame();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    postPluginUiBridgeMessage(currentBridgePort, {
+      type: "openclaw.pluginUi.request",
+      id: "req-current",
+      path: "/plugins/notes-plugin/api/search",
+    });
+    await nextFrame();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(currentResponses).toContainEqual(
+        expect.objectContaining({
+          type: "openclaw.pluginUi.response",
+          id: "req-current",
+          ok: true,
+        }),
+      ),
+    );
   });
 
   it("renders the dreaming view on the /dreaming route", async () => {

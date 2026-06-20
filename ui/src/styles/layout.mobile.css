@@ -598,6 +598,11 @@
     gap: 12px;
   }
 
+  .plugin-ui-entry-frame-shell {
+    height: calc(100vh - 92px);
+    border-radius: var(--radius-sm);
+  }
+
   /* Cards */
   .card {
     padding: 12px;

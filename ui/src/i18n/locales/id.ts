@@ -396,6 +396,7 @@ export const id: TranslationMap = {
     control: "Kontrol",
     agent: "Agen",
     settings: "Pengaturan",
+    plugins: "Plugin",
     expand: "Perluas bilah samping",
     collapse: "Ciutkan bilah samping",
     resize: "Ubah ukuran bilah samping",

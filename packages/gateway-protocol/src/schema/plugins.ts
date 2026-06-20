@@ -33,6 +33,24 @@ export const PluginControlUiDescriptorSchema = Type.Object(
 );
 
 /** Empty request payload for listing plugin UI descriptors. */
+export const PluginControlUiEntryPointSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    pluginId: NonEmptyString,
+    pluginName: Type.Optional(NonEmptyString),
+    surface: Type.Literal("app-nav"),
+    label: NonEmptyString,
+    path: NonEmptyString,
+    openMode: Type.Optional(
+      Type.Union([Type.Literal("in-app"), Type.Literal("same-window"), Type.Literal("new-window")]),
+    ),
+    description: Type.Optional(Type.String()),
+    requiredScopes: Type.Optional(Type.Array(NonEmptyString)),
+  },
+  { additionalProperties: false },
+);
+
+/** Empty request payload for listing plugin UI descriptors. */
 export const PluginsUiDescriptorsParamsSchema = Type.Object({}, { additionalProperties: false });
 
 /** Response payload containing all plugin UI descriptors visible to the client. */
@@ -40,6 +58,37 @@ export const PluginsUiDescriptorsResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
     descriptors: Type.Array(PluginControlUiDescriptorSchema),
+  },
+  { additionalProperties: false },
+);
+
+/** Request payload for invoking one plugin-owned session action. */
+export const PluginsUiEntryPointsParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const PluginsUiEntryPointsResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    entryPoints: Type.Array(PluginControlUiEntryPointSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const PluginsUiEntryPointLaunchParamsSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    pluginId: NonEmptyString,
+    path: NonEmptyString,
+    sessionKey: Type.Optional(NonEmptyString),
+    contextTokens: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+export const PluginsUiEntryPointLaunchResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    path: NonEmptyString,
+    expiresInMs: Type.Number(),
   },
   { additionalProperties: false },
 );
