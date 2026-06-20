@@ -2437,8 +2437,8 @@ describe("legacy model compat migrate", () => {
     expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
       primary: "google/gemini-3.1-flash-image",
       fallbacks: [
-        "gemini-3.1-flash-image",
-        "google/gemini-3.1-flash-image",
+        "gemini-3-pro-image",
+        "google/gemini-3-pro-image",
         "openrouter/google/gemini-3.1-flash-image",
         "google/gemini-3.1-flash-image",
         "google/gemini-3.1-flash-image",
@@ -2447,7 +2447,8 @@ describe("legacy model compat migrate", () => {
     });
     expectMigrationChangesToIncludeFragments(res.changes, [
       'config.agents.defaults.imageGenerationModel.primary from "google/gemini-3.1-flash-image-preview" to "google/gemini-3.1-flash-image"',
-      'config.agents.defaults.imageGenerationModel.fallbacks.0 from "gemini-3-pro-image-preview" to "gemini-3.1-flash-image"',
+      'config.agents.defaults.imageGenerationModel.fallbacks.0 from "gemini-3-pro-image-preview" to "gemini-3-pro-image"',
+      'config.agents.defaults.imageGenerationModel.fallbacks.1 from "google/gemini-3-pro-image-preview" to "google/gemini-3-pro-image"',
       'config.agents.defaults.imageGenerationModel.fallbacks.2 from "openrouter/google/gemini-3.1-flash-image-preview" to "openrouter/google/gemini-3.1-flash-image"',
       'config.agents.defaults.imageGenerationModel.fallbacks.3 from "google/imagen-4.0-generate-001" to "google/gemini-3.1-flash-image"',
       'config.agents.defaults.imageGenerationModel.fallbacks.4 from "google/imagen-4.0-ultra-generate-001" to "google/gemini-3.1-flash-image"',

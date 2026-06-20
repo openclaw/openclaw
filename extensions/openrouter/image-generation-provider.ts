@@ -22,7 +22,11 @@ import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_RESULTS = 4;
-const SUPPORTED_MODELS = [DEFAULT_MODEL, "openai/gpt-5.4-image-2"] as const;
+const SUPPORTED_MODELS = [
+  DEFAULT_MODEL,
+  "google/gemini-3-pro-image",
+  "openai/gpt-5.4-image-2",
+] as const;
 const SUPPORTED_ASPECT_RATIOS = [
   "1:1",
   "2:3",

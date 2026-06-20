@@ -82,9 +82,11 @@ internal image endpoints remain blocked by default.
 | DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell` | `DEEPINFRA_API_KEY`                    |
 | fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`           | `FAL_KEY`                              |
 | OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image`   | `OPENROUTER_API_KEY`                   |
+| OpenRouter Pro image generation                      | `openrouter/google/gemini-3-pro-image`       | `OPENROUTER_API_KEY`                   |
 | LiteLLM image generation                             | `litellm/gpt-image-2`                        | `LITELLM_API_KEY`                      |
 | Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`        | `AZURE_OPENAI_API_KEY` or Entra ID     |
 | Google Gemini image generation                       | `google/gemini-3.1-flash-image`              | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Google Gemini Pro image generation                   | `google/gemini-3-pro-image`                  | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same `image_generate` tool handles text-to-image and reference-image
 editing. Use `image` for one reference or `images` for multiple references.
@@ -400,7 +402,7 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
     Gemini-compatible `aspectRatio` / `resolution` hints to OpenRouter.
     Current built-in OpenRouter image model shortcuts include
     `google/gemini-3.1-flash-image`,
-    `google/gemini-3.1-flash-image`, and `openai/gpt-5.4-image-2`. Use
+    `google/gemini-3-pro-image`, and `openai/gpt-5.4-image-2`. Use
     `action: "list"` to see what your configured plugin exposes.
 
   </Accordion>

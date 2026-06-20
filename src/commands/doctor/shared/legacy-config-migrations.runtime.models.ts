@@ -605,11 +605,12 @@ function upgradeRetiredGoogleImageModelId(model: string): string | null {
   const normalized = normalizeString(model);
   switch (normalized) {
     case "gemini-3.1-flash-image-preview":
-    case "gemini-3-pro-image-preview":
     case "imagen-4.0-generate-001":
     case "imagen-4.0-ultra-generate-001":
     case "imagen-4.0-fast-generate-001":
       return "gemini-3.1-flash-image";
+    case "gemini-3-pro-image-preview":
+      return "gemini-3-pro-image";
     default:
       return null;
   }
@@ -774,14 +775,16 @@ function upgradeRetiredModelRef(value: string): string | null {
         : !normalizedProvider || normalizedProvider === "google"
           ? upgradeRetiredGoogleImageModelId(model)
           : normalizedProvider === "openrouter" &&
-              (normalizedModel === "google/gemini-3.1-flash-image-preview" ||
-                normalizedModel === "google/gemini-3-pro-image-preview")
+              normalizedModel === "google/gemini-3.1-flash-image-preview"
             ? "google/gemini-3.1-flash-image"
-            : normalizedProvider === "openai" ||
-                normalizedProvider === "openai-codex" ||
-                normalizedProvider === "github-copilot"
-              ? upgradeRetiredOpenAiModelId(model, normalizedProvider)
-              : undefined;
+            : normalizedProvider === "openrouter" &&
+                normalizedModel === "google/gemini-3-pro-image-preview"
+              ? "google/gemini-3-pro-image"
+              : normalizedProvider === "openai" ||
+                  normalizedProvider === "openai-codex" ||
+                  normalizedProvider === "github-copilot"
+                ? upgradeRetiredOpenAiModelId(model, normalizedProvider)
+                : undefined;
   if (retiredOwnerModel) {
     const upgraded = provider ? `${provider}/${retiredOwnerModel}` : retiredOwnerModel;
     return `${upgraded}${split.profile ? `@${split.profile}` : ""}`;

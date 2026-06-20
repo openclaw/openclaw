@@ -84,7 +84,7 @@ function hasStubbedImageProviderAuth(providerId: string): boolean {
 }
 
 function stubImageGenerationProviders(params: { googleModels?: string[] } = {}) {
-  const googleModels = params.googleModels ?? ["gemini-3.1-flash-image"];
+  const googleModels = params.googleModels ?? ["gemini-3.1-flash-image", "gemini-3-pro-image"];
   vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
     {
       id: "google",
@@ -2263,7 +2263,7 @@ describe("createImageGenerateTool", () => {
     }
     expect(googleProvider.defaultModel).toBe("gemini-3.1-flash-image");
     expect(googleProvider.authEnvVars).toEqual(["GEMINI_API_KEY", "GOOGLE_API_KEY"]);
-    expect(googleProvider.models).toEqual(["gemini-3.1-flash-image"]);
+    expect(googleProvider.models).toEqual(["gemini-3.1-flash-image", "gemini-3-pro-image"]);
     const googleCapabilities = requireRecord(googleProvider.capabilities, "google capabilities");
     expect(googleCapabilities.edit).toEqual({
       enabled: true,
