@@ -167,8 +167,8 @@ operators validating high-risk deployments.
 
 - Runtime: [`quickjs-wasi`](https://github.com/vercel-labs/quickjs-wasi).
 - Default state: disabled.
-- Stability: experimental OpenClaw surface; Codex Code mode is a separate stable
-  Codex harness surface.
+- Stability: experimental OpenClaw surface; Codex Code mode is a separate
+  Codex-owned harness surface that upstream Codex marks as under development.
 - Target surface: generic OpenClaw agent runs.
 - Security posture: model code is hostile.
 - User-facing promise: enabling code mode never silently falls back to broad
