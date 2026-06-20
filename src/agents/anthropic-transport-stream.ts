@@ -60,7 +60,25 @@ import {
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
-const CLAUDE_CODE_VERSION = "2.1.75";
+const FALLBACK_CLAUDE_CODE_VERSION = "2.1.75";
+
+function resolveClaudeCodeVersion(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeModule = require("node:module") as typeof import("node:module");
+    const localRequire = nodeModule.createRequire(import.meta.url);
+    const pkgPath = localRequire.resolve("@anthropic-ai/claude-code/package.json");
+    const pkg = localRequire(pkgPath) as { version?: string };
+    if (typeof pkg.version === "string" && pkg.version.length > 0) {
+      return pkg.version;
+    }
+  } catch {
+    // Package not resolvable.
+  }
+  return FALLBACK_CLAUDE_CODE_VERSION;
+}
+
+const CLAUDE_CODE_VERSION = resolveClaudeCodeVersion();
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
