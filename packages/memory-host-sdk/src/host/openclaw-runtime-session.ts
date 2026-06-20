@@ -24,6 +24,7 @@ export {
   resolveStorePath,
   resolveSessionAgentId,
   resolveSessionTranscriptsDirForAgent,
+  resolveTrustedInboundBareBody,
   stripInboundMetadata,
   stripInternalRuntimeContext,
   type SessionEntry,

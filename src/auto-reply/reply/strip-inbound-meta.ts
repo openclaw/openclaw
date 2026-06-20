@@ -55,6 +55,27 @@ const SENTINEL_FAST_RE = new RegExp(
     .join("|"),
 );
 
+export type TrustedInboundDecoratedMessage = {
+  inboundDecorated?: unknown;
+  bareBody?: unknown;
+  InboundDecorated?: unknown;
+  BareBody?: unknown;
+};
+
+/** Returns the host-authored bare body for a decorated inbound message, when present. */
+export function resolveTrustedInboundBareBody(
+  message: TrustedInboundDecoratedMessage | null | undefined,
+): string | undefined {
+  const decorated = message?.inboundDecorated === true || message?.InboundDecorated === true;
+  if (!decorated) {
+    return undefined;
+  }
+  if (typeof message?.bareBody === "string") {
+    return message.bareBody;
+  }
+  return typeof message?.BareBody === "string" ? message.BareBody : undefined;
+}
+
 /** Fast check for whether text contains any inbound metadata sentinel. */
 export function hasInboundMetadataSentinel(text: string): boolean {
   return Boolean(text && SENTINEL_FAST_RE.test(text));

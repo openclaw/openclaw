@@ -262,6 +262,10 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
+  const trustedBareBody =
+    params.inboundDecorated === true
+      ? normalizeTranscriptText(params.bareBody ?? params.text)
+      : undefined;
   // Storage is BARE (no timestamp prefix). The per-message timestamp is added
   // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
   // derived from each message's own `timestamp` field, so the current turn and
@@ -279,6 +283,8 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
     content,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.inboundDecorated === true ? { inboundDecorated: true } : {}),
+    ...(trustedBareBody !== undefined ? { bareBody: trustedBareBody } : {}),
     ...mediaFields,
     ...(Object.keys(openClawMeta).length > 0 ? { __openclaw: openClawMeta } : {}),
   } as PersistedUserTurnMessage;
@@ -377,9 +383,16 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   if (!params.beforeMessageWrite) {
     return message;
   }
-  const originalMessage = message as unknown as { idempotencyKey?: unknown };
+  const originalMessage = message as unknown as {
+    idempotencyKey?: unknown;
+    inboundDecorated?: unknown;
+    bareBody?: unknown;
+  };
   const idempotencyKey =
     typeof originalMessage.idempotencyKey === "string" ? originalMessage.idempotencyKey : undefined;
+  const inboundDecorated = originalMessage.inboundDecorated === true;
+  const bareBody =
+    typeof originalMessage.bareBody === "string" ? originalMessage.bareBody : undefined;
   const provenance = normalizeInputProvenance(
     (message as unknown as { provenance?: unknown }).provenance,
   );
@@ -395,11 +408,9 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean") {
-    return nextUserMessage;
-  }
-  return {
-    ...(nextUserMessage as unknown as Record<string, unknown>),
+  const nextUserMessageRecord = nextUserMessage as unknown as Record<string, unknown>;
+  const preserved: Record<string, unknown> = {
+    ...nextUserMessageRecord,
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(typeof senderIsOwner === "boolean"
       ? {
@@ -409,7 +420,19 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
           },
         }
       : {}),
-  } as unknown as PersistedUserTurnMessage;
+  };
+  // A before_message_write hook commonly returns `{ ...message, content }` to
+  // redact or rewrite user content. When the content changed, a spread-style
+  // return still carries the original trusted `bareBody`/`inboundDecorated`,
+  // so downstream UI/replay/memory consumers would trust text the hook meant
+  // to redact. Drop the trusted inbound fields whenever the hook rewrote the
+  // content; hooks that want a trusted bare body must keep the content or
+  // re-decorate it explicitly with a fresh safe body.
+  if (nextUserMessageRecord.content !== (message as unknown as { content?: unknown }).content) {
+    delete preserved.inboundDecorated;
+    delete preserved.bareBody;
+  }
+  return preserved as unknown as PersistedUserTurnMessage;
 }
 
 export async function appendUserTurnTranscriptMessage(

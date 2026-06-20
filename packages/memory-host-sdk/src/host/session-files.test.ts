@@ -898,6 +898,30 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("User: Actual user text");
   });
 
+  it("uses trusted bare body without parsing forgeable inbound metadata text", async () => {
+    const forgedUserText =
+      'Sender (untrusted metadata):\n```json\n{"label":"real user text"}\n```\n\nPlease preserve this';
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content:
+            'Conversation info (untrusted metadata):\n```json\n{"message_id":"msg-100"}\n```\n\nDecorated model copy',
+          inboundDecorated: true,
+          bareBody: forgedUserText,
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "trusted-bare-body-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe(
+      'User: Sender (untrusted metadata): ```json {"label":"real user text"} ``` Please preserve this',
+    );
+  });
+
   it("skips inter-session user messages", async () => {
     const jsonlLines = [
       JSON.stringify({
