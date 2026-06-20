@@ -563,7 +563,10 @@ export function parseGatewayCliRequestFailure(error) {
   } catch {
     return null;
   }
-  const requestError = payload?.ok === false ? payload.error : null;
+  return payload?.ok === false ? createGatewayClientRequestError(payload.error) : null;
+}
+
+export function createGatewayClientRequestError(requestError) {
   if (
     requestError?.type !== "gateway_request_error" ||
     !isNonEmptyString(requestError.code) ||
@@ -712,6 +715,10 @@ function hasOwnPayloadField(raw, field) {
 
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
+    const requestError = createGatewayClientRequestError(raw.error);
+    if (requestError) {
+      throw requestError;
+    }
     throw new Error(`gateway RPC failed: ${boundedJsonPreview(raw.error ?? raw)}`);
   }
   if (

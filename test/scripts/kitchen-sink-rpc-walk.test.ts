@@ -860,6 +860,31 @@ describe("kitchen-sink RPC payload unwrapping", () => {
     });
   });
 
+  it("preserves gateway request error metadata from built RPC calls", () => {
+    const error = captureSyncError(() =>
+      unwrapRpcPayload({
+        ok: false,
+        error: {
+          type: "gateway_request_error",
+          code: "INVALID_REQUEST",
+          message: "unauthorized role: operator",
+          details: { method: "skills.bins" },
+          retryable: false,
+          retryAfterMs: 250,
+        },
+      }),
+    );
+
+    expect(error).toMatchObject({
+      name: "GatewayClientRequestError",
+      message: "unauthorized role: operator",
+      gatewayCode: "INVALID_REQUEST",
+      details: { method: "skills.bins" },
+      retryable: false,
+      retryAfterMs: 250,
+    });
+  });
+
   it("bounds failed RPC payload diagnostics", () => {
     const error = captureSyncError(() =>
       unwrapRpcPayload({
@@ -982,6 +1007,19 @@ describe("kitchen-sink RPC command catalog assertions", () => {
           gatewayCode: "INVALID_REQUEST",
         });
       }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () =>
+        unwrapRpcPayload({
+          ok: false,
+          error: {
+            type: "gateway_request_error",
+            code: "INVALID_REQUEST",
+            message: "unauthorized role: operator",
+            retryable: false,
+          },
+        }),
+      ),
     ).resolves.toBeUndefined();
     await expect(
       assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => {
