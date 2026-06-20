@@ -26,6 +26,7 @@ import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
   getToolParamsRecord,
+  normalizeHallucinatedDocumentExtension,
   stripMalformedXmlArgValueSuffix,
   stripMalformedXmlArgValueSuffixFromKeys,
   wrapToolParamValidation,
@@ -885,9 +886,16 @@ export function createOpenClawReadTool(
     ...base,
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
-      const normalizedRecord = record
+      let normalizedRecord = record
         ? stripMalformedXmlArgValueSuffixFromKeys(record, ["path"])
         : undefined;
+      // Correct hallucinated document extensions (e.g. .docodex → .docx)
+      if (normalizedRecord && typeof normalizedRecord.path === "string") {
+        const corrected = normalizeHallucinatedDocumentExtension(normalizedRecord.path);
+        if (corrected !== normalizedRecord.path) {
+          normalizedRecord = { ...normalizedRecord, path: corrected };
+        }
+      }
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const result = await executeReadWithAdaptivePaging({
         base,
