@@ -131,12 +131,8 @@ function evaluateExpression(
   }
   if ("allOf" in expression) {
     if (expression.allOf.length === 0) {
-      return [
-        {
-          reason: "unsupported-signal",
-          message: "Empty availability allOf group",
-        },
-      ];
+      // Empty allOf is vacuously true — no AND constraints means everything matches.
+      return [];
     }
     return expression.allOf.flatMap((entry) => evaluateExpression(entry, context));
   }

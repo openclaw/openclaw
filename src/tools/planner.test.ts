@@ -97,20 +97,19 @@ describe("buildToolPlan", () => {
     expect(hiddenTool.diagnostics.map((entry) => entry.reason)).toEqual(["plugin-disabled"]);
   });
 
-  it("hides descriptors with malformed empty allOf availability", () => {
+  it("treats empty allOf as available — vacuously true", () => {
+    // Empty allOf means no AND constraints, so it should be vacuously available.
     const plan = buildToolPlan({
-      descriptors: [descriptor("malformed", { availability: { allOf: [] } })],
+      descriptors: [
+        descriptor("empty_allof", {
+          availability: { allOf: [] },
+          executor: { kind: "built-in", toolName: "test" },
+        }),
+      ],
     });
 
-    expect(plan.visible).toStrictEqual([]);
-    const hiddenTool = expectHiddenTool(plan, 0);
-    expect(hiddenTool.descriptor.name).toBe("malformed");
-    expect(hiddenTool.diagnostics).toEqual([
-      {
-        reason: "unsupported-signal",
-        message: "Empty availability allOf group",
-      },
-    ]);
+    expect(plan.visible).toHaveLength(1);
+    expect(plan.visible[0].descriptor.name).toBe("empty_allof");
   });
 
   it("keeps protocol conversion separate from executor refs and model normalization", () => {
