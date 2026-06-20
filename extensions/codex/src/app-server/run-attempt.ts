@@ -1059,6 +1059,9 @@ export async function runCodexAppServerAttempt(
         requestRange: CodexProjectedContextRange;
       }
     | undefined => {
+    // promptInputRange ends before hook appendContext. Measure from the
+    // immutable projected prompt instead of the hook-expanded prompt so that
+    // the suffix remains available for bounded fitting as newer context.
     const promptTextInputOffset = promptInputRange
       ? promptInputRange.end - promptText.length
       : undefined;
