@@ -548,7 +548,7 @@ describe("control UI routing", () => {
     const app = mountApp("/overview");
     app.sessionKey = "agent:main:main";
     app.sessionsResult = createSessionsResult([
-      { key: "agent:main:main", label: "Main Session" },
+      { key: "agent:main:main", label: "Main Session", sessionId: "session-main" },
     ]) as typeof app.sessionsResult;
     app.client = {
       stop: vi.fn(),
@@ -558,8 +558,8 @@ describe("control UI routing", () => {
         }
         if (method === "sessions.list") {
           return createSessionsResult([
-            { key: "agent:main:fresh", label: "Fresh session" },
-            { key: "agent:main:main", label: "Main Session" },
+            { key: "agent:main:fresh", label: "Fresh session", sessionId: "session-fresh" },
+            { key: "agent:main:main", label: "Main Session", sessionId: "session-main" },
           ]);
         }
         return null;
