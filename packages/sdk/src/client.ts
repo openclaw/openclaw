@@ -907,7 +907,7 @@ export class ApprovalsNamespace {
   }
 
   async respond(approvalId: string, decision: Record<string, unknown>): Promise<unknown> {
-    return await this.client.request("exec.approval.resolve", { approvalId, ...decision });
+    return await this.client.request("exec.approval.resolve", { ...decision, id: approvalId });
   }
 }
 
