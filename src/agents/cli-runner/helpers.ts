@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
+import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import path from "node:path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
@@ -157,7 +158,7 @@ export function buildCliAgentSystemPrompt(params: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       host: "openclaw",
-      os: `${os.type()} ${os.release()}`,
+      os: resolveRuntimeOsLabel(),
       arch: os.arch(),
       node: process.version,
       model: params.modelDisplay,

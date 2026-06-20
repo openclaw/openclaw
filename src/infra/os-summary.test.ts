@@ -11,7 +11,105 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-import { resolveOsSummary } from "./os-summary.js";
+import { resolveOsRelease, resolveOsSummary, resolveRuntimeOsLabel, _resetOsSummaryCaches } from "./os-summary.js";
+
+describe("resolveOsRelease", () => {
+  afterEach(() => {
+    _resetOsSummaryCaches();
+    vi.restoreAllMocks();
+  });
+
+  it("returns sw_vers productVersion on darwin", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.5.0");
+    spawnSyncMock.mockReturnValue({
+      stdout: "26.5.1\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+    expect(resolveOsRelease()).toBe("26.5.1");
+  });
+
+  it("falls back to os.release on darwin when sw_vers output is blank", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.5.0");
+    spawnSyncMock.mockReturnValue({
+      stdout: "   ",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+    expect(resolveOsRelease()).toBe("25.5.0");
+  });
+
+  it("returns os.release unchanged on linux", () => {
+    vi.spyOn(os, "platform").mockReturnValue("linux");
+    vi.spyOn(os, "release").mockReturnValue("6.1.0");
+    expect(resolveOsRelease()).toBe("6.1.0");
+  });
+
+  it("returns os.release unchanged on win32", () => {
+    vi.spyOn(os, "platform").mockReturnValue("win32");
+    vi.spyOn(os, "release").mockReturnValue("10.0.26100");
+    expect(resolveOsRelease()).toBe("10.0.26100");
+  });
+});
+
+describe("resolveRuntimeOsLabel", () => {
+  afterEach(() => {
+    _resetOsSummaryCaches();
+    vi.restoreAllMocks();
+  });
+
+  it("returns macos label with sw_vers productVersion on darwin", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "type").mockReturnValue("Darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.5.0");
+    spawnSyncMock.mockReturnValue({
+      stdout: "26.5.1\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+    expect(resolveRuntimeOsLabel()).toBe("macos 26.5.1");
+  });
+
+  it("falls back to Darwin kernel version on darwin when sw_vers is blank", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "type").mockReturnValue("Darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.5.0");
+    spawnSyncMock.mockReturnValue({
+      stdout: "   ",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+    expect(resolveRuntimeOsLabel()).toBe("macos 25.5.0");
+  });
+
+  it("returns os.type plus os.release on linux", () => {
+    vi.spyOn(os, "platform").mockReturnValue("linux");
+    vi.spyOn(os, "type").mockReturnValue("Linux");
+    vi.spyOn(os, "release").mockReturnValue("6.1.0");
+    expect(resolveRuntimeOsLabel()).toBe("Linux 6.1.0");
+  });
+
+  it("returns os.type plus os.release on win32", () => {
+    vi.spyOn(os, "platform").mockReturnValue("win32");
+    vi.spyOn(os, "type").mockReturnValue("Windows_NT");
+    vi.spyOn(os, "release").mockReturnValue("10.0.26100");
+    expect(resolveRuntimeOsLabel()).toBe("Windows_NT 10.0.26100");
+  });
+});
 
 type OsSummaryCase = {
   name: string;
@@ -24,21 +122,22 @@ type OsSummaryCase = {
 
 describe("resolveOsSummary", () => {
   afterEach(() => {
+    _resetOsSummaryCaches();
     vi.restoreAllMocks();
   });
 
   it.each<OsSummaryCase>([
     {
-      name: "formats darwin labels from sw_vers output",
+      name: "formats darwin labels from sw_vers output and uses productVersion as release",
       platform: "darwin" as const,
-      release: "24.0.0",
+      release: "25.5.0",
       arch: "arm64",
-      swVersStdout: " 15.4 \n",
+      swVersStdout: " 26.5.1 \n",
       expected: {
         platform: "darwin",
         arch: "arm64",
-        release: "24.0.0",
-        label: "macos 15.4 (arm64)",
+        release: "26.5.1",
+        label: "macos 26.5.1 (arm64)",
       },
     },
     {

@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import os from "node:os";
+import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
@@ -1035,7 +1036,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
 
     const runtimeInfo = {
       host: machineName,
-      os: `${os.type()} ${os.release()}`,
+      os: resolveRuntimeOsLabel(),
       arch: os.arch(),
       node: process.version,
       model: `${provider}/${modelId}`,

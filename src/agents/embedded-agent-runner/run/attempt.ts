@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import os from "node:os";
+import { resolveRuntimeOsLabel } from "../../../infra/os-summary.js";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -1933,7 +1934,7 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         host: machineName,
-        os: `${os.type()} ${os.release()}`,
+        os: resolveRuntimeOsLabel(),
         arch: os.arch(),
         node: process.version,
         model: `${params.provider}/${params.modelId}`,
