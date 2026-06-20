@@ -313,7 +313,7 @@ describe("control UI routing", () => {
         status: 201,
         body: "pong",
       }),
-      window.location.origin,
+      "*",
     );
 
     fetchSpy.mockClear();

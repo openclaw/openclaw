@@ -206,6 +206,9 @@ const PLUGIN_UI_REQUEST_FORBIDDEN_HEADERS = new Set([
   "x-openclaw-scopes",
 ]);
 const PLUGIN_UI_REQUEST_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]);
+// Plugin UI iframes intentionally omit allow-same-origin, so their target origin
+// is opaque. Receiver binding comes from the exact frame/window plus bridge port.
+const PLUGIN_UI_SANDBOX_TARGET_ORIGIN = "*";
 
 type PluginUiRequestMessage = {
   type?: unknown;
@@ -295,7 +298,7 @@ async function proxyPluginUiFrameRequest(params: {
     queueMicrotask(() => {
       // oxlint-disable-next-line unicorn/require-post-message-target-origin -- MessagePort.postMessage has no targetOrigin parameter.
       params.replyPort.postMessage(message);
-      params.frame.contentWindow?.postMessage(message, window.location.origin);
+      params.frame.contentWindow?.postMessage(message, PLUGIN_UI_SANDBOX_TARGET_ORIGIN);
     });
   };
   const path = resolvePluginUiRequestPath(params.entryPoint, params.message.path);
@@ -1051,7 +1054,11 @@ export class OpenClawApp extends LitElement {
   }
 
   private postPluginUiBridgeConnect(targetWindow: Window, port: MessagePort): void {
-    targetWindow.postMessage({ type: "openclaw.pluginUi.connect" }, window.location.origin, [port]);
+    targetWindow.postMessage(
+      { type: "openclaw.pluginUi.connect" },
+      PLUGIN_UI_SANDBOX_TARGET_ORIGIN,
+      [port],
+    );
   }
 
   private syncPluginUiBridge() {
