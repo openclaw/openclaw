@@ -841,16 +841,21 @@ export function buildGuardedModelFetch(
             `${summarizeError(error)}`,
         );
         localServiceLease?.release();
-        localServiceLease = await ensureModelProviderLocalService(
-          model,
-          baseInit?.headers,
-          localServiceSignal,
-        );
-        result = await fetchWithSsrFGuard(
-          useEnvProxy
-            ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-            : guardedFetchOptions,
-        );
+        try {
+          localServiceLease = await ensureModelProviderLocalService(
+            model,
+            baseInit?.headers,
+            localServiceSignal,
+          );
+          result = await fetchWithSsrFGuard(
+            useEnvProxy
+              ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+              : guardedFetchOptions,
+          );
+        } catch (retryError) {
+          localServiceLease?.release();
+          throw retryError;
+        }
       } else {
         log.warn(
           `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
