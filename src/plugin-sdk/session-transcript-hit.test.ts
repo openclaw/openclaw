@@ -1,4 +1,5 @@
 // Session transcript hit tests cover transcript match formatting and path resolution.
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -278,6 +279,12 @@ describe("resolveTranscriptStemToSessionKeys", () => {
 });
 
 describe("session transcript memory hit key compatibility exports", () => {
+  it("keeps hit-subpath memory helpers off the runtime writer import path", () => {
+    const source = fs.readFileSync(new URL("./session-transcript-hit.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("session-transcript-runtime.js");
+  });
+
   it("exports storage-neutral memory hit key helpers from the legacy hit subpath", () => {
     const key = formatSessionTranscriptMemoryHitKey({
       agentId: "main",

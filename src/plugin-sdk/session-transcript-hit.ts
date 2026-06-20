@@ -9,7 +9,7 @@ export {
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
-} from "./session-transcript-runtime.js";
+} from "./session-transcript-memory-hit.js";
 export type {
   ResolveSessionTranscriptMemoryHitKeyParams,
   SessionTranscriptIdentity,
@@ -17,7 +17,7 @@ export type {
   SessionTranscriptMemoryHitKey,
   SessionTranscriptMemoryHitKeyParams,
   SessionTranscriptReadParams,
-} from "./session-transcript-runtime.js";
+} from "./session-transcript-memory-hit.js";
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
