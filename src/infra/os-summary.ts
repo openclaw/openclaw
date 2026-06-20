@@ -18,6 +18,19 @@ function macosVersion(): string {
   return out || os.release();
 }
 
+/**
+ * Resolves the OS version string for agent runtime prompts.
+ * On macOS this uses sw_vers -productVersion (e.g. "26.5.1") instead
+ * of os.release() which returns the Darwin kernel version (e.g. "25.5.0")
+ * that diverged from the marketing version starting with macOS 26 Tahoe.
+ */
+export function resolveAgentOsString(): string {
+  if (os.platform() === "darwin") {
+    return `${os.type()} ${macosVersion()}`;
+  }
+  return `${os.type()} ${os.release()}`;
+}
+
 /** Resolves a compact OS label for diagnostics, logs, and environment summaries. */
 export function resolveOsSummary(): OsSummary {
   const platform = os.platform();
