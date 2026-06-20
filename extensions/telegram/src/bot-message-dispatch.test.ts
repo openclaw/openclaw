@@ -2600,6 +2600,30 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("shows a progress placeholder when progress mode suppresses answer partial text", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Short draft" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Working", toolProgress: false },
+        },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(telegramHtmlPreview("<b>Working</b>"));
+    expect(draftStream.update).not.toHaveBeenCalledWith("Short draft");
+    expect(draftStream.flush).toHaveBeenCalled();
+  });
+
   it("replaces Telegram command progress items with matching command output", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
