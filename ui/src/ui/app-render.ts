@@ -18,7 +18,6 @@ import {
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { renderChatSessionSelect } from "./chat/session-controls.ts";
-import { measureControlUiRender } from "./control-ui-performance.ts";
 import { runUpdate } from "./controllers/config.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { formatRelativeTimestamp } from "./format.ts";
@@ -311,35 +310,7 @@ export function renderApp(state: AppViewState) {
     { state },
     {
       fallbackRouteId: state.routeId,
-      pending: () => html`
-        <section class="card lazy-view-state lazy-view-state--loading" role="status">
-          <div class="card-title">${t("lazyView.loadingTitle")}</div>
-          <div class="card-sub">${t("common.loading")}</div>
-        </section>
-      `,
-      error: (error, nextState, render) => {
-        const routeError = error instanceof Error ? error.message : String(error);
-        const routeErrorId =
-          nextState.pendingMatches[0]?.routeId ?? nextState.matches[0]?.routeId ?? state.routeId;
-        return html`
-          ${render?.() ?? nothing}
-          <div class="callout danger" role="alert">
-            <strong>${t("lazyView.errorTitle")}</strong>
-            <div>${routeError}</div>
-            <button
-              class="btn btn--sm"
-              @click=${() =>
-                void appRouter
-                  .revalidate(routeLoadContext(state as unknown as SettingsHost), routeErrorId)
-                  .catch(() => undefined)}
-            >
-              ${t("lazyView.retry")}
-            </button>
-          </div>
-        `;
-      },
-      onRender: (routeId, _routeState, render) =>
-        measureControlUiRender(state, routeId, { routeId }, render),
+      retryContext: routeLoadContext(state as unknown as SettingsHost),
     },
   );
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;

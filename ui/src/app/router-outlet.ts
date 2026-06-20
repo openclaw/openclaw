@@ -1,32 +1,22 @@
+import { html, nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
+import { t } from "../i18n/index.ts";
 import type { RouteMatch, Router, RouterState } from "../router/types.ts";
+import type { AppViewState } from "../ui/app-view-state.ts";
+import { measureControlUiRender } from "../ui/control-ui-performance.ts";
 
 type RenderableModule<TContext, TData> = {
   render: (context: TContext, data: TData | undefined) => unknown;
 };
 
-export type RouterOutletOptions<TRouteId extends string, TData = unknown> = {
+export type RouterOutletOptions<
+  TRouteId extends string,
+  TLoadContext = unknown,
+  TData = unknown,
+> = {
   fallbackRouteId?: TRouteId;
-  pending?: (state: RouterState<TRouteId, unknown, TData>) => unknown;
-  error?: (
-    error: unknown,
-    state: RouterState<TRouteId, unknown, TData>,
-    render?: () => unknown,
-  ) => unknown;
-  notFound?: (
-    match: RouteMatch<TRouteId, unknown, TData>,
-    state: RouterState<TRouteId, unknown, TData>,
-  ) => unknown;
-  redirect?: (
-    match: RouteMatch<TRouteId, unknown, TData>,
-    state: RouterState<TRouteId, unknown, TData>,
-  ) => unknown;
-  onRender?: (
-    routeId: TRouteId,
-    state: RouterState<TRouteId, unknown, TData>,
-    render: () => unknown,
-  ) => unknown;
+  retryContext?: TLoadContext;
 };
 
 type RouterOutletSelection = {
@@ -58,6 +48,10 @@ function equalRouterOutletState(
 
 type RouterOutletRuntime = Router<string, unknown, unknown, unknown>;
 
+type RouterRenderContext = {
+  state: AppViewState;
+};
+
 function isRenderableModule<TContext, TData>(
   module: unknown,
 ): module is RenderableModule<TContext, TData> {
@@ -69,6 +63,41 @@ function isRenderableModule<TContext, TData>(
   );
 }
 
+function renderPending() {
+  return html`
+    <section class="card lazy-view-state lazy-view-state--loading" role="status">
+      <div class="card-title">${t("lazyView.loadingTitle")}</div>
+      <div class="card-sub">${t("common.loading")}</div>
+    </section>
+  `;
+}
+
+function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
+  router: Router<TRouteId, TLoadContext, TModule, TData>,
+  retryContext: TLoadContext | undefined,
+  error: unknown,
+  routeId: TRouteId,
+  render?: () => unknown,
+) {
+  const routeError = error instanceof Error ? error.message : String(error);
+  return html`
+    ${render?.() ?? nothing}
+    <div class="callout danger" role="alert">
+      <strong>${t("lazyView.errorTitle")}</strong>
+      <div>${routeError}</div>
+      <button
+        class="btn btn--sm"
+        @click=${() =>
+          retryContext === undefined
+            ? undefined
+            : void router.revalidate(retryContext, routeId).catch(() => undefined)}
+      >
+        ${t("lazyView.retry")}
+      </button>
+    </div>
+  `;
+}
+
 export function renderRouterOutlet<
   TRouteId extends string,
   TLoadContext,
@@ -78,7 +107,7 @@ export function renderRouterOutlet<
 >(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   context: TContext,
-  options: RouterOutletOptions<TRouteId, TData> = {},
+  options: RouterOutletOptions<TRouteId, TLoadContext, TData> = {},
 ): unknown {
   const state = router.getState();
   const activeMatch = state.matches[0];
@@ -88,10 +117,10 @@ export function renderRouterOutlet<
       ? pendingMatch
       : activeMatch;
   if (boundaryMatch?.status === "notFound") {
-    return options.notFound?.(boundaryMatch, state) ?? null;
+    return null;
   }
   if (boundaryMatch?.status === "redirected") {
-    return options.redirect?.(boundaryMatch, state) ?? null;
+    return null;
   }
   const errorMatch =
     pendingMatch?.status === "error" || activeMatch?.status === "error"
@@ -104,9 +133,9 @@ export function renderRouterOutlet<
     (state.status === "idle" || state.status === "loading" ? options.fallbackRouteId : null);
   if (!routeId) {
     if (errorMatch?.error) {
-      return options.error?.(errorMatch.error, state) ?? null;
+      return renderError(router, options.retryContext, errorMatch.error, errorMatch.routeId);
     }
-    return options.pending?.(state) ?? null;
+    return renderPending();
   }
 
   const module =
@@ -117,33 +146,41 @@ export function renderRouterOutlet<
         : undefined;
   const renderedMatch = activeMatch?.routeId === routeId ? activeMatch : pendingMatch;
   if (renderedMatch?.status === "pending") {
-    return options.pending?.(state) ?? null;
+    return renderPending();
   }
   if (!module) {
-    return options.pending?.(state) ?? null;
+    return renderPending();
   }
   if (!isRenderableModule<TContext, TData>(module)) {
-    return errorMatch?.error ? (options.error?.(errorMatch.error, state) ?? null) : null;
+    return errorMatch?.error
+      ? renderError(router, options.retryContext, errorMatch.error, routeId)
+      : null;
   }
   const renderPage = () => module.render(context, renderedMatch?.data);
-  const renderedPage = options.onRender
-    ? () => options.onRender?.(routeId, state, renderPage)
-    : renderPage;
+  const renderedPage = () => {
+    const renderContext = context as RouterRenderContext;
+    return measureControlUiRender(
+      renderContext.state,
+      routeId as AppViewState["routeId"],
+      { routeId },
+      renderPage,
+    );
+  };
   return errorMatch?.error
-    ? (options.error?.(errorMatch.error, state, renderedPage) ?? renderedPage())
+    ? renderError(router, options.retryContext, errorMatch.error, routeId, renderedPage)
     : renderedPage();
 }
 
 class RouterOutletDirective extends AsyncDirective {
   private router?: RouterOutletRuntime;
   private context: unknown;
-  private options: RouterOutletOptions<string, unknown> = {};
+  private options: RouterOutletOptions<string, unknown, unknown> = {};
   private unsubscribe?: () => boolean;
 
   override render(
     router: unknown,
     context: unknown,
-    options: RouterOutletOptions<string, unknown> = {},
+    options: RouterOutletOptions<string, unknown, unknown> = {},
   ) {
     const runtime = router as RouterOutletRuntime;
     this.updateSubscription(runtime);
@@ -192,11 +229,11 @@ export function routerOutlet<
 >(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   context: TContext,
-  options: RouterOutletOptions<TRouteId, TData> = {},
+  options: RouterOutletOptions<TRouteId, TLoadContext, TData> = {},
 ): unknown {
   return routerOutletDirective(
     router,
     context,
-    options as unknown as RouterOutletOptions<string, unknown>,
+    options as unknown as RouterOutletOptions<string, unknown, unknown>,
   );
 }
