@@ -16,7 +16,6 @@ import { resolveOsSummary, resolveRuntimeOsLabel } from "./os-summary.js";
 type OsSummaryCase = {
   name: string;
   platform: ReturnType<typeof os.platform>;
-  type: string;
   release: string;
   arch: ReturnType<typeof os.arch>;
   swVersStdout?: string;
@@ -32,7 +31,6 @@ describe("resolveOsSummary", () => {
     {
       name: "formats darwin labels from sw_vers output",
       platform: "darwin" as const,
-      type: "Darwin",
       release: "24.0.0",
       arch: "arm64",
       swVersStdout: " 15.4 \n",
@@ -41,28 +39,11 @@ describe("resolveOsSummary", () => {
         arch: "arm64",
         release: "24.0.0",
         label: "macos 15.4 (arm64)",
-        osLabel: "macOS 15.4",
-      },
-    },
-    {
-      name: "maps darwin tahoe kernel release to the macos product version (#95145)",
-      platform: "darwin" as const,
-      type: "Darwin",
-      release: "25.5.0",
-      arch: "arm64",
-      swVersStdout: "26.5.1\n",
-      expected: {
-        platform: "darwin",
-        arch: "arm64",
-        release: "25.5.0",
-        label: "macos 26.5.1 (arm64)",
-        osLabel: "macOS 26.5.1",
       },
     },
     {
       name: "falls back to os.release when sw_vers output is blank",
       platform: "darwin" as const,
-      type: "Darwin",
       release: "24.1.0",
       arch: "x64",
       swVersStdout: "   ",
@@ -71,13 +52,11 @@ describe("resolveOsSummary", () => {
         arch: "x64",
         release: "24.1.0",
         label: "macos 24.1.0 (x64)",
-        osLabel: "macOS 24.1.0",
       },
     },
     {
       name: "formats windows labels from os metadata",
       platform: "win32" as const,
-      type: "Windows_NT",
       release: "10.0.26100",
       arch: "x64",
       expected: {
@@ -85,13 +64,11 @@ describe("resolveOsSummary", () => {
         arch: "x64",
         release: "10.0.26100",
         label: "windows 10.0.26100 (x64)",
-        osLabel: "Windows_NT 10.0.26100",
       },
     },
     {
       name: "formats non-darwin labels from os metadata",
       platform: "linux" as const,
-      type: "Linux",
       release: "10.0.26100",
       arch: "x64",
       expected: {
@@ -99,12 +76,10 @@ describe("resolveOsSummary", () => {
         arch: "x64",
         release: "10.0.26100",
         label: "linux 10.0.26100 (x64)",
-        osLabel: "Linux 10.0.26100",
       },
     },
-  ])("$name", ({ platform, type, release, arch, swVersStdout, expected }) => {
+  ])("$name", ({ platform, release, arch, swVersStdout, expected }) => {
     vi.spyOn(os, "platform").mockReturnValue(platform);
-    vi.spyOn(os, "type").mockReturnValue(type);
     vi.spyOn(os, "release").mockReturnValue(release);
     vi.spyOn(os, "arch").mockReturnValue(arch);
     if (platform === "darwin") {

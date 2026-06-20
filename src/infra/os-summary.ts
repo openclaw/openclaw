@@ -8,10 +8,10 @@ type OsSummary = {
   arch: string;
   release: string;
   label: string;
-  osLabel: string;
 };
 
 const cachedOsSummaryByKey = new Map<string, OsSummary>();
+const cachedRuntimeOsLabelByKey = new Map<string, string>();
 
 function macosVersion(): string {
   const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
@@ -31,36 +31,42 @@ export function resolveOsSummary(): OsSummary {
   if (cached) {
     return cached;
   }
-  // On macOS the Darwin kernel release (os.release()) diverged from the macOS
-  // marketing version starting with Tahoe (Darwin 25.x == macOS 26.x), so use
-  // the sw_vers product version for both the diagnostics label and the runtime
-  // metadata label below.
-  const darwinProductVersion = platform === "darwin" ? macosVersion() : undefined;
   const label = (() => {
     if (platform === "darwin") {
-      return `macos ${darwinProductVersion} (${arch})`;
+      return `macos ${macosVersion()} (${arch})`;
     }
     if (platform === "win32") {
       return `windows ${release} (${arch})`;
     }
     return `${platform} ${release} (${arch})`;
   })();
-  // Runtime prompt metadata os string. Architecture is appended separately by
-  // the prompt renderer (buildRuntimeLine), so it must NOT be included here.
-  // Non-darwin keeps the historical `${os.type()} ${os.release()}` shape.
-  const osLabel =
-    platform === "darwin" ? `macOS ${darwinProductVersion}` : `${os.type()} ${release}`;
-  const summary = { platform, arch, release, label, osLabel };
+  const summary = { platform, arch, release, label };
   cachedOsSummaryByKey.set(cacheKey, summary);
   return summary;
 }
 
 /**
  * Resolves the OS string used in agent runtime prompt metadata, without the
- * architecture suffix. On macOS this reports the marketing product version
- * (e.g. `macOS 26.5.1`) rather than the Darwin kernel release, which is what
- * `os.release()` returns and which diverged from the product version on Tahoe.
+ * architecture suffix (the prompt renderer appends `arch` separately). On macOS
+ * this reports the marketing product version (e.g. `macOS 26.5.1`) rather than
+ * the Darwin kernel release returned by `os.release()`, which diverged from the
+ * product version starting with Tahoe (Darwin 25.x == macOS 26.x). Off Darwin it
+ * keeps the historical `${os.type()} ${os.release()}` shape verbatim.
+ *
+ * Kept separate from {@link resolveOsSummary} so this prompt-only label is not
+ * serialized into status JSON or trajectory metadata, which emit the summary
+ * object wholesale.
  */
 export function resolveRuntimeOsLabel(): string {
-  return resolveOsSummary().osLabel;
+  const platform = os.platform();
+  const release = os.release();
+  const arch = os.arch();
+  const cacheKey = `${platform}\0${release}\0${arch}`;
+  const cached = cachedRuntimeOsLabelByKey.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const osLabel = platform === "darwin" ? `macOS ${macosVersion()}` : `${os.type()} ${release}`;
+  cachedRuntimeOsLabelByKey.set(cacheKey, osLabel);
+  return osLabel;
 }
