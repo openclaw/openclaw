@@ -28,6 +28,20 @@ function providerHasGenericConfig(cfg: OpenClawConfig, providerId: string): bool
   );
 }
 
+/**
+ * Resolve the active image generation provider from config.
+ * Uses agents.defaults.imageGenerationModel.primary if set.
+ */
+function resolveActiveImageProvider(cfg: OpenClawConfig): string | null {
+  const primary = cfg.agents?.defaults?.imageGenerationModel?.primary;
+  if (primary) {
+    // Parse "provider/model" or just "provider"
+    const [providerId] = primary.split("/");
+    return providerId || primary;
+  }
+  return null;
+}
+
 /** Gateway request handlers for image generation provider inventory. */
 export const imageHandlers: GatewayRequestHandlers = {
   "image.providers": async ({ respond, context }) => {
@@ -50,8 +64,13 @@ export const imageHandlers: GatewayRequestHandlers = {
           },
         };
       });
-      // Find the first configured provider as active, or fallback to default
-      const activeProvider = providers.find((p) => p.configured)?.id ?? providers[0]?.id ?? null;
+      // Use config primary as active, fallback to first configured provider, then first provider
+      const configActive = resolveActiveImageProvider(cfg);
+      const activeProvider =
+        (configActive && providers.find((p) => p.id === configActive && p.configured))?.id ??
+        providers.find((p) => p.configured)?.id ??
+        providers[0]?.id ??
+        null;
       respond(true, {
         providers,
         active: activeProvider,
