@@ -25,6 +25,9 @@ set -euo pipefail
 REGISTRY="europe-west1-docker.pkg.dev/gold-verve-459312-e7/openclaw-gateway/gateway"
 AGENTS_DIR="/root/.openclaw/agents"
 COMPOSE_DIR="/opt/openclaw"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Rollback depth kept by the pre-pull image prune (see prune-gateway-images.sh).
+KEEP_RECENT=2
 
 # ── Args ──────────────────────────────────────────────────────────────────────
 if [[ -z "${1:-}" ]]; then
@@ -92,6 +95,14 @@ deploy_server() {
     return 1
   fi
   echo "  OK: No port conflicts"
+
+  # Step 1.5: Free disk — prune old, unused gateway images before pulling so the
+  # pull never fails on "no space left" (image drift; each pull adds ~8.5 G).
+  # Keeps in-use + the most-recent tags; all tags are re-pullable from the registry.
+  echo ""
+  echo "-> Pruning old unused gateway images on ${server}..."
+  ssh "$server" "bash -s -- ${KEEP_RECENT}" < "${SCRIPT_DIR}/prune-gateway-images.sh" \
+    || echo "  WARN: prune step failed (continuing)"
 
   # Step 2: Pull image
   echo ""
