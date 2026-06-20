@@ -1,6 +1,8 @@
 // Qa Lab plugin module implements generic QA evidence gallery data.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   QaEvidenceArtifactView,
@@ -59,6 +61,27 @@ function evidenceError(message: string, statusCode: number): QaEvidenceGalleryEr
 function isInside(root: string, candidate: string) {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function sanitizeGalleryText(
+  value: string,
+  params: {
+    extraRoots?: readonly string[];
+    repoRoot: string;
+  },
+) {
+  const localRoots = [...new Set([params.repoRoot, ...(params.extraRoots ?? [])])];
+  const roots = [
+    ...localRoots.flatMap((root) => [
+      { from: path.resolve(root), to: "<repo-root>" },
+      { from: pathToFileURL(path.resolve(root)).href, to: "file://<repo-root>" },
+    ]),
+    { from: os.homedir(), to: "<home>" },
+    { from: pathToFileURL(os.homedir()).href, to: "file://<home>" },
+  ].filter((entry) => entry.from && entry.from !== path.parse(entry.from).root);
+  return roots
+    .toSorted((a, b) => b.from.length - a.from.length)
+    .reduce((text, entry) => text.replaceAll(entry.from, entry.to), value);
 }
 
 async function realpathIfExists(filePath: string): Promise<string | null> {
@@ -642,7 +665,8 @@ export async function buildQaEvidenceGalleryModel(params: {
   evidencePath: string;
   repoRoot: string;
 }): Promise<QaEvidenceGalleryModel> {
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const requestedRepoRoot = path.resolve(params.repoRoot);
+  const repoRoot = await fs.realpath(requestedRepoRoot);
   const evidencePath = await resolveQaEvidenceFile({
     inputPath: params.evidencePath,
     repoRoot,
@@ -684,7 +708,12 @@ export async function buildQaEvidenceGalleryModel(params: {
           ),
         ),
         coverage: entry.coverage,
-        failureReason: entry.result.failure?.reason ?? null,
+        failureReason: entry.result.failure?.reason
+          ? sanitizeGalleryText(entry.result.failure.reason, {
+              extraRoots: [requestedRepoRoot],
+              repoRoot,
+            })
+          : null,
         id: entry.test.id,
         kind: entry.test.kind,
         sourcePath: entry.test.source?.path ?? null,

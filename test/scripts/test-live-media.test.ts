@@ -52,6 +52,12 @@ describe("scripts/test-live-media", () => {
     ).toEqual(new Set(["openrouter"]));
   });
 
+  it("rejects suite-specific provider filters for unselected suites", () => {
+    expect(() => parseArgs(["image", "--music-providers", "fal", "--all-providers"])).toThrow(
+      "Provider filter(s) target unselected media suite(s): music",
+    );
+  });
+
   it("passes single-dash Vitest args after the option separator", () => {
     expect(
       parseArgs(["image", "--all-providers", "--project", "tooling", "--", "-t", "media-smoke"]),

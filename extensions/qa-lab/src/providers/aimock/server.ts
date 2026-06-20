@@ -6,6 +6,7 @@ import {
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
+import { writeJson } from "../shared/http-json.js";
 
 type AimockRequestSnapshot = {
   raw: string;
@@ -21,16 +22,6 @@ type AimockRequestSnapshot = {
   toolOutputCallId?: string;
   toolOutputStructuredError?: true;
 };
-
-function writeJson(res: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(text),
-    "cache-control": "no-store",
-  });
-  res.end(text);
-}
 
 function stringifyContent(content: unknown): string {
   if (typeof content === "string") {

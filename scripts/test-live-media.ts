@@ -253,6 +253,16 @@ export function parseArgs(argv: string[]): CliOptions {
 }
 
 function validateProviderFilters(options: CliOptions): void {
+  const selectedSuites = new Set(options.suites);
+  const unselectedSuiteFilters = Object.keys(options.suiteProviders).filter(
+    (suiteId) => !selectedSuites.has(suiteId as MediaSuiteId),
+  );
+  if (unselectedSuiteFilters.length > 0) {
+    throw new Error(
+      `Provider filter(s) target unselected media suite(s): ${unselectedSuiteFilters.toSorted().join(", ")}`,
+    );
+  }
+
   if (options.globalProviders) {
     const selectedProviders = new Set(
       options.suites.flatMap((suiteId) => MEDIA_SUITES[suiteId].providers),

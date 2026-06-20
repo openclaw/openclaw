@@ -27,7 +27,7 @@ function vitestArtifactEvidence(params: {
   id: string;
   title: string;
   artifact: { kind: string; path: string };
-}) {
+}): QaEvidenceSummaryJson {
   return {
     kind: "openclaw.qa.evidence-summary",
     schemaVersion: 2,
@@ -142,6 +142,38 @@ describe("evidence gallery", () => {
       id: "qa-lab.no-artifacts",
       artifacts: [],
     });
+  });
+
+  it("sanitizes local roots from gallery failure reasons", async () => {
+    const repoRoot = await createTempRepo();
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
+    await fs.mkdir(outputDir, { recursive: true });
+    const evidence: QaEvidenceSummaryJson = vitestArtifactEvidence({
+      id: "qa-lab.failure-path",
+      title: "Failure path evidence",
+      artifact: { kind: "log", path: "missing.log" },
+    });
+    evidence.entries[0] = {
+      ...evidence.entries[0],
+      result: {
+        status: "blocked",
+        failure: {
+          class: "blocked",
+          reason: `Command failed at ${repoRoot}/openclaw.mjs and file://${repoRoot}/trace.log`,
+        },
+      },
+    };
+    await writeJson(path.join(outputDir, QA_EVIDENCE_FILENAME), evidence);
+
+    const model = await buildQaEvidenceGalleryModel({
+      evidencePath: outputDir,
+      repoRoot,
+    });
+
+    expect(model.entries[0].failureReason).toBe(
+      "Command failed at <repo-root>/openclaw.mjs and file://<repo-root>/trace.log",
+    );
+    expect(JSON.stringify(model)).not.toContain(repoRoot);
   });
 
   it("detects UX Matrix producer context from suite-level evidence artifacts", async () => {
