@@ -558,6 +558,32 @@ describe("patchSession", () => {
 });
 
 describe("loadSessions", () => {
+  it("drops scoped agent params while sidebar all-agents mode is active", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request, { sidebarRecentSessionsAllAgents: true });
+
+    await loadSessions(state, { agentId: "reviewer", activeMinutes: 0, limit: 50 });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+    expect(state.sessionsResultAgentId).toBeNull();
+  });
+
   it("hides explicitly archived sessions by default", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {

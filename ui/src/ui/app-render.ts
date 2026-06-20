@@ -529,29 +529,57 @@ function isSidebarSessionForSelectedAgent(
 }
 
 function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
+  const allAgents = state.sidebarRecentSessionsAllAgents === true;
   const selectedAgentId = resolveSidebarSelectedAgentId(state);
   const shouldFilterByAgent =
-    normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
+    !allAgents && normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
   return (state.sessionsResult?.sessions ?? [])
-    .filter(
-      (row) =>
-        !row.archived &&
-        row.kind !== "global" &&
-        row.kind !== "unknown" &&
-        row.kind !== "cron" &&
-        !isCronSessionKey(row.key) &&
-        !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy &&
-        (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
-    )
+    .filter((row) => {
+      if (
+        row.archived ||
+        row.kind === "global" ||
+        row.kind === "unknown" ||
+        row.kind === "cron" ||
+        isCronSessionKey(row.key)
+      ) {
+        return false;
+      }
+      if (!allAgents && (isSubagentSessionKey(row.key) || row.spawnedBy)) {
+        return false;
+      }
+      return !shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId);
+    })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 5);
+}
+
+function toggleSidebarRecentSessionsAgentScope(state: AppViewState) {
+  state.sidebarRecentSessionsAllAgents = state.sidebarRecentSessionsAllAgents !== true;
+  void loadSessions(state, {
+    ...createChatSessionsLoadOverrides(state),
+    ...(state.sidebarRecentSessionsAllAgents
+      ? {}
+      : scopedAgentListParamsForSession(state, state.sessionKey)),
+  });
+}
+
+function hasSidebarRecentSessionsForAllAgents(state: AppViewState): boolean {
+  return (state.sessionsResult?.sessions ?? []).some(
+    (row) =>
+      !row.archived &&
+      row.kind !== "global" &&
+      row.kind !== "unknown" &&
+      row.kind !== "cron" &&
+      !isCronSessionKey(row.key),
+  );
 }
 
 function renderSidebarSessions(state: AppViewState) {
   const collapsed = state.settings.navCollapsed;
   const busy = isSidebarSessionBusy(state);
   const recent = collapsed ? [] : resolveSidebarRecentSessions(state);
+  const showRecentSection =
+    !collapsed && (recent.length > 0 || hasSidebarRecentSessionsForAllAgents(state));
   const newSessionDisabled = !state.connected || state.sessionsLoading || busy || !state.client;
   const newSessionTitle = !state.connected
     ? "Connect to create a new session"
@@ -590,36 +618,47 @@ function renderSidebarSessions(state: AppViewState) {
           surface: "sidebar",
         })}
       </div>
-      ${collapsed || recent.length === 0
-        ? nothing
-        : html`
+      ${showRecentSection
+        ? html`
             <div
               class="sidebar-recent-sessions ${state.settings.recentSessionsCollapsed
                 ? "sidebar-recent-sessions--collapsed"
                 : ""}"
               aria-label=${t("overview.cards.recentSessions")}
             >
-              <button
-                class="sidebar-recent-sessions__label"
-                type="button"
-                aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
-                @click=${() => {
-                  state.applySettings({
-                    ...state.settings,
-                    recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
-                  });
-                }}
-              >
-                <span class="sidebar-recent-sessions__label-text"
-                  >${t("usage.sessions.recentShort")}</span
+              <div class="sidebar-recent-sessions__header">
+                <button
+                  class="sidebar-recent-sessions__label"
+                  type="button"
+                  aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
+                  @click=${() => {
+                    state.applySettings({
+                      ...state.settings,
+                      recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
+                    });
+                  }}
                 >
-                <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
-              </button>
+                  <span class="sidebar-recent-sessions__label-text"
+                    >${t("usage.sessions.recentShort")}</span
+                  >
+                  <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
+                </button>
+                <button
+                  class="sidebar-recent-sessions__scope"
+                  type="button"
+                  aria-pressed=${String(state.sidebarRecentSessionsAllAgents === true)}
+                  title=${t("workboard.allAgents")}
+                  @click=${() => toggleSidebarRecentSessionsAgentScope(state)}
+                >
+                  ${t("workboard.allAgents")}
+                </button>
+              </div>
               <div class="sidebar-recent-sessions__list">
                 ${recent.map((row) => renderSidebarRecentSession(state, row))}
               </div>
             </div>
-          `}
+          `
+        : nothing}
     </section>
   `;
 }

@@ -585,6 +585,60 @@ describe("renderApp assistant avatar routing", () => {
     expect(labels).toEqual(["Work new", "Work older"]);
   });
 
+  it("shows cross-agent subagent sessions when sidebar all-agents mode is active", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "agent:main:main",
+          sidebarRecentSessionsAllAgents: true,
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "orchestrator", name: "Orchestrator" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                label: "Main",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:orchestrator:subagent:child",
+                kind: "direct",
+                label: "Planner",
+                spawnedBy: "agent:orchestrator:main",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:main:cron:nightly",
+                kind: "cron",
+                label: "Nightly",
+                updatedAt: 40,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Subagent: Planner", "Main"]);
+  });
+
   it("keeps legacy main sessions tied to the default agent when identity is stale", () => {
     const container = document.createElement("div");
 
