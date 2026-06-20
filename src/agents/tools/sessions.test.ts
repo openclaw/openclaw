@@ -1207,6 +1207,59 @@ describe("sessions_send gating", () => {
     expect(flowParams?.targetSessionKey).toBe(targetSessionKey);
   });
 
+  it("keeps the configured maxPingPongTurns for a non-canonical cron-like requester key (#92257 regression)", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    // Canonical isolated-cron keys are agent:<id>:cron:<job>:run:<run>; this key
+    // only embeds `:cron:` deeper in a normal channel session and must NOT be
+    // treated as an isolated cron run (isCronRunSessionKey rejects it), so its
+    // intended cross-session ping-pong is preserved.
+    const requesterSessionKey = "agent:main:slack:cron:job:run:uuid";
+    const targetSessionKey = "agent:other:discord:group:ops";
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: requesterSessionKey,
+      agentChannel: "slack",
+    });
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: targetSessionKey, kind: "group" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-cron-like-fire-and-forget", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-cron-like-fire-and-forget", {
+      sessionKey: targetSessionKey,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+    // A non-canonical cron-like key must preserve the intended A2A ping-pong roundtrip.
+    expect(flowParams?.maxPingPongTurns).toBe(5);
+    expect(flowParams?.requesterSessionKey).toBe(requesterSessionKey);
+    expect(flowParams?.targetSessionKey).toBe(targetSessionKey);
+  });
+
   it("caps oversized timeoutSeconds before waiting for the target run", async () => {
     const tool = createMainSessionsSendTool();
     const waitTimeouts: unknown[] = [];
