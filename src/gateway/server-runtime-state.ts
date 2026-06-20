@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
@@ -134,8 +135,19 @@ export async function createGatewayRuntimeState(params: {
     releasePinnedPluginChannelRegistry();
   }
   try {
-    const resolvePluginRouteRegistry = () =>
-      params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
+    const resolvePluginRouteRegistry = () => {
+      const base = params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
+      // Runtime-loaded workspace plugins register HTTP routes into the active
+      // plugin registry (setActivePluginRegistry). The gateway's pluginRegistry
+      // only covers startup/reload paths; merge active registry routes so
+      // deferred-loaded plugin routes are also discoverable. (#94572)
+      const activeHttpRoutes = getPluginRegistryState()?.activeRegistry?.httpRoutes;
+      if (!activeHttpRoutes || activeHttpRoutes.length === 0) return base;
+      return {
+        ...base,
+        httpRoutes: [...(base.httpRoutes ?? []), ...activeHttpRoutes],
+      };
+    };
     const clients = new Set<GatewayWsClient>();
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
