@@ -1,4 +1,5 @@
 // Chat log tests cover message rendering order and layout behavior.
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ChatLog } from "./chat-log.js";
@@ -126,10 +127,12 @@ describe("ChatLog", () => {
       ],
     });
 
-    const rendered = normalizeTestText(chatLog.render(12).join("\n"));
+    const renderedLines = chatLog.render(12).map((line) => normalizeTestText(line).trimEnd());
+    const rendered = renderedLines.join("\n");
 
-    expect(rendered).toContain('  if __name__ == "__main__":');
-    expect(rendered).not.toContain("__name_\n");
+    expect(renderedLines.every((line) => visibleWidth(line) <= 12)).toBe(true);
+    expect(rendered).toContain("__name__");
+    expect(rendered).not.toContain("__name_\n_");
   });
 
   it("prunes system messages atomically when a non-system entry overflows the log", () => {

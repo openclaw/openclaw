@@ -8,6 +8,8 @@ type MarkdownSegment =
   | { kind: "code"; fence: string; info: string; lines: string[]; closed: boolean };
 
 const OPEN_FENCE_RE = /^(?: {0,3})(`{3,}|~{3,})(.*)$/;
+const CODE_WRAP_TOKEN_RE = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]+/gu;
+const WHITESPACE_RE = /^\s+$/;
 
 function parseOpeningFence(line: string): { fence: string; info: string } | undefined {
   const match = OPEN_FENCE_RE.exec(line);
@@ -67,6 +69,64 @@ function parseMarkdownSegments(text: string): MarkdownSegment[] {
 
 function hasFencedCode(text: string): boolean {
   return text.split("\n").some((line) => parseOpeningFence(line));
+}
+
+function splitTokenToWidth(token: string, maxWidth: number): string[] {
+  const chunks: string[] = [];
+  let current = "";
+  for (const char of Array.from(token)) {
+    if (current && visibleWidth(`${current}${char}`) > maxWidth) {
+      chunks.push(current);
+      current = "";
+    }
+    current += char;
+  }
+  if (current || chunks.length === 0) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+function wrapCodeLine(line: string, maxWidth: number): string[] {
+  const width = Math.max(1, maxWidth);
+  const tokens = line.match(CODE_WRAP_TOKEN_RE) ?? [line];
+  const rows: string[] = [];
+  let current = "";
+
+  const pushCurrent = () => {
+    rows.push(current.trimEnd());
+    current = "";
+  };
+
+  for (const token of tokens) {
+    const isWhitespace = WHITESPACE_RE.test(token);
+    if (current === "" && rows.length > 0 && isWhitespace) {
+      continue;
+    }
+    if (visibleWidth(`${current}${token}`) <= width) {
+      current += token;
+      continue;
+    }
+    if (current) {
+      pushCurrent();
+    }
+    if (isWhitespace) {
+      current = token.length <= width ? token : token.slice(0, width);
+      continue;
+    }
+    if (visibleWidth(token) <= width) {
+      current = token;
+      continue;
+    }
+    const chunks = splitTokenToWidth(token, width);
+    rows.push(...chunks.slice(0, -1));
+    current = chunks.at(-1) ?? "";
+  }
+
+  if (current || rows.length === 0) {
+    pushCurrent();
+  }
+  return rows;
 }
 
 /**
@@ -143,10 +203,12 @@ export class HyperlinkMarkdown implements Component {
   ): string[] {
     const language = segment.info.split(/\s+/, 1)[0] || undefined;
     const indent = this.theme.codeBlockIndent ?? "  ";
-    const code = segment.lines.join("\n");
-    const highlightedLines = this.theme.highlightCode
-      ? this.theme.highlightCode(code, language)
-      : segment.lines.map((line) => this.theme.codeBlock(line));
+    const codeWidth = Math.max(1, width - this.paddingX * 2 - visibleWidth(indent));
+    const wrappedCodeLines = segment.lines.flatMap((line) => wrapCodeLine(line, codeWidth));
+    const highlightCode = this.theme.highlightCode;
+    const highlightedLines = highlightCode
+      ? wrappedCodeLines.flatMap((line) => highlightCode(line, language))
+      : wrappedCodeLines.map((line) => this.theme.codeBlock(line));
     const lines = [this.theme.codeBlockBorder(`${segment.fence}${segment.info}`)];
     for (const line of highlightedLines) {
       lines.push(`${indent}${line}`);
