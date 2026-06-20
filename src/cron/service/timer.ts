@@ -1196,6 +1196,10 @@ export async function onTimer(state: CronServiceState) {
       const now = state.deps.nowMs();
       for (const job of due) {
         job.state.runningAtMs = now;
+        // The deferral has now been honored — once the job is reserved for
+        // execution, ordinary future-slot repair must apply again so the
+        // post-run recompute can advance to the next natural slot (#93935).
+        state.pendingCatchupDeferralJobIds.delete(job.id);
       }
       await persist(state);
       if (state.stopped) {

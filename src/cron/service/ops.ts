@@ -186,6 +186,7 @@ function mergeManualRunSnapshotAfterReload(params: {
   }
   if (params.removed) {
     params.state.store.jobs = params.state.store.jobs.filter((job) => job.id !== params.jobId);
+    params.state.pendingCatchupDeferralJobIds.delete(params.jobId);
     return;
   }
   if (!params.snapshot) {
@@ -591,6 +592,7 @@ export async function remove(state: CronServiceState, id: string) {
     }
     const removedJob = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
+    state.pendingCatchupDeferralJobIds.delete(id);
     const removed = (state.store.jobs.length ?? 0) !== before;
     await persist(state);
     armTimer(state);
@@ -681,6 +683,7 @@ async function skipInvalidPersistedManualRun(params: {
 
   if (shouldDelete && params.state.store) {
     params.state.store.jobs = params.state.store.jobs.filter((entry) => entry.id !== params.job.id);
+    params.state.pendingCatchupDeferralJobIds.delete(params.job.id);
     emit(params.state, { jobId: params.job.id, action: "removed" });
   }
 
@@ -977,6 +980,7 @@ async function finishPreparedManualRun(
 
       if (shouldDelete && state.store) {
         state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
+        state.pendingCatchupDeferralJobIds.delete(job.id);
         emit(state, { jobId: job.id, action: "removed", job });
       }
 
