@@ -1,6 +1,6 @@
 // Memory schema tests cover canonical table creation and shipped-name migration.
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory index schema", () => {
@@ -262,7 +262,62 @@ describe("memory index schema", () => {
     }
   });
 
-  it("rebuilds body FTS rows when same-count text drifts from canonical chunks", () => {
+  it("skips FTS virtual-table drift scans after the repair marker is current", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: true,
+      });
+      db.prepare(
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "chunk-1",
+        "memory/2026-06-17-1649.md",
+        "memory",
+        1,
+        2,
+        "hash",
+        "mock",
+        "note",
+        "[0]",
+        1,
+      );
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run("note", "chunk-1", "memory/2026-06-17-1649.md", "memory", "mock", 1, 2);
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts_path (path_text, text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "memory/2026-06-17-1649.md",
+        "note",
+        "chunk-1",
+        "memory/2026-06-17-1649.md",
+        "memory",
+        "mock",
+        1,
+        2,
+      );
+
+      const prepareSpy = vi.spyOn(db, "prepare");
+      ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: true,
+      });
+
+      const preparedSql = prepareSpy.mock.calls.map(([sql]) => sql).join("\n");
+      expect(preparedSql).not.toContain("WHERE NOT EXISTS");
+      expect(preparedSql).not.toContain("memory_index_chunks_fts AS f");
+      expect(preparedSql).not.toContain("memory_index_chunks_fts_path AS f");
+    } finally {
+      vi.restoreAllMocks();
+      db.close();
+    }
+  });
+
+  it("rebuilds unmarked body FTS rows when same-count text drifts from canonical chunks", () => {
     const db = new DatabaseSync(":memory:");
     try {
       ensureMemoryIndexSchema({
@@ -344,6 +399,7 @@ describe("memory index schema", () => {
         1,
         1,
       );
+      db.prepare("DELETE FROM memory_index_meta WHERE key = ?").run("memory_index_fts_repair_v2");
 
       ensureMemoryIndexSchema({
         db,
