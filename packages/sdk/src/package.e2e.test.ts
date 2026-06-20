@@ -5,8 +5,8 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
 import { afterEach, describe, expect, it } from "vitest";
+import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 
 type CommandResult = {
@@ -124,7 +124,7 @@ function runPnpmCommand(
     stdio: ["ignore", "pipe", "pipe"],
   });
   return runCommand(spec.command, spec.args, {
-    cwd: spec.options.cwd ?? options.cwd,
+    cwd: (spec.options.cwd as string) ?? options.cwd,
     env: spec.options.env,
     shell: spec.options.shell,
     timeoutMs: options.timeoutMs,
