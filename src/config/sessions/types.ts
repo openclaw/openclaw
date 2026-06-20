@@ -207,6 +207,8 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
+export type SessionPersistentPreferenceField = "responseUsage" | "thinkingLevel" | "modelOverride";
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -305,6 +307,8 @@ export type SessionEntry = {
   execAsk?: string;
   execNode?: string;
   responseUsage?: "on" | "off" | "tokens" | "full";
+  /** Session preferences explicitly marked with --persist and carried across rollovers. */
+  persistentPreferenceFields?: SessionPersistentPreferenceField[];
   providerOverride?: string;
   modelOverride?: string;
   /** Session-scoped agent runtime/harness override selected with the model picker. */

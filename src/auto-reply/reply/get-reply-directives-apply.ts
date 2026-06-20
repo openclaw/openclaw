@@ -310,6 +310,7 @@ export async function applyInlineDirectiveOverrides(params: {
           modelResolution.profileOverride
             ? `Auth profile set to ${modelResolution.profileOverride}.`
             : undefined,
+          directives.persist ? "⚙️ Persisted across session resets." : undefined,
         ].filter(Boolean);
         typing.cleanup();
         return { kind: "reply", reply: { text: parts.join(" ") } };

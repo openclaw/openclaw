@@ -13,6 +13,7 @@ import {
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
+import { setPersistentPreferenceField } from "../../config/sessions/persistent-preferences.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -174,9 +175,15 @@ export async function persistInlineDirectives(params: {
         delete sessionEntry.thinkingLevel;
         updated = true;
       }
+      if (directives.persist) {
+        updated = setPersistentPreferenceField(sessionEntry, "thinkingLevel") || updated;
+      }
     } else if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
       updated = true;
+      if (directives.persist) {
+        updated = setPersistentPreferenceField(sessionEntry, "thinkingLevel") || updated;
+      }
     }
     if (directives.clearFastMode) {
       if (sessionEntry.fastMode !== undefined) {
@@ -308,6 +315,9 @@ export async function persistInlineDirectives(params: {
             },
           );
         }
+        if (directives.persist) {
+          updated = setPersistentPreferenceField(sessionEntry, "modelOverride") || updated;
+        }
         modelUpdated = appliedModelOverride.updated;
         provider = modelResolution.modelSelection.provider;
         model = modelResolution.modelSelection.model;
@@ -337,6 +347,9 @@ export async function persistInlineDirectives(params: {
               model,
             };
             updated = true;
+            if (directives.persist) {
+              updated = setPersistentPreferenceField(sessionEntry, "thinkingLevel") || updated;
+            }
           }
         }
         const nextLabel = `${provider}/${model}`;

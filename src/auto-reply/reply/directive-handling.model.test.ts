@@ -1524,6 +1524,22 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(otherEntry.modelOverrideSource).toBeUndefined();
   });
 
+  it("marks model override persistent with --persist", async () => {
+    const sessionEntry = createSessionEntry();
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o --persist"),
+        sessionEntry,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to openai/gpt-4o for this session.");
+    expect(result?.text).toContain("Persisted across session resets.");
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.persistentPreferenceFields).toEqual(["modelOverride"]);
+  });
+
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
     const { persisted } = await persistModelDirectiveForTest({
@@ -1700,6 +1716,24 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
+  });
+
+  it("marks thinking level persistent with --persist", async () => {
+    const directives = parseInlineDirectives("/think high --persist");
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking level set to high.");
+    expect(result?.text).toContain("Persisted across session resets.");
+    expect(sessionEntry.thinkingLevel).toBe("high");
+    expect(sessionEntry.persistentPreferenceFields).toEqual(["thinkingLevel"]);
   });
 
   it("clears thinking override for default directives", async () => {

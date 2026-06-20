@@ -16,6 +16,7 @@ import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { setPersistentPreferenceField } from "../../config/sessions/persistent-preferences.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -47,6 +48,7 @@ import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
+import { extractPersistFlag } from "./persist-flag.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
@@ -307,7 +309,9 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     return { shouldContinue: false };
   }
 
-  const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
+  const rawArgsWithFlags = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
+  const persistFlag = extractPersistFlag(rawArgsWithFlags);
+  const rawArgs = persistFlag.cleaned;
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
@@ -355,7 +359,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   if (rawArgs && !requested) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
+      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost [--persist]" },
     };
   }
 
@@ -370,6 +374,9 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     } else {
       targetSessionEntry.responseUsage = next;
     }
+    if (persistFlag.persist) {
+      setPersistentPreferenceField(targetSessionEntry, "responseUsage");
+    }
     params.sessionStore[params.sessionKey] = targetSessionEntry;
     await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
   }
@@ -377,7 +384,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   return {
     shouldContinue: false,
     reply: {
-      text: `⚙️ Usage footer: ${next}.`,
+      text: `⚙️ Usage footer: ${next}.${persistFlag.persist ? " Persisted across session resets." : ""}`,
     },
   };
 };

@@ -1060,6 +1060,72 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.ttsAuto).toBe("always");
   });
 
+  it("preserves usage footer mode across daily rollover only when marked persistent", async () => {
+    const root = await makeCaseDir("openclaw-daily-rollover-usage-persist-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:daily-rollover-usage";
+    const existingSessionId = "session-before-daily-reset-usage";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        responseUsage: "full",
+        persistentPreferenceFields: ["responseUsage"],
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello again",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.responseUsage).toBe("full");
+    expect(result.sessionEntry.persistentPreferenceFields).toEqual(["responseUsage"]);
+  });
+
+  it("drops non-persistent usage footer mode across daily rollover", async () => {
+    const root = await makeCaseDir("openclaw-daily-rollover-usage-session-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:daily-rollover-usage-session";
+    const existingSessionId = "session-before-daily-reset-usage-session";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        responseUsage: "full",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello again",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.responseUsage).toBeUndefined();
+  });
+
   it("clears an auto-fallback model override on an implicit daily stale rollover (#90119)", async () => {
     // Counterpart: auto-created fallback overrides must still be cleared on a
     // daily rollover so stale sessions return to the configured default.

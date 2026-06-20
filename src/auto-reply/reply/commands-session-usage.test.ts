@@ -205,6 +205,38 @@ describe("handleUsageCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
   });
+
+  it("marks usage footer mode persistent with --persist", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage full --persist";
+    params.sessionEntry = {
+      sessionId: "target-session",
+      updatedAt: Date.now(),
+    };
+    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: full. Persisted across session resets.");
+    expect(params.sessionEntry.responseUsage).toBe("full");
+    expect(params.sessionEntry.persistentPreferenceFields).toEqual(["responseUsage"]);
+  });
+
+  it("accepts --persist before the usage mode", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage --persist tokens";
+    params.sessionEntry = {
+      sessionId: "target-session",
+      updatedAt: Date.now(),
+    };
+    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: tokens. Persisted across session resets.");
+    expect(params.sessionEntry.responseUsage).toBe("tokens");
+    expect(params.sessionEntry.persistentPreferenceFields).toEqual(["responseUsage"]);
+  });
 });
 
 describe("handleFastCommand", () => {

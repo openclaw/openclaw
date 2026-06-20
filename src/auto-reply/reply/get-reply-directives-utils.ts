@@ -22,6 +22,7 @@ const CLEARED_EXEC_FIELDS = {
 export function clearInlineDirectives(cleaned: string): InlineDirectives {
   return {
     cleaned,
+    persist: false,
     hasThinkDirective: false,
     thinkLevel: undefined,
     rawThinkLevel: undefined,

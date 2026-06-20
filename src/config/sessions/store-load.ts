@@ -11,6 +11,7 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { normalizePersistentPreferenceFields } from "./persistent-preferences.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
@@ -225,6 +226,27 @@ function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
   return next;
 }
 
+function normalizeSessionPersistentPreferences(entry: SessionEntry): SessionEntry {
+  const normalized = normalizePersistentPreferenceFields(entry.persistentPreferenceFields);
+  const current = entry.persistentPreferenceFields;
+  const same =
+    current === normalized ||
+    (Array.isArray(current) &&
+      Array.isArray(normalized) &&
+      current.length === normalized.length &&
+      current.every((field, index) => field === normalized[index]));
+  if (same) {
+    return entry;
+  }
+  const next = { ...entry };
+  if (normalized) {
+    next.persistentPreferenceFields = normalized;
+  } else {
+    delete next.persistentPreferenceFields;
+  }
+  return next;
+}
+
 function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
   if (entry.pluginExtensionSlotKeys === undefined) {
     return entry;
@@ -356,10 +378,12 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
       continue;
     }
     const normalized = stripPersistedSkillsCache(
-      normalizePluginExtensionSlotKeys(
-        normalizePluginExtensions(
-          normalizePendingFinalDeliveryFields(
-            normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+      normalizeSessionPersistentPreferences(
+        normalizePluginExtensionSlotKeys(
+          normalizePluginExtensions(
+            normalizePendingFinalDeliveryFields(
+              normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+            ),
           ),
         ),
       ),
