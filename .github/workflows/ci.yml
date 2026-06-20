@@ -1270,6 +1270,7 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
+        if: ${{ matrix.task != 'lint' }}
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
@@ -1311,6 +1312,69 @@ jobs:
           done
 
           echo "checkout failed after 5 attempts" >&2
+          exit 1
+
+      - name: Extract source archive
+        if: ${{ matrix.task == 'lint' }}
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          archive_attempt() {
+            local attempt="$1"
+            local archive_dir archive_path
+
+            archive_dir="$(mktemp -d)"
+            archive_path="${archive_dir}/source.tar.gz"
+
+            reset_checkout_dir
+
+            if ! timeout --signal=TERM --kill-after=10s 120s aria2c \
+              --quiet=true \
+              --allow-overwrite=true \
+              --auto-file-renaming=false \
+              --max-connection-per-server=8 \
+              --split=8 \
+              --min-split-size=1M \
+              --dir "$archive_dir" \
+              --out source.tar.gz \
+              --header "Authorization: Bearer ${CHECKOUT_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${CHECKOUT_REPO}/tarball/${CHECKOUT_SHA}"; then
+              rm -rf "$archive_dir"
+              return 1
+            fi
+
+            if ! tar -xzf "$archive_path" --strip-components=1 -C "$workdir"; then
+              rm -rf "$archive_dir"
+              return 1
+            fi
+
+            rm -rf "$archive_dir"
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "source archive attempt ${attempt}/5 succeeded"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if archive_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "source archive attempt ${attempt}/5 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "source archive extraction failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1411,6 +1475,7 @@ jobs:
             group: runtime-topology-architecture
     steps:
       - name: Checkout
+        if: ${{ matrix.group != 'extension-bundled' && matrix.group != 'extension-package-boundary' }}
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
@@ -1452,6 +1517,69 @@ jobs:
           done
 
           echo "checkout failed after 5 attempts" >&2
+          exit 1
+
+      - name: Extract source archive
+        if: ${{ matrix.group == 'extension-bundled' || matrix.group == 'extension-package-boundary' }}
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          archive_attempt() {
+            local attempt="$1"
+            local archive_dir archive_path
+
+            archive_dir="$(mktemp -d)"
+            archive_path="${archive_dir}/source.tar.gz"
+
+            reset_checkout_dir
+
+            if ! timeout --signal=TERM --kill-after=10s 120s aria2c \
+              --quiet=true \
+              --allow-overwrite=true \
+              --auto-file-renaming=false \
+              --max-connection-per-server=8 \
+              --split=8 \
+              --min-split-size=1M \
+              --dir "$archive_dir" \
+              --out source.tar.gz \
+              --header "Authorization: Bearer ${CHECKOUT_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${CHECKOUT_REPO}/tarball/${CHECKOUT_SHA}"; then
+              rm -rf "$archive_dir"
+              return 1
+            fi
+
+            if ! tar -xzf "$archive_path" --strip-components=1 -C "$workdir"; then
+              rm -rf "$archive_dir"
+              return 1
+            fi
+
+            rm -rf "$archive_dir"
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "source archive attempt ${attempt}/5 succeeded"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if archive_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "source archive attempt ${attempt}/5 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "source archive extraction failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
