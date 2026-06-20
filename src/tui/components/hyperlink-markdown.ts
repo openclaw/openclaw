@@ -1,7 +1,73 @@
 // Hyperlink markdown helpers render markdown links with TUI hyperlink styling.
 import type { Component, DefaultTextStyle, MarkdownTheme } from "@earendil-works/pi-tui";
-import { Markdown } from "@earendil-works/pi-tui";
+import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
+
+type MarkdownSegment =
+  | { kind: "markdown"; text: string }
+  | { kind: "code"; fence: string; info: string; lines: string[]; closed: boolean };
+
+const OPEN_FENCE_RE = /^(?: {0,3})(`{3,}|~{3,})(.*)$/;
+
+function parseOpeningFence(line: string): { fence: string; info: string } | undefined {
+  const match = OPEN_FENCE_RE.exec(line);
+  if (!match) {
+    return undefined;
+  }
+  return { fence: match[1], info: match[2].trim() };
+}
+
+function isClosingFence(line: string, openingFence: string): boolean {
+  const marker = openingFence[0];
+  const minLength = openingFence.length;
+  const withoutIndent = line.replace(/^ {0,3}/, "").trimEnd();
+  let markerLength = 0;
+  while (withoutIndent[markerLength] === marker) {
+    markerLength += 1;
+  }
+  return markerLength >= minLength && withoutIndent.slice(markerLength).trim() === "";
+}
+
+function parseMarkdownSegments(text: string): MarkdownSegment[] {
+  const lines = text.replace(/\t/g, "   ").split("\n");
+  const segments: MarkdownSegment[] = [];
+  let markdownLines: string[] = [];
+
+  const flushMarkdown = () => {
+    if (markdownLines.length > 0) {
+      segments.push({ kind: "markdown", text: markdownLines.join("\n") });
+      markdownLines = [];
+    }
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const opening = parseOpeningFence(lines[i]);
+    if (!opening) {
+      markdownLines.push(lines[i]);
+      continue;
+    }
+
+    flushMarkdown();
+    const codeLines: string[] = [];
+    let closed = false;
+    i += 1;
+    for (; i < lines.length; i += 1) {
+      if (isClosingFence(lines[i], opening.fence)) {
+        closed = true;
+        break;
+      }
+      codeLines.push(lines[i]);
+    }
+    segments.push({ kind: "code", ...opening, lines: codeLines, closed });
+  }
+
+  flushMarkdown();
+  return segments;
+}
+
+function hasFencedCode(text: string): boolean {
+  return text.split("\n").some((line) => parseOpeningFence(line));
+}
 
 /**
  * Wrapper around pi-tui's Markdown component that adds OSC 8 terminal
@@ -11,28 +77,91 @@ import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
 export class HyperlinkMarkdown implements Component {
   private inner: Markdown;
   private urls: string[];
+  private text: string;
 
   constructor(
     text: string,
-    paddingX: number,
-    paddingY: number,
-    theme: MarkdownTheme,
-    options?: DefaultTextStyle,
+    private paddingX: number,
+    private paddingY: number,
+    private theme: MarkdownTheme,
+    private defaultTextStyle?: DefaultTextStyle,
   ) {
-    this.inner = new Markdown(text, paddingX, paddingY, theme, options);
+    this.text = text;
+    this.inner = new Markdown(text, paddingX, paddingY, theme, defaultTextStyle);
     this.urls = extractUrls(text);
   }
 
   render(width: number): string[] {
-    return addOsc8Hyperlinks(this.inner.render(width), this.urls);
+    const rendered = hasFencedCode(this.text)
+      ? this.renderWithVerbatimFencedCode(width)
+      : this.inner.render(width);
+    return addOsc8Hyperlinks(rendered, this.urls);
   }
 
   setText(text: string): void {
+    this.text = text;
     this.inner.setText(text);
     this.urls = extractUrls(text);
   }
 
   invalidate(): void {
     this.inner.invalidate();
+  }
+
+  private renderWithVerbatimFencedCode(width: number): string[] {
+    if (!this.text || this.text.trim() === "") {
+      return [];
+    }
+
+    const renderedLines: string[] = [];
+    for (const segment of parseMarkdownSegments(this.text)) {
+      if (segment.kind === "markdown") {
+        renderedLines.push(...this.renderMarkdownSegment(segment.text, width));
+      } else {
+        renderedLines.push(...this.renderCodeSegment(segment, width));
+      }
+    }
+
+    if (renderedLines.length === 0) {
+      return [""];
+    }
+
+    const emptyLines = Array.from({ length: this.paddingY }, () => this.applyLineChrome("", width));
+    return emptyLines.concat(renderedLines, emptyLines);
+  }
+
+  private renderMarkdownSegment(text: string, width: number): string[] {
+    if (!text || text.trim() === "") {
+      return [];
+    }
+    return new Markdown(text, this.paddingX, 0, this.theme, this.defaultTextStyle).render(width);
+  }
+
+  private renderCodeSegment(
+    segment: Extract<MarkdownSegment, { kind: "code" }>,
+    width: number,
+  ): string[] {
+    const language = segment.info.split(/\s+/, 1)[0] || undefined;
+    const indent = this.theme.codeBlockIndent ?? "  ";
+    const code = segment.lines.join("\n");
+    const highlightedLines = this.theme.highlightCode
+      ? this.theme.highlightCode(code, language)
+      : segment.lines.map((line) => this.theme.codeBlock(line));
+    const lines = [this.theme.codeBlockBorder(`${segment.fence}${segment.info}`)];
+    for (const line of highlightedLines) {
+      lines.push(`${indent}${line}`);
+    }
+    if (segment.closed) {
+      lines.push(this.theme.codeBlockBorder(segment.fence));
+    }
+    return lines.map((line) => this.applyLineChrome(line, width));
+  }
+
+  private applyLineChrome(line: string, width: number): string {
+    const margin = " ".repeat(this.paddingX);
+    const withMargins = `${margin}${line}${margin}`;
+    const paddingNeeded = Math.max(0, width - visibleWidth(withMargins));
+    const padded = `${withMargins}${" ".repeat(paddingNeeded)}`;
+    return this.defaultTextStyle?.bgColor ? this.defaultTextStyle.bgColor(padded) : padded;
   }
 }

@@ -114,6 +114,24 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("stale");
   });
 
+  it("keeps fenced code lines verbatim in tool output on narrow terminals", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.startTool("tool-1", "read_file", { path: "example.py" });
+    chatLog.updateToolResult("tool-1", {
+      content: [
+        {
+          type: "text",
+          text: ["```python", 'if __name__ == "__main__":', "    main()", "```"].join("\n"),
+        },
+      ],
+    });
+
+    const rendered = normalizeTestText(chatLog.render(12).join("\n"));
+
+    expect(rendered).toContain('  if __name__ == "__main__":');
+    expect(rendered).not.toContain("__name_\n");
+  });
+
   it("prunes system messages atomically when a non-system entry overflows the log", () => {
     const chatLog = new ChatLog(20);
     for (let i = 1; i <= 20; i++) {
