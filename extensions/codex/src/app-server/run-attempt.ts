@@ -1072,7 +1072,7 @@ export async function runCodexAppServerAttempt(
       contextRange,
       requestRange: {
         start: contextRange.end,
-        end: turnPromptOffset + promptTextOffset + promptText.length,
+        end: turnPromptOffset + promptText.length,
       },
     };
   };
