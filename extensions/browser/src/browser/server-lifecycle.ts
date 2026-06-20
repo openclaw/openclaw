@@ -36,7 +36,9 @@ export async function ensureExtensionRelayForProfiles(params: {
   onWarn: (message: string) => void;
 }) {
   const profiles = params.resolved.profiles ?? {};
-  const needsBridge = Object.values(profiles).some((p) => p?.driver === "extension");
+  // resolved.profiles holds raw BrowserProfileConfig drivers (the input literal),
+  // not the mapped ResolvedBrowserProfile driver, so gate on the input "extension-bridge".
+  const needsBridge = Object.values(profiles).some((p) => p?.driver === "extension-bridge");
   if (!needsBridge) return;
   try {
     await ensureExtensionBridge({
