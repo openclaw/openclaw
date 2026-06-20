@@ -679,6 +679,56 @@ function pathExists(path) {
   }
 }
 
+function crabboxConfigDir() {
+  if (process.platform === "darwin") {
+    return resolve(homedir(), "Library", "Application Support", "crabbox");
+  }
+  if (process.platform === "win32") {
+    return resolve(process.env.APPDATA || resolve(homedir(), "AppData", "Roaming"), "crabbox");
+  }
+  return resolve(process.env.XDG_CONFIG_HOME || resolve(homedir(), ".config"), "crabbox");
+}
+
+function userDisplayPath(path) {
+  const home = homedir();
+  const rel = relative(home, path);
+  if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
+    return `~/${rel}`;
+  }
+  return path;
+}
+
+function blacksmithTestboxPrivateKeyPath(id) {
+  return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
+}
+
+function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
+  if (commandArgs[0] !== "run") {
+    return;
+  }
+  const id = optionValue(commandArgs, "--id");
+  if (!id) {
+    return;
+  }
+  if (!id.startsWith("tbx_")) {
+    return;
+  }
+
+  const keyPath = blacksmithTestboxPrivateKeyPath(id);
+  if (pathExists(keyPath)) {
+    return;
+  }
+
+  console.error(
+    [
+      `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
+      "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+      "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
 function preserveTemporaryCrabboxRuns() {
   if (childCwd === repoRoot) {
     return;
@@ -2393,6 +2443,7 @@ if (canonicalProvider === "blacksmith-testbox") {
   console.error(
     `[crabbox] provider=blacksmith-testbox ${source}; if Testbox is queued or down, ${fallback}`,
   );
+  enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
 let childCwd = repoRoot;

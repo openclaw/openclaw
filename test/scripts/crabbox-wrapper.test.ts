@@ -355,6 +355,25 @@ function normalizeShellLineEndings(value: string): string {
   return value.replace(/\r\n/g, "\n");
 }
 
+function testCrabboxConfigDir(home: string): string {
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Application Support", "crabbox");
+  }
+  if (process.platform === "win32") {
+    return path.join(home, "AppData", "Roaming", "crabbox");
+  }
+  return path.join(home, ".config", "crabbox");
+}
+
+function testHomeEnv(home: string): Record<string, string> {
+  return {
+    APPDATA: path.join(home, "AppData", "Roaming"),
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: path.join(home, ".config"),
+  };
+}
+
 function expectGroupedShellCommand(remoteCommand: string, command: string): void {
   expect(remoteCommand).toContain(`&& { ${command}`);
   if (process.platform !== "win32") {
@@ -488,6 +507,70 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toContain("blacksmith-testbox");
+  });
+
+  it("rejects reused Blacksmith Testboxes that were not created by Crabbox", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", "tbx_direct", "--", "echo ok"],
+      { env: testHomeEnv(home) },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=blacksmith-testbox --id tbx_direct");
+    expect(result.stderr).toContain("has no Crabbox SSH key");
+    expect(result.stderr).toContain("direct `blacksmith testbox warmup` leases");
+  });
+
+  it("allows reused Blacksmith Testboxes when the Crabbox SSH key exists", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", "tbx_owned", "id_ed25519");
+    mkdirSync(path.dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, "fake test key\n", "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", "tbx_owned", "--", "echo ok"],
+      { env: testHomeEnv(home) },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--provider",
+      "blacksmith-testbox",
+      "--id",
+      "tbx_owned",
+      "--",
+      "echo ok",
+    ]);
+  });
+
+  it("lets Crabbox resolve reusable Testbox slugs", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", "blue-hermit", "--", "echo ok"],
+      { env: testHomeEnv(home) },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--provider",
+      "blacksmith-testbox",
+      "--id",
+      "blue-hermit",
+      "--",
+      "echo ok",
+    ]);
   });
 
   it("only forces the short local-container Docker work root on Linux", () => {
