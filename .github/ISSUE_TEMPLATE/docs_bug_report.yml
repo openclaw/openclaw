@@ -9,6 +9,7 @@ body:
     attributes:
       value: |
         Report a documentation defect with concrete evidence from current docs behavior/content.
+        Please only report one documentation defect per submission.
   - type: textarea
     id: summary
     attributes:
