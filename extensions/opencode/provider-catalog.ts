@@ -24,12 +24,11 @@ const MODEL_COSTS: Record<
   string,
   { input: number; output: number; cacheRead: number; cacheWrite: number }
 > = {
-  "claude-fable-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-  "claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+  "claude-opus-4-1": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
   "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-  "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  "gpt-5.5": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+  "minimax-m2.7": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
 };
 
 const MODEL_NAMES: Record<string, string> = {

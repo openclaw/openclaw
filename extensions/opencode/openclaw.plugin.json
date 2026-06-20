@@ -42,10 +42,10 @@
             "contextWindow": 200000,
             "maxTokens": 65536,
             "cost": {
-              "input": 3,
-              "output": 15,
-              "cacheRead": 0.3,
-              "cacheWrite": 3.75
+              "input": 10,
+              "output": 50,
+              "cacheRead": 1,
+              "cacheWrite": 12.5
             },
             "compat": {
               "supportsUsageInStreaming": true,
@@ -89,12 +89,6 @@
             ],
             "contextWindow": 200000,
             "maxTokens": 65536,
-            "cost": {
-              "input": 5,
-              "output": 25,
-              "cacheRead": 0.5,
-              "cacheWrite": 6.25
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -113,12 +107,6 @@
             ],
             "contextWindow": 200000,
             "maxTokens": 65536,
-            "cost": {
-              "input": 5,
-              "output": 25,
-              "cacheRead": 0.5,
-              "cacheWrite": 6.25
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -159,6 +147,12 @@
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens"
+            },
+            "cost": {
+              "input": 15,
+              "output": 75,
+              "cacheRead": 1.5,
+              "cacheWrite": 18.75
             }
           },
           {
@@ -173,12 +167,6 @@
             ],
             "contextWindow": 200000,
             "maxTokens": 65536,
-            "cost": {
-              "input": 3,
-              "output": 15,
-              "cacheRead": 0.3,
-              "cacheWrite": 3.75
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -305,12 +293,6 @@
             ],
             "contextWindow": 400000,
             "maxTokens": 128000,
-            "cost": {
-              "input": 1.75,
-              "output": 14,
-              "cacheRead": 0.175,
-              "cacheWrite": 0
-            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
@@ -387,6 +369,12 @@
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens"
+            },
+            "cost": {
+              "input": 0.75,
+              "output": 4.5,
+              "cacheRead": 0.075,
+              "cacheWrite": 0
             }
           },
           {
@@ -706,6 +694,12 @@
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens"
+            },
+            "cost": {
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0.06,
+              "cacheWrite": 0.375
             }
           },
           {

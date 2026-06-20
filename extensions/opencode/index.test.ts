@@ -227,21 +227,26 @@ describe("opencode provider plugin", () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     const unverifiedCostModel = requireRecord(
-      provider.resolveDynamicModel?.({ modelId: "claude-opus-4-1" } as never),
+      provider.resolveDynamicModel?.({ modelId: "claude-opus-4-5" } as never),
       "unverified cost model",
     );
     expect(unverifiedCostModel.cost).toBeUndefined();
 
-    const verifiedCostModel = requireRecord(
-      provider.resolveDynamicModel?.({ modelId: "claude-opus-4-8" } as never),
-      "verified cost model",
-    );
-    expect(verifiedCostModel.cost).toEqual({
-      input: 5,
-      output: 25,
-      cacheRead: 0.5,
-      cacheWrite: 6.25,
-    });
+    const verifiedCostExamples = new Map([
+      ["claude-fable-5", { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }],
+      ["claude-opus-4-8", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
+      ["claude-opus-4-1", { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
+      ["gpt-5.4-mini", { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }],
+      ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 }],
+    ] as const);
+
+    for (const [modelId, expectedCost] of verifiedCostExamples) {
+      const verifiedCostModel = requireRecord(
+        provider.resolveDynamicModel?.({ modelId } as never),
+        `verified cost model ${modelId}`,
+      );
+      expect(verifiedCostModel.cost).toEqual(expectedCost);
+    }
 
     const manifestProvider = requireRecord(
       manifest.modelCatalog.providers.opencode,
@@ -253,24 +258,19 @@ describe("opencode provider plugin", () => {
     }
     const manifestUnverifiedCostModel = requireRecord(
       manifestModels.find(
-        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-1",
+        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-5",
       ),
       "manifest unverified cost model",
     );
     expect(manifestUnverifiedCostModel.cost).toBeUndefined();
 
-    const manifestVerifiedCostModel = requireRecord(
-      manifestModels.find(
-        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-8",
-      ),
-      "manifest verified cost model",
-    );
-    expect(manifestVerifiedCostModel.cost).toEqual({
-      input: 5,
-      output: 25,
-      cacheRead: 0.5,
-      cacheWrite: 6.25,
-    });
+    for (const [modelId, expectedCost] of verifiedCostExamples) {
+      const manifestVerifiedCostModel = requireRecord(
+        manifestModels.find((model) => requireRecord(model, "manifest model").id === modelId),
+        `manifest verified cost model ${modelId}`,
+      );
+      expect(manifestVerifiedCostModel.cost).toEqual(expectedCost);
+    }
   });
 
   it("loads OpenCode Zen model discovery through the provider runtime", () => {
