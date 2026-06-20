@@ -916,13 +916,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
-    const allAgents = p.allAgents === true;
-    // `allAgents` is the cross-agent visibility path: it pulls every configured
-    // agent's store and opts out of the per-agent scope filter so child-spawned
-    // subagent sessions whose owning agent differs from the viewer's current
-    // scope still surface in the Control UI (issue #95295).
-    const configuredAgentsOnly = allAgents || p.configuredAgentsOnly === true;
-    const loadAgentId = allAgents ? undefined : p.agentId;
+    // Cross-agent visibility for child-spawned subagent sessions (issue #95295):
+    // when the caller asks for `configuredAgentsOnly: true` and does NOT pin a
+    // single `agentId`, every configured agent's store is loaded and the
+    // per-agent scope filter in `filterSessionEntries` is bypassed naturally
+    // (the filter only applies the strict agentId match when `agentId` is set).
+    // No new protocol flag is required — existing callers already express this
+    // shape by omitting `agentId` while keeping `configuredAgentsOnly: true`.
+    const configuredAgentsOnly = p.configuredAgentsOnly === true;
+    const loadAgentId = p.agentId;
     const payload = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list",
       async () => {
@@ -931,7 +933,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
               ...(loadAgentId ? { agentId: loadAgentId } : {}),
-              ...(allAgents ? { configuredAgentsOnly: true } : {}),
+              ...(configuredAgentsOnly ? { configuredAgentsOnly: true } : {}),
             }),
           {
             config: cfg,
@@ -939,7 +941,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             attributes: {
               agentId: p.agentId ?? null,
               configuredAgentsOnly,
-              allAgents,
             },
           },
         );

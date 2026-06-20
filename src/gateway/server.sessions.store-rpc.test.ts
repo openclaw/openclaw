@@ -465,6 +465,10 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
   }
+  // main is configured via agents.list; claude + gemini are configured via the ACP
+  // default/allowlist. `codex` is NOT a configured agent — its store must not be
+  // surfaced under `configuredAgentsOnly: true`. `local` is an unrelated disk
+  // store and must also be hidden.
   testState.agentsConfig = { list: [{ id: "main", default: true }] };
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
@@ -481,12 +485,12 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
 
   const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   const acpStorePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
-  const childStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
-  const diskOnlyStorePath = path.join(stateDir, "agents", "local", "sessions", "sessions.json");
+  const codexStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
+  const localStorePath = path.join(stateDir, "agents", "local", "sessions", "sessions.json");
   await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
   await fs.mkdir(path.dirname(acpStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(childStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(diskOnlyStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(codexStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(localStorePath), { recursive: true });
   await fs.writeFile(
     mainStorePath,
     JSON.stringify({ main: { sessionId: "sess-main", updatedAt: 20 } }, null, 2),
@@ -515,7 +519,7 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     "utf-8",
   );
   await fs.writeFile(
-    childStorePath,
+    codexStorePath,
     JSON.stringify(
       {
         "agent:codex:subagent:app-server-child": {
@@ -530,21 +534,23 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     "utf-8",
   );
   await fs.writeFile(
-    diskOnlyStorePath,
+    localStorePath,
     JSON.stringify({ main: { sessionId: "sess-local", updatedAt: 10 } }, null, 2),
     "utf-8",
   );
 
+  // `configuredAgentsOnly: true` constrains the loader to configured-agent stores
+  // (main + claude + gemini). codex and local stores must be hidden. The cross-agent
+  // visibility path (#95295) uses the same shape — no new protocol flag — and is
+  // covered by the dedicated "with no agentId surfaces cross-agent…" test below.
   const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
     "sessions.list",
     { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
   );
   expect(configuredOnly.ok).toBe(true);
-  expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
-    "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
-    "agent:codex:subagent:app-server-child",
-    "agent:main:main",
-  ]);
+  expect(configuredOnly.payload?.sessions.map((session) => session.key).sort()).toEqual(
+    ["agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7", "agent:main:main"].sort(),
+  );
 
   const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
     "sessions.list",
@@ -559,14 +565,15 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
   ]);
 });
 
-test("sessions.list allAgents surfaces cross-agent child-spawned subagent sessions (#95295)", async () => {
+test("sessions.list with no agentId surfaces cross-agent child-spawned subagent sessions (#95295)", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
   }
   // Viewer is scoped to `main`; orchestrator is a configured peer agent. Issue #95295 reports
   // that sessions.list, when called with the per-agent scope filter, hides child-spawned
-  // subagent sessions owned by other agents.
+  // subagent sessions owned by other agents. The fix expresses cross-agent visibility by
+  // omitting `agentId` while keeping `configuredAgentsOnly: true` — no new protocol flag.
   testState.agentsConfig = {
     list: [{ id: "main", default: true }, { id: "orchestrator" }],
   };
@@ -624,12 +631,14 @@ test("sessions.list allAgents surfaces cross-agent child-spawned subagent sessio
   expect(scoped.ok).toBe(true);
   expect(scoped.payload?.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
 
-  // Fix path: `allAgents: true` drops the per-agent scope filter so the cross-agent
-  // child-spawned subagent session surfaces alongside the viewer's own sessions.
+  // Fix path: omitting `agentId` while keeping `configuredAgentsOnly: true` drops the
+  // per-agent scope filter so the cross-agent child-spawned subagent session surfaces
+  // alongside the viewer's own sessions. This shape is what existing callers can already
+  // express, so no new `allAgents` flag is added to the protocol (issue #95295).
   const cross = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
     "sessions.list",
     {
-      allAgents: true,
+      configuredAgentsOnly: true,
       includeGlobal: false,
       includeUnknown: false,
     },

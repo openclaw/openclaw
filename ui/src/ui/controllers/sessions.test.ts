@@ -624,7 +624,11 @@ describe("loadSessions", () => {
     expect(state.sessionsResult?.count).toBe(2);
   });
 
-  it("omits the per-agent scope filter and forwards allAgents when requested (#95295)", async () => {
+  it("always respects an explicit agentId override even when sessionsAllAgents state is true (#95295)", async () => {
+    // Issue #95295 P1 finding: explicit scoped refreshes must not be silently
+    // widened by the cross-agent toggle. When the caller passes an `agentId`
+    // override, the request must scope to that agent regardless of the sidebar
+    // toggle state.
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`unexpected method: ${method}`);
@@ -639,17 +643,20 @@ describe("loadSessions", () => {
     });
     const state = createState(request, { sessionsAllAgents: true });
 
-    await loadSessions(state, { agentId: "main", allAgents: true });
+    await loadSessions(state, { agentId: "main" });
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
-      allAgents: true,
+      agentId: "main",
     });
   });
 
-  it("keeps the per-agent scope filter when allAgents is not requested", async () => {
+  it("queries every configured agent when no agentId override is supplied (#95295)", async () => {
+    // Cross-agent visibility path: omitting agentId while keeping
+    // configuredAgentsOnly: true lets the combined loader pull every configured
+    // agent's store and filterSessionEntries skips its strict per-agent match.
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`unexpected method: ${method}`);
@@ -664,13 +671,12 @@ describe("loadSessions", () => {
     });
     const state = createState(request);
 
-    await loadSessions(state, { agentId: "main" });
+    await loadSessions(state);
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
-      agentId: "main",
     });
   });
 

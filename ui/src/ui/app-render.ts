@@ -2915,10 +2915,12 @@ export function renderApp(state: AppViewState) {
                   state.sessionsAllAgents = next;
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
-                  // `allAgents` is the cross-agent visibility path: it omits the
-                  // per-agent `agentId` scope filter so child-spawned subagent
-                  // sessions from other agents become visible (issue #95295).
-                  void loadSessions(state, { allAgents: next });
+                  // Cross-agent visibility (issue #95295) is now expressed by
+                  // omitting `agentId` and keeping `configuredAgentsOnly: true`.
+                  // The toggle only flips the sidebar projection filter; a
+                  // plain reload keeps the controller's "no override → query
+                  // all configured agents" default behavior.
+                  void loadSessions(state);
                 },
                 onClearFilters: () => {
                   state.sessionsFilterActive = "";
@@ -2936,7 +2938,6 @@ export function renderApp(state: AppViewState) {
                     includeGlobal: true,
                     includeUnknown: true,
                     showArchived: true,
-                    allAgents: false,
                   });
                 },
                 onSearchChange: (q) => {

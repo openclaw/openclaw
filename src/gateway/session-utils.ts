@@ -2532,11 +2532,9 @@ function filterSessionEntries(params: {
   const { cfg, store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
-  const allAgents = opts.allAgents === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
-  const agentId =
-    !allAgents && typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
+  const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
@@ -2554,13 +2552,11 @@ function filterSessionEntries(params: {
       if (!includeUnknown && key === "unknown") {
         return false;
       }
-      // `allAgents` opts out of the per-agent scope filter so Control UI surfaces can
-      // surface child-spawned subagent sessions whose owning agent differs from the
-      // viewer's current scope (issue #95295). `global`/`unknown` still honor their
-      // explicit include flags so consumers can keep their existing strict views.
-      if (allAgents) {
-        return true;
-      }
+      // Cross-agent visibility (issue #95295): when the caller pins a specific
+      // `agentId` we strict-match against it; when they don't, every configured
+      // agent's child-spawned subagent sessions surface naturally so the
+      // Control UI can render cross-agent rows. `global` / `unknown` rows still
+      // honor their explicit include flags above.
       if (agentId) {
         if (key === "global") {
           return includeGlobal;

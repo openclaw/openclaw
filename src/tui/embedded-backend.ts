@@ -522,10 +522,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     const cfg = getRuntimeConfig();
-    const allAgents = opts?.allAgents === true;
+    // Cross-agent visibility (issue #95295): when `agentId` is unset, the
+    // combined loader pulls every configured agent's store and
+    // `filterSessionEntries` skips its strict per-agent match.
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
-      ...(allAgents ? {} : opts?.agentId ? { agentId: opts.agentId } : {}),
-      ...(allAgents ? { configuredAgentsOnly: true } : {}),
+      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+      ...(opts?.configuredAgentsOnly ? { configuredAgentsOnly: true } : {}),
     });
     return (await listSessionsFromStoreAsync({
       cfg,
