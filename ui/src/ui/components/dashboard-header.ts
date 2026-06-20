@@ -11,6 +11,8 @@ export class DashboardHeader extends LitElement {
   @property() tab: Tab = "overview";
   @property() basePath = "";
   @property() agentLabel = "";
+  @property() workspaceLabel = "";
+  @property() workspaceTitle = "";
 
   private readonly handleOverviewClick = (event: MouseEvent) => {
     if (
@@ -32,6 +34,8 @@ export class DashboardHeader extends LitElement {
   override render() {
     const label = titleForTab(this.tab);
     const agentLabel = this.agentLabel.trim();
+    const workspaceLabel = this.workspaceLabel.trim();
+    const workspaceTitle = this.workspaceTitle.trim() || workspaceLabel;
 
     return html`
       <div class="dashboard-header">
@@ -49,6 +53,19 @@ export class DashboardHeader extends LitElement {
                   <span class="dashboard-header__breadcrumb-sep">›</span>
                   <span class="dashboard-header__breadcrumb-context" title=${agentLabel}>
                     ${agentLabel}
+                  </span>
+                </span>
+              `
+            : nothing}
+          ${workspaceLabel
+            ? html`
+                <span class="dashboard-header__breadcrumb-segment">
+                  <span class="dashboard-header__breadcrumb-sep">›</span>
+                  <span
+                    class="dashboard-header__breadcrumb-context dashboard-header__breadcrumb-context--workspace"
+                    title=${workspaceTitle}
+                  >
+                    ${workspaceLabel}
                   </span>
                 </span>
               `

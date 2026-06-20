@@ -105,6 +105,45 @@ describe("control UI routing", () => {
     expect(breadcrumb.getAttribute("href")).toBe("/ui/overview");
   });
 
+  it("renders workspace context in the chat dashboard header without preloading the rail", async () => {
+    const app = mountApp("/chat?session=agent%3Acodex%3Amain");
+    app.tab = "chat";
+    app.sessionKey = "agent:codex:main";
+    app.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "user",
+      agents: [
+        { id: "main", name: "Main", workspace: "/workspace/main" },
+        { id: "codex", identity: { name: "Codex" }, workspace: "/workspace/configured" },
+      ],
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.files.list") {
+        return { sessionKey: "agent:codex:main", root: "/workspace/live", files: [] };
+      }
+      if (method === "artifacts.list") {
+        return { artifacts: [] };
+      }
+      return null;
+    });
+    app.client = {
+      request,
+      stop: vi.fn(),
+    } as unknown as NonNullable<typeof app.client>;
+
+    await app.updateComplete;
+
+    const workspace = expectElement(
+      app,
+      ".dashboard-header__breadcrumb-context--workspace",
+      HTMLElement,
+    );
+    expect(workspace.textContent?.trim()).toBe("/workspace/configured");
+    expect(workspace.getAttribute("title")).toBe("/workspace/configured");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("renders the dreaming view on the /dreaming route", async () => {
     const app = mountApp("/dreaming");
     app.dreamingStatus = {

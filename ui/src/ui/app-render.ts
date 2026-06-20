@@ -1402,7 +1402,6 @@ export function renderApp(state: AppViewState) {
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
-  const dashboardHeaderContext = resolveDashboardHeaderContext(state);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const activeAssistantAgentId = resolveSidebarSelectedAgentId(state);
@@ -1595,6 +1594,14 @@ export function renderApp(state: AppViewState) {
     state.sessionKey,
     chatWorkspaceAgentId,
   );
+  const showDashboardWorkspaceContext = isChat && (state.agentsList?.agents?.length ?? 0) > 1;
+  const activeSessionWorkspaceRoot =
+    chatWorkspaceFiles.list?.sessionKey === state.sessionKey ? chatWorkspaceFiles.list.root : null;
+  const dashboardHeaderContext = resolveDashboardHeaderContext(state, {
+    agentId: chatWorkspaceAgentId,
+    includeWorkspace: showDashboardWorkspaceContext,
+    workspaceRoot: activeSessionWorkspaceRoot,
+  });
   const currentChatWorkspaceFilesState = () =>
     getChatWorkspaceFilesState(state, state.sessionKey, resolveChatWorkspaceAgentId());
   const currentSessionWorkspaceKey = () => state.sessionKey;
@@ -2506,6 +2513,8 @@ export function renderApp(state: AppViewState) {
               .tab=${state.tab}
               .basePath=${state.basePath}
               .agentLabel=${dashboardHeaderContext.agentLabel}
+              .workspaceLabel=${dashboardHeaderContext.workspaceLabel ?? ""}
+              .workspaceTitle=${dashboardHeaderContext.workspaceTitle ?? ""}
               @navigate=${(event: CustomEvent<Tab>) => {
                 state.setTab(event.detail);
               }}

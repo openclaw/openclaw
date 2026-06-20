@@ -537,6 +537,107 @@ describe("resolveDashboardHeaderContext", () => {
       } as unknown as AppViewState),
     ).toEqual({ agentLabel: "beta" });
   });
+
+  it("uses the active session workspace root when workspace context is enabled", () => {
+    expect(
+      resolveDashboardHeaderContext(
+        {
+          sessionKey: "agent:deep-chat:main",
+          agentsList: {
+            defaultId: "deep-chat",
+            mainKey: "main",
+            scope: "user",
+            agents: [
+              {
+                id: "deep-chat",
+                identity: { name: "Deep Chat" },
+                workspace: "/Users/marko/projects/default-workspace",
+              },
+            ],
+          },
+        } as unknown as AppViewState,
+        {
+          includeWorkspace: true,
+          workspaceRoot: "/Users/marko/projects/live-workspace",
+        },
+      ),
+    ).toEqual({
+      agentLabel: "Deep Chat",
+      workspaceLabel: "/Users/marko/projects/live-workspace",
+      workspaceTitle: "/Users/marko/projects/live-workspace",
+    });
+  });
+
+  it("falls back to the active agent workspace before session files load", () => {
+    expect(
+      resolveDashboardHeaderContext(
+        {
+          sessionKey: "agent:deep-chat:main",
+          agentsList: {
+            defaultId: "deep-chat",
+            mainKey: "main",
+            scope: "user",
+            agents: [
+              {
+                id: "deep-chat",
+                identity: { name: "Deep Chat" },
+                workspace: "/Users/marko/projects/default-workspace",
+              },
+            ],
+          },
+        } as unknown as AppViewState,
+        { includeWorkspace: true },
+      ),
+    ).toEqual({
+      agentLabel: "Deep Chat",
+      workspaceLabel: "/Users/marko/projects/default-workspace",
+      workspaceTitle: "/Users/marko/projects/default-workspace",
+    });
+  });
+
+  it("uses the selected agent workspace for global-session context", () => {
+    expect(
+      resolveDashboardHeaderContext(
+        {
+          sessionKey: "global",
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "user",
+            agents: [
+              { id: "main", name: "Main", workspace: "/Users/marko/projects/main-workspace" },
+              { id: "codex", name: "Codex", workspace: "/Users/marko/projects/codex-workspace" },
+            ],
+          },
+        } as unknown as AppViewState,
+        { agentId: "codex", includeWorkspace: true },
+      ),
+    ).toEqual({
+      agentLabel: "Codex",
+      workspaceLabel: "/Users/marko/projects/codex-workspace",
+      workspaceTitle: "/Users/marko/projects/codex-workspace",
+    });
+  });
+
+  it("omits workspace context unless explicitly enabled", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:deep-chat:main",
+        agentsList: {
+          defaultId: "deep-chat",
+          mainKey: "main",
+          scope: "user",
+          agents: [
+            {
+              id: "deep-chat",
+              identity: { name: "Deep Chat" },
+              workspace: "/Users/marko/projects/default-workspace",
+            },
+          ],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "Deep Chat" });
+  });
 });
 
 describe("isCronSessionKey", () => {
