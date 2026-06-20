@@ -572,7 +572,8 @@ export function createRouter<
         return Promise.resolve();
       }
       invalidate(routeId);
-      const location = state.resolved ?? state.requested;
+      const location =
+        state.pendingRouteId === routeId ? state.requested : (state.resolved ?? state.requested);
       return navigate(routeId, context, { history: "none", revalidate: true }, location);
     },
     stop() {

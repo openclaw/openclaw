@@ -2,7 +2,8 @@
 import { html, nothing } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { SIDEBAR_SECTIONS, subtitleForRoute, titleForRoute } from "../app-navigation.ts";
-import { appRouter, pathForRoute, type RouteId } from "../app-routes.ts";
+import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
+import type { SettingsHost } from "../app/app-host.ts";
 import { renderRouterOutlet } from "../app/router-outlet.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
@@ -324,7 +325,13 @@ export function renderApp(state: AppViewState) {
           <div class="callout danger" role="alert">
             <strong>${t("lazyView.errorTitle")}</strong>
             <div>${routeError}</div>
-            <button class="btn btn--sm" @click=${() => state.setRoute(routeErrorId)}>
+            <button
+              class="btn btn--sm"
+              @click=${() =>
+                void appRouter
+                  .revalidate(routeLoadContext(state as unknown as SettingsHost), routeErrorId)
+                  .catch(() => undefined)}
+            >
               ${t("lazyView.retry")}
             </button>
           </div>
