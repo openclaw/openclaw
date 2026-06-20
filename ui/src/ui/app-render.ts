@@ -4,7 +4,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import { SIDEBAR_SECTIONS, subtitleForRoute, titleForRoute } from "../app-navigation.ts";
 import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
-import { routerOutlet } from "../app/router-outlet.ts";
+import { routerOutlet, routerView } from "../app/router-outlet.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatCommands } from "./app-chat.ts";
@@ -279,21 +279,34 @@ function dismissUpdateBanner(updateAvailable: unknown) {
 }
 
 export function renderApp(state: AppViewState) {
+  if (!state.connected) {
+    return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
+  }
+  return routerView(appRouter, state, (routeView) =>
+    renderConnectedApp(state, {
+      ...routeView,
+      activeRouteId: routeView.activeRouteId as RouteId | undefined,
+      pendingRouteId: routeView.pendingRouteId as RouteId | undefined,
+    }),
+  );
+}
+
+function renderConnectedApp(
+  state: AppViewState,
+  routeView: {
+    status: ReturnType<typeof appRouter.getState>["status"];
+    activeRouteId: RouteId | undefined;
+    activeModule: unknown;
+    pendingRouteId: RouteId | undefined;
+  },
+) {
   const updatableState = state as AppViewState & { requestUpdate?: () => void };
   const requestHostUpdate =
     typeof updatableState.requestUpdate === "function"
       ? () => updatableState.requestUpdate?.()
       : undefined;
-  // Gate: require successful gateway connection before showing the dashboard.
-  // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
-  if (!state.connected) {
-    return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
-  }
-
-  const routeState = appRouter.getState();
-  const activeMatch = routeState.matches[0];
-  const renderedRouteId = activeMatch?.routeId ?? state.routeId;
-  const activeRouteModule = activeMatch?.module;
+  const renderedRouteId = routeView.activeRouteId ?? state.routeId;
+  const activeRouteModule = routeView.activeModule;
   const isChat =
     renderedRouteId === "chat" ||
     (typeof activeRouteModule === "object" &&
@@ -540,7 +553,7 @@ export function renderApp(state: AppViewState) {
         typeof activeRouteModule.contentClass === "string"
           ? activeRouteModule.contentClass
           : ""}"
-        ?aria-busy=${routeState.status === "loading"}
+        ?aria-busy=${routeView.status === "loading"}
       >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">

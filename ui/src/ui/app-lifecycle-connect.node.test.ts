@@ -20,7 +20,7 @@ vi.mock("../app-routes.ts", () => ({
   appRouter: {
     subscribe: vi.fn(() => vi.fn()),
     subscribeSelector: vi.fn(() => vi.fn()),
-    routeIdFromPath: vi.fn(() => "chat"),
+    getState: vi.fn(() => ({ matches: [] })),
     start: appRouterStartMock,
     stop: vi.fn(),
   },

@@ -42,7 +42,6 @@ type LifecycleHost = {
   client?: { stop: () => void } | null;
   connectGeneration: number;
   connected?: boolean;
-  routeId: RouteId;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarSource?: string | null;
@@ -102,8 +101,7 @@ export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   const history = createBrowserHistory();
-  const initialLocation = history.location();
-  host.routeId = appRouter.routeIdFromPath(initialLocation.pathname, host.basePath) ?? "chat";
+  let previousActiveRouteId: RouteId = "chat";
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
@@ -135,7 +133,7 @@ export function handleConnected(host: LifecycleHost) {
       activeRouteId: state.matches[0]?.routeId,
     }),
     (next) => {
-      const previousRouteId = next.activeRouteId ?? host.routeId;
+      const previousRouteId = next.activeRouteId ?? previousActiveRouteId;
       const pendingRouteId = next.pendingRouteId;
       if (next.status === "loading" && pendingRouteId && pendingRouteId !== previousRouteId) {
         clearPendingSessionsChangedReload(host);
@@ -144,6 +142,7 @@ export function handleConnected(host: LifecycleHost) {
         cancelControlUiRouteTiming(host);
       }
       if (next.status === "success" && next.activeRouteId) {
+        previousActiveRouteId = next.activeRouteId;
         completeControlUiRouteTiming(host, next.activeRouteId);
       }
     },
@@ -267,6 +266,7 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  const routeId = appRouter.getState().matches[0]?.routeId ?? "chat";
   if (changed.has("connected") && host.connected) {
     void appRouter
       .revalidate(routeLoadContext(host as unknown as SettingsHost))
@@ -283,19 +283,17 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
   } else if (changed.has("chatMessage")) {
     scheduleChatComposerDraftPersistence(host);
   }
-  if (host.routeId === "chat" && host.chatManualRefreshInFlight) {
+  if (routeId === "chat" && host.chatManualRefreshInFlight) {
     return;
   }
   if (
-    host.routeId === "chat" &&
+    routeId === "chat" &&
     (changed.has("chatMessages") ||
       changed.has("chatToolMessages") ||
       changed.has("chatStream") ||
       changed.has("chatLoading") ||
-      changed.has("realtimeTalkConversation") ||
-      changed.has("routeId"))
+      changed.has("realtimeTalkConversation"))
   ) {
-    const forcedByRoute = changed.has("routeId");
     const forcedByLoad =
       changed.has("chatLoading") && changed.get("chatLoading") === true && !host.chatLoading;
     // Detect streaming start: chatStream changed from null/undefined to a string value
@@ -306,28 +304,25 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       typeof host.chatStream === "string";
     scheduleChatScroll(
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
-      forcedByRoute || forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
+      forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
     );
   }
-  if (
-    host.routeId === "logs" &&
-    (changed.has("logsEntries") || changed.has("logsAutoFollow") || changed.has("routeId"))
-  ) {
+  if (routeId === "logs" && (changed.has("logsEntries") || changed.has("logsAutoFollow"))) {
     if (host.logsAutoFollow && host.logsAtBottom) {
       scheduleLogsScroll(
         host as unknown as Parameters<typeof scheduleLogsScroll>[0],
-        changed.has("routeId") || changed.has("logsAutoFollow"),
+        changed.has("logsAutoFollow"),
       );
     }
   }
   if (
-    host.routeId === "activity" &&
-    (changed.has("activityEntries") || changed.has("activityAutoFollow") || changed.has("routeId"))
+    routeId === "activity" &&
+    (changed.has("activityEntries") || changed.has("activityAutoFollow"))
   ) {
     if (host.activityAutoFollow && host.activityAtBottom) {
       scheduleActivityScroll(
         host as unknown as Parameters<typeof scheduleActivityScroll>[0],
-        changed.has("routeId") || changed.has("activityAutoFollow"),
+        changed.has("activityAutoFollow"),
       );
     }
   }

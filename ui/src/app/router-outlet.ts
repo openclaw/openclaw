@@ -25,6 +25,13 @@ type RouterOutletSelection = {
   pending: RouteMatch<string, unknown, unknown> | undefined;
 };
 
+type RouterViewSelection = {
+  status: RouterState<string, unknown, unknown>["status"];
+  activeRouteId: string | undefined;
+  activeModule: unknown;
+  pendingRouteId: string | undefined;
+};
+
 function selectRouterOutletState(
   state: RouterState<string, unknown, unknown>,
 ): RouterOutletSelection {
@@ -43,6 +50,25 @@ function equalRouterOutletState(
     previous.status === next.status &&
     previous.active === next.active &&
     previous.pending === next.pending
+  );
+}
+
+function selectRouterViewState(state: RouterState<string, unknown, unknown>): RouterViewSelection {
+  const active = state.matches[0];
+  return {
+    status: state.status,
+    activeRouteId: active?.routeId,
+    activeModule: active?.module,
+    pendingRouteId: state.pendingMatches[0]?.routeId,
+  };
+}
+
+function equalRouterViewState(previous: RouterViewSelection, next: RouterViewSelection): boolean {
+  return (
+    previous.status === next.status &&
+    previous.activeRouteId === next.activeRouteId &&
+    previous.activeModule === next.activeModule &&
+    previous.pendingRouteId === next.pendingRouteId
   );
 }
 
@@ -219,6 +245,63 @@ class RouterOutletDirective extends AsyncDirective {
 }
 
 const routerOutletDirective = directive(RouterOutletDirective);
+
+class RouterViewDirective extends AsyncDirective {
+  private router?: RouterOutletRuntime;
+  private context: unknown;
+  private renderView?: (selection: RouterViewSelection, context: unknown) => unknown;
+  private unsubscribe?: () => boolean;
+
+  override render(
+    router: unknown,
+    context: unknown,
+    renderView: (selection: RouterViewSelection, context: unknown) => unknown,
+  ) {
+    const runtime = router as RouterOutletRuntime;
+    this.updateSubscription(runtime);
+    this.context = context;
+    this.renderView = renderView;
+    return renderView(selectRouterViewState(runtime.getState()), context);
+  }
+
+  override disconnected() {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+  }
+
+  override reconnected() {
+    if (this.router) {
+      this.updateSubscription(this.router);
+    }
+  }
+
+  private updateSubscription(router: RouterOutletRuntime) {
+    if (this.router === router && this.unsubscribe) {
+      return;
+    }
+    this.unsubscribe?.();
+    this.router = router;
+    this.unsubscribe = router.subscribeSelector(
+      selectRouterViewState,
+      (selection) => {
+        if (this.isConnected && this.renderView) {
+          this.setValue(this.renderView(selection, this.context));
+        }
+      },
+      equalRouterViewState,
+    );
+  }
+}
+
+const routerViewDirective = directive(RouterViewDirective);
+
+export function routerView<TContext>(
+  router: Router<string, unknown, unknown, unknown>,
+  context: TContext,
+  render: (selection: RouterViewSelection, context: TContext) => unknown,
+): unknown {
+  return routerViewDirective(router, context, render);
+}
 
 export function routerOutlet<
   TRouteId extends string,
