@@ -24,6 +24,17 @@ export function normalizeOpenRouterModelId(modelId: unknown): string | undefined
     : normalized;
 }
 
+// Short model aliases that lack an upstream namespace prefix but still need
+// to be expanded to the full OpenRouter API model id. Without this mapping,
+// a model configured as "openrouter/deepseek-v4-flash" would lose its upstream
+// namespace when the unprefixed remainder ("deepseek-v4-flash") contains no "/",
+// and the original prefixed form would be returned — causing downstream code
+// that re-adds the "openrouter/" prefix to produce "openrouter/openrouter/…".
+const SHORT_MODEL_ALIASES: Record<string, string> = {
+  "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
+  "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+};
+
 export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
@@ -33,9 +44,18 @@ export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefi
     return normalized;
   }
   const unprefixed = normalized.slice(OPENROUTER_MODEL_PREFIX.length);
-  // `openrouter/` is both a provider qualifier and an upstream namespace.
-  // Strip it only when the remainder is still a namespaced API model id.
-  return unprefixed.includes("/") ? unprefixed : normalized;
+  if (unprefixed.includes("/")) {
+    return unprefixed;
+  }
+  // Expand known short aliases (e.g. "deepseek-v4-flash" → "deepseek/deepseek-v4-flash")
+  // so downstream code receives a proper namespaced upstream model ID.
+  const expanded = SHORT_MODEL_ALIASES[unprefixed];
+  if (expanded) {
+    return expanded;
+  }
+  // No known expansion: return the original prefixed form so the caller can
+  // still attempt resolution rather than silently truncating the prefix.
+  return normalized;
 }
 
 export function isOpenRouterMistralModelId(modelId: unknown): boolean {
