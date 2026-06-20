@@ -5,6 +5,7 @@ import {
   createRouteMatch,
   locationForPath,
   locationsEqual,
+  matchIdForLocation,
   normalizeLocation,
   normalizeRouteBasePath,
 } from "./matches.ts";
@@ -47,11 +48,14 @@ export function createRouter<
   const defaultRouteId = options.defaultRouteId ?? null;
   const compiled = compileRoutes(options.routes, defaultRouteId);
   const matches = createMatchStore<TRouteId, TModule, TData>();
-  const loading = createRouteLoading<TRouteId, TLoadContext, TModule, TData>({
-    staleTime: options.staleTime ?? DEFAULT_STALE_TIME,
-    preloadStaleTime: options.preloadStaleTime ?? DEFAULT_PRELOAD_STALE_TIME,
-    gcTime: options.gcTime ?? DEFAULT_GC_TIME,
-  });
+  const loading = createRouteLoading<TRouteId, TLoadContext, TModule, TData>(
+    {
+      staleTime: options.staleTime ?? DEFAULT_STALE_TIME,
+      preloadStaleTime: options.preloadStaleTime ?? DEFAULT_PRELOAD_STALE_TIME,
+      gcTime: options.gcTime ?? DEFAULT_GC_TIME,
+    },
+    matches,
+  );
   let history: RouterHistory | undefined;
   let basePath = "";
   let stopHistory: (() => void) | undefined;
@@ -88,6 +92,7 @@ export function createRouter<
 
     const location = normalizeLocation(requestedLocation);
     const previous = matches.getActiveMatch();
+    const deps = route.loaderDeps?.(context, location) ?? "";
     const sameRoute = previous?.routeId === routeId && locationsEqual(previous.location, location);
     const revalidating = navigationOptions.revalidate === true && previous?.routeId === routeId;
     if (sameRoute && previous?.status === "success" && !previous.invalid && !revalidating) {
@@ -100,8 +105,9 @@ export function createRouter<
 
     cancelRun(currentRun);
     const controller = new AbortController();
-    const deps = route.loaderDeps?.(context, location) ?? "";
     const cause: RouteLoadCause = revalidating ? "revalidate" : "navigation";
+    const matchId = matchIdForLocation(routeId, location, deps);
+    const cached = matches.getCachedMatch(matchId);
     const match =
       sameRoute && previous
         ? {
@@ -112,18 +118,26 @@ export function createRouter<
             invalid: true,
             isFetching: "loader" as const,
             preload: false,
-            fetchCount: previous.fetchCount + 1,
           }
-        : {
-            ...createRouteMatch<TRouteId, TModule, TData>(
-              routeId,
-              location,
-              deps,
+        : cached
+          ? {
+              ...cached,
+              abortController: controller,
               cause,
-              controller,
-            ),
-            fetchCount: 1,
-          };
+              error: undefined,
+              invalid: cached.invalid,
+              isFetching: false as const,
+              preload: cached.preload,
+            }
+          : {
+              ...createRouteMatch<TRouteId, TModule, TData>(
+                routeId,
+                location,
+                deps,
+                cause,
+                controller,
+              ),
+            };
     const run: NavigationRun = { controller, matchId: match.id };
     currentRun = run;
     const hookOptions: RouteHookOptions = {
@@ -147,18 +161,17 @@ export function createRouter<
     const navigation = (async () => {
       let result: { data: TData; module: TModule };
       try {
-        result = await loading.loadRoute(route, context, hookOptions, revalidating);
+        result = await loading.loadRoute(
+          match,
+          route,
+          context,
+          hookOptions,
+          revalidating || Boolean(cached?.invalid),
+        );
       } catch (error) {
         if (!hookOptions.shouldRun()) {
           return;
         }
-        matches.updateMatch(match.id, (current) => ({
-          ...current,
-          status: "error",
-          isFetching: false,
-          error,
-          updatedAt: Date.now(),
-        }));
         matches.setStatus("error");
         if (isCurrentRun(currentRun, run)) {
           currentRun = null;
@@ -169,21 +182,21 @@ export function createRouter<
         return;
       }
 
-      const resolvedMatch: RouteMatch<TRouteId, TModule, TData> = {
+      const resolvedMatch = matches.getMatch(match.id) ?? {
         ...match,
         data: result.data,
         module: result.module,
-        status: "success",
-        isFetching: false,
+        status: "success" as const,
+        isFetching: false as const,
         error: undefined,
         invalid: false,
         updatedAt: Date.now(),
+        lastAccessedAt: Date.now(),
       };
       const currentActive = matches.getActiveMatch();
       if (!sameRoute && currentActive) {
         matches.setCached([...matches.getState().cachedMatches, currentActive]);
       }
-      matches.updateMatch(match.id, () => resolvedMatch);
       matches.setActive([resolvedMatch]);
       matches.setPending([]);
       matches.setLocation(location, location);
@@ -254,16 +267,9 @@ export function createRouter<
     }
     const controller = new AbortController();
     const deps = route.loaderDeps?.(context, location) ?? "";
-    const existing = matches
-      .getState()
-      .cachedMatches.find(
-        (match) => match.routeId === routeId && match.location.pathname === location.pathname,
-      );
-    if (existing?.status === "success" && !existing.invalid) {
-      return Promise.resolve();
-    }
+    const matchId = matchIdForLocation(routeId, location, deps);
     const match =
-      existing ??
+      matches.getCachedMatch(matchId) ??
       createRouteMatch<TRouteId, TModule, TData>(
         routeId,
         location,
@@ -284,17 +290,7 @@ export function createRouter<
       deps,
       cause: "preload",
     };
-    return loading.loadRoute(route, context, hookOptions, false).then((result) => {
-      matches.updateMatch(match.id, (current) => ({
-        ...current,
-        data: result.data,
-        module: result.module,
-        status: "success",
-        isFetching: false,
-        invalid: false,
-        updatedAt: Date.now(),
-      }));
-    });
+    return loading.loadRoute(match, route, context, hookOptions, false).then(() => undefined);
   };
 
   const preloadRoute = (routeId: TRouteId, context: TLoadContext): Promise<void> =>

@@ -9,12 +9,14 @@ import type {
 export type MatchStore<TRouteId extends string, TModule, TData> = {
   getState: () => RouterState<TRouteId, TModule, TData>;
   getMatch: (matchId: string) => RouteMatch<TRouteId, TModule, TData> | undefined;
+  getCachedMatch: (matchId: string) => RouteMatch<TRouteId, TModule, TData> | undefined;
   getActiveMatch: () => RouteMatch<TRouteId, TModule, TData> | undefined;
   setLocation: (location: RouteLocation, resolvedLocation: RouteLocation | null) => void;
   setStatus: (status: RouterState<TRouteId, TModule, TData>["status"]) => void;
   setActive: (matches: readonly RouteMatch<TRouteId, TModule, TData>[]) => void;
   setPending: (matches: readonly RouteMatch<TRouteId, TModule, TData>[]) => void;
   setCached: (matches: readonly RouteMatch<TRouteId, TModule, TData>[]) => void;
+  removeCached: (matchId: string) => void;
   updateMatch: (
     matchId: string,
     update: (match: RouteMatch<TRouteId, TModule, TData>) => RouteMatch<TRouteId, TModule, TData>,
@@ -60,6 +62,7 @@ export function createRouteMatch<TRouteId extends string, TModule, TData>(
     isFetching: false,
     updatedAt: 0,
     fetchCount: 0,
+    lastAccessedAt: 0,
     abortController,
     cause,
     preload,
@@ -177,6 +180,7 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
   return {
     getState: readState,
     getMatch,
+    getCachedMatch: (matchId) => cached.get(matchId),
     getActiveMatch: () => active.values().next().value,
     setLocation(nextLocation, nextResolvedLocation) {
       if (
@@ -208,6 +212,12 @@ export function createMatchStore<TRouteId extends string, TModule, TData>(): Mat
     },
     setCached(matches) {
       batch(() => setPool(cached, matches));
+    },
+    removeCached(matchId) {
+      if (!cached.delete(matchId)) {
+        return;
+      }
+      notify(matchId);
     },
     updateMatch(matchId, update) {
       const pool = [active, pending, cached].find((candidate) => candidate.has(matchId));

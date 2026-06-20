@@ -69,6 +69,7 @@ export type RouteMatch<TRouteId extends string = string, TModule = unknown, TDat
   module?: TModule;
   error?: unknown;
   updatedAt: number;
+  lastAccessedAt: number;
   fetchCount: number;
   abortController: AbortController;
   cause: RouteLoadCause;
