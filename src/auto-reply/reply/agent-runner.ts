@@ -1276,10 +1276,14 @@ export async function runReplyAgent(params: {
   }
 
   const activeRunQueueAction = resolveActiveRunQueueAction({
-    // Gate on liveness, not bare presence. A stale (present but
-    // non-streaming) run must not divert this inbound into a followup queue
-    // whose drain never fires; isStreaming stays true for the whole live run.
-    isActive: isActive && isStreaming,
+    // Trust the caller's isActive — it is already the dispatch-corrected
+    // liveness signal. runReplyAgent cannot distinguish a stale embedded handle
+    // from a genuinely active not-yet-streaming run from its (isActive,
+    // isStreaming) params alone, so staleness is resolved upstream in
+    // runPreparedReply and threaded via isActive; direct callers pass an
+    // authoritative isActive. Re-gating on isStreaming here would wrongly divert
+    // an active not-yet-streaming followup into preflight instead of enqueueing.
+    isActive,
     isHeartbeat,
     shouldFollowup: effectiveShouldFollowup,
     queueMode: activeRunQueueMode,
