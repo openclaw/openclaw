@@ -480,4 +480,25 @@ describe("gateway/node-catalog", () => {
     expect(node?.deviceFamily).toBeUndefined();
     expect(node?.modelIdentifier).toBeUndefined();
   });
+
+  it("drops blind-cast pairing entries whose required id is not a string", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        pairedDevice({ deviceId: "good-node" }),
+        // A corrupted pairing file can carry a non-string id; without the catalog id guard
+        // these would key the maps and crash listKnownNodes' nodeId.localeCompare sort.
+        pairedDevice({ deviceId: 7 as unknown as string }),
+      ],
+      pairedNodes: [
+        pairedNode({ nodeId: "good-node" }),
+        pairedNode({ nodeId: {} as unknown as string }),
+      ],
+      pendingNodes: [pendingNode({ nodeId: [] as unknown as string })],
+      connectedNodes: [],
+    });
+
+    const nodes = listKnownNodes(catalog);
+    expect(nodes.map((entry) => entry.nodeId)).toEqual(["good-node"]);
+    expect(getKnownNode(catalog, "good-node")).not.toBeNull();
+  });
 });

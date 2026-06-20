@@ -87,6 +87,12 @@ function firstNormalizedString(...values: unknown[]): string | undefined {
   return normalizeOptionalString(values.find((value) => value != null));
 }
 
+// Blind-cast pairing records can carry a non-string id; a node with no addressable string
+// id is unusable and would crash the id-based catalog sort/format, so drop it entirely.
+function hasAddressableId(value: unknown): boolean {
+  return normalizeOptionalString(value) !== undefined;
+}
+
 function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {
   return {
     nodeId: entry.deviceId,
@@ -310,15 +316,22 @@ export function createKnownNodeCatalog(params: {
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
-      .filter((entry) => hasEffectivePairedDeviceRole(entry, "node"))
+      .filter(
+        (entry) => hasAddressableId(entry.deviceId) && hasEffectivePairedDeviceRole(entry, "node"),
+      )
       .map((entry) => [entry.deviceId, buildDevicePairingSource(entry)]),
   );
   const nodePairingById = new Map(
-    (params.pairedNodes ?? []).map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
+    (params.pairedNodes ?? [])
+      .filter((entry) => hasAddressableId(entry.nodeId))
+      .map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
   );
   const pendingNodePairingById = new Map<string, KnownNodePendingSource>();
   // listNodePairing returns newest requests first; keep the current approval action per node.
   for (const entry of params.pendingNodes ?? []) {
+    if (!hasAddressableId(entry.nodeId)) {
+      continue;
+    }
     if (!pendingNodePairingById.has(entry.nodeId)) {
       pendingNodePairingById.set(entry.nodeId, buildPendingNodeSource(entry));
     }
