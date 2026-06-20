@@ -319,37 +319,35 @@ export function createRouter<
     }
     lastContext = context;
     hasLastContext = true;
-    const controller = new AbortController();
     const deps = route.loaderDeps?.(context, location) ?? "";
     const matchId = matchIdForLocation(routeId, location, deps);
-    const state = matches.getState();
-    if (
-      state.matches.some((match) => match.id === matchId) ||
-      state.pendingMatches.some((match) => match.id === matchId)
-    ) {
-      return Promise.resolve();
-    }
+    const existing = matches.getMatch(matchId);
+    const cached = matches.getCachedMatch(matchId);
     const match =
-      matches.getCachedMatch(matchId) ??
+      existing ??
       createRouteMatch<TRouteId, TModule, TData>(
         routeId,
         location,
         deps,
         "preload",
-        controller,
+        new AbortController(),
         true,
       );
-    matches.setCached([
-      ...matches.getState().cachedMatches.filter((candidate) => candidate.id !== match.id),
-      match,
-    ]);
+    if (!existing) {
+      matches.setCached([
+        ...matches.getState().cachedMatches.filter((candidate) => candidate.id !== match.id),
+        match,
+      ]);
+    }
+    const controller = match.abortController;
+    const cause = existing && !cached ? match.cause : "preload";
     const hookOptions: RouteHookOptions = {
       signal: controller.signal,
       shouldRun: () => !controller.signal.aborted,
       revalidating: false,
       location,
       deps,
-      cause: "preload",
+      cause,
     };
     return loading.loadRoute(match, route, context, hookOptions, false).then(() => undefined);
   };
