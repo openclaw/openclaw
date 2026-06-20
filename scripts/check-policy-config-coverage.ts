@@ -42,6 +42,10 @@ type ClassifiedEntry = {
   readonly classification?: CoverageClassification;
 };
 
+type UnmatchedMonitoredPattern = {
+  readonly pattern: string;
+};
+
 const args = new Set(process.argv.slice(2));
 const json = args.has("--json");
 const check = args.has("--check");
@@ -67,6 +71,17 @@ const monitoredEntries = flattenConfigDocBaselineEntries(baseline)
   .filter((entry) => !entry.hasChildren)
   .filter((entry) => matchesAny(config.monitored, entry.path))
   .toSorted((left, right) => left.path.localeCompare(right.path));
+const leafEntries = flattenConfigDocBaselineEntries(baseline).filter((entry) => !entry.hasChildren);
+const unmatchedMonitored = config.monitored
+  .filter(
+    (pattern) =>
+      !leafEntries.some((entry) => pathMatchesPattern(pattern, entry.path)) &&
+      !config.classifications.some(
+        (item) => item.allowNoSchemaPath === true && pathMatchesPattern(item.pattern, pattern),
+      ),
+  )
+  .map((pattern) => ({ pattern }))
+  .toSorted((left, right) => left.pattern.localeCompare(right.pattern));
 
 const classified: ClassifiedEntry[] = monitoredEntries.map((entry) => ({
   path: entry.path,
@@ -87,10 +102,11 @@ if (json) {
   console.log(
     JSON.stringify(
       {
-        ok: unclassified.length === 0 && stale.length === 0,
+        ok: unclassified.length === 0 && stale.length === 0 && unmatchedMonitored.length === 0,
         monitoredPaths: monitoredEntries.length,
         counts: summaryCounts,
         unclassified,
+        unmatchedMonitored,
         stale,
       },
       null,
@@ -102,12 +118,13 @@ if (json) {
     monitoredPaths: monitoredEntries.length,
     counts: summaryCounts,
     unclassified,
+    unmatchedMonitored,
     stale,
     classified,
   });
 }
 
-if (check && (unclassified.length > 0 || stale.length > 0)) {
+if (check && (unclassified.length > 0 || stale.length > 0 || unmatchedMonitored.length > 0)) {
   process.exit(1);
 }
 
@@ -115,6 +132,7 @@ function printTextReport(input: {
   readonly monitoredPaths: number;
   readonly counts: Record<string, number>;
   readonly unclassified: readonly ClassifiedEntry[];
+  readonly unmatchedMonitored: readonly UnmatchedMonitoredPattern[];
   readonly stale: readonly CoverageClassification[];
   readonly classified: readonly ClassifiedEntry[];
 }): void {
@@ -135,6 +153,15 @@ function printTextReport(input: {
     );
   } else {
     console.log("\nNo unclassified monitored config paths.");
+  }
+
+  if (input.unmatchedMonitored.length > 0) {
+    console.log("\nMonitored patterns with no matching config paths:");
+    for (const entry of input.unmatchedMonitored) {
+      console.log(`  - ${entry.pattern}`);
+    }
+  } else {
+    console.log("\nNo monitored patterns without matching config paths.");
   }
 
   if (input.stale.length > 0) {
