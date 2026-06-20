@@ -757,6 +757,8 @@ export function createCliJsonlStreamingParser(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onDisplayToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
 }) {
   let lineBuffer = "";
@@ -832,7 +834,7 @@ export function createCliJsonlStreamingParser(params: {
         event.toolCallId,
         event.name,
         event.args ?? {},
-        params.onToolUseStart,
+        params.onDisplayToolUseStart ?? params.onToolUseStart,
       );
       return;
     }
@@ -845,7 +847,7 @@ export function createCliJsonlStreamingParser(params: {
         event.toolCallId,
         event.isError === true,
         event.result,
-        params.onToolResult,
+        params.onDisplayToolResult ?? params.onToolResult,
       );
       return;
     }

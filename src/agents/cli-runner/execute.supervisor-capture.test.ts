@@ -43,6 +43,7 @@ function recordMcpLoopbackToolCallResult(params: {
 function buildPreparedCliRunContext(params: {
   output: "jsonl" | "text";
   provider?: string;
+  parseJsonlEvent?: PreparedCliRunContext["backendResolved"]["parseJsonlEvent"];
 }): PreparedCliRunContext {
   const provider = params.provider ?? "codex-cli";
   const backend = {
@@ -70,6 +71,7 @@ function buildPreparedCliRunContext(params: {
       id: provider,
       config: backend,
       bundleMcp: false,
+      ...(params.parseJsonlEvent ? { parseJsonlEvent: params.parseJsonlEvent } : {}),
     },
     preparedBackend: {
       backend,
@@ -414,6 +416,126 @@ describe("executePreparedCliRun supervisor output capture", () => {
         text: "done",
       }),
     ]);
+  });
+
+  it("keeps plugin JSONL display tool events out of delivery evidence", async () => {
+    const toolEvents: Array<Record<string, unknown>> = [];
+    const stop = onAgentEvent((event) => {
+      if (event.stream === "tool") {
+        toolEvents.push(event.data as Record<string, unknown>);
+      }
+    });
+    const chunks = [
+      `${JSON.stringify({ type: "text", text: "sending" })}\n`,
+      `${JSON.stringify({
+        type: "tool_call",
+        subtype: "started",
+        call_id: "plugin-message-send",
+        tool_call: {
+          message: {
+            args: {
+              action: "send",
+              channel: "telegram",
+              target: "chat123",
+              message: "done",
+            },
+          },
+        },
+      })}\n`,
+      `${JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "plugin-message-send",
+        tool_call: {
+          message: {
+            result: { ok: true, to: "spaces/AAA" },
+          },
+        },
+      })}\n`,
+      `${JSON.stringify({ type: "result", result: "sending" })}\n`,
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      for (const chunk of chunks) {
+        input.onStdout?.(chunk);
+      }
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      const result = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          output: "jsonl",
+          provider: "plugin-jsonl-cli",
+          parseJsonlEvent: (line) => {
+            const parsed = JSON.parse(line) as {
+              type: string;
+              subtype?: string;
+              text?: string;
+              result?: string;
+              call_id?: string;
+              tool_call?: Record<string, { args?: Record<string, unknown>; result?: unknown }>;
+            };
+            if (parsed.type === "text") {
+              return { kind: "text", text: parsed.text ?? "" };
+            }
+            if (parsed.type === "result") {
+              return { kind: "result", text: parsed.result };
+            }
+            if (parsed.type !== "tool_call" || !parsed.call_id || !parsed.tool_call) {
+              return undefined;
+            }
+            const entry = Object.entries(parsed.tool_call)[0];
+            if (!entry) {
+              return undefined;
+            }
+            const [name, payload] = entry;
+            return parsed.subtype === "completed"
+              ? {
+                  kind: "toolResult",
+                  toolCallId: parsed.call_id,
+                  name,
+                  isError: false,
+                  result: payload.result,
+                }
+              : {
+                  kind: "toolStart",
+                  toolCallId: parsed.call_id,
+                  name,
+                  args: payload.args ?? {},
+                };
+          },
+        }),
+      );
+
+      expect(result.text).toBe("sending");
+      expect(result.didSendViaMessagingTool).toBeUndefined();
+      expect(getCliMessagingDeliveryEvidence(result)).toBeUndefined();
+      expect(toolEvents).toEqual([
+        expect.objectContaining({
+          phase: "start",
+          name: "message",
+          toolCallId: "plugin-message-send",
+        }),
+        expect.objectContaining({
+          phase: "result",
+          name: "message",
+          toolCallId: "plugin-message-send",
+          isError: false,
+        }),
+      ]);
+    } finally {
+      stop();
+    }
   });
 
   it("captures message text aliases from correlated JSONL tool events", async () => {
