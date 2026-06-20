@@ -146,6 +146,7 @@ observation-only.
 - `subagent_delivery_target` - compatibility hook for completion delivery when no core session binding can project a route.
 - `subagent_spawning` - deprecated compatibility hook. Core now prepares `thread: true` subagent bindings through channel session-binding adapters before `subagent_spawned` fires.
 - `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
+- `subagent_ended` carries `targetSessionKey` (the identity field for the ended subagent), `targetKind`, `reason`, `outcome`, `error?`, `runId?`, `sendFarewell?`, `accountId?`, and `endedAt?`. Unlike `subagent_spawned`, this event does not include `agentId`.
 
 **Lifecycle**
 
