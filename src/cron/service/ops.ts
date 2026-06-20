@@ -266,9 +266,14 @@ export async function start(state: CronServiceState) {
     if (state.stopped) {
       return;
     }
+    // Store deferred catch-up job IDs in state so every maintenance recompute
+    // caller (read RPC, finalize, empty-due tick) skips future-slot repair for
+    // these overflow-deferred jobs, not only this immediate pass (#93935).
+    if (deferredCatchupJobIds.size > 0) {
+      state.pendingCatchupDeferralJobIds = new Set(deferredCatchupJobIds);
+    }
     const changed = recomputeNextRunsForMaintenance(state, {
       recomputeExpired: true,
-      skipFutureRepairJobIds: deferredCatchupJobIds,
     });
     if (changed) {
       await persist(state);

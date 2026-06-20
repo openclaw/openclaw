@@ -243,6 +243,7 @@ export function createMockCronStateForJobs(params: {
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
     pendingQuarantineConfigJobs: [],
+    pendingCatchupDeferralJobIds: undefined,
     lastQuarantineFailureWarnKey: null,
     deps: {
       storePath: "/mock/path",

@@ -673,12 +673,10 @@ export function recomputeNextRunsForMaintenance(
     recomputeExpired?: boolean;
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
-    skipFutureRepairJobIds?: ReadonlySet<string>;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
-  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
@@ -689,7 +687,7 @@ export function recomputeNextRunsForMaintenance(
         }
       } else if (
         repairFutureCronNextRunAtMs &&
-        !skipFutureRepairJobIds?.has(job.id) &&
+        !state.pendingCatchupDeferralJobIds?.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
@@ -717,6 +715,18 @@ export function recomputeNextRunsForMaintenance(
           if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
             changed = true;
           }
+        }
+      }
+      // Auto-cleanup: once a deferred catch-up job has reached its slot,
+      // remove it from the pending set so subsequent recomputes use normal scheduling.
+      if (
+        state.pendingCatchupDeferralJobIds?.has(job.id) &&
+        hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
+        now >= job.state.nextRunAtMs
+      ) {
+        state.pendingCatchupDeferralJobIds.delete(job.id);
+        if (state.pendingCatchupDeferralJobIds.size === 0) {
+          state.pendingCatchupDeferralJobIds = undefined;
         }
       }
       return changed;
