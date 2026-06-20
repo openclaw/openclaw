@@ -1401,6 +1401,32 @@ async function resolveExistingUsageSessionFileForLineage(params: {
   }
 }
 
+// Select the active+archive lineage for one session from a directory's already
+// listed transcript names. Pure so callers that list the directory once — the
+// per-session resolver and the batched hidden-row reader — share one selection
+// rule: prefer the active file plus same-stem archives oldest-first; with no
+// active file the newest archive is authoritative (summing same-stem archives
+// would double-count overlapping content, see the reset+deleted test).
+function selectUsageSessionLineageFromNames(params: {
+  sessionsDir: string;
+  entryNames: string[];
+  fallbackFile: string;
+}): UsageSessionLineageFiles {
+  const toPath = (name: string) => path.join(params.sessionsDir, name);
+  const primary = params.entryNames.find((entry) => isPrimarySessionTranscriptFileName(entry));
+  const archives = params.entryNames
+    .filter((entry) => isSessionArchiveArtifactName(entry))
+    .toSorted(sortSessionArchiveNamesAscending);
+  if (primary) {
+    return { sessionFile: toPath(primary), files: [...archives, primary].map(toPath) };
+  }
+  const latestArchive = archives.toSorted(sortSessionArchiveNamesDescending)[0];
+  if (latestArchive) {
+    return { sessionFile: toPath(latestArchive), files: [toPath(latestArchive)] };
+  }
+  return { sessionFile: params.fallbackFile, files: [params.fallbackFile] };
+}
+
 async function resolveUsageSessionLineageFiles(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
@@ -1421,26 +1447,11 @@ async function resolveUsageSessionLineageFiles(params: {
   try {
     const sessionsDir = path.dirname(sessionFile);
     const entries = await listUsageSessionLineageFileNames(sessionsDir, sessionId);
-    const primary = entries.find((entry) => isPrimarySessionTranscriptFileName(entry));
-    const archives = entries
-      .filter((entry) => isSessionArchiveArtifactName(entry))
-      .toSorted(sortSessionArchiveNamesAscending);
-
-    if (primary) {
-      return {
-        sessionFile: path.join(sessionsDir, primary),
-        files: [...archives, primary].map((entry) => path.join(sessionsDir, entry)),
-      };
-    }
-
-    const latestArchive = archives.toSorted(sortSessionArchiveNamesDescending)[0];
-    if (latestArchive) {
-      // No active transcript: same-stem reset/deleted archives are alternative
-      // snapshots of one logical session, so the newest is authoritative. Summing
-      // them would double-count overlapping content (see the reset+deleted test).
-      const archiveFile = path.join(sessionsDir, latestArchive);
-      return { sessionFile: archiveFile, files: [archiveFile] };
-    }
+    return selectUsageSessionLineageFromNames({
+      sessionsDir,
+      entryNames: entries,
+      fallbackFile: sessionFile,
+    });
   } catch {
     // Fall back to the single resolved file below.
   }
@@ -1839,6 +1850,82 @@ export async function loadCostUsageSummaryFromCache(params: {
   });
 }
 
+// Combine the cached usage entries for one session's active+archive lineage into
+// a single summary. Shared by the per-session reader and the batched hidden-row
+// reader so both apply the same freshness + same-stem combination rule (#46252):
+// a single fresh file uses its stored sessionSummary; multiple lineage files are
+// summed from their transcript entries (oldest archive first); when some lineage
+// files are still uncached the summary is partial and the stale paths are
+// reported so the caller can request a refresh.
+function summarizeSessionLineageFromCache(params: {
+  cache: UsageCostCacheFile;
+  pricingFingerprint: string;
+  sessionId?: string;
+  sessionFile: string;
+  sessionFiles: string[];
+  statsByPath: Map<string, UsageCostTranscriptFile>;
+  startMs?: number;
+  endMs?: number;
+}): { summary: SessionCostSummary | null; cachedFiles: number; staleFilePaths: string[] } {
+  const entries: UsageCostCacheFileEntry[] = [];
+  const staleFilePaths: string[] = [];
+  for (const filePath of params.sessionFiles) {
+    const file = params.statsByPath.get(filePath);
+    const entry = params.cache.files[filePath];
+    const fresh = file
+      ? isUsageCostCacheEntryFresh({
+          entry,
+          file,
+          pricingFingerprint: params.pricingFingerprint,
+          requireSessionSummary: true,
+        })
+      : false;
+    // A multi-file lineage must combine raw transcriptEntries to avoid
+    // double-counting overlapping summaries, so only entries carrying them count
+    // as fresh once there is more than one file in the lineage.
+    if (fresh && entry && (params.sessionFiles.length === 1 || entry.transcriptEntries)) {
+      entries.push(entry);
+    } else {
+      staleFilePaths.push(filePath);
+    }
+  }
+  const startMs = params.startMs ?? Number.NEGATIVE_INFINITY;
+  const endMs = params.endMs ?? Number.POSITIVE_INFINITY;
+  let summary: SessionCostSummary | null = null;
+  if (staleFilePaths.length === 0) {
+    const singleEntry = entries.length === 1 ? entries[0] : undefined;
+    summary = singleEntry?.sessionSummary ?? null;
+    if (
+      entries.length > 1 ||
+      !summary ||
+      (params.startMs !== undefined &&
+        params.endMs !== undefined &&
+        !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs))
+    ) {
+      summary = buildSessionCostSummaryFromCacheEntries({
+        entries,
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        startMs,
+        endMs,
+      });
+    }
+  } else if (entries.length > 0) {
+    // Some lineage files are stale (e.g. a just-created reset archive not yet
+    // cached) while others are fresh. Build a partial summary from the cached
+    // entries so a freshly reset session shows its known spend instead of
+    // blanking until the background refresh lands.
+    summary = buildSessionCostSummaryFromCacheEntries({
+      entries,
+      sessionId: params.sessionId,
+      sessionFile: params.sessionFile,
+      startMs,
+      endMs,
+    });
+  }
+  return { summary, cachedFiles: entries.length, staleFilePaths };
+}
+
 export async function loadSessionCostSummaryFromCache(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
@@ -1857,7 +1944,7 @@ export async function loadSessionCostSummaryFromCache(params: {
   const sessionFiles = lineage.files.length > 0 ? lineage.files : [params.sessionFile];
   const readCacheState = async (): Promise<{
     cache: UsageCostCacheFile;
-    entries: UsageCostCacheFileEntry[];
+    summary: SessionCostSummary | null;
     cachedFiles: number;
     staleFiles: number;
   }> => {
@@ -1870,31 +1957,22 @@ export async function loadSessionCostSummaryFromCache(params: {
         }),
       ),
     ]);
-    const filesByPath = new Map(
+    const statsByPath = new Map(
       stats
         .filter((file): file is UsageCostTranscriptFile => Boolean(file))
         .map((file) => [file.filePath, file]),
     );
-    const entries: UsageCostCacheFileEntry[] = [];
-    let staleFiles = 0;
-    for (const filePath of sessionFiles) {
-      const file = filesByPath.get(filePath);
-      const entry = cache.files[filePath];
-      const fresh = file
-        ? isUsageCostCacheEntryFresh({
-            entry,
-            file,
-            pricingFingerprint,
-            requireSessionSummary: true,
-          })
-        : false;
-      if (fresh && entry && (sessionFiles.length === 1 || entry.transcriptEntries)) {
-        entries.push(entry);
-      } else {
-        staleFiles += 1;
-      }
-    }
-    return { cache, entries, cachedFiles: entries.length, staleFiles };
+    const { summary, cachedFiles, staleFilePaths } = summarizeSessionLineageFromCache({
+      cache,
+      pricingFingerprint,
+      sessionId: params.sessionId,
+      sessionFile,
+      sessionFiles,
+      statsByPath,
+      startMs: params.startMs,
+      endMs: params.endMs,
+    });
+    return { cache, summary, cachedFiles, staleFiles: staleFilePaths.length };
   };
 
   let cacheState = await readCacheState();
@@ -1929,41 +2007,7 @@ export async function loadSessionCostSummaryFromCache(params: {
   }
   const refreshRunning =
     usageCostRefreshes.has(cachePath) || (await isUsageCostCacheRefreshRunning(cachePath));
-  const startMs = params.startMs ?? Number.NEGATIVE_INFINITY;
-  const endMs = params.endMs ?? Number.POSITIVE_INFINITY;
-  let summary: SessionCostSummary | null = null;
-  if (!stale) {
-    const singleEntry = cacheState.entries.length === 1 ? cacheState.entries[0] : undefined;
-    summary = singleEntry?.sessionSummary ?? null;
-    if (
-      cacheState.entries.length > 1 ||
-      !summary ||
-      (params.startMs !== undefined &&
-        params.endMs !== undefined &&
-        !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs))
-    ) {
-      summary = buildSessionCostSummaryFromCacheEntries({
-        entries: cacheState.entries,
-        sessionId: params.sessionId,
-        sessionFile,
-        startMs,
-        endMs,
-      });
-    }
-  } else if (cacheState.entries.length > 0) {
-    // Some lineage files are stale (e.g. a just-created reset archive not yet
-    // cached) while others are fresh. Build a partial summary from the cached
-    // entries so a freshly reset session shows its known spend instead of
-    // blanking until the background refresh lands; cacheStatus reports
-    // "partial"/"refreshing" so callers know more is still coming.
-    summary = buildSessionCostSummaryFromCacheEntries({
-      entries: cacheState.entries,
-      sessionId: params.sessionId,
-      sessionFile,
-      startMs,
-      endMs,
-    });
-  }
+  let summary = cacheState.summary;
   if (!summary && params.refreshMode === "sync-when-empty") {
     summary = await loadSessionCostSummary({
       sessionId: params.sessionId,
@@ -2003,55 +2047,88 @@ export async function loadSessionCostSummariesFromCache(params: {
 }): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
   const cachePath = resolveUsageCostCachePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  const statTasks = params.sessions.map(
-    (session) => async () => await fs.promises.stat(session.sessionFile).catch(() => null),
+
+  // Resolve each session's active+archive lineage so hidden aggregate rows count
+  // reset/deleted spend, not just the active file (#46252). Every hidden session
+  // for one agent shares a transcripts dir, so list each dir once and index by
+  // name rather than running a per-session readdir on this hot aggregate path.
+  const dirNamesCache = new Map<string, string[]>();
+  const readSessionsDirNames = async (sessionsDir: string): Promise<string[]> => {
+    const cached = dirNamesCache.get(sessionsDir);
+    if (cached) {
+      return cached;
+    }
+    const names = await fs.promises
+      .readdir(sessionsDir, { withFileTypes: true })
+      .then((entries) => entries.filter((entry) => entry.isFile()).map((entry) => entry.name))
+      .catch(() => [] as string[]);
+    dirNamesCache.set(sessionsDir, names);
+    return names;
+  };
+  const lineages = await Promise.all(
+    params.sessions.map(async (session) => {
+      const sessionId = session.sessionId?.trim();
+      if (!sessionId) {
+        return { sessionFile: session.sessionFile, files: [session.sessionFile] };
+      }
+      const sessionsDir = path.dirname(session.sessionFile);
+      const entryNames = (await readSessionsDirNames(sessionsDir)).filter((name) =>
+        isUsageSessionLineageFileName(name, sessionId),
+      );
+      if (entryNames.length === 0) {
+        return { sessionFile: session.sessionFile, files: [session.sessionFile] };
+      }
+      return selectUsageSessionLineageFromNames({
+        sessionsDir,
+        entryNames,
+        fallbackFile: session.sessionFile,
+      });
+    }),
   );
-  const statsPromise = runTasksWithConcurrency({
-    tasks: statTasks,
-    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
-  }).then(({ results }) => results);
-  const [cache, stats, refreshRunning] = await Promise.all([
+
+  // Stat the deduped union of all lineage files once so freshness checks reuse a
+  // single stat per file across the active+archive set.
+  const uniqueFiles = [...new Set(lineages.flatMap((lineage) => lineage.files))];
+  const statTasks = uniqueFiles.map((filePath) => async () => {
+    const stat = await fs.promises.stat(filePath).catch(() => null);
+    return stat ? { filePath, size: stat.size, mtimeMs: stat.mtimeMs } : null;
+  });
+  const [cache, statResults, refreshRunning] = await Promise.all([
     readUsageCostCache(cachePath),
-    statsPromise,
+    runTasksWithConcurrency({
+      tasks: statTasks,
+      limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+    }).then(({ results }) => results),
     isUsageCostCacheRefreshRunning(cachePath),
   ]);
+  const statsByPath = new Map(
+    statResults
+      .filter((file): file is UsageCostTranscriptFile => Boolean(file))
+      .map((file) => [file.filePath, file]),
+  );
+
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
   const summaries = params.sessions.map((session, index) => {
-    const stat = stats[index];
-    const file = stat
-      ? { filePath: session.sessionFile, size: stat.size, mtimeMs: stat.mtimeMs }
-      : undefined;
-    const entry = cache.files[session.sessionFile];
-    const stale =
-      !file ||
-      !isUsageCostCacheEntryFresh({
-        entry,
-        file,
-        pricingFingerprint,
-        requireSessionSummary: true,
-      });
-    if (stale) {
-      staleFiles.add(session.sessionFile);
-      return null;
-    }
-    cachedFiles += 1;
-    const summary = entry?.sessionSummary ?? null;
-    if (
-      summary &&
-      params.startMs !== undefined &&
-      params.endMs !== undefined &&
-      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
-    ) {
-      return entry
-        ? buildSessionCostSummaryFromCacheEntry({
-            entry,
-            sessionId: session.sessionId,
-            sessionFile: session.sessionFile,
-            startMs: params.startMs,
-            endMs: params.endMs,
-          })
-        : null;
+    const lineage = lineages[index];
+    const sessionFiles = lineage.files.length > 0 ? lineage.files : [session.sessionFile];
+    const {
+      summary,
+      cachedFiles: lineageCachedFiles,
+      staleFilePaths,
+    } = summarizeSessionLineageFromCache({
+      cache,
+      pricingFingerprint,
+      sessionId: session.sessionId,
+      sessionFile: lineage.sessionFile ?? session.sessionFile,
+      sessionFiles,
+      statsByPath,
+      startMs: params.startMs,
+      endMs: params.endMs,
+    });
+    cachedFiles += lineageCachedFiles;
+    for (const stalePath of staleFilePaths) {
+      staleFiles.add(stalePath);
     }
     return summary;
   });

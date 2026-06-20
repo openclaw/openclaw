@@ -1395,6 +1395,58 @@ describe("session cost usage", () => {
     });
   });
 
+  it("combines active and archived lineage for hidden batch sessions (#46252)", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    // A hidden aggregate session is passed by its active file only; its same-stem
+    // reset archive must still be counted. A second plain session controls that
+    // non-lineage rows are unchanged.
+    const lineageActive = path.join(sessionsDir, "sess-batch-lineage.jsonl");
+    const lineageArchive = path.join(
+      sessionsDir,
+      "sess-batch-lineage.jsonl.reset.2026-02-05T12-30-00.000Z",
+    );
+    const plainFile = path.join(sessionsDir, "sess-batch-plain.jsonl");
+    const assistantMessage = (tokens: number, cost: number, timestamp: string) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: cost } },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(
+        lineageArchive,
+        assistantMessage(12, 0.012, "2026-02-05T12:00:00.000Z"),
+        "utf-8",
+      ),
+      fs.writeFile(lineageActive, assistantMessage(18, 0.018, "2026-02-05T13:00:00.000Z"), "utf-8"),
+      fs.writeFile(plainFile, assistantMessage(5, 0.005, "2026-02-05T14:00:00.000Z"), "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [lineageActive, lineageArchive, plainFile] });
+      const result = await loadSessionCostSummariesFromCache({
+        sessions: [
+          { sessionId: "sess-batch-lineage", sessionFile: lineageActive },
+          { sessionId: "sess-batch-plain", sessionFile: plainFile },
+        ],
+        agentId: "main",
+        requestRefresh: false,
+      });
+
+      expect(result.cacheStatus.status).toBe("fresh");
+      // Active (18) + reset archive (12) = 30, not the active-file-only 18.
+      expect(result.summaries[0]?.totalTokens).toBe(30);
+      expect(result.summaries[0]?.totalCost).toBeCloseTo(0.03, 8);
+      expect(result.summaries[1]?.totalTokens).toBe(5);
+    });
+  });
+
   it("returns a partial summary when a same-stem archive is not yet cached", async () => {
     const root = await makeSessionCostRoot("cost-cache-lineage-partial");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
