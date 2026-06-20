@@ -23,7 +23,8 @@ function macosVersion(): string {
 export function resolveOsRuntimeName(): string {
   const platform = os.platform();
   const release = os.release();
-  const cacheKey = `${platform}\0${release}`;
+  const type = os.type();
+  const cacheKey = `${platform}\0${type}\0${release}`;
   const cached = cachedOsRuntimeNameByKey.get(cacheKey);
   if (cached) {
     return cached;
@@ -32,10 +33,7 @@ export function resolveOsRuntimeName(): string {
     if (platform === "darwin") {
       return `macos ${macosVersion()}`;
     }
-    if (platform === "win32") {
-      return `windows ${release}`;
-    }
-    return `${platform} ${release}`;
+    return `${type} ${release}`;
   })();
   cachedOsRuntimeNameByKey.set(cacheKey, runtimeName);
   return runtimeName;
@@ -53,7 +51,15 @@ export function resolveOsSummary(): OsSummary {
   if (cached) {
     return cached;
   }
-  const label = `${resolveOsRuntimeName()} (${arch})`;
+  const label = (() => {
+    if (platform === "darwin") {
+      return `macos ${macosVersion()} (${arch})`;
+    }
+    if (platform === "win32") {
+      return `windows ${release} (${arch})`;
+    }
+    return `${platform} ${release} (${arch})`;
+  })();
   const summary = { platform, arch, release, label };
   cachedOsSummaryByKey.set(cacheKey, summary);
   return summary;

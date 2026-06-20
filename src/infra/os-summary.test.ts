@@ -116,10 +116,19 @@ describe("resolveOsRuntimeName", () => {
     expect(resolveOsRuntimeName()).toBe("macos 26.5.1");
   });
 
-  it("keeps non-darwin runtime names on os metadata", () => {
+  it("keeps non-darwin runtime names on os.type metadata", () => {
     vi.spyOn(os, "platform").mockReturnValue("linux");
+    vi.spyOn(os, "type").mockReturnValue("Linux");
     vi.spyOn(os, "release").mockReturnValue("6.8.0");
 
-    expect(resolveOsRuntimeName()).toBe("linux 6.8.0");
+    expect(resolveOsRuntimeName()).toBe("Linux 6.8.0");
+  });
+
+  it("keeps Windows runtime names on os.type metadata", () => {
+    vi.spyOn(os, "platform").mockReturnValue("win32");
+    vi.spyOn(os, "type").mockReturnValue("Windows_NT");
+    vi.spyOn(os, "release").mockReturnValue("10.0.26100");
+
+    expect(resolveOsRuntimeName()).toBe("Windows_NT 10.0.26100");
   });
 });
