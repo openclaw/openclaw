@@ -159,6 +159,13 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
       const { runBrowserProxyCommand } = await loadBrowserRegistrationRuntimeModule();
       return await runBrowserProxyCommand(paramsJSON);
     },
+    onNodeHostStart: async () => {
+      // Eagerly bring up the extension bridge at node-host start so the side panel
+      // can dial it immediately (no-op unless a profile uses driver:"extension").
+      const { startBrowserControlServiceFromConfig } =
+        await loadBrowserRegistrationRuntimeModule();
+      await startBrowserControlServiceFromConfig();
+    },
   },
 ];
 

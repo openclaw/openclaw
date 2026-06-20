@@ -28,6 +28,7 @@ import { registerNodeGatewayEventEmitter } from "./node-event-emitter.js";
 import {
   ensureNodeHostPluginRegistry,
   listRegisteredNodeHostCapsAndCommands,
+  runRegisteredNodeHostStartupHooks,
 } from "./plugin-node-host.js";
 
 export { buildNodeInvokeResultParams, buildNodeEventParams };
@@ -320,6 +321,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   registerNodeGatewayEventEmitter((event, payload) =>
     client.request("node.event", buildNodeEventParams(event, payload)).then(() => undefined),
   );
+
+  // Run plugin node-host start hooks (e.g. the browser extension bridge) now that
+  // the node->gateway emitter is live, so node-anchored services bind before the
+  // first dial instead of a lazy per-turn start that can never bootstrap (#93680).
+  await runRegisteredNodeHostStartupHooks({ onWarn: (m) => writeStderrLine(m) });
 
   const skillBins = new SkillBinsCache(async () => {
     const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});

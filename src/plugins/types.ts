@@ -2202,6 +2202,13 @@ export type OpenClawPluginNodeHostCommand = {
   cap?: string;
   dangerous?: boolean;
   handle: (paramsJSON?: string | null) => Promise<string>;
+  /**
+   * Optional hook run once when the node-host process starts, after the
+   * node->gateway event emitter is registered. Use it to start long-lived
+   * node-anchored services (e.g. the browser extension bridge) so they are up
+   * before the first command dial. Must be idempotent and self-guarding.
+   */
+  onNodeHostStart?: () => Promise<void>;
 };
 
 export type OpenClawPluginNodeInvokeTransportResult =

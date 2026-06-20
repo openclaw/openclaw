@@ -51,6 +51,26 @@ export function listRegisteredNodeHostCapsAndCommands(): {
 }
 
 /** Invoke a registered node-host plugin command, or return null for unknown commands. */
+/** Run every registered node-host startup hook once. Failures are reported, not fatal. */
+export async function runRegisteredNodeHostStartupHooks(params: {
+  onWarn: (message: string) => void;
+}): Promise<void> {
+  const registry = getActivePluginRegistry();
+  for (const entry of registry?.nodeHostCommands ?? []) {
+    const start = entry.command.onNodeHostStart;
+    if (!start) {
+      continue;
+    }
+    try {
+      await start();
+    } catch (err) {
+      params.onWarn(
+        "node-host startup hook failed (" + entry.pluginId + ":" + entry.command.command + "): " + String(err),
+      );
+    }
+  }
+}
+
 export async function invokeRegisteredNodeHostCommand(
   command: string,
   paramsJSON?: string | null,
