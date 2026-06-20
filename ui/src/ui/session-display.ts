@@ -24,6 +24,10 @@ export type SessionKeyInfo = {
   fallbackName: string;
 };
 
+type SessionDisplayRow = SessionsListResult["sessions"][number] & {
+  title?: string;
+};
+
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -82,18 +86,22 @@ export function resolveSessionDisplayName(
   key: string,
   row?: SessionsListResult["sessions"][number],
 ): string {
-  const label = normalizeOptionalString(row?.label) ?? "";
-  const displayName = normalizeOptionalString(row?.displayName) ?? "";
+  const displayRow = row as SessionDisplayRow | undefined;
+  const title = normalizeOptionalString(displayRow?.title) ?? "";
+  const label = normalizeOptionalString(displayRow?.label) ?? "";
+  const displayName = normalizeOptionalString(displayRow?.displayName) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
   const applyTypedPrefix = (name: string): string => {
     if (!prefix) {
       return name;
     }
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
-    return prefixPattern.test(name) ? name : `${prefix} ${name}`;
+    return name.toLowerCase().startsWith(prefix.toLowerCase()) ? name : `${prefix} ${name}`;
   };
 
+  if (title && title !== key) {
+    return applyTypedPrefix(title);
+  }
   if (label && label !== key) {
     return applyTypedPrefix(label);
   }
