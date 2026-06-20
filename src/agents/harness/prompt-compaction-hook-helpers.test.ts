@@ -7,6 +7,21 @@ afterEach(() => {
 });
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
+  it("retains an empty prompt range without hooks", async () => {
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {},
+    });
+
+    expect(result).toEqual({
+      prompt: "",
+      developerInstructions: "base instructions",
+      promptInputRange: { start: 0, end: 0 },
+    });
+  });
+
   it("uses precomputed agent-start context without a global hook runner", async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: "hello",

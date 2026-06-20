@@ -43,7 +43,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     return {
       prompt: params.prompt,
       developerInstructions: params.developerInstructions,
-      ...(params.prompt ? { promptInputRange: { start: 0, end: params.prompt.length } } : {}),
+      promptInputRange: { start: 0, end: params.prompt.length },
     };
   }
   const hookCtx = buildAgentHookContext(params.ctx);
