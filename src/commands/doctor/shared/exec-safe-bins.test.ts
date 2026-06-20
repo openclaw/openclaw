@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveSafeBinProfiles } from "../../../infra/exec-safe-bin-policy.js";
 import {
+  collectExecSafeBinCoverageInfoNotes,
   collectExecSafeBinCoverageWarnings,
   collectExecSafeBinTrustedDirHintWarnings,
   maybeRepairExecSafeBinProfiles,
@@ -38,6 +40,7 @@ describe("doctor exec safe bin helpers", () => {
         warning:
           "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
       },
+      { scopePath: "tools.exec", bin: "jq", kind: "emptyBuiltinOverride" },
     ]);
   });
 
@@ -59,7 +62,6 @@ describe("doctor exec safe bin helpers", () => {
     expect(warnings).toEqual([
       "- tools.exec.safeBins includes interpreter/runtime 'node' without profile.",
       "- agents.list.runner.tools.exec.safeBins includes 'jq': jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      '- Run "openclaw doctor --fix" to scaffold missing custom safeBinProfiles entries.',
     ]);
   });
 
@@ -67,19 +69,18 @@ describe("doctor exec safe bin helpers", () => {
     const result = maybeRepairExecSafeBinProfiles({
       tools: {
         exec: {
-          safeBins: ["node", "jq"],
+          safeBins: ["node", "myfilter"],
         },
       },
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- tools.exec.safeBinProfiles.jq: added scaffold profile {} (review and tighten flags/positionals).",
+      "- tools.exec.safeBinProfiles.myfilter: added scaffold profile { maxPositional: 0 } (stdin-only default; review and adjust flags/positionals).",
     ]);
     expect(result.warnings).toEqual([
-      "- tools.exec.safeBins includes 'jq': jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
       "- tools.exec.safeBins includes interpreter/runtime 'node' without profile; remove it from safeBins or use explicit allowlist entries.",
     ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({ jq: {} });
+    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({ myfilter: { maxPositional: 0 } });
   });
 
   it("warns on awk-family safeBins instead of scaffolding them", () => {
@@ -98,7 +99,7 @@ describe("doctor exec safe bin helpers", () => {
       "- tools.exec.safeBins includes interpreter/runtime 'awk' without profile; remove it from safeBins or use explicit allowlist entries.",
       "- tools.exec.safeBins includes interpreter/runtime 'sed' without profile; remove it from safeBins or use explicit allowlist entries.",
     ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toStrictEqual({});
+    expect(result.config.tools?.exec?.safeBinProfiles).toBeUndefined();
   });
 
   it("warns on busybox/toybox safeBins instead of scaffolding them", () => {
@@ -115,7 +116,7 @@ describe("doctor exec safe bin helpers", () => {
       "- tools.exec.safeBins includes interpreter/runtime 'busybox' without profile; remove it from safeBins or use explicit allowlist entries.",
       "- tools.exec.safeBins includes interpreter/runtime 'toybox' without profile; remove it from safeBins or use explicit allowlist entries.",
     ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toStrictEqual({});
+    expect(result.config.tools?.exec?.safeBinProfiles).toBeUndefined();
   });
 
   it("flags safeBins that resolve outside trusted directories", () => {
@@ -153,5 +154,126 @@ describe("doctor exec safe bin helpers", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("doctor exec safe bin built-in profile handling", () => {
+  it("reports built-in bins without overrides as info, not missing profiles", () => {
+    const cfg = { tools: { exec: { safeBins: ["grep"] } } } as OpenClawConfig;
+
+    const hits = scanExecSafeBinCoverage(cfg);
+    expect(hits).toEqual([{ scopePath: "tools.exec", bin: "grep", kind: "builtinProfile" }]);
+    expect(collectExecSafeBinCoverageInfoNotes({ hits })).toEqual([
+      "- tools.exec.safeBins entry 'grep' uses built-in profile (no custom override needed).",
+    ]);
+    expect(
+      collectExecSafeBinCoverageWarnings({ hits, doctorFixCommand: "openclaw doctor --fix" }),
+    ).toStrictEqual([]);
+
+    const repair = maybeRepairExecSafeBinProfiles(cfg);
+    expect(repair.changes).toStrictEqual([]);
+    expect(repair.config.tools?.exec?.safeBinProfiles).toBeUndefined();
+  });
+
+  it("scaffolds a stdin-only default profile for custom bins", () => {
+    const repair = maybeRepairExecSafeBinProfiles({
+      tools: { exec: { safeBins: ["myfilter"] } },
+    } as OpenClawConfig);
+
+    expect(repair.changes).toEqual([
+      "- tools.exec.safeBinProfiles.myfilter: added scaffold profile { maxPositional: 0 } (stdin-only default; review and adjust flags/positionals).",
+    ]);
+    expect(repair.config.tools?.exec?.safeBinProfiles).toStrictEqual({
+      myfilter: { maxPositional: 0 },
+    });
+  });
+
+  it("warns and removes an empty override that disables a built-in profile", () => {
+    const cfg = {
+      tools: { exec: { safeBins: ["grep"], safeBinProfiles: { grep: {} } } },
+    } as OpenClawConfig;
+
+    const hits = scanExecSafeBinCoverage(cfg);
+    expect(hits).toEqual([{ scopePath: "tools.exec", bin: "grep", kind: "emptyBuiltinOverride" }]);
+    expect(
+      collectExecSafeBinCoverageWarnings({ hits, doctorFixCommand: "openclaw doctor --fix" }),
+    ).toEqual([
+      "- tools.exec.safeBinProfiles.grep: empty profile overrides built-in defaults (positional limits, allowedValueFlags, and deniedFlags are lost). Remove this entry to restore built-in protection, or provide explicit constraints.",
+    ]);
+
+    const repair = maybeRepairExecSafeBinProfiles(cfg);
+    expect(repair.changes).toEqual([
+      "- tools.exec.safeBinProfiles.grep: removed empty override that disabled the built-in profile (restored built-in positional limits, allowedValueFlags, and deniedFlags).",
+    ]);
+    expect(repair.config.tools?.exec?.safeBinProfiles).toBeUndefined();
+  });
+
+  it("detects and removes a built-in override that disables profiles via global safeBins fallback", () => {
+    // The agent inherits the global safeBins list at runtime, so its empty grep override silently
+    // disables the built-in profile even though the agent declares no safeBins of its own.
+    const cfg = {
+      tools: { exec: { safeBins: ["grep"] } },
+      agents: {
+        list: [{ id: "ops", tools: { exec: { safeBinProfiles: { grep: {} } } } }],
+      },
+    } as OpenClawConfig;
+
+    expect(scanExecSafeBinCoverage(cfg)).toEqual([
+      { scopePath: "tools.exec", bin: "grep", kind: "builtinProfile" },
+      { scopePath: "agents.list.ops.tools.exec", bin: "grep", kind: "emptyBuiltinOverride" },
+    ]);
+
+    const repair = maybeRepairExecSafeBinProfiles(cfg);
+    expect(repair.changes).toEqual([
+      "- agents.list.ops.tools.exec.safeBinProfiles.grep: removed empty override that disabled the built-in profile (restored built-in positional limits, allowedValueFlags, and deniedFlags).",
+    ]);
+    const ops = repair.config.agents?.list?.find((entry) => entry.id === "ops");
+    expect(ops?.tools?.exec?.safeBinProfiles).toBeUndefined();
+  });
+
+  it("flags an empty built-in override even when safeBins is not explicitly configured", () => {
+    // head is in DEFAULT_SAFE_BINS, so it is an active safeBin at runtime even without an explicit
+    // safeBins list; a stale empty override therefore disables its built-in profile.
+    const cfg = { tools: { exec: { safeBinProfiles: { head: {} } } } } as OpenClawConfig;
+
+    expect(scanExecSafeBinCoverage(cfg)).toEqual([
+      { scopePath: "tools.exec", bin: "head", kind: "emptyBuiltinOverride" },
+    ]);
+
+    const repair = maybeRepairExecSafeBinProfiles(cfg);
+    expect(repair.changes).toEqual([
+      "- tools.exec.safeBinProfiles.head: removed empty override that disabled the built-in profile (restored built-in positional limits, allowedValueFlags, and deniedFlags).",
+    ]);
+    expect(repair.config.tools?.exec?.safeBinProfiles).toBeUndefined();
+  });
+
+  it("keeps an explicit non-empty override of a built-in bin", () => {
+    const cfg = {
+      tools: {
+        exec: {
+          safeBins: ["grep"],
+          safeBinProfiles: { grep: { maxPositional: 0, allowedValueFlags: ["-e"] } },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanExecSafeBinCoverage(cfg)).toStrictEqual([]);
+
+    const repair = maybeRepairExecSafeBinProfiles(cfg);
+    expect(repair.changes).toStrictEqual([]);
+    expect(repair.config.tools?.exec?.safeBinProfiles).toStrictEqual({
+      grep: { maxPositional: 0, allowedValueFlags: ["-e"] },
+    });
+  });
+
+  it("leaves built-in profiles intact through resolveSafeBinProfiles after repair", () => {
+    const repair = maybeRepairExecSafeBinProfiles({
+      tools: { exec: { safeBins: ["grep"] } },
+    } as OpenClawConfig);
+
+    const resolved = resolveSafeBinProfiles(repair.config.tools?.exec?.safeBinProfiles);
+    expect(resolved.grep?.maxPositional).toBe(0);
+    expect(resolved.grep?.deniedFlags?.size ?? 0).toBeGreaterThan(0);
+    expect(resolved.grep?.allowedValueFlags?.size ?? 0).toBeGreaterThan(0);
   });
 });

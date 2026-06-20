@@ -230,6 +230,18 @@ function normalizeSafeBinProfileName(raw: string): string | null {
   return name.length > 0 ? name : null;
 }
 
+const BUILTIN_SAFE_BIN_NAMES: ReadonlySet<string> = new Set(Object.keys(SAFE_BIN_PROFILE_FIXTURES));
+
+/**
+ * True when a safeBin name ships a built-in profile. These bins are constrained at runtime even
+ * with no user override, so doctor must not scaffold `{}` for them (an empty override would wipe
+ * the built-in maxPositional/allowedValueFlags/deniedFlags via the key-spread in resolveSafeBinProfiles).
+ */
+export function isBuiltinSafeBinProfile(name: string): boolean {
+  const normalized = normalizeSafeBinProfileName(name);
+  return normalized !== null && BUILTIN_SAFE_BIN_NAMES.has(normalized);
+}
+
 function normalizeFixtureLimit(raw: number | undefined): number | undefined {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return undefined;

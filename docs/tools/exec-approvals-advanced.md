@@ -118,7 +118,7 @@ Configuration location:
 - `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
 - allowlist entries live in the host-local approvals file under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
 - `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
-- `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
+- `openclaw doctor --fix` scaffolds missing custom `safeBinProfiles.<bin>` entries as `{ maxPositional: 0 }` (a stdin-only default; review and adjust flags/positionals afterward). Built-in bins (`cut`, `grep`, `head`, `jq`, `sort`, `tail`, `tr`, `uniq`, `wc`) are not scaffolded because their profile already applies, and an empty `{}` override of a built-in is removed so the shipped profile is restored. Interpreter/runtime bins are not auto-scaffolded.
 
 Custom profile example:
 
