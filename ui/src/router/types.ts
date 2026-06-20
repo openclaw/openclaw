@@ -26,6 +26,11 @@ export type RouteHookOptions = {
 
 export type RouteLoaderOptions = RouteHookOptions;
 
+export type RouterNavigationOptions = {
+  history?: "none" | "push" | "replace";
+  revalidate?: boolean;
+};
+
 export type PageDefinition<
   TRouteId extends string = string,
   TLoadContext = unknown,
@@ -59,6 +64,37 @@ export type RouteState<TRouteId extends string = string, TData = unknown> = {
   status: "idle" | "loading" | "resolved" | "error";
   revalidating: boolean;
   error?: unknown;
+};
+
+export type RouterOptions<TRouteId extends string, TLoadContext, TModule, TData> = {
+  routes: readonly PageDefinition<TRouteId, TLoadContext, TModule, TData>[];
+  defaultRouteId?: TRouteId;
+  staleTime?: number;
+  preloadStaleTime?: number;
+  gcTime?: number;
+};
+
+export type Router<TRouteId extends string, TLoadContext, TModule, TData> = {
+  routes: readonly PageDefinition<TRouteId, TLoadContext, TModule, TData>[];
+  getRoute: (routeId: TRouteId) => PageDefinition<TRouteId, TLoadContext, TModule, TData> | null;
+  getLoadedModule: (routeId: TRouteId) => TModule | undefined;
+  preloadRoute: (routeId: TRouteId, context: TLoadContext) => Promise<void>;
+  preloadLocation: (location: RouteLocation, context: TLoadContext) => Promise<void>;
+  invalidate: (routeId?: TRouteId) => void;
+  getState: () => RouteState<TRouteId, TData>;
+  subscribe: (listener: (next: RouteState<TRouteId, TData>) => void) => () => boolean;
+  pathForRoute: (routeId: TRouteId, basePath?: string) => string;
+  routeIdFromPath: (pathname: string, basePath?: string) => TRouteId | null;
+  start: (history: RouterHistory, basePath: string, context: TLoadContext) => Promise<void>;
+  navigate: (
+    routeId: TRouteId,
+    context: TLoadContext,
+    options?: RouterNavigationOptions,
+    requestedLocation?: RouteLocation,
+  ) => Promise<void>;
+  navigateLocation: (location: RouteLocation, context: TLoadContext) => Promise<void>;
+  revalidate: (context: TLoadContext, routeId?: TRouteId) => Promise<void>;
+  stop: () => void;
 };
 
 export function definePage<

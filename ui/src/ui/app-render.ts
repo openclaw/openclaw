@@ -316,20 +316,24 @@ export function renderApp(state: AppViewState) {
           <div class="card-sub">${t("common.loading")}</div>
         </section>
       `,
+      error: (error, nextState, render) => {
+        const routeError = error instanceof Error ? error.message : String(error);
+        const routeErrorId = nextState.pendingRouteId ?? nextState.resolvedRouteId ?? state.routeId;
+        return html`
+          ${render?.() ?? nothing}
+          <div class="callout danger" role="alert">
+            <strong>${t("lazyView.errorTitle")}</strong>
+            <div>${routeError}</div>
+            <button class="btn btn--sm" @click=${() => state.setRoute(routeErrorId)}>
+              ${t("lazyView.retry")}
+            </button>
+          </div>
+        `;
+      },
       onRender: (routeId, _routeState, render) =>
         measureControlUiRender(state, routeId, { routeId }, render),
     },
   );
-  const routeError =
-    routeState.status === "error"
-      ? routeState.error instanceof Error
-        ? routeState.error.message
-        : String(routeState.error)
-      : null;
-  const routeErrorId =
-    routeState.status === "error"
-      ? (routeState.pendingRouteId ?? routeState.resolvedRouteId ?? state.routeId)
-      : null;
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !state.onboarding;
@@ -556,18 +560,6 @@ export function renderApp(state: AppViewState) {
           : ""}"
         ?aria-busy=${routeState.status === "loading"}
       >
-        ${routeError
-          ? html`<div class="callout danger" role="alert">
-              <strong>${t("lazyView.errorTitle")}</strong>
-              <div>${routeError}</div>
-              <button
-                class="btn btn--sm"
-                @click=${() => routeErrorId && state.setRoute(routeErrorId)}
-              >
-                ${t("lazyView.retry")}
-              </button>
-            </div>`
-          : nothing}
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
               ${state.updateStatusBanner.text}
