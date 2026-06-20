@@ -7,12 +7,19 @@ on:
       - "**/*.md"
       - "docs/**"
       - "!CHANGELOG.md"
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - "**/*.md"
+      - "**/*.mdx"
+      - "docs/**"
+      - "!CHANGELOG.md"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ format('{0}-{1}', github.workflow, github.ref) }}
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
   cancel-in-progress: true
 
 env:
