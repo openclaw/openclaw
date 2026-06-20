@@ -166,6 +166,7 @@ import {
 } from "./network-errors.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
+import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -676,6 +677,7 @@ export const registerTelegramHandlers = ({
     agentId: string;
     sessionEntry: ReturnType<typeof getSessionEntry>;
     sessionKey: string;
+    storePath: string;
     model?: string;
   } => {
     const runtimeCfg = params.runtimeCfg ?? telegramDeps.getRuntimeConfig();
@@ -736,6 +738,7 @@ export const registerTelegramHandlers = ({
         agentId: route.agentId,
         sessionEntry: entry,
         sessionKey,
+        storePath,
         model: storedOverride.provider
           ? `${storedOverride.provider}/${storedOverride.model}`
           : storedOverride.model,
@@ -748,6 +751,7 @@ export const registerTelegramHandlers = ({
         agentId: route.agentId,
         sessionEntry: entry,
         sessionKey,
+        storePath,
         model: `${provider}/${model}`,
       };
     }
@@ -756,6 +760,7 @@ export const registerTelegramHandlers = ({
       agentId: route.agentId,
       sessionEntry: entry,
       sessionKey,
+      storePath,
       model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
     };
   };
@@ -1223,6 +1228,31 @@ export const registerTelegramHandlers = ({
       messageId,
     });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
+    const sessionBeforeTimestampMs =
+      options?.receivedAtMs ?? (msg.date ? msg.date * 1000 : undefined);
+    const sessionPromptMessages = isGroup
+      ? []
+      : await buildTelegramSessionTranscriptPromptMessages({
+          ...resolveTelegramSessionState({
+            chatId: msg.chat.id,
+            isGroup: false,
+            isForum: false,
+            messageThreadId: msg.message_thread_id,
+            senderId: msg.from?.id,
+          }),
+          limit: 10,
+          ...(sessionBeforeTimestampMs !== undefined
+            ? { beforeTimestampMs: sessionBeforeTimestampMs }
+            : {}),
+          ...(options?.promptContextMinTimestampMs !== undefined
+            ? { minTimestampMs: options.promptContextMinTimestampMs }
+            : {}),
+        }).catch((error: unknown) => {
+          logVerbose(
+            `telegram: failed to read session transcript prompt context: ${String(error)}`,
+          );
+          return [];
+        });
     const conversationContext = await buildTelegramConversationContext({
       cache: messageCache,
       messageId,
@@ -1230,7 +1260,7 @@ export const registerTelegramHandlers = ({
       chatId: msg.chat.id,
       ...(Number.isFinite(threadId) ? { threadId } : {}),
       replyChainNodes,
-      recentLimit: 10,
+      recentLimit: isGroup || sessionPromptMessages.length === 0 ? 10 : 0,
       replyTargetWindowSize: 2,
       ...(options?.promptContextMinTimestampMs !== undefined
         ? { minTimestampMs: options.promptContextMinTimestampMs }
@@ -1239,22 +1269,26 @@ export const registerTelegramHandlers = ({
         ? { includeNode: buildMentionOnlyGroupHistoryPredicate({ ctx, msg, threadId }) }
         : {}),
     });
-    return conversationContext.length > 0
+    const cachePromptMessages = conversationContext.map((entry) =>
+      toPromptContextMessage(
+        entry.node,
+        { replyTarget: entry.isReplyTarget },
+        entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
+      ),
+    );
+    const promptMessages = [...sessionPromptMessages, ...cachePromptMessages].toSorted(
+      (left, right) => (left.timestamp_ms ?? 0) - (right.timestamp_ms ?? 0),
+    );
+    return promptMessages.length > 0
       ? [
           {
             label: "Conversation context",
-            source: "telegram",
+            source: isGroup || sessionPromptMessages.length === 0 ? "telegram" : "session",
             type: "chat_window",
             payload: {
               order: "chronological",
               relation: "selected_for_current_message",
-              messages: conversationContext.map((entry) =>
-                toPromptContextMessage(
-                  entry.node,
-                  { replyTarget: entry.isReplyTarget },
-                  entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
-                ),
-              ),
+              messages: promptMessages,
             },
           },
         ]

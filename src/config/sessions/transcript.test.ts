@@ -22,6 +22,8 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
+  readRecentUserAssistantTextForSession,
+  readRecentUserAssistantTextFromSessionTranscript,
   readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 
@@ -554,6 +556,82 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
       expect(records.filter((record) => record.type === "message")).toHaveLength(2);
     }
+  });
+
+  it("reads bounded recent user and assistant text before the current turn", async () => {
+    writeTranscriptStore();
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "user",
+        content: "Analyze this chart",
+        timestamp: 1_000,
+        provenance: { kind: "external_user", sourceChannel: "gateway" },
+      },
+    });
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        ...createExactAssistantMessage({ text: "The chart is range-bound; want an alert?" }),
+        timestamp: 2_000,
+      },
+    });
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "user",
+        content: "no need, I closed it",
+        timestamp: 3_000,
+        provenance: { kind: "external_user", sourceChannel: "telegram" },
+      },
+    });
+
+    const recent = await readRecentUserAssistantTextFromSessionTranscript(sessionFile, {
+      beforeTimestampMs: 3_000,
+      limit: 10,
+    });
+
+    expect(recent).toEqual([
+      {
+        id: expect.any(String),
+        role: "user",
+        text: "Analyze this chart",
+        timestamp: 1_000,
+        sourceChannel: "gateway",
+      },
+      {
+        id: expect.any(String),
+        role: "assistant",
+        text: "The chart is range-bound; want an alert?",
+        timestamp: 2_000,
+      },
+    ]);
+  });
+
+  it("resolves recent transcript context from session identity", async () => {
+    writeTranscriptStore();
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "user", content: "from shared session", timestamp: 4_000 },
+    });
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        sessionKey,
+        storePath: fixture.storePath(),
+        beforeTimestampMs: 5_000,
+      }),
+    ).resolves.toEqual([
+      {
+        id: expect.any(String),
+        role: "user",
+        text: "from shared session",
+        timestamp: 4_000,
+      },
+    ]);
   });
 
   it("skips transcript-only OpenClaw assistant entries when reading latest assistant text", async () => {
