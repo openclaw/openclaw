@@ -2428,35 +2428,74 @@ describe("gateway server chat", () => {
     );
   });
 
-  test("chat.send forwards the requested session resume to reply initialization", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const spy = getReplyFromConfig;
-      await connectOk(ws);
+  test("chat.send rejects Control UI reconnect resume marker from public WebChat clients", async () => {
+    await withGatewayChatHarness(
+      async ({ ws }) => {
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
 
-      await createSessionDir();
-      await writeMainSessionStore();
-      let capturedOpts: GetReplyOptions | undefined;
-      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
-        capturedOpts = opts;
-        return undefined;
-      });
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          sessionId: "sess-main",
+          __controlUiReconnectResume: true,
+          message: "hello after reconnect",
+          idempotencyKey: "idem-public-webchat-resume",
+        });
+        expect(sendRes.ok).toBe(false);
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
+  });
 
-      const sendRes = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        sessionId: "sess-main",
-        resumeSession: true,
-        message: "hello after reconnect",
-        idempotencyKey: "idem-requested-session-id",
-      });
-      expect(sendRes.ok).toBe(true);
+  test("chat.send forwards Control UI reconnect resume internally", async () => {
+    await withGatewayChatHarness(
+      async ({ ws, createSessionDir }) => {
+        const spy = getReplyFromConfig;
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
 
-      await vi.waitFor(() => {
-        expect(spy.mock.calls.length).toBeGreaterThan(0);
-      }, FAST_WAIT_OPTS);
+        await createSessionDir();
+        await writeMainSessionStore();
+        let capturedOpts: GetReplyOptions | undefined;
+        mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+          capturedOpts = opts;
+          return undefined;
+        });
 
-      expect(capturedOpts?.requestedSessionId).toBe("sess-main");
-      expect(capturedOpts?.resumeRequestedSession).toBe(true);
-    });
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          sessionId: "sess-main",
+          __controlUiReconnectResume: true,
+          message: "hello after reconnect",
+          idempotencyKey: "idem-requested-session-id",
+        });
+        expect(sendRes.ok).toBe(true);
+
+        await vi.waitFor(() => {
+          expect(spy.mock.calls.length).toBeGreaterThan(0);
+        }, FAST_WAIT_OPTS);
+
+        expect(capturedOpts?.requestedSessionId).toBe("sess-main");
+        expect(capturedOpts?.resumeRequestedSession).toBe(true);
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
   });
 
   test("chat.history hard-caps single oversized nested payloads", async () => {

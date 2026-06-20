@@ -1892,6 +1892,7 @@ describe("sendChatMessage", () => {
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
     expect(sendParams.resumeSession).toBeUndefined();
+    expect(sendParams.__controlUiReconnectResume).toBeUndefined();
     expect(sendParams.message).toBe("continue");
   });
 
@@ -1914,7 +1915,7 @@ describe("sendChatMessage", () => {
       expect.objectContaining({
         sessionKey: "main",
         sessionId: "session-before-reconnect",
-        resumeSession: true,
+        __controlUiReconnectResume: true,
         message: "continue",
         idempotencyKey: "run-1",
       }),

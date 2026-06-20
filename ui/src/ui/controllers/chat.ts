@@ -959,7 +959,7 @@ export async function requestChatSend(
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
-  const resumeSession = Boolean(
+  const controlUiReconnectResume = Boolean(
     routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
   );
   const payload = await state.client!.request("chat.send", {
@@ -968,13 +968,13 @@ export async function requestChatSend(
       ? { agentId: routing.selectedAgentId }
       : {}),
     ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
-    ...(resumeSession ? { resumeSession: true } : {}),
+    ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
     attachments: buildApiAttachments(params.attachments),
   });
-  if (resumeSession) {
+  if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;
   }
   return normalizeChatSendAck(payload, params.runId);
