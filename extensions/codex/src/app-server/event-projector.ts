@@ -521,13 +521,15 @@ export class CodexAppServerEventProjector {
     this.assistantTextByItem.set(itemId, text);
     if (this.isCommentaryAssistantItem(itemId)) {
       this.emitCommentaryProgress({ itemId, text });
-    } else if (this.shouldStreamAssistantPartial(itemId)) {
+    } else {
       await this.params.onPartialReply?.({ text, delta });
     }
-    // Codex app-server can emit multiple agentMessage items per turn, including
-    // intermediate coordination/progress prose. Keep those deltas internal until
-    // their phase identifies terminal answer text or turn completion chooses the
-    // last assistant item as the user-visible reply.
+    // Stream non-commentary assistant deltas as partial replies so live surfaces
+    // (TUI, WebChat) render incremental answer text. Older Codex app-servers tag
+    // the terminal item with phase "final_answer", but newer builds may omit that
+    // phase mid-stream, so gating on it silently disabled streaming entirely.
+    // Commentary items stay progress-only, and turn completion still selects the
+    // final user-visible reply, so any superseded intermediate item is replaced.
   }
 
   private async handleReasoningDelta(
@@ -1060,10 +1062,6 @@ export class CodexAppServerEventProjector {
 
   private isCommentaryAssistantItem(itemId: string): boolean {
     return this.assistantPhaseByItem.get(itemId) === "commentary";
-  }
-
-  private shouldStreamAssistantPartial(itemId: string): boolean {
-    return this.assistantPhaseByItem.get(itemId) === "final_answer";
   }
 
   private emitCommentaryProgress(params: { itemId: string; text: string }): void {

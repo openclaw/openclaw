@@ -305,7 +305,10 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "hel", delta: "hel" },
+      { text: "hello", delta: "lo" },
+    ]);
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
@@ -337,6 +340,21 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
 
     expect(onPartialReply).toHaveBeenCalledTimes(2);
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "hel", delta: "hel" },
+      { text: "hello", delta: "lo" },
+    ]);
+  });
+
+  it("streams assistant deltas when the app-server omits the item phase", async () => {
+    // Newer Codex app-servers (>= 0.139) stream agentMessage deltas without a
+    // "final_answer" phase. These must still surface as live partial replies
+    // instead of only appearing as one chunk at turn completion.
+    const { onPartialReply, projector } = await createProjectorWithAssistantHooks();
+
+    await projector.handleNotification(agentMessageDelta("hel", "msg-final"));
+    await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
+
     expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
       { text: "hel", delta: "hel" },
       { text: "hello", delta: "lo" },
@@ -1041,7 +1059,12 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).not.toHaveBeenCalled();
+    // Intermediate (non-commentary) deltas stream live and are then superseded by
+    // the final item; turn completion still keeps them out of the persisted reply.
+    expect(onPartialReply.mock.calls.map((call) => call[0]?.text)).toEqual([
+      "checking thread context; then post a tight progress reply here.",
+      "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+    ]);
     expect(result.assistantTexts).toEqual([
       "release fixes first. please drop affected PRs, failing checks, and blockers here.",
     ]);
