@@ -124,7 +124,7 @@ export type Router<TRouteId extends string, TLoadContext, TModule, TData> = {
   getMatch: (matchId: string) => RouteMatch<TRouteId, TModule, TData> | undefined;
   preloadRoute: (routeId: TRouteId, context: TLoadContext) => Promise<void>;
   preloadLocation: (location: RouteLocation, context: TLoadContext) => Promise<void>;
-  invalidate: (routeId?: TRouteId) => void;
+  invalidate: (routeId?: TRouteId) => Promise<void>;
   getState: () => RouterState<TRouteId, TModule, TData>;
   subscribe: (listener: (next: RouterState<TRouteId, TModule, TData>) => void) => () => boolean;
   subscribeSelector: <TSelected>(

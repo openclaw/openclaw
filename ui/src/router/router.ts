@@ -75,6 +75,8 @@ export function createRouter<
   let stopHistory: (() => void) | undefined;
   let currentRun: NavigationRun | null = null;
   let activeNavigation: Promise<void> | null = null;
+  let lastContext: TLoadContext | undefined;
+  let hasLastContext = false;
 
   const runHook = async (
     match: RouteMatch<TRouteId, TModule, TData> | undefined,
@@ -104,6 +106,8 @@ export function createRouter<
       throw new Error(`Unknown route id "${routeId}".`);
     }
 
+    lastContext = context;
+    hasLastContext = true;
     const location = normalizeLocation(requestedLocation);
     const previous = matches.getActiveMatch();
     const deps = route.loaderDeps?.(context, location) ?? "";
@@ -313,6 +317,8 @@ export function createRouter<
     if (!route) {
       return Promise.reject(new Error(`Unknown route id "${routeId}".`));
     }
+    lastContext = context;
+    hasLastContext = true;
     const controller = new AbortController();
     const deps = route.loaderDeps?.(context, location) ?? "";
     const matchId = matchIdForLocation(routeId, location, deps);
@@ -365,6 +371,16 @@ export function createRouter<
     preloadLocation,
     invalidate(routeId) {
       matches.invalidate(routeId);
+      const active = matches.getActiveMatch();
+      if (!active || (routeId !== undefined && active.routeId !== routeId) || !hasLastContext) {
+        return Promise.resolve();
+      }
+      return navigate(
+        active.routeId,
+        lastContext as TLoadContext,
+        { history: "none", revalidate: true },
+        active.location,
+      );
     },
     getState: matches.getState,
     subscribe: matches.subscribe,
