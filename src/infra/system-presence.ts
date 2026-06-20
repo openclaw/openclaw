@@ -69,7 +69,9 @@ function initSelfPresence() {
       encoding: "utf-8",
     });
     const out = normalizeOptionalString(res.stdout) ?? "";
-    return out.length > 0 ? out : os.release();
+    // Return the macOS product version from sw_vers, not the Darwin kernel
+    // release (os.release()). See os-summary.ts for the same fix.
+    return out.length > 0 ? out : "unknown";
   };
   const platform = (() => {
     const p = os.platform();

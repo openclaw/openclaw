@@ -42,16 +42,16 @@ describe("resolveOsSummary", () => {
       },
     },
     {
-      name: "falls back to os.release when sw_vers output is blank",
+      name: "returns unknown when sw_vers output is blank (no Darwin kernel fallback)",
       platform: "darwin" as const,
-      release: "24.1.0",
+      release: "25.5.0",
       arch: "x64",
       swVersStdout: "   ",
       expected: {
         platform: "darwin",
         arch: "x64",
-        release: "24.1.0",
-        label: "macos 24.1.0 (x64)",
+        release: "25.5.0",
+        label: "macos unknown (x64)",
       },
     },
     {

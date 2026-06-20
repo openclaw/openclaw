@@ -15,7 +15,10 @@ const cachedOsSummaryByKey = new Map<string, OsSummary>();
 function macosVersion(): string {
   const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
   const out = normalizeOptionalString(res.stdout) ?? "";
-  return out || os.release();
+  // Return the macOS product version from sw_vers, not the Darwin kernel release
+  // (os.release()). macOS 26 (Tahoe) broke the historical darwin→macOS mapping
+  // so os.release() can no longer produce the correct marketing version.
+  return out || "unknown";
 }
 
 /** Resolves a compact OS label for diagnostics, logs, and environment summaries. */
