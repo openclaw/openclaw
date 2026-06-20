@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import {
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "@openclaw/media-core/read-response-with-limit";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -20,6 +23,12 @@ const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
+// ClawHub is an external marketplace (untrusted source): bound JSON and error
+// bodies so a hostile or malfunctioning host cannot exhaust memory by streaming
+// an unbounded response. Mirrors the error-stream hardening landed in #95108.
+const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
@@ -675,8 +684,12 @@ async function clawhubRequest(
 
 async function readErrorBody(response: Response): Promise<string> {
   try {
-    const text = (await response.text()).trim();
-    return text || response.statusText || `HTTP ${response.status}`;
+    const snippet = await readResponseTextSnippet(response, {
+      maxBytes: CLAWHUB_ERROR_BODY_MAX_BYTES,
+      maxChars: CLAWHUB_ERROR_BODY_MAX_CHARS,
+      chunkTimeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+    });
+    return snippet || response.statusText || `HTTP ${response.status}`;
   } catch {
     return response.statusText || `HTTP ${response.status}`;
   }
@@ -720,8 +733,21 @@ async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);
   }
+  return parseClawHubJsonBody<T>(response, url);
+}
+
+async function parseClawHubJsonBody<T>(response: Response, url: URL): Promise<T> {
+  const buffer = await readResponseWithLimit(response, CLAWHUB_JSON_MAX_BYTES, {
+    chunkTimeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `ClawHub ${url.pathname} response exceeded ${maxBytes} bytes (${size} bytes received)`,
+      ),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`ClawHub ${url.pathname} response stalled after ${chunkTimeoutMs}ms`),
+  });
   try {
-    return (await response.json()) as T;
+    return JSON.parse(new TextDecoder().decode(buffer)) as T;
   } catch (cause) {
     throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
   }

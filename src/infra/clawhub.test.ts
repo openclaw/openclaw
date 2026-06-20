@@ -801,6 +801,59 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
   });
 
+  it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+    const overshootChunks = 34; // 34 * 512 KiB = 17 MiB > 16 MiB cap
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted >= overshootChunks) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancel();
+      },
+    });
+
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow(/ClawHub \/api\/v1\/search response exceeded 16777216 bytes/);
+    // The reader is cancelled at the cap so the oversized stream releases its
+    // socket/buffer instead of being drained into memory.
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds oversized ClawHub error bodies to a short collapsed snippet", async () => {
+    const oversized = "boom ".repeat(64 * 1024); // ~320 KiB error body
+    let error: unknown;
+    try {
+      await searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () => new Response(oversized, { status: 500 }),
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message.startsWith("ClawHub /api/v1/search failed (500): ")).toBe(true);
+    expect(message.endsWith("…")).toBe(true);
+    // prefix + 400-char snippet + "…" stays far below the raw ~320 KiB body.
+    expect(message.length).toBeLessThanOrEqual(500);
+  });
+
   it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
     await expect(
