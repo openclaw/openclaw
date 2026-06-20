@@ -293,13 +293,14 @@ export function renderApp(state: AppViewState) {
 
   const routeState = appRouter.getState();
   const activeMatch = routeState.matches[0];
-  const renderedRouteId = activeMatch?.routeId ?? state.routeId;
+  const renderedRouteId = state.routeId ?? activeMatch?.routeId;
   const activeRouteModule = activeMatch?.module;
   const isChat =
-    typeof activeRouteModule === "object" &&
-    activeRouteModule !== null &&
-    "shell" in activeRouteModule &&
-    activeRouteModule.shell === "chat";
+    renderedRouteId === "chat" ||
+    (typeof activeRouteModule === "object" &&
+      activeRouteModule !== null &&
+      "shell" in activeRouteModule &&
+      activeRouteModule.shell === "chat");
   const routeOwnsHeader =
     typeof activeRouteModule === "object" &&
     activeRouteModule !== null &&
@@ -410,7 +411,7 @@ export function renderApp(state: AppViewState) {
           </button>
           <div class="topnav-shell__content">
             <dashboard-header
-              .routeId=${state.routeId}
+              .routeId=${renderedRouteId}
               .basePath=${state.basePath}
               .agentLabel=${dashboardHeaderContext.agentLabel}
               @navigate=${(event: CustomEvent<RouteId>) => {
@@ -609,8 +610,8 @@ export function renderApp(state: AppViewState) {
               aria-hidden=${chatHeaderHidden ? "true" : nothing}
             >
               <div>
-                <div class="page-title">${titleForRoute(state.routeId)}</div>
-                <div class="page-sub">${subtitleForRoute(state.routeId)}</div>
+                <div class="page-title">${titleForRoute(renderedRouteId)}</div>
+                <div class="page-sub">${subtitleForRoute(renderedRouteId)}</div>
               </div>
               <div class="page-meta">
                 ${headerError ? html`<div class="pill danger">${headerError}</div>` : nothing}

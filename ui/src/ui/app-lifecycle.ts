@@ -94,6 +94,7 @@ type LifecycleHost = {
   topbarObserver: ResizeObserver | null;
   requestUpdate?: () => void;
   routeSubscription?: () => void;
+  routePopStateHandler?: () => void;
 };
 
 function createBrowserHistory() {
@@ -107,22 +108,14 @@ function createBrowserHistory() {
       window.history.pushState({}, "", `${pathname}${search}${hash}`),
     replace: ({ pathname, search, hash }: { pathname: string; search: string; hash: string }) =>
       window.history.replaceState({}, "", `${pathname}${search}${hash}`),
-    listen: (listener: (location: { pathname: string; search: string; hash: string }) => void) => {
-      const onPopState = () =>
-        listener({
-          pathname: window.location.pathname,
-          search: window.location.search,
-          hash: window.location.hash,
-        });
-      window.addEventListener("popstate", onPopState);
-      return () => window.removeEventListener("popstate", onPopState);
-    },
+    listen: () => () => {},
   };
 }
 
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
+  host.routeId = appRouter.routeIdFromPath(window.location.pathname, host.basePath) ?? "chat";
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
@@ -144,26 +137,58 @@ export function handleConnected(host: LifecycleHost) {
   if (host.connectGeneration === connectGeneration) {
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   }
-  host.routeSubscription?.();
-  host.routeSubscription = appRouter.subscribe((next) => {
+  if (host.routePopStateHandler) {
+    window.removeEventListener("popstate", host.routePopStateHandler);
+  }
+  host.routePopStateHandler = () => {
+    const location = {
+      pathname: window.location.pathname,
+      search: window.location.search,
+      hash: window.location.hash,
+    };
     const previousRouteId = host.routeId;
-    const pendingRouteId = next.pendingMatches[0]?.routeId;
-    const resolvedRouteId = next.matches[0]?.routeId;
-    if (next.status === "loading" && pendingRouteId && pendingRouteId !== previousRouteId) {
-      clearPendingSessionsChangedReload(host);
-      beginControlUiRouteTiming(host, previousRouteId, pendingRouteId);
-    } else if (next.status === "error") {
-      cancelControlUiRouteTiming(host);
-    }
-    // Keep the committed page active while the next route loads. This matches
-    // the router contract: pending navigation must not switch app rendering
-    // before the target route has completed loading and committed.
-    if (next.status === "success" && resolvedRouteId) {
-      host.routeId = resolvedRouteId;
-      completeControlUiRouteTiming(host, resolvedRouteId);
-    }
-    host.requestUpdate?.();
-  });
+    const routeId = appRouter.routeIdFromPath(location.pathname, host.basePath);
+    void appRouter
+      .navigateLocation(location, routeLoadContext(host as unknown as SettingsHost))
+      .then(
+        () => {
+          if (routeId) {
+            host.routeId = routeId;
+          }
+          host.requestUpdate?.();
+        },
+        () => {
+          host.routeId = previousRouteId;
+          host.requestUpdate?.();
+        },
+      );
+  };
+  window.addEventListener("popstate", host.routePopStateHandler);
+  host.routeSubscription?.();
+  host.routeSubscription = appRouter.subscribeSelector(
+    (state) => ({
+      status: state.status,
+      pendingRouteId: state.pendingMatches[0]?.routeId,
+      activeRouteId: state.matches[0]?.routeId,
+    }),
+    (next) => {
+      const previousRouteId = next.activeRouteId ?? host.routeId;
+      const pendingRouteId = next.pendingRouteId;
+      if (next.status === "loading" && pendingRouteId && pendingRouteId !== previousRouteId) {
+        clearPendingSessionsChangedReload(host);
+        beginControlUiRouteTiming(host, previousRouteId, pendingRouteId);
+      } else if (next.status === "error") {
+        cancelControlUiRouteTiming(host);
+      }
+      if (next.status === "success" && next.activeRouteId) {
+        completeControlUiRouteTiming(host, next.activeRouteId);
+      }
+    },
+    (previous, next) =>
+      previous.status === next.status &&
+      previous.pendingRouteId === next.pendingRouteId &&
+      previous.activeRouteId === next.activeRouteId,
+  );
   void Promise.resolve(
     appRouter.start(
       createBrowserHistory(),
@@ -246,6 +271,10 @@ export function handleDisconnected(host: LifecycleHost) {
   cancelControlUiRouteTiming(host);
   host.routeSubscription?.();
   host.routeSubscription = undefined;
+  if (host.routePopStateHandler) {
+    window.removeEventListener("popstate", host.routePopStateHandler);
+    host.routePopStateHandler = undefined;
+  }
   appRouter.stop();
   flushPendingChatComposerPersistence(host);
   window.removeEventListener("popstate", host.sessionPopStateHandler);
