@@ -79,74 +79,10 @@ export function normalizePluginId(id: string): string {
   return normalizePluginIdWithLookup(id, getBundledPluginAliasLookup);
 }
 
-const LOSSLESS_CONTEXT_ENGINE_ID = "lossless-claw";
-
-/**
- * Auto-populate the lossless-claw plugin's {@code llm} policy from
- * {@code config.summaryModel} when the plugin entry is configured but no
- * explicit {@code llm.allowModelOverride} block is present.
- *
- * This mirrors the legacy migration path
- * ({@code ensureLosslessLlmPolicy} in {@code codex-route-warnings.ts})
- * but runs during every normal config load (not just during
- * {@code doctor --fix}). Without this, a correctly configured
- * {@code summaryModel} is silently ignored at gateway startup until
- * an incidental config hot-reload triggers the legacy migration.
- */
-function normalizeLosslessLlmPolicy(
-  normalized: NormalizedPluginsConfig,
-  rawConfig?: OpenClawConfig["plugins"],
-): void {
-  const entry = normalized.entries[LOSSLESS_CONTEXT_ENGINE_ID];
-  if (!entry) {
-    return;
-  }
-
-  // Only auto-populate when there is no explicit llm policy block.
-  // If the operator already configured llm.allowModelOverride the
-  // normal policy resolution path handles it correctly.
-  if (entry.llm?.allowModelOverride === true) {
-    return;
-  }
-
-  // Read summaryModel from the raw entries object so we get the
-  // un-normalized string value without any intermediate transforms.
-  const rawEntries = rawConfig?.entries;
-  if (!rawEntries || typeof rawEntries !== "object") {
-    return;
-  }
-  const rawEntry = (rawEntries as Record<string, unknown>)[LOSSLESS_CONTEXT_ENGINE_ID];
-  if (!rawEntry || typeof rawEntry !== "object") {
-    return;
-  }
-  const rawPluginConfig = (rawEntry as Record<string, unknown>).config;
-  if (!rawPluginConfig || typeof rawPluginConfig !== "object") {
-    return;
-  }
-  const summaryModel =
-    typeof (rawPluginConfig as Record<string, unknown>).summaryModel === "string"
-      ? ((rawPluginConfig as Record<string, unknown>).summaryModel as string).trim()
-      : "";
-  if (!summaryModel) {
-    return;
-  }
-
-  // Build the llm policy from summaryModel — same logic as
-  // ensureLosslessLlmPolicy in codex-route-warnings.ts.
-  entry.llm = {
-    ...entry.llm,
-    allowModelOverride: true,
-    hasAllowedModelsConfig: true,
-    allowedModels: [...(entry.llm?.allowedModels ?? []), summaryModel],
-  };
-}
-
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  const normalized = normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
-  normalizeLosslessLlmPolicy(normalized, config);
-  return normalized;
+  return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
 };
 
 export function createPluginActivationSource(params: {
