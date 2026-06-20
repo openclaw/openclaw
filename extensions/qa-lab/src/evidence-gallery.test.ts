@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildQaEvidenceGalleryModel,
+  resolveQaEvidenceArtifactFileByIndex,
   resolveQaEvidenceArtifactFile,
   resolveQaEvidenceFile,
 } from "./evidence-gallery.js";
@@ -126,7 +127,7 @@ describe("evidence gallery", () => {
         expect.objectContaining({
           exists: true,
           kind: "runner-result",
-          href: "/api/evidence/artifact?evidencePath=.artifacts%2Fqa-e2e%2Fvitest%2Fqa-evidence.json&artifactPath=runner%2Fresult.json",
+          href: "/api/evidence/artifact?evidencePath=.artifacts%2Fqa-e2e%2Fvitest%2Fqa-evidence.json&entryIndex=0&artifactIndex=0",
           mediaKind: "json",
           preview: '{\n  "ok": true\n}',
         }),
@@ -186,16 +187,40 @@ describe("evidence gallery", () => {
       `absolute artifact ${repoRoot}\nfile://${repoRoot}/trace.log\n`,
       "utf8",
     );
+    const relativeLeakArtifactPath = `nested${repoRoot}/relative.log`;
+    const relativeLeakFile = path.resolve(outputDir, relativeLeakArtifactPath);
+    await fs.mkdir(path.dirname(relativeLeakFile), { recursive: true });
+    await fs.writeFile(relativeLeakFile, "relative artifact\n", "utf8");
     const evidence: QaEvidenceSummaryJson = vitestArtifactEvidence({
       id: "qa-lab.absolute-artifact-path",
       title: "Absolute artifact path",
       artifact: { kind: "log", path: artifactPath },
     });
+    evidence.profile = `${repoRoot}/qa-profile`;
     evidence.entries[0] = {
       ...evidence.entries[0],
+      coverage: [{ id: `${repoRoot}/coverage`, role: `${repoRoot}/role` }],
+      execution: {
+        ...evidence.entries[0].execution!,
+        artifacts: [
+          {
+            ...evidence.entries[0].execution!.artifacts[0],
+            kind: `${repoRoot}/log`,
+            source: `${repoRoot}/vitest`,
+          },
+          {
+            kind: "log",
+            path: relativeLeakArtifactPath,
+            source: "vitest",
+          },
+        ],
+      },
       test: {
         ...evidence.entries[0].test,
+        id: `${repoRoot}/qa-lab.absolute-artifact-path`,
+        kind: `${repoRoot}/vitest-test`,
         source: { path: path.join(repoRoot, "extensions/qa-lab/src/absolute.test.ts") },
+        title: `Absolute artifact path at ${repoRoot}`,
       },
     };
     await writeJson(path.join(outputDir, QA_EVIDENCE_FILENAME), evidence);
@@ -208,13 +233,28 @@ describe("evidence gallery", () => {
     const artifact = model.entries[0]?.artifacts[0];
     expect(artifact).toMatchObject({
       exists: true,
+      kind: "<repo-root>/log",
       path: ".artifacts/qa-e2e/vitest/absolute.log",
       preview: "absolute artifact <repo-root>\nfile://<repo-root>/trace.log\n",
+      source: "<repo-root>/vitest",
     });
-    expect(artifact?.href).toContain(
-      "artifactPath=%3Crepo-root%3E%2F.artifacts%2Fqa-e2e%2Fvitest%2Fabsolute.log",
-    );
+    expect(artifact?.href).toContain("entryIndex=0&artifactIndex=0");
+    const relativeArtifact = model.entries[0]?.artifacts[1];
+    expect(relativeArtifact).toMatchObject({
+      exists: true,
+      path: expect.stringContaining(".artifacts/qa-e2e/vitest/nested"),
+      preview: "relative artifact\n",
+    });
+    expect(decodeURIComponent(relativeArtifact?.href ?? "")).not.toContain(repoRoot);
+    expect(relativeArtifact?.href).toContain("entryIndex=0&artifactIndex=1");
     expect(model.entries[0]?.sourcePath).toBe("extensions/qa-lab/src/absolute.test.ts");
+    expect(model.entries[0]).toMatchObject({
+      coverage: [{ id: "<repo-root>/coverage", role: "<repo-root>/role" }],
+      id: "<repo-root>/qa-lab.absolute-artifact-path",
+      kind: "<repo-root>/vitest-test",
+      title: "Absolute artifact path at <repo-root>",
+    });
+    expect(model.profile).toBe("<repo-root>/qa-profile");
     expect(JSON.stringify(model)).not.toContain(repoRoot);
     await expect(
       resolveQaEvidenceArtifactFile({
@@ -223,6 +263,14 @@ describe("evidence gallery", () => {
         repoRoot,
       }),
     ).resolves.toBe(await fs.realpath(artifactPath));
+    await expect(
+      resolveQaEvidenceArtifactFileByIndex({
+        artifactIndex: 1,
+        entryIndex: 0,
+        evidencePath: outputDir,
+        repoRoot,
+      }),
+    ).resolves.toBe(await fs.realpath(relativeLeakFile));
   });
 
   it("detects UX Matrix producer context from suite-level evidence artifacts", async () => {
@@ -257,17 +305,19 @@ describe("evidence gallery", () => {
         "proof-gap": 1,
       },
       stages: [
+        { id: `${repoRoot}/diagnostics`, label: "Diagnostics" },
         { id: "first-run", label: "First run" },
         { id: "error-state", label: "Error state" },
       ],
       surfaces: [
+        { id: `${repoRoot}/native`, label: "Native" },
         { id: "web-ui", label: "Web UI" },
         { id: "cli", label: "CLI" },
       ],
       cells: [
         null,
         {
-          coverageIds: ["ui.control"],
+          coverageIds: [`${repoRoot}/ui.control`],
           runner: {
             availability: "local",
             command: `${repoRoot}/openclaw.mjs qa suite --scenario ux-matrix-evidence-dashboard`,
@@ -320,7 +370,7 @@ describe("evidence gallery", () => {
           test: {
             kind: "ux-matrix-cell",
             id: "ux-matrix.web-ui.first-run",
-            title: "UX Matrix: web-ui / first-run",
+            title: `UX Matrix: web-ui / first-run at ${repoRoot}`,
             source: { path: "scripts/ux-matrix/dashboard.ts" },
           },
           coverage: [{ id: "ui.control", role: "primary" }],
@@ -414,8 +464,8 @@ describe("evidence gallery", () => {
           blocked: 1,
           "proof-gap": 1,
         },
-        stages: ["first-run", "error-state"],
-        surfaces: ["web-ui", "cli"],
+        stages: ["<repo-root>/diagnostics", "first-run", "error-state"],
+        surfaces: ["<repo-root>/native", "web-ui", "cli"],
       },
       releaseLedger: {
         counts: {
@@ -431,7 +481,7 @@ describe("evidence gallery", () => {
         artifactPaths: [
           ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1/surfaces/web-ui/stages/first-run/screenshot.png",
         ],
-        coverageIds: ["ui.control"],
+        coverageIds: ["<repo-root>/ui.control"],
         runner: {
           availability: "local",
           command: "<repo-root>/openclaw.mjs qa suite --scenario ux-matrix-evidence-dashboard",
@@ -442,7 +492,7 @@ describe("evidence gallery", () => {
         status: "pass",
         surface: "web-ui",
         testId: "ux-matrix.web-ui.first-run",
-        title: "UX Matrix: web-ui / first-run",
+        title: "UX Matrix: web-ui / first-run at <repo-root>",
       },
       {
         artifactKinds: [],

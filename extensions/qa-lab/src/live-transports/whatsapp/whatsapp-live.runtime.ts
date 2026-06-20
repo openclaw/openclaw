@@ -39,6 +39,7 @@ import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   redactQaLiveLaneDetails,
 } from "../shared/live-artifacts.js";
+import { inferQaCredentialSource as inferWhatsAppCredentialSource } from "../shared/live-credential-source.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
@@ -1399,15 +1400,6 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KE
     throw new Error(`Missing ${key}.`);
   }
   return value;
-}
-
-function inferWhatsAppCredentialSource(
-  value: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): "convex" | "env" {
-  const normalized =
-    value?.trim().toLowerCase() || env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim().toLowerCase();
-  return normalized === "convex" ? "convex" : "env";
 }
 
 function resolveWhatsAppMetadataRedaction(env: NodeJS.ProcessEnv = process.env) {

@@ -19,6 +19,7 @@ import { createQaBusState, type QaBusState } from "./bus-state.js";
 import {
   QaEvidenceGalleryError,
   buildQaEvidenceGalleryModel,
+  resolveQaEvidenceArtifactFileByIndex,
   resolveQaEvidenceArtifactFile,
 } from "./evidence-gallery.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
@@ -453,15 +454,24 @@ export async function startQaLabServer(
         ) {
           const evidencePath = url.searchParams.get("evidencePath")?.trim();
           const artifactPath = url.searchParams.get("artifactPath")?.trim();
-          if (!evidencePath || !artifactPath) {
-            writeError(res, 400, "Missing evidencePath or artifactPath");
+          const entryIndexText = url.searchParams.get("entryIndex")?.trim();
+          const artifactIndexText = url.searchParams.get("artifactIndex")?.trim();
+          if (!evidencePath || (!artifactPath && (!entryIndexText || !artifactIndexText))) {
+            writeError(res, 400, "Missing evidencePath and artifact selector");
             return;
           }
-          const artifactFile = await resolveQaEvidenceArtifactFile({
-            artifactPath,
-            evidencePath,
-            repoRoot,
-          });
+          const artifactFile = artifactPath
+            ? await resolveQaEvidenceArtifactFile({
+                artifactPath,
+                evidencePath,
+                repoRoot,
+              })
+            : await resolveQaEvidenceArtifactFileByIndex({
+                artifactIndex: Number(artifactIndexText),
+                entryIndex: Number(entryIndexText),
+                evidencePath,
+                repoRoot,
+              });
           const artifactStats = await fs.promises.stat(artifactFile);
           res.writeHead(200, {
             "content-type": detectQaEvidenceArtifactContentType(artifactFile),
