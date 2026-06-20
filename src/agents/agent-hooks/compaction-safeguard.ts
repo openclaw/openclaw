@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  collectErrorGraphCandidates,
+  formatErrorMessage,
+  readErrorName,
+} from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -353,15 +357,44 @@ async function resolveModelAuth(
   };
 }
 
-function isAwsSdkCredentialFailure(error: unknown): boolean {
-  const message = formatErrorMessage(error);
-  return (
-    /\bCredentialsProviderError\b/i.test(message) ||
-    /\bCould not load credentials\b/i.test(message) ||
-    /\bNo credentials\b/i.test(message) ||
-    /\bcredential chain\b/i.test(message) ||
-    /\bAWS_PROFILE\b/i.test(message)
+const AWS_SDK_CREDENTIAL_FAILURE_PATTERNS = [
+  /\bCredentialsProviderError\b/i,
+  /\bCould not load credentials\b/i,
+  /\bNo credentials\b/i,
+  /\bcredential chain\b/i,
+  /\bAWS_PROFILE\b/i,
+] as const;
+
+function resolveNestedAwsCredentialErrorCandidates(current: Record<string, unknown>): unknown[] {
+  const nested = [current.cause, current.error, current.reason].filter(
+    (candidate) => candidate !== undefined,
   );
+  if (Array.isArray(current.errors)) {
+    nested.push(...current.errors);
+  }
+  return nested;
+}
+
+function hasAwsSdkCredentialProviderShape(candidate: unknown): boolean {
+  if (!candidate || typeof candidate !== "object") {
+    return false;
+  }
+  if (/^CredentialsProviderError$/i.test(readErrorName(candidate))) {
+    return true;
+  }
+  return (candidate as { tryNextLink?: unknown }).tryNextLink === false;
+}
+
+function isAwsSdkCredentialFailure(error: unknown): boolean {
+  if (
+    collectErrorGraphCandidates(error, resolveNestedAwsCredentialErrorCandidates).some(
+      hasAwsSdkCredentialProviderShape,
+    )
+  ) {
+    return true;
+  }
+  const message = formatErrorMessage(error);
+  return AWS_SDK_CREDENTIAL_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 function buildCompactionSummaryHeaders(params: {

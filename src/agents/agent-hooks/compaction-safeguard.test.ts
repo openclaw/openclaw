@@ -2061,6 +2061,59 @@ describe("compaction-safeguard extension model fallback", () => {
     );
   });
 
+  it("cancels aws-sdk compaction for terminal credential-provider errors without matching text", async () => {
+    mockSummarizeInStages.mockReset();
+    const terminalProviderError = Object.assign(new Error("profile source failed"), {
+      name: "ProviderError",
+      tryNextLink: false,
+    });
+    const credentialError = new Error("bedrock request failed", {
+      cause: terminalProviderError,
+    });
+    mockSummarizeInStages.mockImplementation(async (params: unknown) => {
+      const shouldFallbackOnError = (
+        params as {
+          shouldFallbackOnError?: (error: unknown) => boolean;
+        }
+      ).shouldFallbackOnError;
+      if (shouldFallbackOnError?.(credentialError) === false) {
+        throw credentialError;
+      }
+      return "generic fallback summary";
+    });
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      id: "eu.anthropic.claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      provider: "amazon-bedrock",
+      api: "bedrock-converse-stream" as const,
+      baseUrl: "https://bedrock-runtime.eu-west-1.amazonaws.com",
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const mockEvent = createCompactionEvent({
+      messageText: "older context",
+      tokensBefore: 1000,
+    });
+    (mockEvent.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+      requestAuth: { ok: true, authMode: "aws-sdk" },
+    });
+
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toContain(
+      "profile source failed",
+    );
+  });
+
   it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
     const sessionManager = stubSessionManager();
 
