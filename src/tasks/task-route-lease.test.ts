@@ -30,6 +30,7 @@ import {
   mapDeliveryStatusToLeaseRetirement,
   resetTaskRouteLeasesForTests,
   settleTaskRouteLease,
+  updateTaskRouteLease,
 } from "./task-route-lease.js";
 
 function createTempStateDir(): string {
@@ -247,6 +248,75 @@ describe("task-route lease", () => {
     expect(second).toBeDefined();
     expect(second?.expiresAt).toBeGreaterThan(Date.now() + 60_000);
     expect(getActiveTaskRouteLease("run-twice")?.requesterOrigin?.to).toBe("user:test-user-3");
+  });
+});
+
+describe("updateTaskRouteLease (#92460 P1 #2)", () => {
+  it("replaces requesterOrigin on an active lease", () => {
+    // Reported case: cron captured only `channel: "webchat"` at acquire
+    // time. After the resolver produces the concrete (channel, to, thread),
+    // the lease is updated so the completion-time resolver can recover it.
+    acquireTaskRouteLease({
+      runId: "run-update",
+      taskId: "task-update",
+      requesterOrigin: { channel: "webchat" },
+      ttlMs: 60_000,
+    });
+    const before = getActiveTaskRouteLease("run-update");
+    expect(before?.requesterOrigin).toEqual({ channel: "webchat" });
+
+    const updated = updateTaskRouteLease("run-update", {
+      channel: "webchat",
+      to: "user:test-user-resolved",
+      threadId: "thread-1",
+    });
+    expect(updated).toBe(true);
+
+    const after = getActiveTaskRouteLease("run-update");
+    expect(after?.requesterOrigin).toEqual({
+      channel: "webchat",
+      to: "user:test-user-resolved",
+      threadId: "thread-1",
+    });
+  });
+
+  it("returns false for a settled lease (does not re-arm)", () => {
+    acquireTaskRouteLease({
+      runId: "run-settled",
+      taskId: "task-settled",
+      requesterOrigin: SAMPLE_ORIGIN,
+      ttlMs: 60_000,
+    });
+    settleTaskRouteLease("run-settled", "settled");
+    const updated = updateTaskRouteLease("run-settled", {
+      channel: "telegram",
+      to: "chat:99",
+    });
+    expect(updated).toBe(false);
+    expect(getActiveTaskRouteLease("run-settled")).toBeUndefined();
+  });
+
+  it("returns false for a missing runId", () => {
+    const updated = updateTaskRouteLease("run-does-not-exist", {
+      channel: "webchat",
+      to: "user:nobody",
+    });
+    expect(updated).toBe(false);
+  });
+
+  it("preserves original origin when called with undefined", () => {
+    acquireTaskRouteLease({
+      runId: "run-empty-update",
+      taskId: "task-empty-update",
+      requesterOrigin: SAMPLE_ORIGIN,
+      ttlMs: 60_000,
+    });
+    const updated = updateTaskRouteLease("run-empty-update", undefined);
+    expect(updated).toBe(true);
+    // The lease stays active; the origin is cleared (matches acquire
+    // semantics for a partial origin).
+    const after = getActiveTaskRouteLease("run-empty-update");
+    expect(after?.requesterOrigin).toBeUndefined();
   });
 });
 
