@@ -1,6 +1,6 @@
 ---
 name: gog
-description: "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs."
+description: "Google Workspace CLI for Gmail, Calendar, Drive, Docs, Sheets, Sites, Slides, Forms, Meet, Apps Script, Analytics, Search Console, Contacts, Tasks, People, Classroom, Chat, YouTube, and Workspace admin."
 homepage: https://gogcli.sh
 metadata:
   {
@@ -24,15 +24,49 @@ metadata:
 
 # gog
 
-Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
+Use `gog` for Google Workspace from the terminal. Requires OAuth setup.
 
-Setup (once)
+## Supported Services
+
+`gog` covers these Google services (run `gog <service> --help` for full subcommands):
+
+| Service            | Key commands                                                                |
+| ------------------ | --------------------------------------------------------------------------- |
+| **Gmail**          | search, send, drafts, reply, messages, labels, filters, attachments         |
+| **Calendar**       | events, create, update, colors, focus-time, out-of-office, working-location |
+| **Drive**          | search, upload, download, tree, disk-usage, sharing-audit, changes, raw API |
+| **Docs**           | export, cat, copy                                                           |
+| **Sheets**         | get, update, append, clear, metadata                                        |
+| **Contacts**       | list, create, update, delete                                                |
+| **Tasks**          | list, create, update, complete                                              |
+| **People**         | search, get, connections                                                    |
+| **Classroom**      | courses, roster, coursework, materials, submissions, announcements          |
+| **Chat**           | spaces, messages, threads, direct messages                                  |
+| **YouTube**        | channel data, search                                                        |
+| **Maps/Places**    | places search, details, directions, geocoding                               |
+| **Forms**          | form creation, responses                                                    |
+| **Meet**           | attachment/auth setup for calendar events                                   |
+| **Sites**          | site management                                                             |
+| **Slides**         | presentation operations                                                     |
+| **Apps Script**    | project management, deployments                                             |
+| **Analytics**      | reporting                                                                   |
+| **Search Console** | site verification, performance reports                                      |
+
+Additional capabilities:
+
+- **MCP server** — typed MCP server for agent clients (`gog mcp`), read-only by default
+- **Drive audits** — tree, disk usage, sharing audits, bulk public removal, Drive Labels
+- **Drive changes** — change tracking, polling, revision history, activity logs
+- **Gmail filters** — export in Gmail web UI import format
+- **Workspace admin** — directory, users, groups
+
+## Setup (once)
 
 - `gog auth credentials /path/to/client_secret.json`
 - `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
 - `gog auth list`
 
-Common commands
+## Common commands
 
 - Gmail search: `gog gmail search 'newer_than:7d' --max 10`
 - Gmail messages search (per email, ignores threading): `gog gmail messages search "in:inbox from:ryanair.com" --max 20 --account you@example.com`
@@ -58,7 +92,16 @@ Common commands
 - Docs export: `gog docs export <docId> --format txt --out /tmp/doc.txt`
 - Docs cat: `gog docs cat <docId>`
 
-Calendar Colors
+## Full Command Reference
+
+For the complete, up-to-date command surface, use:
+
+- `gog --help` — top-level service list
+- `gog <service> --help` — subcommands for a specific service (e.g. `gog gmail --help`)
+- Generated docs: <https://gogcli.sh/>
+- Command index: <https://gogcli.sh/commands/>
+
+## Calendar Colors
 
 - Use `gog calendar colors` to see all available event colors (IDs 1-11)
 - Add colors to events with `--event-color <id>` flag
@@ -75,7 +118,7 @@ Calendar Colors
   - 10: #51b749
   - 11: #dc2127
 
-Email Formatting
+## Email Formatting
 
 - Prefer plain text. Use `--body-file` for multi-paragraph messages (or `--body-file -` for stdin).
 - Same `--body-file` pattern works for drafts and replies.
@@ -106,7 +149,7 @@ Email Formatting
     --body-html "<p>Hi Name,</p><p>Thanks for meeting today. Here are the next steps:</p><ul><li>Item one</li><li>Item two</li></ul><p>Best regards,<br>Your Name</p>"
   ```
 
-Notes
+## Notes
 
 - Set `GOG_ACCOUNT=you@gmail.com` to avoid repeating `--account`.
 - For scripting, prefer `--json` plus `--no-input`.
@@ -114,3 +157,4 @@ Notes
 - Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
 - Confirm before sending mail or creating events.
 - `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.
+- `gog mcp` starts a typed MCP server for agent integration (read-only by default).
