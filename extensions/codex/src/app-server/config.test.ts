@@ -1073,6 +1073,36 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).toEqual({ sandboxExecServer: true });
   });
 
+  it("parses app-server native hook relay policy", () => {
+    expect(
+      readCodexPluginConfig({
+        appServer: {
+          nativeHookRelay: {
+            enabled: false,
+            mode: "disabled",
+            hookTimeoutSec: 15,
+          },
+        },
+      }).appServer?.nativeHookRelay,
+    ).toEqual({
+      enabled: false,
+      mode: "disabled",
+      hookTimeoutSec: 15,
+    });
+  });
+
+  it("rejects invalid app-server native hook relay policy", () => {
+    expect(
+      readCodexPluginConfig({
+        appServer: {
+          nativeHookRelay: {
+            mode: "forklift",
+          },
+        },
+      }),
+    ).toEqual({});
+  });
+
   it("rejects the retired dynamic tool profile key", () => {
     expect(
       readCodexPluginConfig({

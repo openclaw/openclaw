@@ -118,6 +118,14 @@ export type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
 };
 
+export type CodexAppServerNativeHookRelayMode = "enabled" | "disabled" | "serial" | "full";
+
+export type CodexAppServerNativeHookRelayConfig = {
+  enabled?: boolean;
+  mode?: CodexAppServerNativeHookRelayMode;
+  hookTimeoutSec?: number;
+};
+
 export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
 export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
 export type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
@@ -230,6 +238,7 @@ export type CodexPluginConfig = {
     serviceTier?: CodexServiceTier | null;
     networkProxy?: CodexAppServerNetworkProxyConfig;
     defaultWorkspaceDir?: string;
+    nativeHookRelay?: CodexAppServerNativeHookRelayConfig;
     experimental?: CodexAppServerExperimentalConfig;
   };
 };
@@ -264,6 +273,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "serviceTier",
   "networkProxy",
   "defaultWorkspaceDir",
+  "nativeHookRelay",
   "experimental",
 ] as const;
 
@@ -322,6 +332,14 @@ const codexAppServerExperimentalSchema = z
     sandboxExecServer: z.boolean().optional(),
   })
   .strict();
+const codexAppServerNativeHookRelayModeSchema = z.enum(["enabled", "disabled", "serial", "full"]);
+const codexAppServerNativeHookRelaySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: codexAppServerNativeHookRelayModeSchema.optional(),
+    hookTimeoutSec: z.number().positive().optional(),
+  })
+  .strict();
 const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
 const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
 const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
@@ -332,7 +350,9 @@ const codexAppServerNetworkProxySchema = z
     baseProfile: z.enum(["read-only", "workspace"]).optional(),
     mode: z.enum(["limited", "full"]).optional(),
     domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
-    unixSockets: z.record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema).optional(),
+    unixSockets: z
+      .record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema)
+      .optional(),
     proxyUrl: z.string().trim().min(1).optional(),
     socksUrl: z.string().trim().min(1).optional(),
     enableSocks5: z.boolean().optional(),
@@ -407,6 +427,7 @@ const codexPluginConfigSchema = z
         serviceTier: codexAppServerServiceTierSchema,
         networkProxy: codexAppServerNetworkProxySchema.optional(),
         defaultWorkspaceDir: z.string().optional(),
+        nativeHookRelay: codexAppServerNativeHookRelaySchema.optional(),
         experimental: codexAppServerExperimentalSchema.optional(),
       })
       .strict()
