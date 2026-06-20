@@ -187,9 +187,14 @@ function normalizePart(value: string | undefined, fallback: string): string {
 }
 
 function openStateDatabase(stateDir?: string) {
-  return openOpenClawStateDatabase({
-    env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
-  });
+  // Avoid `{ ...process.env }` in the hot path: Kubernetes pods can inherit
+  // thousands of service env vars, and this function is called on every queue
+  // operation. An overlay object preserves inherited lookups while only adding
+  // the state-dir override.
+  const env = stateDir
+    ? Object.assign(Object.create(process.env) as NodeJS.ProcessEnv, { OPENCLAW_STATE_DIR: stateDir })
+    : process.env;
+  return openOpenClawStateDatabase({ env });
 }
 
 function getChannelIngressKysely(db: DatabaseSync) {
