@@ -2198,12 +2198,19 @@ class NodeRuntime(
       }.orEmpty()
 
   private fun parseGatewayLogEntry(line: String): GatewayLogEntry {
+    val sanitizedLine = sanitizeGatewayLogText(line)
     val root =
       try {
         json.parseToJsonElement(line).asObjectOrNull()
       } catch (_: Throwable) {
         null
-      } ?: return GatewayLogEntry(time = null, level = null, subsystem = null, message = line.trim().ifEmpty { "Empty log entry" })
+      } ?: return GatewayLogEntry(
+        time = null,
+        level = null,
+        subsystem = null,
+        message = sanitizedLine.trim().ifEmpty { "Empty log entry" },
+        raw = sanitizedLine,
+      )
     val meta = root["_meta"].asObjectOrNull()
     val time = root["time"].asStringOrNull() ?: meta?.get("date").asStringOrNull()
     val level = normalizeLogLevel(meta?.get("logLevelName").asStringOrNull() ?: meta?.get("level").asStringOrNull())
@@ -2221,7 +2228,7 @@ class NodeRuntime(
         ?: root["message"].asStringOrNull()
         ?: line
     val normalizedMessage =
-      message
+      sanitizeGatewayLogText(message)
         .trim()
         .replace(Regex("\\s+"), " ")
         .take(240)
@@ -2229,8 +2236,9 @@ class NodeRuntime(
     return GatewayLogEntry(
       time = time,
       level = level,
-      subsystem = subsystem?.trim()?.takeIf { it.isNotEmpty() },
+      subsystem = subsystem?.let(::sanitizeGatewayLogText)?.trim()?.takeIf { it.isNotEmpty() },
       message = normalizedMessage,
+      raw = sanitizedLine,
     )
   }
 
@@ -2319,6 +2327,7 @@ class NodeRuntime(
         if (name.isEmpty()) return@mapNotNull null
         val missing = obj["missing"].asObjectOrNull()
         GatewaySkillSummary(
+          skillKey = obj["skillKey"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: name,
           name = name,
           description = obj["description"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           source = obj["source"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown",
@@ -2846,6 +2855,7 @@ data class GatewaySkillsSummary(
 )
 
 data class GatewaySkillSummary(
+  val skillKey: String,
   val name: String,
   val description: String?,
   val source: String,
@@ -3043,7 +3053,16 @@ data class GatewayLogEntry(
   val level: String?,
   val subsystem: String?,
   val message: String,
+  val raw: String,
 )
+
+private val gatewayAnsiControlPattern = Regex("\\u001B\\[[0-?]*[ -/]*[@-~]")
+private val gatewayVisibleSgrPattern = Regex("\\[(?:0|\\d{1,3};\\d{1,3}(?:;\\d{1,3})*)m")
+
+internal fun sanitizeGatewayLogText(value: String): String =
+  value
+    .replace(gatewayAnsiControlPattern, "")
+    .replace(gatewayVisibleSgrPattern, "")
 
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
 
