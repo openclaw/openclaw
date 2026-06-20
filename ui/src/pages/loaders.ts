@@ -2,7 +2,11 @@ import type { SettingsAppHost, SettingsHost } from "../app/app-host.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
 import type { RouteHookOptions } from "../router/types.ts";
-import { refreshChat } from "../ui/app-chat.ts";
+import {
+  createChatSessionsLoadOverrides,
+  refreshChat,
+  scopedAgentListParamsForSession,
+} from "../ui/app-chat.ts";
 import { scheduleChatScroll } from "../ui/app-scroll.ts";
 import {
   controlUiNowMs,
@@ -64,6 +68,8 @@ export async function loadDreamsPage(host: SettingsHost, app: SettingsAppHost) {
 }
 
 export async function loadChatPage(host: SettingsHost, app: SettingsAppHost) {
+  // Capture this before refreshChat seeds a one-row result from history.
+  const hadSessionsResult = Boolean(app.sessionsResult);
   try {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
     scheduleChatScroll(
@@ -72,6 +78,13 @@ export async function loadChatPage(host: SettingsHost, app: SettingsAppHost) {
     );
   } finally {
     void loadModelAuthStatusState(app).catch(() => undefined);
+    if (!hadSessionsResult) {
+      void loadSessions(app, {
+        ...createChatSessionsLoadOverrides(app),
+        ...scopedAgentListParamsForSession(app, app.sessionKey),
+        backgroundHydrate: true,
+      }).catch(() => undefined);
+    }
   }
 }
 
