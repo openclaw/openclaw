@@ -263,6 +263,12 @@ async function callSubagentGateway(
   ) {
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
+    // Subagent calls that set model/provider need model-override authorization on
+    // the synthetic client; otherwise the gateway agent handler silently discards
+    // the override and the child run falls back to the default model (#91171).
+    const hasModelOverride =
+      (request.params as Record<string, unknown>).model != null ||
+      (request.params as Record<string, unknown>).provider != null;
     return await subagentSpawnDeps.dispatchGatewayMethodInProcess(
       request.method,
       request.params as Record<string, unknown>,
@@ -271,6 +277,7 @@ async function callSubagentGateway(
         ...(scopes != null ? { forceSyntheticClient: true } : {}),
         timeoutMs: request.timeoutMs,
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
+        ...(hasModelOverride ? { allowSyntheticModelOverride: true } : {}),
       },
     );
   }
@@ -1581,6 +1588,7 @@ export async function spawnSubagentDirect(
         cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
+        ...(resolvedModel ? { model: resolvedModel } : {}),
         timeout: runTimeoutSeconds,
         label: label || undefined,
         ...(bootstrapContextMode

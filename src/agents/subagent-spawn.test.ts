@@ -315,6 +315,9 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentParams = requireRecord(agentRequest.params);
     expect(agentParams.sessionKey).toBe(childSessionKey);
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
+    // Model override must be forwarded to the gateway agent call so the child
+    // run uses the requested model instead of falling back to the default (#91171).
+    expect(agentParams.model).toBe("openai/gpt-5.4");
   });
 
   it("dispatches spawned agent runs in process when a gateway context is available", async () => {
@@ -347,6 +350,40 @@ describe("spawnSubagentDirect seam flow", () => {
       }),
       expect.objectContaining({
         timeoutMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it("enables allowSyntheticModelOverride when subagent spawn requests a specific model (regression #91171)", async () => {
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        return { runId: "run-in-process-model-override" };
+      }
+      return { ok: true };
+    });
+
+    await spawnSubagentDirect(
+      {
+        task: "use specific model",
+        model: "openai/gpt-5.4",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    // The in-process dispatch must authorize model overrides on the synthetic
+    // client when model is requested, or the gateway agent handler will silently
+    // discard it.
+    expect(hoisted.dispatchGatewayMethodInProcessMock).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        model: "openai/gpt-5.4",
+      }),
+      expect.objectContaining({
+        allowSyntheticModelOverride: true,
       }),
     );
   });
