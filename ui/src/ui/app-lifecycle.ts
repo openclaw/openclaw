@@ -1,5 +1,6 @@
 import { appRouter, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
+import { createBrowserHistory } from "../app/browser.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import { stopLogsPolling, stopNodesPolling, stopDebugPolling } from "./app-polling.ts";
@@ -13,6 +14,7 @@ import {
   applySettingsFromUrl,
   detachThemeListener,
   inferBasePath,
+  syncSessionWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
@@ -89,32 +91,18 @@ type LifecycleHost = {
   controlUiRoutePaintSeq?: number;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
   controlUiBootstrapReady?: Promise<void> | null;
-  sessionPopStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
   requestUpdate?: () => void;
   routeSubscription?: () => void;
-  routePopStateHandler?: () => void;
+  sessionLocationSubscription?: () => void;
 };
-
-function createBrowserHistory() {
-  return {
-    location: () => ({
-      pathname: window.location.pathname,
-      search: window.location.search,
-      hash: window.location.hash,
-    }),
-    push: ({ pathname, search, hash }: { pathname: string; search: string; hash: string }) =>
-      window.history.pushState({}, "", `${pathname}${search}${hash}`),
-    replace: ({ pathname, search, hash }: { pathname: string; search: string; hash: string }) =>
-      window.history.replaceState({}, "", `${pathname}${search}${hash}`),
-    listen: () => () => {},
-  };
-}
 
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
-  host.routeId = appRouter.routeIdFromPath(window.location.pathname, host.basePath) ?? "chat";
+  const history = createBrowserHistory();
+  const initialLocation = history.location();
+  host.routeId = appRouter.routeIdFromPath(initialLocation.pathname, host.basePath) ?? "chat";
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
@@ -132,35 +120,12 @@ export function handleConnected(host: LifecycleHost) {
     host.chatComposerProvisionalRestore = null;
   }
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
-  window.addEventListener("popstate", host.sessionPopStateHandler);
+  host.sessionLocationSubscription = history.listen(() =>
+    syncSessionWithLocation(host as unknown as Parameters<typeof syncSessionWithLocation>[0]),
+  );
   if (host.connectGeneration === connectGeneration) {
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   }
-  if (host.routePopStateHandler) {
-    window.removeEventListener("popstate", host.routePopStateHandler);
-  }
-  host.routePopStateHandler = () => {
-    const location = {
-      pathname: window.location.pathname,
-      search: window.location.search,
-      hash: window.location.hash,
-    };
-    const previousRouteId = host.routeId;
-    const routeId = appRouter.routeIdFromPath(location.pathname, host.basePath);
-    void appRouter
-      .navigateLocation(location, routeLoadContext(host as unknown as SettingsHost))
-      .then(
-        () => {
-          if (routeId) {
-            host.routeId = routeId;
-          }
-        },
-        () => {
-          host.routeId = previousRouteId;
-        },
-      );
-  };
-  window.addEventListener("popstate", host.routePopStateHandler);
   host.routeSubscription?.();
   host.routeSubscription = appRouter.subscribeSelector(
     (state) => ({
@@ -187,11 +152,7 @@ export function handleConnected(host: LifecycleHost) {
       previous.activeRouteId === next.activeRouteId,
   );
   void Promise.resolve(
-    appRouter.start(
-      createBrowserHistory(),
-      host.basePath,
-      routeLoadContext(host as unknown as SettingsHost),
-    ),
+    appRouter.start(history, host.basePath, routeLoadContext(host as unknown as SettingsHost)),
   ).catch(() => undefined);
   host.controlUiResponsivenessObserver ??= startControlUiResponsivenessObserver(
     host as unknown as Parameters<typeof startControlUiResponsivenessObserver>[0],
@@ -268,13 +229,10 @@ export function handleDisconnected(host: LifecycleHost) {
   cancelControlUiRouteTiming(host);
   host.routeSubscription?.();
   host.routeSubscription = undefined;
-  if (host.routePopStateHandler) {
-    window.removeEventListener("popstate", host.routePopStateHandler);
-    host.routePopStateHandler = undefined;
-  }
+  host.sessionLocationSubscription?.();
+  host.sessionLocationSubscription = undefined;
   appRouter.stop();
   flushPendingChatComposerPersistence(host);
-  window.removeEventListener("popstate", host.sessionPopStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
