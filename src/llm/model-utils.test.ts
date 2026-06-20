@@ -2,15 +2,7 @@ import { describe, expect, it } from "vitest";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "./model-utils.js";
 import type { Model } from "./types.js";
 
-type OpenAICompatReasoningMetadata = {
-  supportsReasoningEffort?: boolean;
-  supportedReasoningEfforts?: string[];
-  reasoningEffortMap?: Record<string, string | null>;
-};
-
-type TestOpenAICompletionsModel = Omit<Model<"openai-completions">, "compat"> & {
-  compat?: Model<"openai-completions">["compat"] & OpenAICompatReasoningMetadata;
-};
+type TestOpenAICompletionsModel = Model<"openai-completions">;
 
 const baseModel = {
   id: "codex-lb-2455/gpt-5.5",
@@ -172,6 +164,23 @@ describe("model thinking levels", () => {
     } satisfies TestOpenAICompletionsModel;
 
     expect(getSupportedThinkingLevels(model)).toEqual(["off", "minimal", "low", "medium", "high"]);
+    expect(clampThinkingLevel(model, "max")).toBe("high");
+  });
+
+  it("respects explicit compat reasoning effort disablement", () => {
+    const model = {
+      ...baseModel,
+      compat: {
+        supportsReasoningEffort: false,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        reasoningEffortMap: {
+          max: "xhigh",
+        },
+      },
+    } satisfies TestOpenAICompletionsModel;
+
+    expect(getSupportedThinkingLevels(model)).toEqual(["off", "minimal", "low", "medium", "high"]);
+    expect(clampThinkingLevel(model, "xhigh")).toBe("high");
     expect(clampThinkingLevel(model, "max")).toBe("high");
   });
 

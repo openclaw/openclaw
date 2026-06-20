@@ -3,7 +3,7 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
 } from "@openclaw/llm-core";
-import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
+import type { Api, Model, ModelThinkingLevel, OpenAICompletionsCompat, Usage } from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
@@ -26,11 +26,6 @@ const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = [
   "max",
 ];
 
-type CompatReasoningEffortConfig = {
-  reasoningEffortMap?: unknown;
-  supportedReasoningEfforts?: unknown;
-};
-
 const normalizeReasoningEffort = (value: unknown): string =>
   typeof value === "string" ? value.trim().toLowerCase() : "";
 
@@ -42,16 +37,14 @@ function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
 
 function getCompatReasoningEffortConfig<TApi extends Api>(
   model: Model<TApi>,
-): CompatReasoningEffortConfig | undefined {
-  const compat = (model as { compat?: unknown }).compat;
-  if (!compat || typeof compat !== "object" || Array.isArray(compat)) {
-    return undefined;
-  }
-  return compat as CompatReasoningEffortConfig;
+): OpenAICompletionsCompat | undefined {
+  return model.api === "openai-completions"
+    ? (model.compat as OpenAICompletionsCompat | undefined)
+    : undefined;
 }
 
 function getCompatSupportedReasoningEfforts(
-  compat: CompatReasoningEffortConfig | undefined,
+  compat: OpenAICompletionsCompat | undefined,
 ): Set<string> {
   if (!Array.isArray(compat?.supportedReasoningEfforts)) {
     return new Set();
@@ -61,16 +54,6 @@ function getCompatSupportedReasoningEfforts(
       .map((effort) => normalizeReasoningEffort(effort))
       .filter(Boolean),
   );
-}
-
-function getCompatReasoningEffortMap(
-  compat: CompatReasoningEffortConfig | undefined,
-): Record<string, unknown> | undefined {
-  const map = compat?.reasoningEffortMap;
-  if (!map || typeof map !== "object" || Array.isArray(map)) {
-    return undefined;
-  }
-  return map as Record<string, unknown>;
 }
 
 function mappedReasoningEffortIsSupported(mapped: unknown, supportedEfforts: Set<string>): boolean {
@@ -110,9 +93,12 @@ function compatSupportsThinkingLevel<TApi extends Api>(
   level: ModelThinkingLevel,
 ): boolean {
   const compat = getCompatReasoningEffortConfig(model);
+  if (compat?.supportsReasoningEffort === false) {
+    return false;
+  }
+
   const supportedEfforts = getCompatSupportedReasoningEfforts(compat);
-  const effortMap = getCompatReasoningEffortMap(compat);
-  const mappedEffort = effortMap?.[level];
+  const mappedEffort = compat?.reasoningEffortMap?.[level];
   if (mappedEffort === null) {
     return false;
   }

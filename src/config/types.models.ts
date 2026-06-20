@@ -30,6 +30,8 @@ type SupportedOpenAICompatFields = Pick<
   | "supportsStore"
   | "supportsDeveloperRole"
   | "supportsReasoningEffort"
+  | "supportedReasoningEfforts"
+  | "reasoningEffortMap"
   | "supportsUsageInStreaming"
   | "supportsStrictMode"
   | "maxTokensField"
@@ -83,10 +85,6 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
   SupportedAnthropicMessagesCompatFields & {
     /** Reasoning/thinking payload dialect for provider-compatible APIs. */
     thinkingFormat?: SupportedThinkingFormat;
-    /** Provider-accepted reasoning effort labels. */
-    supportedReasoningEfforts?: string[];
-    /** Maps OpenClaw reasoning effort labels to provider-specific labels. */
-    reasoningEffortMap?: Record<string, string>;
     /** Reasoning detail block types safe to expose in visible transcripts. */
     visibleReasoningDetailTypes?: string[];
     /** Whether this model supports tool/function calling. */

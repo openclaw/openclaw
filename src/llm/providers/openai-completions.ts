@@ -101,9 +101,11 @@ interface OpenAICompatCacheControl {
 
 type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat"
+  "cacheControlFormat" | "supportedReasoningEfforts" | "reasoningEffortMap"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+  supportedReasoningEfforts?: OpenAICompletionsCompat["supportedReasoningEfforts"];
+  reasoningEffortMap?: OpenAICompletionsCompat["reasoningEffortMap"];
 };
 
 type ChatCompletionInstructionMessageParam =
@@ -1311,6 +1313,8 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     supportsDeveloperRole: !isNonStandard,
     supportsReasoningEffort:
       !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway,
+    supportedReasoningEfforts: undefined,
+    reasoningEffortMap: undefined,
     supportsUsageInStreaming: true,
     maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
     requiresToolResultName: false,
@@ -1354,6 +1358,9 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
     supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
     supportsReasoningEffort:
       model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
+    supportedReasoningEfforts:
+      model.compat.supportedReasoningEfforts ?? detected.supportedReasoningEfforts,
+    reasoningEffortMap: model.compat.reasoningEffortMap ?? detected.reasoningEffortMap,
     supportsUsageInStreaming:
       model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
     maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
