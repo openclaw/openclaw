@@ -23,7 +23,7 @@ let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-nati
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
 type TelegramInlineKeyboardReplyMarkup = {
-  inline_keyboard?: Array<Array<{ callback_data?: string }>>;
+  inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
 };
 type PlugCommandHarnessParams = {
   botHarness?: CommandBotHarness;
@@ -410,6 +410,44 @@ describe("registerTelegramNativeCommands", () => {
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast default")).toBe("/fast default");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
+  });
+
+  it("skips /model native menu callbacks that exceed Telegram callback_data limits", async () => {
+    const { bot, commandHandlers, sendMessage } = createCommandBot();
+    const longModel = "nousresearch/hermes-3-llama-3.1-405b:extended";
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(
+        {
+          models: {
+            providers: {
+              openrouter: {
+                models: [
+                  { id: "short-model", name: "Short Model" },
+                  { id: longModel, name: "Hermes 405B Extended" },
+                ],
+              },
+            },
+          },
+        } as never,
+        { bot, allowFrom: [200] },
+      ),
+    });
+
+    const handler = commandHandlers.get("model");
+    if (!handler) {
+      throw new Error("expected model command handler to be registered");
+    }
+    await handler(createPrivateCommandContext());
+
+    const replyMarkup = (firstCall(sendMessage)[2] as { reply_markup?: unknown } | undefined)
+      ?.reply_markup as TelegramInlineKeyboardReplyMarkup | undefined;
+    const callbackData = collectCallbackData(replyMarkup);
+
+    expect(callbackData).toHaveLength(1);
+    expect(callbackData[0]).toContain("short-model");
+    expect(callbackData.every((data) => Buffer.byteLength(data, "utf8") <= 64)).toBe(true);
+    expect(JSON.stringify(replyMarkup)).not.toContain(longModel);
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
