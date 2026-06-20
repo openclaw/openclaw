@@ -293,6 +293,73 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("stores a trusted bare body for persisted user turns", async () => {
+      const dir = createTempDir("openclaw-user-turn-trusted-bare-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "Plain user message",
+          timestamp: 123,
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        __openclaw: {
+          inboundDecoration: {
+            bareBody: "Plain user message",
+          },
+        },
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          __openclaw: {
+            inboundDecoration: {
+              bareBody: "Plain user message",
+            },
+          },
+        }),
+      ]);
+    });
+
+    it("treats sentinel-looking user text as trusted bare body on new transcript rows", async () => {
+      const dir = createTempDir("openclaw-user-turn-sentinel-bare-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const quotedDecoration = [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"message_id":"msg-1"}',
+        "```",
+        "Literal quoted metadata from the user",
+      ].join("\n");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: quotedDecoration,
+          timestamp: 123,
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        content: quotedDecoration,
+        __openclaw: {
+          inboundDecoration: {
+            bareBody: quotedDecoration,
+          },
+        },
+      });
+    });
+
     it("uses inline update mode by default", async () => {
       const dir = createTempDir("openclaw-user-turn-append-inline-");
       const transcriptPath = path.join(dir, "session.jsonl");
@@ -418,9 +485,75 @@ describe("user turn transcript persistence", () => {
           content: "[redacted by hook]",
           idempotencyKey: "chat-run-1:user",
           provenance,
+          __openclaw: {
+            inboundDecoration: {
+              bareBody: "[redacted by hook]",
+            },
+          },
         }),
       ]);
       expect(hookCalls).toBe(1);
+    });
+
+    it("updates the trusted bare body after before_message_write rewrites a user turn", async () => {
+      const dir = createTempDir("openclaw-user-turn-redacted-bare-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        input: {
+          text: "secret prompt",
+          idempotencyKey: "chat-run-2:user",
+        },
+        beforeMessageWrite: ({ message }) =>
+          castAgentMessage({
+            ...(message as Record<string, unknown>),
+            role: "user",
+            content: "[redacted by hook]",
+          }),
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "[redacted by hook]",
+        __openclaw: {
+          inboundDecoration: {
+            bareBody: "[redacted by hook]",
+          },
+        },
+      });
+    });
+
+    it("drops a stale trusted bare body when before_message_write rewrites to different sentinel-looking text", async () => {
+      const dir = createTempDir("openclaw-user-turn-redacted-sentinel-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const rewritten = [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"message_id":"rewritten"}',
+        "```",
+        "hook rewrite",
+      ].join("\n");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        input: {
+          text: "original plain user text",
+          idempotencyKey: "chat-run-3:user",
+        },
+        beforeMessageWrite: ({ message }) =>
+          castAgentMessage({
+            ...(message as Record<string, unknown>),
+            role: "user",
+            content: rewritten,
+          }),
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: rewritten,
+      });
+      expect(appended?.message).not.toHaveProperty("__openclaw.inboundDecoration.bareBody");
     });
   });
 

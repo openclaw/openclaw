@@ -17,6 +17,12 @@
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
 
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+const OPENCLAW_INBOUND_DECORATION_KEY = "inboundDecoration";
+const OPENCLAW_INBOUND_BARE_BODY_KEY = "bareBody";
+
+type OpenClawMessageMeta = Record<string, unknown> & {
+  inboundDecoration?: Record<string, unknown>;
+};
 
 /**
  * Sentinel strings that identify the start of an injected metadata block.
@@ -47,6 +53,165 @@ const SENTINEL_FAST_RE = new RegExp(
 /** Fast check for whether text contains any inbound metadata sentinel. */
 export function hasInboundMetadataSentinel(text: string): boolean {
   return Boolean(text && SENTINEL_FAST_RE.test(text));
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function collectUserMessageTextContent(message: unknown): string | undefined {
+  const record = asRecord(message);
+  if (!record) {
+    return undefined;
+  }
+  if (typeof record.content === "string") {
+    return record.content;
+  }
+  if (Array.isArray(record.content)) {
+    const textParts = record.content
+      .map((block) => {
+        const item = asRecord(block);
+        return item?.type === "text" && typeof item.text === "string" ? item.text : undefined;
+      })
+      .filter((value): value is string => typeof value === "string");
+    return textParts.length > 0 ? textParts.join("\n") : undefined;
+  }
+  return typeof record.text === "string" ? record.text : undefined;
+}
+
+/**
+ * Returns the trusted user-visible body stored on newer user transcript rows.
+ * Consumers should prefer this over sentinel stripping when available.
+ */
+export function resolveTrustedInboundBareBody(message: unknown): string | undefined {
+  const record = asRecord(message);
+  const meta = asRecord(record?.["__openclaw"]) as OpenClawMessageMeta | undefined;
+  const inboundDecoration = asRecord(meta?.[OPENCLAW_INBOUND_DECORATION_KEY]);
+  return typeof inboundDecoration?.[OPENCLAW_INBOUND_BARE_BODY_KEY] === "string"
+    ? (inboundDecoration[OPENCLAW_INBOUND_BARE_BODY_KEY] as string)
+    : undefined;
+}
+
+/**
+ * Returns trusted bare user text when available, otherwise falls back to the
+ * legacy sentinel-based stripping path for older rows.
+ */
+export function resolveBareUserMessageText(
+  message: unknown,
+  fallbackText?: string,
+): string | undefined {
+  return (
+    resolveTrustedInboundBareBody(message) ??
+    (fallbackText ? stripInboundMetadata(fallbackText) : fallbackText)
+  );
+}
+
+/**
+ * Attaches the trusted user-visible body contract to a persisted/runtime user
+ * message so downstream consumers do not need to guess from forgeable text.
+ */
+export function attachTrustedInboundBareBody<T>(message: T, bareBody?: string): T {
+  const record = asRecord(message);
+  if (!record || record.role !== "user") {
+    return message;
+  }
+  const nextBareBody = bareBody ?? collectUserMessageTextContent(record);
+  const existingMeta = asRecord(record["__openclaw"]);
+  const nextMeta: OpenClawMessageMeta = existingMeta ? { ...existingMeta } : {};
+  const existingInboundDecoration = asRecord(nextMeta[OPENCLAW_INBOUND_DECORATION_KEY]);
+
+  if (nextBareBody !== undefined) {
+    nextMeta[OPENCLAW_INBOUND_DECORATION_KEY] = {
+      ...(existingInboundDecoration ?? {}),
+      [OPENCLAW_INBOUND_BARE_BODY_KEY]: nextBareBody,
+    };
+  } else if (existingInboundDecoration) {
+    const updatedInboundDecoration = { ...existingInboundDecoration };
+    delete updatedInboundDecoration[OPENCLAW_INBOUND_BARE_BODY_KEY];
+    if (Object.keys(updatedInboundDecoration).length > 0) {
+      nextMeta[OPENCLAW_INBOUND_DECORATION_KEY] = updatedInboundDecoration;
+    } else {
+      delete nextMeta[OPENCLAW_INBOUND_DECORATION_KEY];
+    }
+  }
+
+  const nextRecord = { ...record };
+  if (Object.keys(nextMeta).length > 0) {
+    nextRecord["__openclaw"] = nextMeta;
+  } else {
+    delete nextRecord["__openclaw"];
+  }
+  return nextRecord as T;
+}
+
+export function clearTrustedInboundBareBody<T>(message: T): T {
+  const record = asRecord(message);
+  if (!record || record.role !== "user") {
+    return message;
+  }
+  const existingMeta = asRecord(record["__openclaw"]);
+  const nextMeta: OpenClawMessageMeta = existingMeta ? { ...existingMeta } : {};
+  const existingInboundDecoration = asRecord(nextMeta[OPENCLAW_INBOUND_DECORATION_KEY]);
+  if (!existingInboundDecoration) {
+    return message;
+  }
+
+  const updatedInboundDecoration = { ...existingInboundDecoration };
+  delete updatedInboundDecoration[OPENCLAW_INBOUND_BARE_BODY_KEY];
+  if (Object.keys(updatedInboundDecoration).length > 0) {
+    nextMeta[OPENCLAW_INBOUND_DECORATION_KEY] = updatedInboundDecoration;
+  } else {
+    delete nextMeta[OPENCLAW_INBOUND_DECORATION_KEY];
+  }
+
+  const nextRecord = { ...record };
+  if (Object.keys(nextMeta).length > 0) {
+    nextRecord["__openclaw"] = nextMeta;
+  } else {
+    delete nextRecord["__openclaw"];
+  }
+  return nextRecord as T;
+}
+
+/**
+ * Reconciles the trusted bare-body contract after runtime or hook rewrites.
+ *
+ * - Plain user text always becomes the trusted bare body.
+ * - Sentinel/decorated text keeps an existing trusted body only when that body
+ *   still matches either the full content or the legacy stripped body.
+ * - New sentinel-looking text is trusted only when the caller opts in, such as
+ *   the direct transcript build path where the host already knows the text is
+ *   the canonical user body.
+ */
+export function reconcileTrustedInboundBareBody<T>(
+  message: T,
+  options?: { allowTrustFromSentinelText?: boolean },
+): T {
+  const record = asRecord(message);
+  if (!record || record.role !== "user") {
+    return message;
+  }
+  const contentText = collectUserMessageTextContent(record);
+  if (contentText === undefined) {
+    return message;
+  }
+  if (!hasInboundMetadataSentinel(contentText)) {
+    return attachTrustedInboundBareBody(message, contentText);
+  }
+
+  const trustedBareBody = resolveTrustedInboundBareBody(message);
+  if (trustedBareBody !== undefined) {
+    if (trustedBareBody === contentText || stripInboundMetadata(contentText) === trustedBareBody) {
+      return attachTrustedInboundBareBody(message, trustedBareBody);
+    }
+    return clearTrustedInboundBareBody(message);
+  }
+
+  return options?.allowTrustFromSentinelText === true
+    ? attachTrustedInboundBareBody(message, contentText)
+    : message;
 }
 
 function isMessageToolDeliveryHintLine(line: string): boolean {

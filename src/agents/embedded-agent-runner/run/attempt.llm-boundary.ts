@@ -1,7 +1,10 @@
 /**
  * Installs runtime-context and prompt-transform boundaries before LLM calls.
  */
-import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
+import {
+  resolveTrustedInboundBareBody,
+  stripInboundMetadata,
+} from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
@@ -465,6 +468,7 @@ function stripHistoricalInboundMetadataFromUserMessages(
     }
     const content = (message as { content?: unknown }).content;
     const isActive = index === activeUserMessageIndex;
+    const trustedBareBody = !isActive ? resolveTrustedInboundBareBody(message) : undefined;
     const override = options?.currentUserTimestampOverride;
     const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
     const useCurrentUserTimestampOverride =
@@ -496,9 +500,9 @@ function stripHistoricalInboundMetadataFromUserMessages(
         const envelope = envelopeMatch ? envelopeMatch[0] : "";
         const body = envelope ? raw.slice(envelope.length) : raw;
         // Strip metadata from the body but re-attach the original envelope.
-        return `${envelope}${stripInboundMetadata(body)}`;
+        return `${envelope}${trustedBareBody ?? stripInboundMetadata(body)}`;
       }
-      const stripped = isActive ? raw : stripInboundMetadata(raw);
+      const stripped = isActive ? raw : (trustedBareBody ?? stripInboundMetadata(raw));
       return stampUserTextWithMessageTimestamp(
         stripped,
         messageTimestamp,
@@ -538,27 +542,39 @@ function stripHistoricalInboundMetadataFromUserMessages(
     // preserved untouched so attachment turns keep their array form.
     let contentChanged = false;
     let processedFirstText = false;
-    const nextContent = content.map((block) => {
-      if (!block || typeof block !== "object") {
-        return block;
-      }
-      const textBlock = block as { type?: unknown; text?: unknown };
-      if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
-        return block;
-      }
-      let nextText: string;
-      if (!processedFirstText) {
-        nextText = transformText(textBlock.text);
-        processedFirstText = true;
-      } else {
-        nextText = isActive ? textBlock.text : stripInboundMetadata(textBlock.text);
-      }
-      if (nextText === textBlock.text) {
-        return block;
-      }
-      contentChanged = true;
-      return Object.assign({}, block, { text: nextText });
-    });
+    const nextContent = content
+      .map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const textBlock = block as { type?: unknown; text?: unknown };
+        if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+          return block;
+        }
+        let nextText: string;
+        if (!processedFirstText) {
+          nextText = transformText(trustedBareBody ?? textBlock.text);
+          processedFirstText = true;
+        } else {
+          nextText = isActive
+            ? textBlock.text
+            : trustedBareBody !== undefined
+              ? ""
+              : stripInboundMetadata(textBlock.text);
+        }
+        if (nextText === textBlock.text) {
+          return block;
+        }
+        contentChanged = true;
+        return Object.assign({}, block, { text: nextText });
+      })
+      .filter((block) => {
+        if (!block || typeof block !== "object") {
+          return true;
+        }
+        const textBlock = block as { type?: unknown; text?: unknown };
+        return textBlock.type !== "text" || textBlock.text !== "";
+      });
     if (!contentChanged) {
       return message;
     }

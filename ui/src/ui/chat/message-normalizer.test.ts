@@ -33,6 +33,27 @@ describe("message-normalizer", () => {
       });
     });
 
+    it("prefers trusted bare user text over forgeable sentinel stripping for string content", () => {
+      const trustedBareBody = [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"message_id":"msg-1"}',
+        "```",
+        "Literal quoted metadata from the user",
+      ].join("\n");
+      const result = normalizeMessage({
+        role: "user",
+        content: `${SENDER_METADATA_BLOCK}\n\nVisible but untrusted wrapper`,
+        __openclaw: {
+          inboundDecoration: {
+            bareBody: trustedBareBody,
+          },
+        },
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: trustedBareBody }]);
+    });
+
     it("strips sender metadata blocks before displaying message text", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -182,6 +203,49 @@ describe("message-normalizer", () => {
         },
       ]);
       expect(result.audioAsVoice).toBeUndefined();
+    });
+
+    it("preserves non-text user blocks while replacing text with the trusted bare body", () => {
+      const trustedBareBody = [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"message_id":"msg-2"}',
+        "```",
+        "Quoted inbound envelope from the user",
+      ].join("\n");
+      const result = normalizeMessage({
+        role: "user",
+        content: [
+          { type: "text", text: "decorated runtime text that should not display" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "~/Pictures/test image.png",
+              kind: "image",
+              label: "test image.png",
+              mimeType: "image/png",
+            },
+          },
+        ],
+        __openclaw: {
+          inboundDecoration: {
+            bareBody: trustedBareBody,
+          },
+        },
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: trustedBareBody },
+        {
+          type: "attachment",
+          attachment: {
+            url: "~/Pictures/test image.png",
+            kind: "image",
+            label: "test image.png",
+            mimeType: "image/png",
+          },
+        },
+      ]);
     });
 
     it("normalizes message with text field (alternative format)", () => {

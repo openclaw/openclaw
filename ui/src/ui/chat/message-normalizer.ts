@@ -3,7 +3,10 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  resolveBareUserMessageText,
+  stripInboundMetadata,
+} from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
@@ -214,10 +217,16 @@ export function stripMessageDisplayMetadataText(text: string): string {
   return stripInboundMetadata(text);
 }
 
-function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
+function stripMessageDisplayMetadata(
+  items: MessageContentItem[],
+  options?: { stripUserText?: boolean },
+): MessageContentItem[] {
   return items
     .map((item) => {
       if (item.type !== "text" || typeof item.text !== "string") {
+        return item;
+      }
+      if (options?.stripUserText === false) {
         return item;
       }
       return { ...item, text: stripMessageDisplayMetadataText(item.text) };
@@ -307,6 +316,8 @@ function expandTextContent(text: string): {
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const m = message as Record<string, unknown>;
   let role = typeof m.role === "string" ? m.role : "unknown";
+  const trustedBareUserText =
+    role === "user" ? resolveBareUserMessageText(message as Record<string, unknown>) : undefined;
 
   // Detect tool messages by common gateway shapes.
   // Some tool events come through as assistant role with tool_* items in the content array.
@@ -340,7 +351,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
     } else {
-      content = [{ type: "text", text: m.content }];
+      content = [{ type: "text", text: trustedBareUserText ?? m.content }];
     }
   } else if (Array.isArray(m.content)) {
     content = m.content.flatMap((item: Record<string, unknown>) => {
@@ -429,6 +440,15 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         },
       ];
     });
+    if (!isAssistantMessage && trustedBareUserText !== undefined) {
+      const nonTextItems = content.filter((item) => item.type !== "text");
+      content = [
+        ...(trustedBareUserText.trim()
+          ? [{ type: "text" as const, text: trustedBareUserText }]
+          : []),
+        ...nonTextItems,
+      ];
+    }
   } else if (typeof m.text === "string") {
     if (isAssistantMessage) {
       const expanded = expandTextContent(m.text);
@@ -436,7 +456,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
     } else {
-      content = [{ type: "text", text: m.text }];
+      content = [{ type: "text", text: trustedBareUserText ?? m.text }];
     }
   }
 
@@ -445,7 +465,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const senderLabel =
     typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
 
-  content = stripMessageDisplayMetadata(content);
+  content = stripMessageDisplayMetadata(content, {
+    stripUserText: !(role === "user" && trustedBareUserText !== undefined),
+  });
 
   return {
     role,

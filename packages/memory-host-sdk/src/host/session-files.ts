@@ -17,8 +17,8 @@ import {
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
+  resolveBareUserMessageText,
   resolveSessionTranscriptsDirForAgent,
-  stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
@@ -426,11 +426,15 @@ function renderSessionExportLines(label: string, text: string): string[] {
  *
  * See: https://github.com/openclaw/openclaw/issues/63921
  */
-function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant"): string {
+function stripInboundMetadataForUserRole(
+  text: string,
+  role: "user" | "assistant",
+  message?: { role?: unknown; content?: unknown; text?: unknown; __openclaw?: unknown },
+): string {
   if (role !== "user") {
     return text;
   }
-  return stripInboundMetadata(text);
+  return resolveBareUserMessageText(message, text) ?? text;
 }
 
 const GENERATED_SYSTEM_MESSAGE_RE = /^System(?: \(untrusted\))?: \[[^\]]+\]\s*/;
@@ -453,8 +457,12 @@ function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assista
   return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
 }
 
-function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
-  const strippedInbound = stripInboundMetadataForUserRole(text, role);
+function sanitizeSessionText(
+  text: string,
+  role: "user" | "assistant",
+  message?: { role?: unknown; content?: unknown; text?: unknown; __openclaw?: unknown },
+): string | null {
+  const strippedInbound = stripInboundMetadataForUserRole(text, role, message);
   const strippedInternal = stripInternalRuntimeContext(strippedInbound);
   const normalized = normalizeSessionText(strippedInternal);
   if (!normalized) {
@@ -632,7 +640,7 @@ export async function buildSessionEntry(
         lineMap.length = 0;
         messageTimestampsMs.length = 0;
       }
-      const text = sanitizeSessionText(rawText, message.role);
+      const text = sanitizeSessionText(rawText, message.role, message);
       if (!text) {
         // Assistant-side machinery (silent replies, system wrappers) is already
         // dropped by sanitizeSessionText. We deliberately do NOT use the prior

@@ -5,6 +5,7 @@
  */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { reconcileTrustedInboundBareBody } from "../auto-reply/reply/strip-inbound-meta.js";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -64,6 +65,13 @@ type AppendMessageOptions = Parameters<SessionManager["appendMessage"]>[1];
 
 function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage {
   return message.role === "user";
+}
+
+function attachTrustedBareBodyForPersistence(message: AgentMessage): AgentMessage {
+  if (!isUserAgentMessage(message)) {
+    return message;
+  }
+  return reconcileTrustedInboundBareBody(message);
 }
 
 function isExpectedCompactionAppend(entryId: string, appendedText: string): boolean {
@@ -693,16 +701,25 @@ export function installSessionToolResultGuard(
     msg: AgentMessage,
   ): { message: AgentMessage; changed: boolean } | null => {
     if (!beforeWrite) {
-      return { message: msg, changed: false };
+      return {
+        message: attachTrustedBareBodyForPersistence(msg),
+        changed: false,
+      };
     }
     const result = beforeWrite({ message: msg });
     if (result?.block) {
       return null;
     }
     if (result?.message) {
-      return { message: result.message, changed: true };
+      return {
+        message: attachTrustedBareBodyForPersistence(result.message),
+        changed: true,
+      };
     }
-    return { message: msg, changed: false };
+    return {
+      message: attachTrustedBareBodyForPersistence(msg),
+      changed: false,
+    };
   };
 
   const flushPendingToolResults = () => {
@@ -728,7 +745,9 @@ export function installSessionToolResultGuard(
             capToolResultForPersistence(flushed.message, maxToolResultChars, redactionConfig),
             {
               invalidateSerializedPrefixCache:
-                persistedSynthetic !== synthetic || toolResultTransformerMayMutate || flushed.changed,
+                persistedSynthetic !== synthetic ||
+                toolResultTransformerMayMutate ||
+                flushed.changed,
             },
           );
         }

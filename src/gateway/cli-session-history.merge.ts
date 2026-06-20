@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { resolveBareUserMessageText } from "../auto-reply/reply/strip-inbound-meta.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
@@ -40,7 +40,8 @@ function extractComparableText(message: unknown): string | undefined {
   if (!joined) {
     return undefined;
   }
-  const visible = role === "user" ? stripInboundMetadata(joined) : joined;
+  const visible =
+    role === "user" ? (resolveBareUserMessageText(message, joined) ?? joined) : joined;
   const normalized = visible.replace(/\s+/g, " ").trim();
   return normalized || undefined;
 }

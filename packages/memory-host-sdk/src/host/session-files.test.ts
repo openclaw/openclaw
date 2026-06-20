@@ -280,6 +280,37 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("User: Actual user text");
   });
 
+  it("prefers the trusted bare body over heuristic stripping for user-authored sentinel text", async () => {
+    const quotedDecoration = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-100","chat_id":"-100123"}',
+      "```",
+      "Literal quoted metadata from the user",
+    ].join("\n");
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: quotedDecoration,
+          __openclaw: {
+            inboundDecoration: {
+              bareBody: quotedDecoration,
+            },
+          },
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "trusted-bare-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe(
+      'User: Conversation info (untrusted metadata): ```json {"message_id":"msg-100","chat_id":"-100123"} ``` Literal quoted metadata from the user',
+    );
+  });
+
   it("skips inter-session user messages", async () => {
     const jsonlLines = [
       JSON.stringify({

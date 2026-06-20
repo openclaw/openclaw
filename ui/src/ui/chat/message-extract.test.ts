@@ -99,6 +99,38 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("visible ask");
     expect(extractTextCached(message)).toBe("visible ask");
   });
+
+  it("prefers trusted bare user text over sentinel stripping", () => {
+    const message = {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            '{"message_id":"msg-1"}',
+            "```",
+            "Literal quoted metadata from the user",
+          ].join("\n"),
+        },
+      ],
+      __openclaw: {
+        inboundDecoration: {
+          bareBody: [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            '{"message_id":"msg-1"}',
+            "```",
+            "Literal quoted metadata from the user",
+          ].join("\n"),
+        },
+      },
+    };
+
+    expect(extractText(message)).toBe(message.__openclaw.inboundDecoration.bareBody);
+    expect(extractTextCached(message)).toBe(message.__openclaw.inboundDecoration.bareBody);
+  });
 });
 
 describe("extractThinkingCached", () => {

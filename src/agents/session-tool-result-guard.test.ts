@@ -589,6 +589,119 @@ describe("installSessionToolResultGuard", () => {
     });
   });
 
+  it("stores a trusted bare body for plain persisted user messages", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "plain user text",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm)[0] as Record<string, unknown> | undefined;
+    expect(persisted).toMatchObject({
+      __openclaw: {
+        inboundDecoration: {
+          bareBody: "plain user text",
+        },
+      },
+    });
+  });
+
+  it("does not invent a trusted bare body from sentinel-looking runtime user text", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const quotedDecoration = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-1"}',
+      "```",
+      "Literal quoted metadata from the user",
+    ].join("\n");
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: quotedDecoration,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm)[0] as Record<string, unknown> | undefined;
+    expect(persisted).not.toHaveProperty("__openclaw.inboundDecoration.bareBody");
+  });
+
+  it("preserves an existing trusted bare body on runtime user messages", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const quotedDecoration = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-1"}',
+      "```",
+      "Literal quoted metadata from the user",
+    ].join("\n");
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: quotedDecoration,
+        timestamp: Date.now(),
+        __openclaw: {
+          inboundDecoration: {
+            bareBody: quotedDecoration,
+          },
+        },
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm)[0] as Record<string, unknown> | undefined;
+    expect(persisted).toMatchObject({
+      __openclaw: {
+        inboundDecoration: {
+          bareBody: quotedDecoration,
+        },
+      },
+    });
+  });
+
+  it("clears a mismatched trusted bare body on runtime user messages", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const originalTrustedBareBody = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-1"}',
+      "```",
+      "Literal quoted metadata from the user",
+    ].join("\n");
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: [
+          "Conversation info (untrusted metadata):",
+          "```json",
+          '{"message_id":"msg-2"}',
+          "```",
+          "rewritten sentinel-looking text",
+        ].join("\n"),
+        timestamp: Date.now(),
+        __openclaw: {
+          inboundDecoration: {
+            bareBody: originalTrustedBareBody,
+          },
+        },
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm)[0] as Record<string, unknown> | undefined;
+    expect(persisted).not.toHaveProperty("__openclaw.inboundDecoration.bareBody");
+  });
+
   it("suppresses only the next persisted user message when requested", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
