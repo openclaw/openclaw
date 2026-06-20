@@ -63,8 +63,8 @@ function pruneBindingsForMissingAgents(cfg: OpenClawConfig, changes: string[]): 
   }
 
   const agentIds = new Set(validAgents.map((agent) => normalizeAgentId(agent.id)));
-  // Preserve exact "main" bindings — the implicit main session always exists.
-  agentIds.add(DEFAULT_AGENT_ID);
+  // Preserve exact "main" bindings — checked explicitly below
+  // (normalized variants like "MAIN" must be pruned to stay symmetric with schema).
   const nextBindings = bindings.filter((binding) => {
     const agentId = binding && typeof binding === "object" ? binding.agentId : undefined;
     return (
