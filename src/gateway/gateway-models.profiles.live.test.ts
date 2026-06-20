@@ -2127,8 +2127,9 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   }
   const messages = await readSessionMessagesAsync(
     {
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey,
       storePath,
     },
     {

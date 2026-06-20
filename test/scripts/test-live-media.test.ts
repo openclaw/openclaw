@@ -1,4 +1,5 @@
 // Test Live Media tests cover test live media script behavior.
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   MEDIA_SUITES,
@@ -8,6 +9,22 @@ import {
 } from "../../scripts/test-live-media.ts";
 
 describe("scripts/test-live-media", () => {
+  it("prints help through the real node --import tsx entrypoint", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/test-live-media.ts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Media live harness");
+    expect(result.stdout).toContain("pnpm test:live:media");
+    expect(result.stderr).toBe("");
+  });
+
   it("rejects unknown global providers for the selected suites", () => {
     expect(() =>
       parseArgs(["image", "--providers", "definitely-not-a-provider", "--all-providers"]),

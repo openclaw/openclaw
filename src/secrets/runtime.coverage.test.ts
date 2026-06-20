@@ -234,6 +234,10 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
 const RUNTIME_COVERAGE_TEST_TIMEOUT_MS = 240_000;
+const COVERAGE_CONFIG_PLUGIN_SOURCE_DIRS = new Map([
+  ["google-meet", path.join(process.cwd(), "extensions", "google-meet")],
+  ["voice-call", path.join(process.cwd(), "extensions", "voice-call")],
+]);
 const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
 const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
@@ -347,10 +351,26 @@ function buildCoverageLoadablePluginOrigins(
   for (const entry of entries) {
     const [scope, entriesKey, pluginId] = entry.id.split(".");
     if (scope === "plugins" && entriesKey === "entries" && pluginId) {
-      origins.set(pluginId, "bundled");
+      origins.set(
+        pluginId,
+        COVERAGE_CONFIG_PLUGIN_SOURCE_DIRS.has(pluginId) ? "config" : "bundled",
+      );
     }
   }
   return origins;
+}
+
+function addCoveragePluginLoadPath(config: OpenClawConfig, pluginId: string): void {
+  const loadPath = COVERAGE_CONFIG_PLUGIN_SOURCE_DIRS.get(pluginId);
+  if (!loadPath) {
+    return;
+  }
+  const existing = getPath(config, ["plugins", "load", "paths"]);
+  if (Array.isArray(existing) && existing.includes(loadPath)) {
+    return;
+  }
+  const nextIndex = Array.isArray(existing) ? existing.length : 0;
+  setPathCreateStrict(config, ["plugins", "load", "paths", String(nextIndex)], loadPath);
 }
 
 function resolveCoverageLoadablePluginOrigins(
@@ -508,6 +528,7 @@ function applyConfigForOpenClawTarget(
     const pluginId = entry.id.split(".")[2];
     if (pluginId) {
       setPathCreateStrict(config, ["plugins", "entries", pluginId, "enabled"], true);
+      addCoveragePluginLoadPath(config, pluginId);
     }
   }
   if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {

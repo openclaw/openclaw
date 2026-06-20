@@ -107,6 +107,22 @@ const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--compare-baseline",
+  "--compare-candidate",
+  "--cpu-prof-dir",
+  "--entry",
+  "--entry-primary",
+  "--entry-secondary",
+  "--heap-prof-dir",
+  "--output",
+  "--preset",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+const BOOLEAN_FLAGS = new Set(["--help", "--json"]);
 
 const COMMAND_CASES: readonly CommandCase[] = [
   {
@@ -449,6 +465,24 @@ function parseRepeatableFlag(flag: string): string[] {
     }
   }
   return values;
+}
+
+function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (VALUE_FLAGS.has(arg)) {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error(`${arg} requires a value`);
+      }
+      index += 1;
+      continue;
+    }
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
@@ -1044,6 +1078,7 @@ async function main(): Promise<void> {
     return;
   }
 
+  validateCliArgs();
   const options = parseOptions();
   if (options.compareBaseline || options.compareCandidate) {
     if (!options.compareBaseline || !options.compareCandidate) {
@@ -1148,12 +1183,13 @@ export const testing = {
   parseNonNegativeInt,
   parsePositiveInt,
   readBenchmarkComparison: readBenchmarkComparisonForTesting,
+  validateCliArgs,
   writeJsonOutput,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   await main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.stack : String(error));
+    console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
 }

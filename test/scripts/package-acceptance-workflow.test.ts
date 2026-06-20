@@ -119,9 +119,17 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
     expect(workflow).toContain('fallback_package_version="${BASH_REMATCH[1]}"');
+    expect(workflow).toContain('tag_package_content="$RUNNER_TEMP/tag-package-content.b64"');
+    expect(workflow).toContain('gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag"');
+    expect(workflow).toContain("for attempt in 1 2 3; do");
+    expect(workflow).toContain("sleep $((attempt * 5))");
     expect(workflow).toContain(
-      'tag_package_version="$(gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag"',
+      "Stable closeout could not read package.json for $tag from GitHub API.",
     );
+    expect(workflow).toContain(
+      "Stable closeout package.json content for $tag was not valid base64.",
+    );
+    expect(workflow).toContain('tag_package_version="$(jq -r');
     expect(workflow).toContain('evidence_source_tag="v$fallback_package_version"');
     expect(workflow).toContain('gh release download "$evidence_source_tag"');
     expect(workflow).toContain("Checkout fallback evidence tag");

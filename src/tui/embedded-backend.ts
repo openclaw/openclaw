@@ -450,8 +450,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
         ? await readSessionMessagesAsync(
             {
               agentId: sessionAgentId,
-              sessionFile: entry?.sessionFile,
+              sessionEntry: entry,
               sessionId,
+              sessionKey: canonicalKey,
               storePath,
             },
             {

@@ -1,4 +1,5 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -29,6 +30,25 @@ function withEnv<T>(env: Record<string, string | undefined>, callback: () => T):
 }
 
 describe("bench-cli-startup", () => {
+  it("rejects unknown CLI options before running benchmarks", () => {
+    expect(() => testing.validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--wat"],
+      {
+        cwd: join(__dirname, "../.."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stderr).not.toContain("Node.js");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
   it("writes compare-mode JSON output and creates parent directories", () => {
     const tempDirs = createTempDirTracker();
     const tmpDir = tempDirs.make("openclaw-cli-startup-compare-output-");

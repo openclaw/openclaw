@@ -1,20 +1,8 @@
-#!/usr/bin/env -S node --import tsx
 // Test Live Media script supports OpenClaw repository automation.
 
-import type { ChildProcess } from "node:child_process";
-import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-type SpawnPnpmRunner = (params: {
-  pnpmArgs: string[];
-  stdio: "inherit";
-  env: NodeJS.ProcessEnv;
-}) => ChildProcess;
-
-const require = createRequire(import.meta.url);
-const { spawnPnpmRunner: _spawnPnpmRunner } = require("./pnpm-runner.mjs") as {
-  spawnPnpmRunner: SpawnPnpmRunner;
-};
+import { spawnPnpmRunner as _spawnPnpmRunner } from "./pnpm-runner.mjs";
 
 export type MediaSuiteId = "image" | "music" | "video";
 
@@ -114,7 +102,7 @@ function formatProviderList(providers: Iterable<string>): string {
   return [...providers].toSorted().join(", ");
 }
 
-function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }): ChildProcess {
+function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }) {
   return _spawnPnpmRunner({
     pnpmArgs: params.pnpmArgs,
     stdio: "inherit",

@@ -332,6 +332,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
       }
 
       if (frame.method === "exec.approval.resolve") {
+        expect(frame.params).toMatchObject({ id: "approval-1", decision: "allow-once" });
         reply({ ok: true, params: frame.params as JsonObject | undefined });
         return;
       }
@@ -508,7 +509,7 @@ describe("OpenClaw SDK websocket e2e", () => {
       const approvals = expectJsonObject(await oc.approvals.list());
       expect(approvals.approvals).toEqual([]);
       const approvalResult = expectJsonObject(
-        await oc.approvals.respond("approval-1", { decision: "approve" }),
+        await oc.approvals.respond("approval-1", { decision: "allow-once" }),
       );
       expect(approvalResult.ok).toBe(true);
 
@@ -537,6 +538,14 @@ describe("OpenClaw SDK websocket e2e", () => {
         "exec.approval.list",
         "exec.approval.resolve",
       ]);
+      const requestParams = new Map(
+        gateway.requests.map((request) => [request.method, request.params]),
+      );
+      expect(requestParams.get("agents.list")).toEqual({});
+      expect(requestParams.get("sessions.list")).toEqual({});
+      expect(requestParams.get("models.list")).toEqual({});
+      expect(requestParams.get("tools.catalog")).toEqual({});
+      expect(requestParams.get("exec.approval.list")).toEqual({});
     } finally {
       await oc.close();
       await gateway.close();

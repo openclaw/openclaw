@@ -467,8 +467,9 @@ async function loadArtifacts(
   await visitSessionMessagesAsync(
     {
       agentId: resolved.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
-      sessionFile: entry?.sessionFile,
+      sessionEntry: entry,
       sessionId,
+      sessionKey,
       storePath,
     },
     (message, seq) => {

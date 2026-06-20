@@ -570,6 +570,32 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
 
 export const moveNewestPackedTarballForTest = moveNewestPackedTarball;
 
+async function cleanPackedOpenClawTarballs(outputDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(outputDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      entries = [];
+    } else {
+      throw error;
+    }
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawTarballFilename(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
+      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
+  );
+}
+
+export const cleanPackedOpenClawTarballsForTest = cleanPackedOpenClawTarballs;
+
 function normalizeUrlHostname(hostname) {
   return hostname.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.+$/u, "").toLowerCase();
 }
@@ -1209,7 +1235,10 @@ export async function downloadUrl(url, target, options = {}) {
     const rawContentLength = responseHeader(response, "content-length");
     const contentLength =
       rawContentLength && /^\d+$/u.test(rawContentLength) ? Number(rawContentLength) : undefined;
-    if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+    if (
+      contentLength !== undefined &&
+      (!Number.isSafeInteger(contentLength) || contentLength > maxBytes)
+    ) {
       throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
     }
     await fs.rm(tempTarget, { force: true });
@@ -1304,6 +1333,7 @@ async function resolveCandidate(options) {
       const npmPackRunner = resolveNpmPackageCandidatePackRunner(options.packageSpec, outputDir, {
         env: process.env,
       });
+      await cleanPackedOpenClawTarballs(outputDir);
       const packOutput = await run(npmPackRunner.command, npmPackRunner.args, {
         capture: true,
         env: npmPackRunner.env,

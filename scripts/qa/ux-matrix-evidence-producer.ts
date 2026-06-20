@@ -38,6 +38,27 @@ export type ProducerOptions = {
   skipVisualProof: boolean;
 };
 
+function usage() {
+  return `Usage: node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base <dir> [options]
+
+Produces a QA Lab UX Matrix evidence bundle.
+
+Options:
+  --artifact-base <dir>  Evidence artifact directory
+  --repo-root <dir>      Repository root
+  --skip-visual-proof    Use fixture visual evidence instead of Playwright screenshots
+  -h, --help             Show this help
+`;
+}
+
+function readOptionValue(argv: readonly string[], index: number, arg: string) {
+  const value = argv[index + 1] ?? "";
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${arg} requires a value`);
+  }
+  return value;
+}
+
 function parseOptions(argv: readonly string[]): ProducerOptions {
   let artifactBase = "";
   let repoRoot = process.cwd();
@@ -45,12 +66,12 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--artifact-base") {
-      artifactBase = argv[index + 1] ?? "";
+      artifactBase = readOptionValue(argv, index, arg);
       index += 1;
       continue;
     }
     if (arg === "--repo-root") {
-      repoRoot = argv[index + 1] ?? "";
+      repoRoot = readOptionValue(argv, index, arg);
       index += 1;
       continue;
     }
@@ -625,13 +646,21 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  runUxMatrixEvidenceProducer(parseOptions(process.argv.slice(2)))
-    .then((result) => {
-      console.log(`UX Matrix evidence: ${path.join(result.artifactBase, QA_EVIDENCE_FILENAME)}`);
-      console.log(`UX Matrix entries: ${result.evidence.entries.length}`);
+  (async () => {
+    const cliArgs = process.argv.slice(2);
+    if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+      console.log(usage());
+      return;
+    }
+    const result = await runUxMatrixEvidenceProducer(parseOptions(cliArgs));
+    console.log(`UX Matrix evidence: ${path.join(result.artifactBase, QA_EVIDENCE_FILENAME)}`);
+    console.log(`UX Matrix entries: ${result.evidence.entries.length}`);
+  })()
+    .then(() => {
+      process.exitCode = 0;
     })
     .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.stack || error.message : String(error));
+      console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     });
 }

@@ -24,7 +24,6 @@ import {
   win32 as pathWin32,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { verify as verifySigstoreBundle } from "sigstore";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
@@ -278,7 +277,8 @@ async function verifySigstoreNpmProvenanceBundle(
   bundle: unknown,
   policy: NpmProvenanceVerificationPolicy,
 ): Promise<void> {
-  await verifySigstoreBundle(bundle as Parameters<typeof verifySigstoreBundle>[0], policy);
+  const sigstore = require("sigstore") as { verify: VerifyNpmProvenanceBundle };
+  await sigstore.verify(bundle, policy);
 }
 
 export async function verifyNpmProvenanceAttestation(params: {
