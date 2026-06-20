@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 // Gateway RPC handlers for image generation provider inventory.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listImageGenerationProviders } from "../../image-generation/provider-registry.js";
@@ -55,10 +56,11 @@ export const imageHandlers: GatewayRequestHandlers = {
   "image.providers": async ({ respond, context }) => {
     try {
       const cfg = context.getRuntimeConfig();
-      const agentDir = context.agentDir;
+      // Use default agent directory for provider readiness checks
+      const agentDir = resolveDefaultAgentDir(cfg);
 
       const providers = listImageGenerationProviders(cfg).map((provider) => {
-        // Use provider's isConfigured with agentDir if available, otherwise fallback to generic config check
+        // Use provider's isConfigured with agentDir, fallback to generic config check
         const isConfigured =
           provider.isConfigured?.({ cfg, agentDir }) ??
           providerHasGenericConfig(cfg, provider.id, agentDir);
