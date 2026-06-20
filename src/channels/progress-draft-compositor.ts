@@ -216,6 +216,27 @@ export function createChannelProgressDraftCompositor(params: {
     start() {
       return gate.startNow();
     },
+    async noteActivity(options?: { startImmediately?: boolean }) {
+      if (
+        !params.active ||
+        params.mode !== "progress" ||
+        progressSuppressed ||
+        finalReplyStarted ||
+        finalReplyDelivered
+      ) {
+        return false;
+      }
+      if (options?.startImmediately) {
+        await gate.startNow();
+        return gate.hasStarted ? await render({ flush: true }) : false;
+      }
+      const alreadyStarted = gate.hasStarted;
+      const progressActive = await gate.noteWork();
+      if ((alreadyStarted || progressActive) && gate.hasStarted) {
+        return await render();
+      }
+      return false;
+    },
     pushToolProgress: noteProgress,
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       if (
