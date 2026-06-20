@@ -22,4 +22,18 @@ describe("HyperlinkMarkdown", () => {
     expect(rendered).toContain('  __main__":');
     expect(rendered).not.toContain("  __name_");
   });
+
+  it("keeps long fenced code info strings within narrow terminal width", () => {
+    const markdown = new HyperlinkMarkdown(
+      ["```this-is-a-very-long-language-info-string", "x", "```"].join("\n"),
+      0,
+      0,
+      markdownTheme,
+    );
+
+    const rendered = plainLines(markdown.render(12));
+
+    expect(rendered.every((line) => visibleWidth(line) <= 12)).toBe(true);
+    expect(rendered.join("\n")).toContain("this-is-a");
+  });
 });

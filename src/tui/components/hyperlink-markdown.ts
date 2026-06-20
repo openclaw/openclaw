@@ -209,12 +209,17 @@ export class HyperlinkMarkdown implements Component {
     const highlightedLines = highlightCode
       ? wrappedCodeLines.flatMap((line) => highlightCode(line, language))
       : wrappedCodeLines.map((line) => this.theme.codeBlock(line));
-    const lines = [this.theme.codeBlockBorder(`${segment.fence}${segment.info}`)];
+    const borderWidth = Math.max(1, width - this.paddingX * 2);
+    const lines = wrapCodeLine(`${segment.fence}${segment.info}`, borderWidth).map((line) =>
+      this.theme.codeBlockBorder(line),
+    );
     for (const line of highlightedLines) {
       lines.push(`${indent}${line}`);
     }
     if (segment.closed) {
-      lines.push(this.theme.codeBlockBorder(segment.fence));
+      lines.push(
+        ...wrapCodeLine(segment.fence, borderWidth).map((line) => this.theme.codeBlockBorder(line)),
+      );
     }
     return lines.map((line) => this.applyLineChrome(line, width));
   }
