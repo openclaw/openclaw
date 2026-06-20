@@ -232,7 +232,9 @@ export function createTelegramDraftStream(params: {
   let deliveredTextOffset = 0;
   let shortInitialPreviewSinceMs: number | undefined;
   let shortInitialPreviewTimer: ReturnType<typeof setTimeout> | undefined;
-  let rescheduleDraftUpdate: ((text: string) => void) | undefined;
+  function rescheduleDraftUpdate(text: string) {
+    updateDraft(text);
+  }
   const minInitialPreviewDelayMs =
     minInitialChars == null ? undefined : throttleMs * MIN_INITIAL_PREVIEW_DELAY_THROTTLE_WINDOWS;
   const clearShortInitialPreviewTimer = () => {
@@ -257,7 +259,7 @@ export function createTelegramDraftStream(params: {
         }
         const text = lastRequestedText;
         if (text.trim()) {
-          rescheduleDraftUpdate?.(text);
+          rescheduleDraftUpdate(text);
         }
       },
       Math.max(0, delayMs),
@@ -517,7 +519,6 @@ export function createTelegramDraftStream(params: {
     state: streamState,
     sendOrEditStreamMessage,
   });
-  rescheduleDraftUpdate = updateDraft;
 
   const requestDraftUpdate = (text: string, preview?: TelegramDraftPreview) => {
     if (streamState.stopped || streamState.final) {
