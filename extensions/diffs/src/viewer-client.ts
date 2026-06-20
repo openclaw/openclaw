@@ -287,6 +287,10 @@ function syncAllControllers(): void {
 }
 
 export async function hydrateViewer(): Promise<void> {
+  // Clear stale controllers from previous hydration cycles before
+  // pushing new ones. The module-level array persists across
+  // re-hydration calls and would otherwise accumulate orphaned entries.
+  controllers.length = 0;
   const cards = await Promise.all(
     getCards().map(async ({ host, payload }) => ({
       host,

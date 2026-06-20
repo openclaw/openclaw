@@ -172,6 +172,22 @@ describe("hydrateViewer", () => {
     expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
     warn.mockRestore();
   });
+
+  it("clears stale controllers on re-hydration", async () => {
+    renderCard();
+    const { controllers, hydrateViewer } = await import("./viewer-client.js");
+    controllers.splice(0);
+
+    await hydrateViewer();
+    expect(controllers).toHaveLength(1);
+    const firstController = controllers[0];
+
+    // Second hydration with a new card should replace the old controller.
+    renderCard();
+    await hydrateViewer();
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0]).not.toBe(firstController);
+  });
 });
 
 describe("viewerState initialization", () => {
