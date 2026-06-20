@@ -1457,6 +1457,7 @@
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/qwen-oauth",
+                  "providers/requesty",
                   "providers/runway",
                   "providers/senseaudio",
                   "providers/sglang",

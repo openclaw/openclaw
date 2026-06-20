@@ -1,0 +1,57 @@
+{
+  "id": "requesty",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["requesty"],
+  "modelIdNormalization": {
+    "providers": {
+      "requesty": {
+        "prefixWhenBare": "requesty"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "requesty": {
+        "liteLLM": false
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "openai-completions",
+      "hostSuffixes": ["requesty.ai"]
+    }
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "requesty",
+        "envVars": ["REQUESTY_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "requesty",
+      "method": "api-key",
+      "choiceId": "requesty-api-key",
+      "choiceLabel": "Requesty API key",
+      "groupId": "requesty",
+      "groupLabel": "Requesty",
+      "groupHint": "API key",
+      "onboardingScopes": ["text-inference"],
+      "optionKey": "requestyApiKey",
+      "cliFlag": "--requesty-api-key",
+      "cliOption": "--requesty-api-key <key>",
+      "cliDescription": "Requesty API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -26,6 +26,7 @@ export const providerExtensionIds = [
   "ollama",
   "openrouter",
   "qianfan",
+  "requesty",
   "stepfun",
   "together",
   "venice",
