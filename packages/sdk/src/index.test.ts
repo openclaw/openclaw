@@ -676,6 +676,69 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
+  it("sends empty params for no-arg Gateway list helpers", async () => {
+    const transport = new FakeTransport({
+      "agents.list": { agents: [] },
+      "sessions.list": { sessions: [] },
+      "tasks.list": { tasks: [] },
+      "models.list": { models: [] },
+      "tools.catalog": { tools: [] },
+      "exec.approval.list": { approvals: [] },
+      "environments.list": { environments: [] },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.agents.list()).resolves.toEqual({ agents: [] });
+    await expect(oc.sessions.list()).resolves.toEqual({ sessions: [] });
+    await expect(oc.tasks.list()).resolves.toEqual({ tasks: [] });
+    await expect(oc.models.list()).resolves.toEqual({ models: [] });
+    await expect(oc.tools.list()).resolves.toEqual({ tools: [] });
+    await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
+    await expect(oc.environments.list()).resolves.toEqual({ environments: [] });
+
+    expect(transport.calls).toEqual([
+      { method: "agents.list", params: {}, options: undefined },
+      { method: "sessions.list", params: {}, options: undefined },
+      { method: "tasks.list", params: {}, options: undefined },
+      { method: "models.list", params: {}, options: undefined },
+      { method: "tools.catalog", params: {}, options: undefined },
+      { method: "exec.approval.list", params: {}, options: undefined },
+      { method: "environments.list", params: {}, options: undefined },
+    ]);
+  });
+
+  it("preserves explicit null params for Gateway list validation", async () => {
+    type ListMethod = (this: unknown, params: unknown) => Promise<unknown>;
+    const transport = new FakeTransport({
+      "agents.list": { agents: [] },
+      "sessions.list": { sessions: [] },
+      "tasks.list": { tasks: [] },
+      "models.list": { models: [] },
+      "tools.catalog": { tools: [] },
+      "exec.approval.list": { approvals: [] },
+      "environments.list": { environments: [] },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await (oc.agents.list as unknown as ListMethod).call(oc.agents, null);
+    await (oc.sessions.list as unknown as ListMethod).call(oc.sessions, null);
+    await (oc.tasks.list as unknown as ListMethod).call(oc.tasks, null);
+    await oc.models.list(null);
+    await oc.tools.list(null);
+    await oc.approvals.list(null);
+    await oc.environments.list(null);
+
+    expect(transport.calls).toEqual([
+      { method: "agents.list", params: null, options: undefined },
+      { method: "sessions.list", params: null, options: undefined },
+      { method: "tasks.list", params: null, options: undefined },
+      { method: "models.list", params: null, options: undefined },
+      { method: "tools.catalog", params: null, options: undefined },
+      { method: "exec.approval.list", params: null, options: undefined },
+      { method: "environments.list", params: null, options: undefined },
+    ]);
+  });
+
   it("keeps close terminal when it races a pending connect", async () => {
     const transport = new DelayedConnectTransport({
       "agents.list": { agents: [] },
@@ -713,7 +776,7 @@ describe("OpenClaw SDK", () => {
       {
         method: "exec.approval.list",
         options: undefined,
-        params: undefined,
+        params: {},
       },
       {
         method: "exec.approval.resolve",

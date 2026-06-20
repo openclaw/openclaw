@@ -708,7 +708,7 @@ export class AgentsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
   async list(params?: Record<string, unknown>): Promise<unknown> {
-    return await this.client.request("agents.list", params);
+    return await this.client.request("agents.list", params === undefined ? {} : params);
   }
 
   async get(id: string): Promise<Agent> {
@@ -733,7 +733,7 @@ export class SessionsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
   async list(params?: Record<string, unknown>): Promise<unknown> {
-    return await this.client.request("sessions.list", params);
+    return await this.client.request("sessions.list", params === undefined ? {} : params);
   }
 
   async create(params: SessionCreateParams = {}): Promise<Session> {
@@ -817,7 +817,7 @@ export class TasksNamespace extends RpcNamespace {
   }
 
   async list(params?: TasksListParams): Promise<TasksListResult> {
-    return await this.call("list", params);
+    return await this.call("list", params === undefined ? {} : params);
   }
 
   async get(taskId: string): Promise<TasksGetResult> {
@@ -839,7 +839,7 @@ export class ModelsNamespace extends RpcNamespace {
   }
 
   async list(params?: unknown): Promise<unknown> {
-    return await this.call("list", params);
+    return await this.call("list", params === undefined ? {} : params);
   }
 
   async status(params?: unknown): Promise<unknown> {
@@ -854,7 +854,7 @@ export class ToolsNamespace extends RpcNamespace {
   }
 
   async list(params?: unknown): Promise<unknown> {
-    return await this.call("catalog", params);
+    return await this.call("catalog", params === undefined ? {} : params);
   }
 
   async effective(params?: unknown): Promise<unknown> {
@@ -903,7 +903,7 @@ export class ApprovalsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
   async list(params?: unknown): Promise<unknown> {
-    return await this.client.request("exec.approval.list", params);
+    return await this.client.request("exec.approval.list", params === undefined ? {} : params);
   }
 
   async respond(approvalId: string, decision: Record<string, unknown>): Promise<unknown> {
@@ -918,7 +918,7 @@ export class EnvironmentsNamespace extends RpcNamespace {
   }
 
   async list(params?: unknown): Promise<EnvironmentsListResult> {
-    return await this.call("list", params ?? {});
+    return await this.call("list", params === undefined ? {} : params);
   }
 
   async create(params?: unknown): Promise<unknown> {

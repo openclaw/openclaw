@@ -538,6 +538,14 @@ describe("OpenClaw SDK websocket e2e", () => {
         "exec.approval.list",
         "exec.approval.resolve",
       ]);
+      const requestParams = new Map(
+        gateway.requests.map((request) => [request.method, request.params]),
+      );
+      expect(requestParams.get("agents.list")).toEqual({});
+      expect(requestParams.get("sessions.list")).toEqual({});
+      expect(requestParams.get("models.list")).toEqual({});
+      expect(requestParams.get("tools.catalog")).toEqual({});
+      expect(requestParams.get("exec.approval.list")).toEqual({});
     } finally {
       await oc.close();
       await gateway.close();
