@@ -22,12 +22,14 @@ import { createHash } from "node:crypto";
 export const QUERY_EMBED_CACHE_MAX_ENTRIES = 512;
 
 /**
- * Build a cache key whose text component is hashed, so the in-memory cache never
- * retains raw recall, store, or auto-capture text as a Map key. SHA-256
- * preserves equality (identical identity + text map to the same key) while
- * keeping only a fixed-length digest in process memory, not plaintext user or
- * memory content. The identity is provider/model/dimension metadata, not user
- * content, so it stays in clear text.
+ * Build a cache key whose components are both hashed, so the in-memory cache
+ * never retains raw recall/store/auto-capture text NOR raw provider identity as
+ * a Map key. The text is digested here; the `identity` argument is already a
+ * digest produced by {@link canonicalizeEmbeddingIdentity}. SHA-256 preserves
+ * equality (identical identity + text map to the same key) while keeping only
+ * fixed-length digests in process memory, not plaintext user/memory content and
+ * not provider-owned identity material (which may carry secret-shaped fields
+ * such as authorization headers inside `cacheKeyData`).
  */
 export function queryCacheKey(identity: string, text: string): string {
   const textDigest = createHash("sha256").update(text, "utf8").digest("hex");
@@ -35,12 +37,20 @@ export function queryCacheKey(identity: string, text: string): string {
 }
 
 /**
- * Build the canonical identity portion of a cache key. The identity MUST encode
- * everything that changes the produced vector — provider, model, dimensions,
- * endpoint — so that switching model/provider/dims can never return a stale or
- * wrong-dimension embedding from the cache. `cacheKeyData` (when the adapter
- * supplies it) already captures provider/baseUrl/model/outputDimensionality, so
- * it is preferred; otherwise we fall back to the configured provider/model/dims.
+ * Build the canonical identity portion of a cache key as a SHA-256 digest. The
+ * identity MUST encode everything that changes the produced vector — provider,
+ * model, dimensions, endpoint — so that switching model/provider/dims can never
+ * return a stale or wrong-dimension embedding from the cache. `cacheKeyData`
+ * (when the adapter supplies it) already captures
+ * provider/baseUrl/model/outputDimensionality, so it is preferred; otherwise we
+ * fall back to the configured provider/model/dims.
+ *
+ * SECURITY: `cacheKeyData` is a provider-owned `Record<string, unknown>` and may
+ * contain secret-shaped material (e.g. `headers.authorization`). We therefore
+ * hash the canonical serialization rather than retaining it verbatim, mirroring
+ * the memory-core provider-identity path (`hashText(JSON.stringify(...))`).
+ * Distinct identities still map to distinct digests, so model/provider/dims
+ * separation is preserved without keeping plaintext identity in heap keys.
  */
 export function canonicalizeEmbeddingIdentity(identity: Record<string, unknown>): string {
   // Stable serialization: sort top-level keys so field order never changes the
@@ -52,7 +62,7 @@ export function canonicalizeEmbeddingIdentity(identity: Record<string, unknown>)
       .toSorted()
       .map((key) => [key, identity[key]]),
   );
-  return JSON.stringify(sorted);
+  return createHash("sha256").update(JSON.stringify(sorted), "utf8").digest("hex");
 }
 
 export function isCacheableEmbeddingVector(vector: number[]): boolean {

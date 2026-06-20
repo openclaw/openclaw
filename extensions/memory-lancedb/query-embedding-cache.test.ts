@@ -161,9 +161,10 @@ describe("QueryEmbeddingCache", () => {
     // total distinct resident entries ≤ maxEntries).
     let cacheHits = 0;
     for (let i = 0; i < keyCount; i++) {
-      const callsBefore = computes[i]!.mock.calls.length;
-      await cache.getOrCompute(`key-${i}`, computes[i]!);
-      if (computes[i]!.mock.calls.length === callsBefore) {
+      const compute = computes[i];
+      const callsBefore = compute.mock.calls.length;
+      await cache.getOrCompute(`key-${i}`, compute);
+      if (compute.mock.calls.length === callsBefore) {
         cacheHits += 1;
       }
     }
@@ -233,11 +234,11 @@ describe("canonicalizeEmbeddingIdentity", () => {
     expect(modelA).not.toBe(dims4);
   });
 
-  test("preserves NESTED identity fields (headers) so they cannot collide", () => {
+  test("distinguishes NESTED identity fields (headers) without retaining them", () => {
     // Regression guard for the replacer-array trap: a JSON.stringify replacer
     // array filters nested objects, erasing cacheKeyData.headers and letting two
     // distinct identities serialize identically. These two identities differ
-    // ONLY in a nested header and must produce different keys.
+    // ONLY in a nested header and must still produce different keys.
     const withHeaderA = canonicalizeEmbeddingIdentity({
       provider: "p",
       model: "m",
@@ -248,8 +249,44 @@ describe("canonicalizeEmbeddingIdentity", () => {
       model: "m",
       headers: { authorization: "token-b" },
     });
+    // Separation is preserved: nested header difference still changes the digest.
     expect(withHeaderA).not.toBe(withHeaderB);
-    expect(withHeaderA).toContain("token-a");
+    // SECURITY: the canonical identity is a SHA-256 digest, so provider-owned
+    // secret-shaped material (an authorization-like nested field) is NEVER
+    // retained verbatim in the returned identity token.
+    expect(withHeaderA).toMatch(/^[0-9a-f]{64}$/);
+    expect(withHeaderA).not.toContain("token-a");
+    expect(withHeaderA).not.toContain("authorization");
+  });
+
+  test("authorization-like identity material is absent from the composed cache key", () => {
+    // End-to-end guard for the security-boundary finding: an authorization-like
+    // nested field fed through canonicalizeEmbeddingIdentity -> queryCacheKey ->
+    // inFlightKey must never appear in clear text in any retained key. distinct
+    // tokens still separate (no collision) while the secret stays out of heap.
+    const identityA = canonicalizeEmbeddingIdentity({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      headers: { authorization: "Bearer sk-super-secret-token" },
+    });
+    const identityB = canonicalizeEmbeddingIdentity({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      headers: { authorization: "Bearer sk-different-token" },
+    });
+    const text = "recall query about salaries";
+    const keyA = queryCacheKey(identityA, text);
+    const keyB = queryCacheKey(identityB, text);
+    const inFlightKeyA = JSON.stringify([keyA, "untimed"]);
+
+    // Distinct authorization material -> distinct keys (identity separation holds).
+    expect(keyA).not.toBe(keyB);
+    // The secret token never appears in the settled key or the in-flight key.
+    for (const retained of [keyA, inFlightKeyA]) {
+      expect(retained).not.toContain("sk-super-secret-token");
+      expect(retained).not.toContain("Bearer");
+      expect(retained).not.toContain("authorization");
+    }
   });
 });
 
