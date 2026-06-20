@@ -70,8 +70,6 @@ export const slackActionRuntime = {
 export type SlackActionContext = {
   /** Current channel ID for auto-threading. */
   currentChannelId?: string;
-  /** Current channel name, when available from the inbound transport context. */
-  currentChannelName?: string;
   /** Routable target for the current conversation when it differs from the channel ID. */
   currentMessagingTarget?: string;
   /** Current thread timestamp for auto-threading. */
@@ -144,16 +142,6 @@ function readSlackBlocksParam(params: Record<string, unknown>) {
 
 function isImageContentType(value: string | undefined): boolean {
   return value?.trim().toLowerCase().startsWith("image/") === true;
-}
-
-function resolveSlackTargetChannelNameFromContext(
-  channelId: string,
-  context: SlackActionContext | undefined,
-): string | undefined {
-  if (!context?.currentChannelName || !slackContextTargetsMatch(channelId, context)) {
-    return undefined;
-  }
-  return context.currentChannelName;
 }
 
 type SlackReadTargetAllowance = {
@@ -330,7 +318,6 @@ export async function handleSlackAction(
       account,
       cfg,
       channelId,
-      channelName: resolveSlackTargetChannelNameFromContext(channelId, context),
     });
     const reactions = readOpts
       ? await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts)
@@ -484,7 +471,6 @@ export async function handleSlackAction(
           account,
           cfg,
           channelId,
-          channelName: resolveSlackTargetChannelNameFromContext(channelId, context),
         });
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",
@@ -525,7 +511,6 @@ export async function handleSlackAction(
           account,
           cfg,
           channelId,
-          channelName: resolveSlackTargetChannelNameFromContext(channelId, context),
         });
         const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
         const maxBytes = account.config?.mediaMaxMb
@@ -607,7 +592,6 @@ export async function handleSlackAction(
       account,
       cfg,
       channelId,
-      channelName: resolveSlackTargetChannelNameFromContext(channelId, context),
     });
     const pins = writeOpts
       ? await slackActionRuntime.listSlackPins(channelId, readOpts)
