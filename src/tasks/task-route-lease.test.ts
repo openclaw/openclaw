@@ -19,7 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
@@ -28,7 +28,6 @@ import {
   extendTaskRouteLease,
   getActiveTaskRouteLease,
   mapDeliveryStatusToLeaseRetirement,
-  resetTaskRouteLeasesForTests,
   settleTaskRouteLease,
   updateTaskRouteLease,
 } from "./task-route-lease.js";
@@ -44,16 +43,22 @@ const SAMPLE_ORIGIN = {
 };
 
 beforeEach(() => {
-  resetTaskRouteLeasesForTests();
+  // Open a fresh temp state DB for every test so the lease helpers operate
+  // on the test fixture, never on the default shared state DB. A new DB
+  // file has no rows, so the previous `resetTaskRouteLeasesForTests()`
+  // dance is no longer needed and would have been unsafe if called before
+  // the temp env was installed.
+  const stateDir = createTempStateDir();
+  openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
 });
 
 afterEach(() => {
-  closeOpenClawStateDatabase();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("task-route lease", () => {
   it("acquires and reads back an active lease", () => {
-    const stateDir = createTempStateDir();
+    // The beforeEach hook has already opened a temp state DB for this test.
     const lease = acquireTaskRouteLease({
       runId: "run-1",
       taskId: "task-1",
@@ -68,8 +73,7 @@ describe("task-route lease", () => {
     expect(lease?.status).toBe("active");
     expect(lease?.expiresAt).toBeGreaterThan(Date.now());
 
-    // Open the DB on the same state dir and read it back directly.
-    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    // Read it back through a fresh lookup against the same DB.
     const fetched = getActiveTaskRouteLease("run-1");
     expect(fetched?.runId).toBe("run-1");
     expect(fetched?.requesterOrigin).toEqual(SAMPLE_ORIGIN);
@@ -152,7 +156,11 @@ describe("task-route lease", () => {
   });
 
   it("persists leases across close + reopen of the shared state DB", () => {
+    // The beforeEach hook already opened a temp DB; close it so this test
+    // can re-open the SAME dir twice and prove the row survives close +
+    // reopen (i.e. lives in SQLite rather than in-memory).
     const stateDir = createTempStateDir();
+    closeOpenClawStateDatabaseForTest();
     openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
 
     acquireTaskRouteLease({
@@ -166,7 +174,7 @@ describe("task-route lease", () => {
 
     // Close and reopen; the lease should still be there because it lives
     // in SQLite (not in-memory).
-    closeOpenClawStateDatabase();
+    closeOpenClawStateDatabaseForTest();
     openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
 
     const after = getActiveTaskRouteLease("run-persist");
@@ -325,7 +333,7 @@ describe("updateTaskRouteLease (#92460 P1 #2)", () => {
 // guards against the rare case where the test failed before afterEach.
 process.on("exit", () => {
   try {
-    closeOpenClawStateDatabase();
+    closeOpenClawStateDatabaseForTest();
   } catch {
     // noop
   }

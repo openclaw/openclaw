@@ -99,7 +99,9 @@ async function main(): Promise<void> {
       ttlMs: 60_000,
     });
     // Wait past the 1ms TTL.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
     const expired = expireStaleTaskRouteLeases();
     assert(expired >= 1, `expected at least 1 expired lease, got ${expired}`);
     assert(!getActiveTaskRouteLease("run-stale"), "stale lease still active after GC");
@@ -145,7 +147,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exitCode = 1;
 });
