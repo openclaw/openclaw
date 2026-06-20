@@ -1098,6 +1098,59 @@ describe("cron tool", () => {
     });
   });
 
+  // ── Whitespace-padded key recovery (issue #95407) ────────────────────
+
+  it("recovers whitespace-padded cron add keys from local model parsers", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-padded-add", {
+      action: "add",
+      job: {
+        delivery: { mode: "none" },
+        enabled: true,
+        "schedule ": { kind: "every", everyMs: 999_999 },
+        "sessionTarget ": "isolated",
+        "payload ": { kind: "agentTurn", message: "Test job." },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add");
+    expect(params).toMatchObject({
+      delivery: { mode: "none" },
+      enabled: true,
+      payload: { kind: "agentTurn", message: "Test job." },
+      schedule: { everyMs: 999_999, kind: "every" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+    });
+    // normalizeCronJobCreate infers name from message when absent
+    expect(params?.name).toContain("Test job");
+    expect(Object.keys(params ?? {}).some((k) => k !== k.trim())).toBe(false);
+  });
+
+  it("recovers flat whitespace-padded cron add keys", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-flat-padded-add", {
+      action: "add",
+      delivery: { mode: "none" },
+      enabled: true,
+      "schedule ": { kind: "every", everyMs: 999_999 },
+      "sessionTarget ": "isolated",
+      "payload ": { kind: "agentTurn", message: "Test job." },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add");
+    expect(params).toMatchObject({
+      delivery: { mode: "none" },
+      enabled: true,
+      payload: { kind: "agentTurn", message: "Test job." },
+      schedule: { everyMs: 999_999, kind: "every" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+    });
+    expect(params?.name).toContain("Test job");
+    expect(Object.keys(params ?? {}).some((k) => k !== k.trim())).toBe(false);
+  });
+
   it("stamps cron.add with caller sessionKey when missing", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 

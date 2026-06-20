@@ -110,6 +110,21 @@ function repairConcatenatedCronToolKeys(value: Record<string, unknown>): void {
   delete value.sessionTargetName;
 }
 
+/**
+ * Recovers cron tool object keys that have trailing whitespace.
+ * Some local model parsers append whitespace to specific key names during
+ * parameter serialization.
+ */
+function repairWhitespacePaddedCronToolKeys(value: Record<string, unknown>): void {
+  for (const key of Object.keys(value)) {
+    const trimmed = key.trimEnd();
+    if (trimmed !== key && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) {
+      value[trimmed] = value[key];
+      delete value[key];
+    }
+  }
+}
+
 function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): void {
   const atMs = typeof value === "number" ? value : Number(value);
   // Invalid/out-of-range timestamps stay raw so cron gateway validation reports the user error.
@@ -278,6 +293,7 @@ export function canonicalizeCronToolObject(
   const next = { ...unwrapped };
   repairPaddedCronKeys(next);
   repairConcatenatedCronToolKeys(next);
+  repairWhitespacePaddedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);
   return next;
@@ -306,8 +322,10 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   const value: Record<string, unknown> = {};
   let found = false;
   for (const key of Object.keys(params)) {
-    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
-      value[key] = params[key];
+    const trimmed = key.trimEnd();
+    const matchKey = trimmed !== key && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed) ? trimmed : key;
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(matchKey) && params[key] !== undefined) {
+      value[matchKey] = params[key];
       found = true;
     }
   }
