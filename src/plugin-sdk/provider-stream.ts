@@ -1,6 +1,9 @@
 // Provider stream helpers expose shared wrapper families and payload transforms for provider plugins.
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
-import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
+import {
+  createMinimaxFastModeWrapper,
+  createMinimaxThinkingDisabledWrapper,
+} from "../llm/providers/stream-wrappers/minimax.js";
 import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 import {
   createCodexNativeWebSearchWrapper,
@@ -63,7 +66,10 @@ export type ProviderStreamFamily =
   /** Enables tool-call event streaming unless explicitly disabled. */
   | "tool-stream-default-on";
 
-type ProviderStreamFamilyHooks = Pick<ProviderPlugin, "wrapStreamFn">;
+type ProviderStreamFamilyHooks = Pick<
+  ProviderPlugin,
+  "wrapSimpleCompletionStreamFn" | "wrapStreamFn"
+>;
 
 /** Builds provider hook objects for one supported stream-wrapper family. */
 export function buildProviderStreamFamilyHooks(
@@ -105,6 +111,8 @@ export function buildProviderStreamFamilyHooks(
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
           createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+        wrapSimpleCompletionStreamFn: (ctx: ProviderWrapStreamFnContext) =>
+          createMinimaxThinkingDisabledWrapper(ctx.streamFn, ctx.thinkingLevel),
       };
     case "openai-responses-defaults":
       return {

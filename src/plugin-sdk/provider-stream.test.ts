@@ -34,6 +34,18 @@ function requireWrapStreamFn(
   return wrapStreamFn;
 }
 
+function requireWrapSimpleCompletionStreamFn(
+  wrapSimpleCompletionStreamFn: ReturnType<
+    typeof buildProviderStreamFamilyHooks
+  >["wrapSimpleCompletionStreamFn"],
+) {
+  expect(wrapSimpleCompletionStreamFn).toBeTypeOf("function");
+  if (!wrapSimpleCompletionStreamFn) {
+    throw new Error("expected wrapSimpleCompletionStreamFn to be defined");
+  }
+  return wrapSimpleCompletionStreamFn;
+}
+
 function requireStreamFn(streamFn: StreamFn | null | undefined) {
   expect(streamFn).toBeTypeOf("function");
   if (!streamFn) {
@@ -199,6 +211,38 @@ describe("buildProviderStreamFamilyHooks", () => {
       {},
     );
     expect(capturedModelId).toBe("MiniMax-M2.7-highspeed");
+
+    const minimaxSimpleCompletionStream = requireStreamFn(
+      requireWrapSimpleCompletionStreamFn(minimaxHooks.wrapSimpleCompletionStreamFn)({
+        streamFn: baseStreamFn,
+      } as never),
+    );
+    await minimaxSimpleCompletionStream(
+      {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M2.7",
+      } as never,
+      {} as never,
+      {},
+    );
+    const minimaxSimpleCompletionPayload = requirePayload(capturedPayload);
+    expect(requireRecord(minimaxSimpleCompletionPayload.thinking, "minimax thinking").type).toBe(
+      "disabled",
+    );
+
+    payloadSeed = { thinking: { type: "disabled" } };
+    await minimaxSimpleCompletionStream(
+      {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M3",
+      } as never,
+      {} as never,
+      {},
+    );
+    const minimaxM3Payload = requirePayload(capturedPayload);
+    expect(minimaxM3Payload).not.toHaveProperty("thinking");
 
     const kilocodeHooks = KILOCODE_THINKING_STREAM_HOOKS;
     void requireStreamFn(
