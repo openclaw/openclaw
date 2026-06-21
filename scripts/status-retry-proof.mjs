@@ -21,7 +21,9 @@ async function simulateImport() {
 async function loadModule() {
   if (!loaderPromise) {
     loaderPromise = simulateImport().catch((err) => {
-      console.log(`  -> Caught: ${err.message}. Resetting promise cache for retry.`);
+      console.log(
+        `  -> Caught: ${err instanceof Error ? err.message : String(err)}. Resetting promise cache for retry.`,
+      );
       loaderPromise = null;
       return undefined;
     });

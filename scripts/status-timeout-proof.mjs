@@ -20,7 +20,7 @@ function createHangingPromise() {
 await Promise.race([
   createHangingPromise(),
   new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    setTimeout(() => {
       result = `Status render timeout after ${Date.now() - start}ms`;
       resolve(result);
     }, timeoutMs);
