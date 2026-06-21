@@ -1,8 +1,8 @@
+import fs from "node:fs";
 // Gateway tests cover archived-transcript retention cleanup: every retention
 // rule shares one directory listing per cleanup call. Store maintenance runs
 // this on each save, so per-rule listings would multiply READDIR load.
 import fsPromises from "node:fs/promises";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -133,8 +133,8 @@ describe("cleanupArchivedSessionTranscripts", () => {
 
       expect(result.scanned).toBe(2);
       expect(result.removed).toBe(1);
-      const remaining = await fsPromises.readdir(trajectoryDir);
-      expect(remaining).toEqual([`session.jsonl.reset.${FRESH_STAMP}`]);
+      const trajectoryEntries = await fsPromises.readdir(trajectoryDir);
+      expect(trajectoryEntries).toEqual([`session.jsonl.reset.${FRESH_STAMP}`]);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_TRAJECTORY_DIR;
@@ -162,10 +162,7 @@ describe("cleanupArchivedSessionTranscripts", () => {
         path.join(trajectoryDir, `not-ours.jsonl.reset.${OLD_STAMP}`),
         "some other tool's data\n",
       );
-      await fsPromises.writeFile(
-        path.join(trajectoryDir, `backup.jsonl.deleted.${OLD_STAMP}`),
-        "",
-      );
+      await fsPromises.writeFile(path.join(trajectoryDir, `backup.jsonl.deleted.${OLD_STAMP}`), "");
 
       const result = await cleanupArchivedSessionTranscripts({
         directories: [dir],
@@ -177,8 +174,8 @@ describe("cleanupArchivedSessionTranscripts", () => {
       });
 
       expect(result.removed).toBe(1);
-      const remaining = (await fsPromises.readdir(trajectoryDir)).toSorted();
-      expect(remaining).toEqual([
+      const trajectoryEntries = (await fsPromises.readdir(trajectoryDir)).toSorted();
+      expect(trajectoryEntries).toEqual([
         `backup.jsonl.deleted.${OLD_STAMP}`,
         `not-ours.jsonl.reset.${OLD_STAMP}`,
       ]);
