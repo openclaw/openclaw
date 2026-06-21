@@ -182,6 +182,7 @@ describe("tasks gateway handlers", () => {
   });
 
   it("lists and gets tasks by durable task metadata", async () => {
+    const longMetadataValue = "metadata ".repeat(40);
     const task = createTaskRecord({
       runtime: "subagent",
       taskKind: "klaw_worker",
@@ -198,6 +199,7 @@ describe("tasks gateway handlers", () => {
         branch: "klaw/task-ledger-worker-state",
         prUrl: "https://github.com/openclaw/openclaw/pull/95433",
         khalilAttentionNeeded: true,
+        nextAction: longMetadataValue,
       },
     });
     createTaskRecord({
@@ -225,10 +227,14 @@ describe("tasks gateway handlers", () => {
     });
 
     expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
-    expect(payload?.tasks?.[0]?.metadata).toEqual(task.metadata);
+    expect(payload?.tasks?.[0]?.metadata).toEqual({
+      ...task.metadata,
+      nextAction: expect.stringMatching(/^metadata /),
+    });
+    expect(String(payload?.tasks?.[0]?.metadata?.nextAction).length).toBeLessThanOrEqual(120);
 
     const detail = await getTaskPayload(task.taskId);
-    expect(detail.payload?.task?.metadata).toEqual(task.metadata);
+    expect(detail.payload?.task?.metadata).toEqual(payload?.tasks?.[0]?.metadata);
   });
 
   it("reconciles stale running subagent tasks from session truth before listing", async () => {

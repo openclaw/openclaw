@@ -539,6 +539,18 @@ function mergeTaskMetadata(
   });
 }
 
+function taskMetadataEqual(
+  left: TaskMetadata | undefined,
+  right: TaskMetadata | undefined,
+): boolean {
+  const leftEntries = Object.entries(left ?? {});
+  const rightEntries = Object.entries(right ?? {});
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+  return leftEntries.every(([key, value]) => right?.[key] === value);
+}
+
 function shouldApplyRunScopedStatusUpdate(params: {
   currentStatus: TaskStatus;
   nextStatus: TaskStatus;
@@ -919,6 +931,7 @@ function mergeExistingTaskForCreate(
     label?: string;
     task: string;
     preferMetadata?: boolean;
+    metadata?: TaskMetadata;
     deliveryStatus?: TaskDeliveryStatus;
     notifyPolicy?: TaskNotifyPolicy;
   },
@@ -973,6 +986,12 @@ function mergeExistingTaskForCreate(
   }
   if (params.deliveryStatus === "pending" && existing.deliveryStatus !== "delivered") {
     patch.deliveryStatus = "pending";
+  }
+  if (params.metadata !== undefined) {
+    const metadata = mergeTaskMetadata(existing.metadata, params.metadata);
+    if (!taskMetadataEqual(metadata, existing.metadata)) {
+      patch.metadata = metadata;
+    }
   }
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,

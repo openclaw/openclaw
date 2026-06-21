@@ -14,7 +14,12 @@ import {
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
 import { reconcileInspectableTasks } from "../../tasks/task-registry.reconcile.js";
-import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import type {
+  TaskMetadata,
+  TaskMetadataValue,
+  TaskRecord,
+  TaskStatus,
+} from "../../tasks/task-registry.types.js";
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
   formatTaskStatusTitle,
@@ -24,6 +29,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
+const TASK_METADATA_KEY_MAX_CHARS = 80;
 
 type TaskLedgerStatus = TaskSummary["status"];
 
@@ -65,10 +71,35 @@ function sanitizeOptionalTaskText(
   return sanitized || undefined;
 }
 
+function sanitizeTaskMetadataValue(value: TaskMetadataValue): TaskMetadataValue | undefined {
+  if (typeof value !== "string") {
+    return value;
+  }
+  return sanitizeOptionalTaskText(value, { errorContext: true });
+}
+
+function sanitizeTaskMetadata(metadata: TaskMetadata | undefined): TaskMetadata | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+  const sanitized: TaskMetadata = {};
+  for (const [rawKey, rawValue] of Object.entries(metadata)) {
+    const key = sanitizeTaskStatusText(rawKey, {
+      maxChars: TASK_METADATA_KEY_MAX_CHARS,
+    });
+    const value = sanitizeTaskMetadataValue(rawValue);
+    if (key && value !== undefined) {
+      sanitized[key] = value;
+    }
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
 function mapTaskSummary(task: TaskRecord): TaskSummary {
   const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
   const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
+  const metadata = sanitizeTaskMetadata(task.metadata);
   return {
     id: task.taskId,
     taskId: task.taskId,
@@ -91,7 +122,7 @@ function mapTaskSummary(task: TaskRecord): TaskSummary {
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
-    ...(task.metadata ? { metadata: { ...task.metadata } } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 

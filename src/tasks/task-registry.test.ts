@@ -1896,6 +1896,10 @@ describe("task-registry", () => {
         task: "Direct ACP child",
         status: "running",
         deliveryStatus: "pending",
+        metadata: {
+          repo: "openclaw/openclaw",
+          nextAction: "initial",
+        },
       });
 
       const spawnedTask = createTaskRecord({
@@ -1913,6 +1917,10 @@ describe("task-registry", () => {
         preferMetadata: true,
         status: "running",
         deliveryStatus: "pending",
+        metadata: {
+          nextAction: "review PR",
+          khalilAttentionNeeded: true,
+        },
       });
 
       expect(spawnedTask.taskId).toBe(directTask.taskId);
@@ -1920,6 +1928,11 @@ describe("task-registry", () => {
         taskId: directTask.taskId,
         label: "Quant patch",
         task: "Implement the feature and report back",
+        metadata: {
+          repo: "openclaw/openclaw",
+          nextAction: "review PR",
+          khalilAttentionNeeded: true,
+        },
       });
     });
   });
