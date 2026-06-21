@@ -69,6 +69,7 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
+export const queueCronMessageToolDeliveryAwarenessMock = createMock();
 export const cleanupDirectCronSessionMock = createMock();
 export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
@@ -312,6 +313,7 @@ vi.mock("./run-delivery.runtime.js", async () => {
     cleanupDirectCronSession: cleanupDirectCronSessionMock,
     resolveDeliveryTarget: resolveDeliveryTargetMock,
     dispatchCronDelivery: dispatchCronDeliveryMock,
+    queueCronMessageToolDeliveryAwareness: queueCronMessageToolDeliveryAwarenessMock,
   };
 });
 
@@ -631,6 +633,8 @@ function resetRunOutcomeMocks(): void {
       deliveryPayloads,
     }),
   );
+  queueCronMessageToolDeliveryAwarenessMock.mockReset();
+  queueCronMessageToolDeliveryAwarenessMock.mockResolvedValue(undefined);
   cleanupDirectCronSessionMock.mockReset();
   cleanupDirectCronSessionMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();

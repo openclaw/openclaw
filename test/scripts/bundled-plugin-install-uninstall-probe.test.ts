@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../../src/test-utils/env.js";
 
 const tempDirs: string[] = [];
 const probePath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs");
@@ -97,28 +98,11 @@ function runRuntimeSmoke(root: string, args: string[]) {
 }
 
 async function importRuntimeSmokeWithEnv(env: Record<string, string | undefined>) {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
+  return await withEnvAsync(env, async () => {
     return await import(
       `${pathToFileURL(runtimeSmokePath).href}?case=${Date.now()}-${Math.random()}`
     );
-  } finally {
-    for (const [key, value] of previous.entries()) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  });
 }
 
 async function listenOnLoopback(server: HttpServer | NetServer): Promise<number> {
