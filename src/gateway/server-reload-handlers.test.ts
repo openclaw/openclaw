@@ -148,9 +148,7 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
 }));
 
 vi.mock("../infra/restart.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/restart.js")>(
-    "../infra/restart.js",
-  );
+  const actual = await vi.importActual<typeof import("../infra/restart.js")>("../infra/restart.js");
   return {
     ...actual,
     isGatewayRestartPending: () => hoisted.gatewayRestartPending.value,
@@ -165,6 +163,7 @@ function createReloadHandlersForTest(
   },
 ) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
+  const heartbeatRunner = {
     stop: vi.fn(),
     updateConfig: vi.fn(),
   };
@@ -800,9 +799,7 @@ describe("gateway restart deferral preflight", () => {
       await vi.advanceTimersByTimeAsync(500);
       expect(stopChannel).not.toHaveBeenCalled();
       expect(startChannel).not.toHaveBeenCalled();
-      expect(logReload.warn).toHaveBeenCalledWith(
-        expect.stringContaining("deferring until 1"),
-      );
+      expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("deferring until 1"));
 
       // Simulate gateway restart becoming pending during deferral
       hoisted.gatewayRestartPending.value = true;
