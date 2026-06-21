@@ -1197,6 +1197,16 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   if (codeReason) {
     return toReasonClassification(codeReason);
   }
+  // Provider-reported upstream errors are transient server-side failures that
+  // should trigger model fallback when a fallback chain is configured.
+  if (
+    signal.errorType === "upstream_error" &&
+    !statusClassification &&
+    !providerPluginReason &&
+    !codeReason
+  ) {
+    return toReasonClassification("server_error");
+  }
   return effectiveMessageClassification;
 }
 

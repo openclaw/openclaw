@@ -130,4 +130,31 @@ describe("provider failover hook structured signals", () => {
     ).toBeNull();
     expect(providerRuntimeMocks.classifyProviderPluginError).not.toHaveBeenCalled();
   });
+
+  it("classifies upstream_error errorType as server_error for model fallback", () => {
+    // When a provider returns an upstream_error type (e.g. OpenAI-compatible
+    // providers wrapping transient backend failures), the error should be
+    // classified as server_error so that configured fallback models are tried.
+    expect(
+      classifyFailoverSignal({
+        provider: "openai",
+        errorType: "upstream_error",
+        message: "Upstream request failed",
+      }),
+    ).toEqual({ kind: "reason", reason: "server_error" });
+  });
+
+  it("does not override provider plugin classification for upstream_error", () => {
+    // If a provider plugin hook already classifies the error, the
+    // errorType-based fallback should not interfere.
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue("overloaded");
+
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        errorType: "upstream_error",
+        message: "Upstream request failed",
+      }),
+    ).toEqual({ kind: "reason", reason: "overloaded" });
+  });
 });
