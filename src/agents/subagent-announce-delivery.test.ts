@@ -1095,6 +1095,52 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("preserves pending non-media completion handoffs as delivered", async () => {
+    const callGateway = createGatewayMock({ status: "running" });
+    const channelOrigin = {
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "acct-1",
+    } as const;
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-pending",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: channelOrigin,
+      requesterSessionOrigin: channelOrigin,
+      completionDirectOrigin: channelOrigin,
+      directOrigin: channelOrigin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-channel-completion-pending",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expectGatewayAgentParams(callGateway, {
+      idempotencyKey: "announce-channel-completion-pending",
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+      bestEffortDeliver: true,
+    });
+  });
+
   it("waits through compaction on the completion handoff wake (86566)", async () => {
     const previousTestFast = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";

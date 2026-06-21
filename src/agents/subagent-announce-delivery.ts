@@ -663,13 +663,6 @@ async function maybeSteerSubagentAnnounce(params: {
   return { status: currentActivity.isActive ? "dropped" : "none" };
 }
 
-function hasVisibleGatewayAgentPayload(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  return Boolean(
-    result && (hasVisibleAgentPayload(result) || hasMessagingToolDeliveryEvidence(result)),
-  );
-}
-
 function hasVisibleNonSilentGatewayAgentPayload(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   if (!result) {
@@ -708,11 +701,6 @@ function isVisibleNonSilentGatewayAgentPayload(payload: unknown): boolean {
     record.text.trim() !== "" &&
     !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
   );
-}
-
-function hasGatewayAgentMessagingToolDeliveryEvidence(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  return Boolean(result && hasMessagingToolDeliveryEvidence(result));
 }
 
 function hasGatewayAgentCompletionSideEffectEvidence(response: unknown): boolean {
