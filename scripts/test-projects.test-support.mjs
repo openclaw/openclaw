@@ -1094,6 +1094,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/managed-child-process.test.ts", "test/scripts/run-with-env.test.ts"],
   ],
   [
+    "scripts/lib/windows-taskkill.d.mts",
+    ["test/scripts/managed-child-process.test.ts", "test/scripts/run-with-env.test.ts"],
+  ],
+  [
     "scripts/lib/local-build-metadata.mjs",
     [
       "src/infra/build-stamp.test.ts",
