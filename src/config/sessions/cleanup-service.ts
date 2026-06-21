@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -541,6 +542,17 @@ export async function runSessionsCleanup(params: {
               },
       });
       const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
+      // Conversation bindings must be cleared alongside pruned session store entries.
+      // Without this, a binding that survives a missing-transcript prune routes every
+      // subsequent message to a phantom session key, silently spawning ephemeral sessions.
+      for (const sessionKey of missingRemovals
+        .map((r) => r.sessionKey)
+        .filter((k) => removedSessionKeys.has(k))) {
+        await getSessionBindingService().unbind({
+          targetSessionKey: sessionKey,
+          reason: "cleanup-missing-transcript",
+        });
+      }
       const missingApplied = missingRemovals.filter(({ sessionKey }) =>
         removedSessionKeys.has(sessionKey),
       ).length;
