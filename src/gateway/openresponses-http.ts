@@ -33,7 +33,11 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
+import {
+  isReplaceableAssistantStreamEvent,
+  resolveAssistantStreamDeltaText,
+  resolveAssistantStreamSnapshotText,
+} from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -1028,11 +1032,14 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const text = evt.data?.text;
-      const replace = evt.data?.replace === true;
-      if (replace && typeof text === "string") {
-        accumulatedText = text;
+      if (isReplaceableAssistantStreamEvent(evt)) {
+        const snapshot = resolveAssistantStreamSnapshotText(evt);
+        if (snapshot) {
+          accumulatedText = snapshot;
+        }
+        return;
       }
+
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
@@ -1247,12 +1254,13 @@ export async function handleOpenResponsesHttpRequest(
       if (!sawAssistantDelta) {
         const payloads = resultAny.payloads;
         const content =
-          Array.isArray(payloads) && payloads.length > 0
+          accumulatedText ||
+          (Array.isArray(payloads) && payloads.length > 0
             ? payloads
                 .map((p) => (typeof p.text === "string" ? p.text : ""))
                 .filter(Boolean)
                 .join("\n\n")
-            : "No response from OpenClaw.";
+            : "No response from OpenClaw.");
 
         accumulatedText = content;
         sawAssistantDelta = true;

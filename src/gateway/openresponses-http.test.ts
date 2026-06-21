@@ -976,6 +976,47 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
+  it("buffers replaceable assistant events for streaming responses", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "final answer", delta: "", replace: true, replaceable: true },
+      });
+      return { payloads: [{ text: "final answer" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const deltas = events
+      .filter((event) => event.event === "response.output_text.delta")
+      .map((event) => {
+        const parsed = JSON.parse(event.data) as { delta?: string };
+        return parsed.delta ?? "";
+      })
+      .join("");
+    const completed = JSON.parse(findSseEvent(events, "response.completed").data) as {
+      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
+    };
+
+    expect(deltas).toBe("final answer");
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("final answer");
+  });
+
   it("maps provider format failures to OpenResponses 400 failed responses", async () => {
     const port = enabledPort;
 

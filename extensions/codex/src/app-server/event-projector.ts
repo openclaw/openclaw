@@ -528,7 +528,7 @@ export class CodexAppServerEventProjector {
       this.streamedPartialAssistantItemId = itemId;
       const partial = replace ? { text, delta: "", replace: true as const } : { text, delta };
       await this.params.onPartialReply?.(partial);
-      this.emitAgentEvent({ stream: "assistant", data: partial });
+      this.emitAgentEvent({ stream: "assistant", data: { ...partial, replaceable: true } });
     }
   }
 

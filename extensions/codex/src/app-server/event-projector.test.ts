@@ -368,8 +368,8 @@ describe("CodexAppServerEventProjector", () => {
         .filter((event) => event.stream === "assistant")
         .map((event) => event.data),
     ).toEqual([
-      { text: "hel", delta: "hel" },
-      { text: "hello", delta: "lo" },
+      { text: "hel", delta: "hel", replaceable: true },
+      { text: "hello", delta: "lo", replaceable: true },
     ]);
   });
 
@@ -395,8 +395,8 @@ describe("CodexAppServerEventProjector", () => {
         .filter((event) => event.stream === "assistant")
         .map((event) => event.data),
     ).toEqual([
-      { text: "coordination draft", delta: "coordination draft" },
-      { text: "final answer", delta: "", replace: true },
+      { text: "coordination draft", delta: "coordination draft", replaceable: true },
+      { text: "final answer", delta: "", replace: true, replaceable: true },
     ]);
   });
 

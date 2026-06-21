@@ -35,7 +35,11 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
+import {
+  isReplaceableAssistantStreamEvent,
+  resolveAssistantStreamDeltaText,
+  resolveAssistantStreamSnapshotText,
+} from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
@@ -1180,6 +1184,7 @@ export async function handleOpenAiHttpRequest(
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
   let bufferedAssistantContent = "";
+  let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
@@ -1226,6 +1231,14 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+      if (isReplaceableAssistantStreamEvent(evt)) {
+        const snapshot = resolveAssistantStreamSnapshotText(evt);
+        if (snapshot) {
+          bufferedReplaceableAssistantContent = snapshot;
+        }
+        return;
+      }
+
       const content = resolveAssistantStreamDeltaText(evt) ?? "";
       if (!content) {
         return;
@@ -1313,7 +1326,10 @@ export async function handleOpenAiHttpRequest(
           writeAssistantRoleChunk(res, { runId, model });
         }
         if (!sawAssistantDelta) {
-          const commentary = bufferedAssistantContent || resolveAgentResponseCommentary(result);
+          const commentary =
+            bufferedAssistantContent ||
+            bufferedReplaceableAssistantContent ||
+            resolveAgentResponseCommentary(result);
           if (commentary) {
             sawAssistantDelta = true;
             writeAssistantContentChunk(res, {
@@ -1339,7 +1355,7 @@ export async function handleOpenAiHttpRequest(
           writeAssistantRoleChunk(res, { runId, model });
         }
 
-        const content = resolveAgentResponseText(result);
+        const content = bufferedReplaceableAssistantContent || resolveAgentResponseText(result);
 
         sawAssistantDelta = true;
         writeAssistantContentChunk(res, {
