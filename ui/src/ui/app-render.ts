@@ -284,9 +284,8 @@ export function renderApp(state: AppViewState) {
   }
   return routerView(appRouter, state, (routeView) =>
     renderConnectedApp(state, {
-      ...routeView,
-      activeRouteId: routeView.activeRouteId as RouteId | undefined,
-      pendingRouteId: routeView.pendingRouteId as RouteId | undefined,
+      routeId: routeView.routeId as RouteId | undefined,
+      module: routeView.module,
     }),
   );
 }
@@ -294,10 +293,8 @@ export function renderApp(state: AppViewState) {
 function renderConnectedApp(
   state: AppViewState,
   routeView: {
-    status: ReturnType<typeof appRouter.getState>["status"];
-    activeRouteId: RouteId | undefined;
-    activeModule: unknown;
-    pendingRouteId: RouteId | undefined;
+    routeId: RouteId | undefined;
+    module: unknown;
   },
 ) {
   const updatableState = state as AppViewState & { requestUpdate?: () => void };
@@ -305,8 +302,8 @@ function renderConnectedApp(
     typeof updatableState.requestUpdate === "function"
       ? () => updatableState.requestUpdate?.()
       : undefined;
-  const renderedRouteId = routeView.activeRouteId ?? state.routeId;
-  const activeRouteModule = routeView.activeModule;
+  const renderedRouteId = routeView.routeId ?? state.routeId;
+  const activeRouteModule = routeView.module;
   const isChat =
     renderedRouteId === "chat" ||
     (typeof activeRouteModule === "object" &&
