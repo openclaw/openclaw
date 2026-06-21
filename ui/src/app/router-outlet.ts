@@ -6,6 +6,8 @@ import type { RouteMatch, Router, RouterState } from "../router/types.ts";
 import type { AppViewState } from "../ui/app-view-state.ts";
 import { measureControlUiRender } from "../ui/control-ui-performance.ts";
 
+const PENDING_UI_DELAY_MS = 1_000;
+
 type RenderableModule<TContext, TData> = {
   render: (context: TContext, data: TData | undefined) => unknown;
 };
@@ -30,6 +32,7 @@ export type RouterOutletSelection<
   status: RouterState<TRouteId, TModule, TData>["status"];
   active: RouteMatch<TRouteId, TModule, TData> | undefined;
   pending: RouteMatch<TRouteId, TModule, TData> | undefined;
+  showPending: boolean;
 };
 
 function selectRouterOutletState<TRouteId extends string, TModule, TData>(
@@ -39,6 +42,7 @@ function selectRouterOutletState<TRouteId extends string, TModule, TData>(
     status: state.status,
     active: state.matches[0],
     pending: state.pendingMatches[0],
+    showPending: false,
   };
 }
 
@@ -119,13 +123,13 @@ export function renderRouterOutlet<
 ): unknown {
   const renderedMatch = selection.pending ?? selection.active;
   if (renderedMatch?.status === "notFound") {
-    return renderPending();
+    return nothing;
   }
   if (renderedMatch?.status === "redirected") {
-    return renderPending();
+    return nothing;
   }
   if (!renderedMatch) {
-    return renderPending();
+    return nothing;
   }
 
   const routeId = renderedMatch.routeId;
@@ -137,7 +141,9 @@ export function renderRouterOutlet<
           renderedMatch.error,
           routeId,
         )
-      : renderPending();
+      : selection.showPending
+        ? renderPending()
+        : nothing;
   }
   const routeModule = renderedMatch.module;
   if (!isRenderableModule<TContext, TData>(routeModule)) {
@@ -173,6 +179,10 @@ class RouterOutletDirective extends AsyncDirective {
   private unsubscribe?: () => boolean;
   private boundaryOptions?: RouterOutletBoundaryOptions;
   private notFoundScheduled = false;
+  private pendingMatchId?: string;
+  private pendingTimer?: ReturnType<typeof globalThis.setTimeout>;
+  private pendingSelection?: RouterOutletSelection;
+  private showPending = false;
 
   override render(
     router: unknown,
@@ -191,6 +201,8 @@ class RouterOutletDirective extends AsyncDirective {
   override disconnected() {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.clearPendingTimer();
+    this.pendingSelection = undefined;
     this.boundaryOptions = undefined;
     this.notFoundScheduled = false;
   }
@@ -219,6 +231,27 @@ class RouterOutletDirective extends AsyncDirective {
   }
 
   private renderSelection(selection: RouterOutletSelection) {
+    this.pendingSelection = selection;
+    const pending = selection.pending;
+    const coldPending =
+      pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
+    if (!coldPending) {
+      this.clearPendingTimer();
+      this.pendingMatchId = undefined;
+      this.showPending = false;
+    } else if (this.pendingMatchId !== pending.id) {
+      this.clearPendingTimer();
+      this.pendingMatchId = pending.id;
+      this.showPending = false;
+      this.pendingTimer = globalThis.setTimeout(() => {
+        this.pendingTimer = undefined;
+        if (this.pendingSelection?.pending?.id !== this.pendingMatchId) {
+          return;
+        }
+        this.showPending = true;
+        this.setValue(this.renderSelection(this.pendingSelection));
+      }, PENDING_UI_DELAY_MS);
+    }
     if (selection.status === "notFound") {
       if (!this.notFoundScheduled) {
         this.notFoundScheduled = true;
@@ -230,7 +263,14 @@ class RouterOutletDirective extends AsyncDirective {
     } else {
       this.notFoundScheduled = false;
     }
-    return this.renderApp?.(selection, this.context);
+    return this.renderApp?.({ ...selection, showPending: this.showPending }, this.context);
+  }
+
+  private clearPendingTimer() {
+    if (this.pendingTimer !== undefined) {
+      globalThis.clearTimeout(this.pendingTimer);
+      this.pendingTimer = undefined;
+    }
   }
 }
 
