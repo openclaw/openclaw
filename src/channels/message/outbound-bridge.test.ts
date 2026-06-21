@@ -106,6 +106,28 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     ).resolves.toEqual({ messageId: "legacy-id", receipt });
   });
 
+  it("infers receipt kind as card when both text and presentation are present (#95440)", async () => {
+    const sendPayload = vi.fn(async (_request: ChannelMessageSendPayloadContext) => ({
+      channel: "slack",
+      messageId: "card-2",
+    }));
+    const adapter = createChannelMessageAdapterFromOutbound({
+      capabilities: { payload: true, batch: true },
+      outbound: { sendPayload },
+    });
+
+    const result = await adapter.send?.payload?.({
+      cfg,
+      to: "C0XXXX",
+      text: "test",
+      payload: {
+        presentation: { blocks: [{ type: "text", text: "above" }, { type: "divider" }] },
+      },
+    });
+
+    expect(result?.receipt.parts[0]?.kind).toBe("card");
+  });
+
   it("wraps rich payload sends and infers the receipt part kind", async () => {
     const sendPayload = vi.fn(async (_request: ChannelMessageSendPayloadContext) => ({
       channel: "demo",

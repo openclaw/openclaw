@@ -116,11 +116,11 @@ function resolvePayloadReceiptKind(
   if (ctx.mediaUrl || ctx.payload.mediaUrl || ctx.payload.mediaUrls?.length) {
     return "media";
   }
-  if (ctx.payload.text?.trim() || ctx.text.trim()) {
-    return "text";
-  }
   if (ctx.payload.presentation?.blocks?.length || ctx.payload.interactive) {
     return "card";
+  }
+  if (ctx.payload.text?.trim() || ctx.text.trim()) {
+    return "text";
   }
   return "unknown";
 }
