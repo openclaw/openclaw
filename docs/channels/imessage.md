@@ -681,7 +681,7 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
     }
     ```
 
-    With the flag on and no explicit `messages.inbound.byChannel.imessage` or global `messages.inbound.debounceMs`, the debounce window widens to **2500 ms** (the legacy default is 0 ms — no debouncing). The wider window is required because Apple's split-send cadence of 0.8-2.0 s does not fit in a tighter default.
+    With the flag on and no explicit `messages.inbound.byChannel.imessage` or global `messages.inbound.debounceMs`, the debounce window widens to **7000 ms** (the legacy default is 0 ms — no debouncing). The wider window is required because Apple's URL-preview split-send cadence can stretch to several seconds while Messages.app emits the preview row.
 
     To tune the window yourself:
 
@@ -690,10 +690,8 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
       messages: {
         inbound: {
           byChannel: {
-            // 2500 ms works for most setups; raise to 4000 ms if your Mac is
-            // slow or under memory pressure (observed gap can stretch past 2 s
-            // then).
-            imessage: 2500,
+            // 7000 ms covers observed Messages.app URL-preview delays.
+            imessage: 7000,
           },
         },
       },
