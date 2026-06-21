@@ -3566,6 +3566,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       text: "Answer",
       messageThreadId: 88,
     });
+    expectDraftStreamParams({ thread: { id: 88, scope: "forum" } });
+    expectRecordFields(mockCallArg(createTelegramDraftStream, 1), {
+      thread: { id: 88, scope: "forum" },
+    });
   });
 
   it("replaces reasoning snapshots on the reasoning lane", async () => {
