@@ -1,7 +1,7 @@
 /**
  * Browser server lifecycle helpers for relay setup and profile shutdown.
  */
-import { emitNodeGatewayEvent } from "./node-gateway-emitter.js";
+import { emitNodeGatewayEvent, getRegisteredNodeIdentity } from "./node-gateway-emitter.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
@@ -47,6 +47,10 @@ export async function ensureExtensionRelayForProfiles(params: {
       // before it can drive the browser or originate turns; undefined on a
       // tokenless loopback gateway, where the bridge stays trusted-local.
       authToken: getRuntimeConfig().gateway?.auth?.token,
+      // Surface the hosting node's identity on /whoami so the side panel knows
+      // this bridge is node-hosted (not gateway-only) and fails closed on a
+      // dropped node route instead of an unconfined direct gateway turn.
+      identity: getRegisteredNodeIdentity(),
       // Originate node-attributed turns when this process is a paired node-host.
       // emitNodeGatewayEvent throws if no node connection is registered (e.g. a
       // gateway-only deployment), which the bridge surfaces to the side panel so

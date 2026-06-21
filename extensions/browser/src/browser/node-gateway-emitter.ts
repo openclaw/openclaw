@@ -11,10 +11,25 @@
 export type NodeGatewayEventEmitter = (event: string, payload: unknown) => Promise<void>;
 
 let registeredEmitter: NodeGatewayEventEmitter | null = null;
+let registeredNodeId: string | undefined;
 
-/** Install the node-host's real emitter (called from the onNodeHostStart hook). */
-export function setNodeGatewayEventEmitter(emitter: NodeGatewayEventEmitter | null): void {
+/** Install the node-host's real emitter + id (called from the onNodeHostStart hook). */
+export function setNodeGatewayEventEmitter(
+  emitter: NodeGatewayEventEmitter | null,
+  nodeId?: string,
+): void {
   registeredEmitter = emitter;
+  registeredNodeId = emitter ? nodeId : undefined;
+}
+
+/**
+ * Node identity surfaced on the bridge `/whoami` so the side panel knows this
+ * bridge is node-hosted (and must fail closed on a dropped node route) rather
+ * than gateway-only. `nodeIntegrated` is true exactly when a node-host has
+ * registered its emitter on this process.
+ */
+export function getRegisteredNodeIdentity(): { nodeId?: string; nodeIntegrated: boolean } {
+  return { nodeId: registeredNodeId, nodeIntegrated: registeredEmitter !== null };
 }
 
 /**

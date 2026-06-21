@@ -55,6 +55,7 @@ export function listRegisteredNodeHostCapsAndCommands(): {
 /** Run every registered node-host startup hook once. Failures are reported, not fatal. */
 export async function runRegisteredNodeHostStartupHooks(params: {
   onWarn: (message: string) => void;
+  nodeId?: string;
 }): Promise<void> {
   const registry = getActivePluginRegistry();
   for (const entry of registry?.nodeHostCommands ?? []) {
@@ -63,7 +64,7 @@ export async function runRegisteredNodeHostStartupHooks(params: {
       continue;
     }
     try {
-      await start({ emitNodeGatewayEvent });
+      await start({ emitNodeGatewayEvent, nodeId: params.nodeId });
     } catch (err) {
       params.onWarn(
         "node-host startup hook failed (" + entry.pluginId + ":" + entry.command.command + "): " + String(err),

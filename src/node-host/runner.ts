@@ -325,7 +325,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   // Run plugin node-host start hooks (e.g. the browser extension bridge) now that
   // the node->gateway emitter is live, so node-anchored services bind before the
   // first dial instead of a lazy per-turn start that can never bootstrap (#93680).
-  await runRegisteredNodeHostStartupHooks({ onWarn: (m) => writeStderrLine(m) });
+  await runRegisteredNodeHostStartupHooks({ onWarn: (m) => writeStderrLine(m), nodeId });
 
   const skillBins = new SkillBinsCache(async () => {
     const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});

@@ -166,7 +166,7 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
       // node-attributed turns without emitNodeGatewayEvent on the public plugin SDK.
       const { startBrowserControlServiceFromConfig, setNodeGatewayEventEmitter } =
         await loadBrowserRegistrationRuntimeModule();
-      setNodeGatewayEventEmitter(ctx.emitNodeGatewayEvent);
+      setNodeGatewayEventEmitter(ctx.emitNodeGatewayEvent, ctx.nodeId);
       await startBrowserControlServiceFromConfig();
     },
   },
