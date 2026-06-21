@@ -318,6 +318,7 @@ function resolveTelegramMirroredTranscriptText(
 
 async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
+  dispatchStartedAt: number;
   route: TelegramMessageContext["route"];
   sessionKey: string;
   loadFreshSessionStore: FreshTelegramSessionStoreLoader;
@@ -344,6 +345,11 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     agentId: params.route.agentId,
     sessionsDir: path.dirname(storePath),
   });
+  // Only the current-turn tail may suppress this mirror; crossing a user line
+  // would drop legitimate repeated answers.
+  if (await isCurrentTurnTelegramMirrorDuplicate(sessionFile, text, params.dispatchStartedAt)) {
+    return;
+  }
   const message = {
     role: "assistant" as const,
     content: [{ type: "text" as const, text }],
@@ -395,6 +401,23 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     message: appendedMessage,
     messageId,
   });
+}
+
+async function isCurrentTurnTelegramMirrorDuplicate(
+  sessionFile: string,
+  text: string,
+  dispatchStartedAt: number,
+): Promise<boolean> {
+  const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+  return (
+    latest?.timestamp !== undefined &&
+    latest.timestamp >= dispatchStartedAt &&
+    normalizeTelegramMirrorText(latest.text) === normalizeTelegramMirrorText(text)
+  );
+}
+
+function normalizeTelegramMirrorText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
@@ -1541,6 +1564,7 @@ export const dispatchTelegramMessage = async ({
       ? async (payload: TelegramTranscriptMirrorPayload) => {
           await mirrorTelegramAssistantReplyToTranscript({
             cfg,
+            dispatchStartedAt,
             route,
             sessionKey,
             loadFreshSessionStore,

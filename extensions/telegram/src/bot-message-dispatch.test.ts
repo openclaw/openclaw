@@ -1783,6 +1783,49 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("mirrors a legitimate repeat after a new user turn instead of skipping it", async () => {
+    const repeatedText = "Final answer";
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+      text: repeatedText,
+      timestamp: 1,
+    });
+    deliverReplies.mockImplementation(
+      async (params: {
+        replies?: Array<{ text?: string }>;
+        transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void>;
+      }) => {
+        const text = params.replies
+          ?.map((reply) => reply.text)
+          .filter(Boolean)
+          .join("\n\n");
+        await params.transcriptMirror?.({ text });
+        return { delivered: true };
+      },
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: repeatedText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(appendSessionTranscriptMessage).toHaveBeenCalledTimes(1);
+    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
+      transcriptPath: "/tmp/session.jsonl",
+    });
+    expectRecordFields(transcriptCall.message, {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: repeatedText }],
+    });
+  });
+
   it("mirrors the longer streamed preview when final text is truncated", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const fullAnswer =
@@ -1814,15 +1857,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       content: fullAnswer,
       messageId: 2001,
     });
-    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
-      transcriptPath: "/tmp/session.jsonl",
-    });
-    expectRecordFields(transcriptCall.message, {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: fullAnswer }],
-    });
+    expect(appendSessionTranscriptMessage).not.toHaveBeenCalled();
   });
 
   it("emits the redacted appended message in transcript updates", async () => {
@@ -2691,7 +2726,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
         replyOptions?.onVerboseProgressVisibility?.(() => true);
-        await dispatcherOptions.deliver({ text: "Tool output visible to Telegram" }, { kind: "tool" });
+        await dispatcherOptions.deliver(
+          { text: "Tool output visible to Telegram" },
+          { kind: "tool" },
+        );
         await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
         return { queuedFinal: true };
       },
