@@ -691,8 +691,15 @@ async function createStateSqliteBackupPlan(params: {
 }
 
 const STALE_SWEEP_GRACE_MS = 60 * 60 * 1000;
+const BACKUP_STAGING_OWNER_FILE = ".openclaw-backup-owner.json";
+const BACKUP_ARCHIVE_OWNER_SUFFIX = ".openclaw-owner.json";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type BackupArtifactOwner = {
+  pid: number;
+  startedAtMs: number;
+};
 
 export async function sweepStaleBackupArtifacts(params: {
   outputPath: string;
@@ -715,7 +722,10 @@ async function sweepStaleBackupStagingDirs(tempRoot: string): Promise<void> {
   await Promise.all(
     entries
       .filter((entry) => entry.isDirectory() && entry.name.startsWith("openclaw-backup-"))
-      .map((entry) => removeStalePath(path.join(tempRoot, entry.name))),
+      .map((entry) => {
+        const artifactPath = path.join(tempRoot, entry.name);
+        return removeStalePath(artifactPath, path.join(artifactPath, BACKUP_STAGING_OWNER_FILE));
+      }),
   );
 }
 
@@ -729,14 +739,32 @@ async function sweepStaleBackupArchiveTemps(outputPath: string): Promise<void> {
     return;
   }
 
+  const entryNames = new Set(entries.map((entry) => entry.name));
   await Promise.all(
     entries
-      .filter((entry) => entry.isFile() && isBackupArchiveTempName(entry.name, outputBaseName))
-      .map((entry) => removeStalePath(path.join(outputDir, entry.name))),
+      .filter((entry) => entry.isFile())
+      .flatMap((entry) => {
+        if (isBackupArchiveTempName(entry.name, outputBaseName)) {
+          const artifactPath = path.join(outputDir, entry.name);
+          return [removeStalePath(artifactPath, resolveBackupArchiveOwnerPath(artifactPath))];
+        }
+        const archiveTempName = resolveBackupArchiveTempNameFromOwnerName(
+          entry.name,
+          outputBaseName,
+        );
+        if (!archiveTempName || entryNames.has(archiveTempName)) {
+          return [];
+        }
+        const ownerPath = path.join(outputDir, entry.name);
+        return [removeStalePath(ownerPath, ownerPath)];
+      }),
   );
 }
 
-async function removeStalePath(targetPath: string): Promise<void> {
+async function removeStalePath(targetPath: string, ownerPath?: string): Promise<void> {
+  if (ownerPath && (await hasLiveBackupArtifactOwner(ownerPath))) {
+    return;
+  }
   let stat: import("node:fs").Stats;
   try {
     stat = await fs.stat(targetPath);
@@ -747,6 +775,9 @@ async function removeStalePath(targetPath: string): Promise<void> {
     return;
   }
   await fs.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
+  if (ownerPath && ownerPath !== targetPath) {
+    await fs.rm(ownerPath, { force: true }).catch(() => undefined);
+  }
 }
 
 function isBackupArchiveTempName(name: string, outputBaseName: string): boolean {
@@ -756,6 +787,58 @@ function isBackupArchiveTempName(name: string, outputBaseName: string): boolean 
     return false;
   }
   return UUID_RE.test(name.slice(prefix.length, -suffix.length));
+}
+
+function resolveBackupArchiveOwnerPath(tempArchivePath: string): string {
+  return `${tempArchivePath}${BACKUP_ARCHIVE_OWNER_SUFFIX}`;
+}
+
+function resolveBackupArchiveTempNameFromOwnerName(
+  name: string,
+  outputBaseName: string,
+): string | undefined {
+  if (!name.endsWith(BACKUP_ARCHIVE_OWNER_SUFFIX)) {
+    return undefined;
+  }
+  const archiveTempName = name.slice(0, -BACKUP_ARCHIVE_OWNER_SUFFIX.length);
+  return isBackupArchiveTempName(archiveTempName, outputBaseName) ? archiveTempName : undefined;
+}
+
+function buildBackupArtifactOwner(): BackupArtifactOwner {
+  return { pid: process.pid, startedAtMs: Date.now() };
+}
+
+async function writeBackupArtifactOwner(
+  ownerPath: string,
+  owner: BackupArtifactOwner,
+): Promise<void> {
+  await fs.writeFile(ownerPath, `${JSON.stringify(owner)}\n`, "utf8");
+}
+
+async function hasLiveBackupArtifactOwner(ownerPath: string): Promise<boolean> {
+  let owner: BackupArtifactOwner;
+  try {
+    owner = JSON.parse(await fs.readFile(ownerPath, "utf8")) as BackupArtifactOwner;
+  } catch {
+    return false;
+  }
+  return isLiveBackupOwner(owner);
+}
+
+function isLiveBackupOwner(owner: BackupArtifactOwner): boolean {
+  if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(owner.pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") {
+      return false;
+    }
+    return code === "EPERM";
+  }
 }
 
 export async function createBackupArchive(
@@ -820,8 +903,12 @@ export async function createBackupArchive(
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
+  const tempArchiveOwnerPath = resolveBackupArchiveOwnerPath(tempArchivePath);
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
   try {
+    const backupOwner = buildBackupArtifactOwner();
+    await writeBackupArtifactOwner(path.join(tempDir, BACKUP_STAGING_OWNER_FILE), backupOwner);
+    await writeBackupArtifactOwner(tempArchiveOwnerPath, backupOwner);
     const stateSqliteBackup = stateAsset
       ? await createStateSqliteBackupPlan({
           stateDir: stateAsset.sourcePath,
@@ -948,6 +1035,7 @@ export async function createBackupArchive(
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
+    await fs.rm(tempArchiveOwnerPath, { force: true }).catch(() => undefined);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
