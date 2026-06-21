@@ -5,6 +5,10 @@
  * - Only uppercase env vars are matched: `[A-Z_][A-Z0-9_]*`
  * - Escape with `$${}` to output literal `${}`
  * - Missing env vars throw `MissingEnvVarError` with context
+ * - Opt-in JSON coercion: when a value is exactly one `${VAR:json}` and the
+ *   resolved text is a JSON array or object literal, it is parsed into a real
+ *   array/object (so list/object config can be injected via env vars). Plain
+ *   `${VAR}` always stays a string; embedded/multi-var references stay strings.
  *
  * @example
  * ```json5
@@ -37,9 +41,25 @@ export class MissingEnvVarError extends Error {
   }
 }
 
+// `inner` is the verbatim text inside the braces (e.g. "VAR" or "VAR:json").
+// It is preserved so escaped and unresolved placeholders round-trip exactly,
+// including the optional `:json` modifier.
 type EnvToken =
-  | { kind: "escaped"; name: string; end: number }
-  | { kind: "substitution"; name: string; end: number };
+  | { kind: "escaped"; name: string; inner: string; end: number }
+  | { kind: "substitution"; name: string; inner: string; coerce: boolean; end: number };
+
+// Splits the braces content into a bare env name and optional modifier.
+// `:json` is the only supported modifier; anything else is rejected so the
+// token stays unrecognized and passes through literally.
+function parseEnvTokenInner(inner: string): { name: string; coerce: boolean } | null {
+  const colon = inner.indexOf(":");
+  const name = colon === -1 ? inner : inner.slice(0, colon);
+  const modifier = colon === -1 ? "" : inner.slice(colon + 1);
+  if (!ENV_VAR_NAME_PATTERN.test(name) || (modifier !== "" && modifier !== "json")) {
+    return null;
+  }
+  return { name, coerce: modifier === "json" };
+}
 
 function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   if (value[index] !== "$") {
@@ -49,27 +69,29 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   const next = value[index + 1];
   const afterNext = value[index + 2];
 
-  // Escaped: $${VAR} -> ${VAR}
+  // Escaped: $${VAR} -> ${VAR} (and $${VAR:json} -> ${VAR:json}).
   if (next === "$" && afterNext === "{") {
     // Parse escaped placeholders before substitutions so "$${VAR}" never resolves from env.
     const start = index + 3;
     const end = value.indexOf("}", start);
     if (end !== -1) {
-      const name = value.slice(start, end);
-      if (ENV_VAR_NAME_PATTERN.test(name)) {
-        return { kind: "escaped", name, end };
+      const inner = value.slice(start, end);
+      const parsed = parseEnvTokenInner(inner);
+      if (parsed) {
+        return { kind: "escaped", name: parsed.name, inner, end };
       }
     }
   }
 
-  // Substitution: ${VAR} -> value
+  // Substitution: ${VAR} -> value, or ${VAR:json} -> JSON-coerced value.
   if (next === "{") {
     const start = index + 2;
     const end = value.indexOf("}", start);
     if (end !== -1) {
-      const name = value.slice(start, end);
-      if (ENV_VAR_NAME_PATTERN.test(name)) {
-        return { kind: "substitution", name, end };
+      const inner = value.slice(start, end);
+      const parsed = parseEnvTokenInner(inner);
+      if (parsed) {
+        return { kind: "substitution", name: parsed.name, inner, coerce: parsed.coerce, end };
       }
     }
   }
@@ -109,7 +131,8 @@ function substituteString(
 
     const token = parseEnvTokenAt(value, i);
     if (token?.kind === "escaped") {
-      chunks.push(`\${${token.name}}`);
+      // Reconstruct from `inner` so the modifier (e.g. ":json") round-trips.
+      chunks.push(`\${${token.inner}}`);
       i = token.end;
       continue;
     }
@@ -118,8 +141,9 @@ function substituteString(
       if (envValue === undefined || envValue === "") {
         if (opts?.onMissing) {
           opts.onMissing({ varName: token.name, configPath });
-          // Preserve the original placeholder so the value is visibly unresolved.
-          chunks.push(`\${${token.name}}`);
+          // Preserve the original placeholder (including any modifier) so the
+          // value is visibly unresolved and the opt-in form is not dropped.
+          chunks.push(`\${${token.inner}}`);
           i = token.end;
           continue;
         }
@@ -162,6 +186,47 @@ export function containsEnvVarReference(value: string): boolean {
   return false;
 }
 
+/**
+ * If `value` is exactly one `${VAR:json}` reference (modulo surrounding
+ * whitespace), returns the env var name; otherwise `null`. Only this sole
+ * opt-in form is eligible for JSON coercion — plain `${VAR}`, embedded
+ * references, and multi-var strings always keep their string result.
+ * Exported so config write-back (env-preserve) reuses identical token semantics.
+ */
+export function parseSoleCoerceTokenName(value: string): string | null {
+  const trimmed = value.trim();
+  const token = parseEnvTokenAt(trimmed, 0);
+  if (token?.kind !== "substitution" || !token.coerce || token.end !== trimmed.length - 1) {
+    return null;
+  }
+  return token.name;
+}
+
+/**
+ * When a `${VAR:json}` value resolves to a JSON array or object literal, return
+ * the parsed value so array/object config can be injected through env vars.
+ * Returns `undefined` when the resolved text is not a JSON array/object.
+ */
+export function tryParseJsonArrayOrObject(
+  resolved: string,
+): unknown[] | Record<string, unknown> | undefined {
+  const trimmed = resolved.trim();
+  const looksLikeArray = trimmed.startsWith("[") && trimmed.endsWith("]");
+  const looksLikeObject = trimmed.startsWith("{") && trimmed.endsWith("}");
+  if (!looksLikeArray && !looksLikeObject) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed) || isPlainObject(parsed)) {
+      return parsed;
+    }
+  } catch {
+    // Not JSON — fall through and keep the string result.
+  }
+  return undefined;
+}
+
 function substituteAny(
   value: unknown,
   env: NodeJS.ProcessEnv,
@@ -169,7 +234,14 @@ function substituteAny(
   opts?: SubstituteOptions,
 ): unknown {
   if (typeof value === "string") {
-    return substituteString(value, env, path, opts);
+    const substituted = substituteString(value, env, path, opts);
+    if (substituted !== value && parseSoleCoerceTokenName(value) !== null) {
+      const coerced = tryParseJsonArrayOrObject(substituted);
+      if (coerced !== undefined) {
+        return coerced;
+      }
+    }
+    return substituted;
   }
 
   if (Array.isArray(value)) {

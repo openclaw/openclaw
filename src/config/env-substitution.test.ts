@@ -399,4 +399,98 @@ describe("resolveConfigEnvVars", () => {
       expectResolvedScenarios(scenarios);
     });
   });
+
+  describe("opt-in ${VAR:json} array/object coercion", () => {
+    it("coerces a sole ${VAR:json} that resolves to a JSON array or object", () => {
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "JSON string array becomes a real array",
+          config: { allowFrom: "${ALLOW_FROM:json}" },
+          env: { ALLOW_FROM: '["alice","bob"]' },
+          expected: { allowFrom: ["alice", "bob"] },
+        },
+        {
+          name: "JSON object becomes a real object",
+          config: { limits: "${LIMITS:json}" },
+          env: { LIMITS: '{"max":5,"enabled":true}' },
+          expected: { limits: { max: 5, enabled: true } },
+        },
+        {
+          name: "surrounding whitespace is tolerated",
+          config: { ids: "  ${IDS:json}  " },
+          env: { IDS: "[1,2,3]" },
+          expected: { ids: [1, 2, 3] },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("never coerces plain ${VAR} — only the opt-in ${VAR:json} form", () => {
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "plain ${VAR} with JSON-looking value stays a string",
+          config: { vars: { TAGS: "${TAGS}" } },
+          env: { TAGS: '["a","b"]' },
+          expected: { vars: { TAGS: '["a","b"]' } },
+        },
+        {
+          name: "embedded ${VAR:json} is not coerced",
+          config: { key: "prefix-${ARR:json}" },
+          env: { ARR: '["a","b"]' },
+          expected: { key: 'prefix-["a","b"]' },
+        },
+        {
+          name: "scalar value stays a string even with :json",
+          config: { key: "${SCALAR:json}" },
+          env: { SCALAR: "plain" },
+          expected: { key: "plain" },
+        },
+        {
+          name: "malformed JSON stays a string even with :json",
+          config: { key: "${BROKEN:json}" },
+          env: { BROKEN: "[1, 2," },
+          expected: { key: "[1, 2," },
+        },
+        {
+          name: "JSON primitive is not coerced (only arrays/objects)",
+          config: { key: "${NUM:json}" },
+          env: { NUM: "42" },
+          expected: { key: "42" },
+        },
+        {
+          name: "unknown modifier is left as a literal placeholder",
+          config: { key: "${VAR:yaml}" },
+          env: { VAR: "x" },
+          expected: { key: "${VAR:yaml}" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("keeps escaped $${VAR:json} literal instead of resolving it", () => {
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "escaped :json placeholder stays literal including the modifier",
+          config: { key: "$${ALLOW_FROM:json}" },
+          env: { ALLOW_FROM: '["alice","bob"]' },
+          expected: { key: "${ALLOW_FROM:json}" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("preserves the :json modifier when onMissing keeps the placeholder", () => {
+      const warnings: { varName: string; configPath: string }[] = [];
+      const result = resolveConfigEnvVars(
+        { allowFrom: "${ALLOW_FROM:json}" },
+        {} as NodeJS.ProcessEnv,
+        { onMissing: (w) => warnings.push(w) },
+      );
+      expect(result).toEqual({ allowFrom: "${ALLOW_FROM:json}" });
+      expect(warnings).toEqual([{ varName: "ALLOW_FROM", configPath: "allowFrom" }]);
+    });
+  });
 });

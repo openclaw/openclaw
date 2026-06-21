@@ -1,6 +1,7 @@
 // Normalizes preserved environment-variable config for subprocess launches.
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../infra/plain-object.js";
+import { parseSoleCoerceTokenName, tryParseJsonArrayOrObject } from "./env-substitution.js";
 
 /**
  * Preserves `${VAR}` environment variable references during config write-back.
@@ -18,7 +19,7 @@ import { isPlainObject } from "../infra/plain-object.js";
  * resolves to), the new value is kept as-is.
  */
 
-const ENV_VAR_PATTERN = /\$\{[A-Z_][A-Z0-9_]*\}/;
+const ENV_VAR_PATTERN = /\$\{[A-Z_][A-Z0-9_]*(?::json)?\}/;
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
 export class EnvRefArrayMutationError extends Error {
@@ -49,12 +50,21 @@ function collectAuthoredEnvRefs(value: string): AuthoredEnvRef[] {
       continue;
     }
     const nameEnd = value.indexOf("}", nameStart);
-    if (nameEnd === -1 || !ENV_VAR_NAME_PATTERN.test(value.slice(nameStart, nameEnd))) {
+    if (nameEnd === -1) {
+      continue;
+    }
+    // Strip the optional `:json` modifier before validating the bare var name,
+    // so `${VAR:json}` refs are tracked under their name like plain `${VAR}`.
+    const inner = value.slice(nameStart, nameEnd);
+    const colon = inner.indexOf(":");
+    const name = colon === -1 ? inner : inner.slice(0, colon);
+    const modifier = colon === -1 ? "" : inner.slice(colon + 1);
+    if (!ENV_VAR_NAME_PATTERN.test(name) || (modifier !== "" && modifier !== "json")) {
       continue;
     }
     refs.push({
       kind: isEscaped ? "escaped" : "unescaped",
-      name: value.slice(nameStart, nameEnd),
+      name,
     });
     index = nameEnd;
   }
@@ -662,30 +672,39 @@ function tryResolveString(template: string, env: NodeJS.ProcessEnv): string {
 
   for (let i = 0; i < template.length; i++) {
     if (template[i] === "$") {
-      // Escaped: $${VAR} -> literal ${VAR}
+      // Escaped: $${VAR} -> literal ${VAR} (and $${VAR:json} -> ${VAR:json}).
       if (template[i + 1] === "$" && template[i + 2] === "{") {
         const start = i + 3;
         const end = template.indexOf("}", start);
         if (end !== -1) {
-          const name = template.slice(start, end);
-          if (ENV_VAR_NAME_PATTERN.test(name)) {
-            chunks.push(`\${${name}}`);
+          const inner = template.slice(start, end);
+          const colon = inner.indexOf(":");
+          const name = colon === -1 ? inner : inner.slice(0, colon);
+          const modifier = colon === -1 ? "" : inner.slice(colon + 1);
+          if (ENV_VAR_NAME_PATTERN.test(name) && (modifier === "" || modifier === "json")) {
+            chunks.push(`\${${inner}}`);
             i = end;
             continue;
           }
         }
       }
 
-      // Substitution: ${VAR} -> env value
+      // Substitution: ${VAR} or ${VAR:json} -> env value (string).
+      // The optional `:json` modifier is ignored for string resolution here;
+      // structured coercion of `${VAR:json}` is handled by the dedicated
+      // restore branch in restoreEnvVarRefs.
       if (template[i + 1] === "{") {
         const start = i + 2;
         const end = template.indexOf("}", start);
         if (end !== -1) {
-          const name = template.slice(start, end);
-          if (ENV_VAR_NAME_PATTERN.test(name)) {
+          const inner = template.slice(start, end);
+          const colon = inner.indexOf(":");
+          const name = colon === -1 ? inner : inner.slice(0, colon);
+          const modifier = colon === -1 ? "" : inner.slice(colon + 1);
+          if (ENV_VAR_NAME_PATTERN.test(name) && (modifier === "" || modifier === "json")) {
             const val = env[name];
             if (val === undefined || val === "") {
-              chunks.push(`\${${name}}`);
+              chunks.push(`\${${inner}}`);
               i = end;
               continue;
             }
@@ -733,6 +752,25 @@ export function restoreEnvVarRefs(
 ): unknown {
   // If parsed has no env var refs at this level, return incoming as-is
   if (parsed === null || parsed === undefined) {
+    return incoming;
+  }
+
+  // Structured leaf: parsed was a sole `${VAR:json}` template that resolved to
+  // the incoming array/object. Restore the literal template so the authored
+  // env reference survives the write-back instead of being inlined to disk.
+  // Runs before the array/object walks so the resolved structure is never
+  // recursed into, and only fires on an exact env-resolved deep match.
+  if (typeof parsed === "string" && (Array.isArray(incoming) || isPlainObject(incoming))) {
+    const coerceName = parseSoleCoerceTokenName(parsed);
+    if (coerceName !== null) {
+      const raw = env[coerceName];
+      if (raw !== undefined && raw !== "") {
+        const reparsed = tryParseJsonArrayOrObject(raw);
+        if (reparsed !== undefined && isDeepStrictEqual(reparsed, incoming)) {
+          return parsed;
+        }
+      }
+    }
     return incoming;
   }
 
