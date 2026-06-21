@@ -963,8 +963,9 @@ describe("spawnSubagentDirect seam flow", () => {
         // Admin-only methods must be pinned to operator.admin.
         expect(call.scopes).toEqual(["operator.admin"]);
       } else {
-        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope.
-        expect(call.scopes).toBeUndefined();
+        // "agent" must escalate to operator.admin when a resolved model is
+        // forwarded as an explicit override (#91171).
+        expect(call.scopes).toEqual(["operator.admin"]);
       }
     }
   });
@@ -1107,5 +1108,27 @@ describe("spawnSubagentDirect seam flow", () => {
         (call) => (call[0] as { method?: string }).method === "agent",
       ),
     ).toBe(false);
+  });
+
+  // ── Regression: #91171 sub-agent model routing ─────────────────
+  it("forwards resolved model + provider to the sub-agent gateway agent call", async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn sub-agent with explicit qwen model",
+        model: "qwen/qwen3.6-plus",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "qq",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentRequest = gatewayRequest("agent");
+    const agentParams = requireRecord(agentRequest.params);
+    // Regression: resolved model must be forwarded to the child gateway call
+    // so the sub-agent actually runs on the requested provider/model.
+    expect(agentParams.model).toBe("qwen3.6-plus");
+    expect(agentParams.provider).toBe("qwen");
   });
 });

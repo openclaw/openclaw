@@ -239,7 +239,7 @@ async function updateSubagentSessionStore(
 }
 
 async function callSubagentGateway(
-  params: Parameters<typeof callGateway>[0],
+  params: Parameters<typeof callGateway>[0] & { allowModelOverride?: boolean },
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
   // (sessions.patch / sessions.delete → admin, agent → write).  When each call
@@ -250,7 +250,19 @@ async function callSubagentGateway(
   //
   // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
   // "agent" -> write) keep their least-privilege scope.
-  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  const allowModelOverride = params.allowModelOverride === true;
+  const baseScopes =
+    params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  // When a resolved model is forwarded as an explicit override, escalate to
+  // admin scope so the gateway authorizes it. ADMIN_SCOPE is required for
+  // both dispatch paths: out-of-process callGateway (no synthetic client
+  // seam) and in-process dispatchGatewayMethodInProcess (synthetic client
+  // gains allowModelOverride from the broader scope set) (#91171).
+  const scopes = (() => {
+    if (!allowModelOverride) return baseScopes;
+    if (baseScopes == null) return [ADMIN_SCOPE];
+    return baseScopes.includes(ADMIN_SCOPE) ? baseScopes : [...baseScopes, ADMIN_SCOPE];
+  })();
   const request = {
     ...params,
     ...(scopes != null ? { scopes } : {}),
@@ -271,6 +283,7 @@ async function callSubagentGateway(
         ...(scopes != null ? { forceSyntheticClient: true } : {}),
         timeoutMs: request.timeoutMs,
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
+        ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
       },
     );
   }
@@ -1562,6 +1575,13 @@ export async function spawnSubagentDirect(
       workspaceDir: _workspaceDir,
       ...publicSpawnedMetadata
     } = spawnedMetadata;
+    // Forward the resolved sub-agent model to the child gateway call so the
+    // spawned run actually uses the requested provider/model instead of
+    // silently falling back to the agent default (#91171). The gateway
+    // requires explicit override authorization, hence allowModelOverride.
+    const resolvedModelRef = resolvedModel?.trim();
+    const { provider: resolvedProvider, model: resolvedModelId } = splitModelRef(resolvedModelRef);
+    const hasResolvedModelOverride = Boolean(resolvedProvider && resolvedModelId);
     const response = await callSubagentGateway({
       method: "agent",
       params: {
@@ -1583,6 +1603,7 @@ export async function spawnSubagentDirect(
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
+        ...(hasResolvedModelOverride ? { model: resolvedModelId, provider: resolvedProvider } : {}),
         ...(bootstrapContextMode
           ? {
               bootstrapContextMode,
@@ -1592,6 +1613,7 @@ export async function spawnSubagentDirect(
         ...publicSpawnedMetadata,
       },
       timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
+      ...(hasResolvedModelOverride ? { allowModelOverride: true } : {}),
     });
     const runId = readGatewayRunId(response);
     if (runId) {
