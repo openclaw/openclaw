@@ -336,7 +336,7 @@ export function renderAgentOverview(params: {
                   type="password"
                   .value=${ttsApiKey}
                   ?disabled=${disabled}
-                  placeholder="${ELEVENLABS_API_KEY} or paste key"
+                  placeholder="Paste ElevenLabs API key"
                   @change=${(e: Event) =>
                     onTtsApiKeyChange(agent.id, (e.target as HTMLInputElement).value)}
                 />
