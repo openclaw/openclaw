@@ -27,6 +27,10 @@ export {
   parseSessionTranscriptMemoryHitKey,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
 };
+// Delivery-mirror dedup guard lives with transcript reads, not the session
+// store: channel mirrors compare a candidate reply against the redacted tail
+// row before appending, so the helper belongs on this transcript subpath.
+export { isDeliveryMirrorTailDuplicate } from "../config/sessions/transcript.js";
 export type {
   ResolveSessionTranscriptMemoryHitKeyParams,
   SessionTranscriptIdentity,

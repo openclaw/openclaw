@@ -157,10 +157,7 @@ export { resolveSessionFilePath } from "../config/sessions/paths.js";
  * persisting transcript file paths directly.
  */
 export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
-export {
-  readLatestAssistantTextFromSessionTranscript,
-  readTailAssistantTextFromSessionTranscript,
-} from "../config/sessions/transcript.js";
+export { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";

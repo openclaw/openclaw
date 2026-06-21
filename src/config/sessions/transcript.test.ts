@@ -2,8 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
+import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
@@ -21,6 +22,7 @@ import {
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
+  isDeliveryMirrorTailDuplicate,
   readLatestAssistantTextFromSessionTranscript,
   readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
@@ -1832,5 +1834,83 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(messages[1]?.parentId).toBe("legacy-first");
     expect(messages[2]?.id).toBe(appended.messageId);
     expect(messages[2]?.parentId).toBe("legacy-second");
+  });
+});
+
+describe("isDeliveryMirrorTailDuplicate", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "mirror-dedup-"));
+  });
+
+  function writeTranscript(entries: Array<Record<string, unknown>>): string {
+    const file = path.join(dir, "session.jsonl");
+    fs.writeFileSync(
+      file,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf-8",
+    );
+    return file;
+  }
+
+  function assistantEntry(id: string, text: string): Record<string, unknown> {
+    return {
+      type: "message",
+      id,
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    };
+  }
+
+  function redactedText(text: string): string {
+    const message = redactTranscriptMessage(
+      { role: "assistant", content: [{ type: "text", text }] } as never,
+      undefined,
+    ) as { content: Array<{ text: string }> };
+    return message.content[0]?.text ?? text;
+  }
+
+  it("dedupes a secret-shaped reply whose persisted tail row is already redacted", () => {
+    const rawReply = "Final answer: sk-abcdef1234567890ABCDEFGHIJ";
+    const persistedReply = redactedText(rawReply);
+    // The on-disk row is redacted while the candidate is still raw; a raw string
+    // compare would miss the duplicate. Guard against a no-op test if redaction
+    // is disabled in the environment.
+    expect(persistedReply).not.toBe(rawReply);
+
+    const file = writeTranscript([assistantEntry("a1", persistedReply)]);
+    return expect(isDeliveryMirrorTailDuplicate(file, rawReply)).resolves.toBe(true);
+  });
+
+  it("ignores whitespace differences from rejoined delivery blocks", () => {
+    const file = writeTranscript([assistantEntry("a1", "Line one\n\nLine two")]);
+    return expect(isDeliveryMirrorTailDuplicate(file, "Line one Line two")).resolves.toBe(true);
+  });
+
+  it("does not dedupe when the tail assistant reply differs", () => {
+    const file = writeTranscript([assistantEntry("a1", "Different answer")]);
+    return expect(isDeliveryMirrorTailDuplicate(file, "Mirror text")).resolves.toBe(false);
+  });
+
+  it("does not dedupe when the current turn has no assistant tail yet", () => {
+    // message_tool-only path: the primary runner wrote nothing this turn, so the
+    // tail is the user line and the mirror must still be written.
+    const file = writeTranscript([
+      assistantEntry("a1", "Mirror text"),
+      {
+        type: "message",
+        id: "u1",
+        message: { role: "user", content: [{ type: "text", text: "say it again" }] },
+      },
+    ]);
+    return expect(isDeliveryMirrorTailDuplicate(file, "Mirror text")).resolves.toBe(false);
+  });
+
+  it("skips trailing non-message entries to reach the assistant tail", () => {
+    const file = writeTranscript([
+      assistantEntry("a1", "Mirror text"),
+      { type: "custom", customType: "openclaw.cache-ttl", data: { provider: "anthropic" } },
+    ]);
+    return expect(isDeliveryMirrorTailDuplicate(file, "Mirror text")).resolves.toBe(true);
   });
 });
