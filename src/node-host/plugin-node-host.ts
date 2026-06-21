@@ -64,10 +64,14 @@ export async function runRegisteredNodeHostStartupHooks(params: {
       continue;
     }
     try {
-      // Pass the host-internal node->gateway emitter on the runtime ctx (built as a
-      // non-literal so it stays assignable to the public {nodeId?} ctx type without
-      // adding the privileged emitter to that public type).
-      const startCtx = { emitNodeGatewayEvent, nodeId: params.nodeId };
+      // The node->gateway emitter is privileged (it originates node-attributed
+      // turns), so only the bundled node-anchored browser bridge (cap "browser")
+      // receives it on its startup ctx; every other plugin hook gets just nodeId.
+      // Built as a non-literal so the emitter stays off the public {nodeId?} type.
+      const startCtx =
+        entry.command.cap === "browser"
+          ? { emitNodeGatewayEvent, nodeId: params.nodeId }
+          : { nodeId: params.nodeId };
       await start(startCtx);
     } catch (err) {
       params.onWarn(
