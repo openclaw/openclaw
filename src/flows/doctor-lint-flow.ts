@@ -37,7 +37,7 @@ export async function runDoctorLintChecks(
     if (only.size > 0 && !only.has(c.id)) {
       return false;
     }
-    if (only.size === 0 && c.defaultEnabled === false) {
+    if (only.size === 0 && isDefaultDisabled(c)) {
       return false;
     }
     if (skip.has(c.id)) {
@@ -79,6 +79,10 @@ export async function runDoctorLintChecks(
     checksRun: selected.length,
     checksSkipped: all.length - selected.length,
   };
+}
+
+function isDefaultDisabled(check: HealthCheck): boolean {
+  return "defaultEnabled" in check && check.defaultEnabled === false;
 }
 
 // Stable ordering keeps CLI output and tests deterministic across registry order changes.

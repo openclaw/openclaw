@@ -36,6 +36,7 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { registerHealthCheck } from "./health-check-registry.js";
+import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
   HealthCheckContext,
@@ -735,7 +736,7 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
-const sessionLocksCheck: HealthCheck = {
+const sessionLocksCheck: SplitHealthCheckInput = {
   id: SESSION_LOCKS_CHECK_ID,
   kind: "core",
   description: "Stale session lock files are represented as structured findings.",
@@ -1007,7 +1008,9 @@ function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck
   };
 }
 
-function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly HealthCheck[] {
+function createConvertedWorkflowChecks(
+  deps: CoreHealthCheckDeps,
+): readonly SplitHealthCheckInput[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
@@ -1049,7 +1052,7 @@ export function resetCoreHealthChecksForTest(): void {
 
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
-): readonly HealthCheck[] {
+): readonly SplitHealthCheckInput[] {
   return [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
@@ -1060,4 +1063,4 @@ export function createCoreHealthChecks(
   ];
 }
 
-export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
+export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();
