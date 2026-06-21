@@ -304,6 +304,22 @@ describe("verify-pr-hosted-gates", () => {
       changelogOnly: false,
     });
     expect(() => parseArgs(["--repo", "openclaw/openclaw"])).toThrow("Usage:");
+    expect(() =>
+      parseArgs(["--repo", "-h", "--sha", sha, "--output", ".local/gates-hosted-checks.json"]),
+    ).toThrow("Expected --repo <value>.");
+    expect(() =>
+      parseArgs([
+        "--repo",
+        "openclaw/openclaw",
+        "--sha",
+        "-h",
+        "--output",
+        ".local/gates-hosted-checks.json",
+      ]),
+    ).toThrow("Expected --sha <value>.");
+    expect(() =>
+      parseArgs(["--repo", "openclaw/openclaw", "--sha", sha, "--output", "-h"]),
+    ).toThrow("Expected --output <value>.");
   });
 
   it("accepts JSON emitted through a colorizing GitHub CLI shim", () => {
