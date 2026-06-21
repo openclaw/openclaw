@@ -1973,6 +1973,42 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
   });
 
+  it("ignores a stale native InputEvent replay after send clears the host draft", () => {
+    let draft = "";
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn(() => {
+      draft = "";
+    });
+    const renderWithDraft = () => {
+      render(
+        renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+        container,
+      );
+    };
+
+    renderWithDraft();
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+  });
+
   it("commits local draft input before Enter sends", () => {
     const onDraftChange = vi.fn();
     const onSend = vi.fn();
