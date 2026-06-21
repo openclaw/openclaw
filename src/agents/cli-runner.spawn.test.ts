@@ -56,6 +56,16 @@ import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
+/** Minimal valid MCP config used by mcpDeliveryCapture tests. */
+const MCP_CAPTURED_CONFIG = JSON.stringify({
+  mcpServers: {
+    openclaw: {
+      url: "http://127.0.0.1:0/mcp",
+      headers: {},
+    },
+  },
+});
+
 vi.mock("../plugin-sdk/anthropic-cli.js", () => ({
   CLAUDE_CLI_BACKEND_ID: "claude-cli",
   isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
@@ -74,12 +84,14 @@ beforeEach(() => {
   supervisorSpawnMock.mockClear();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   resetDiagnosticRunActivityForTest();
   resetClaudeLiveSessionsForTest();
   replyRunTesting.resetReplyRunRegistry();
+  await fs.rm("/tmp/mcp-captured.json", { force: true });
+  await fs.rm("/tmp/mcp-captured-test.json", { force: true });
 });
 
 function buildPreparedCliRunContext(params: {
@@ -1281,6 +1293,7 @@ describe("runCliAgent spawn path", () => {
       };
     });
     const preparedBackendCleanup = vi.fn(async () => {});
+    await fs.writeFile("/tmp/mcp-captured.json", MCP_CAPTURED_CONFIG, "utf-8");
     const context = buildPreparedCliRunContext({
       provider: "claude-cli",
       model: "sonnet",
