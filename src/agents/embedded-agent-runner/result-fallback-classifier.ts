@@ -1,6 +1,7 @@
 /**
  * Classifies embedded-agent run results for model fallback decisions.
  */
+import { isGenericExternalRunFailureText } from "../../auto-reply/reply/agent-runner-failure-copy.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
@@ -133,14 +134,24 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (!isEmbeddedAgentRunResult(params.result)) {
     return null;
   }
+  // claude-cli out-of-credits error arrives as a visible text payload (isError: false).
+  // It should still trigger fallback rather than suppressing it.
+  const visiblePayloads = (params.result.payloads ?? []).filter(
+    (p: { text?: string; isError?: boolean }) => !p.isError && typeof p.text === "string",
+  );
+  const hasGenericFailurePayload = visiblePayloads.some((p: { text: string }) =>
+    isGenericExternalRunFailureText(p.text),
+  );
+
   if (
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
     params.hasBlockReplyPipelineOutput === true ||
-    hasVisibleAgentPayload(params.result, {
+    (hasVisibleAgentPayload(params.result, {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,
-    })
+    }) &&
+      !hasGenericFailurePayload)
   ) {
     return null;
   }
