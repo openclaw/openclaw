@@ -560,7 +560,8 @@ export function buildInboundUserContextPrefix(
   const includeDirectConversationInfo = Boolean(
     directChannelValue && directChannelValue !== "webchat",
   );
-  const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
+  const shouldIncludeConversationInfo =
+    envelope?.includeConversationInfo ?? (!isDirect || includeDirectConversationInfo);
 
   const messageId = normalizePromptMetadataString(ctx.MessageSid);
   const messageIdFull = normalizePromptMetadataString(ctx.MessageSidFull);
@@ -590,49 +591,48 @@ export function buildInboundUserContextPrefix(
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
-  const conversationInfo = {
-    chat_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.OriginatingTo) : undefined,
-    message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
-    reply_to_id: shouldIncludeConversationInfo
-      ? normalizePromptMetadataString(ctx.ReplyToId)
-      : undefined,
-    sender_id: shouldIncludeConversationInfo
-      ? normalizePromptMetadataString(ctx.SenderId)
-      : undefined,
-    conversation_label: isDirect ? undefined : normalizePromptMetadataString(ctx.ConversationLabel),
-    sender: shouldIncludeConversationInfo
-      ? (normalizePromptMetadataString(ctx.SenderName) ??
+  // When shouldIncludeConversationInfo is false (config override) skip the entire block
+  // so providers that rely on exact-prefix KV-cache matching see a stable prefix.
+  if (shouldIncludeConversationInfo) {
+    const conversationInfo = {
+      chat_id: normalizeOptionalString(ctx.OriginatingTo),
+      message_id: resolvedMessageId,
+      reply_to_id: normalizePromptMetadataString(ctx.ReplyToId),
+      sender_id: normalizePromptMetadataString(ctx.SenderId),
+      conversation_label: isDirect ? undefined : normalizePromptMetadataString(ctx.ConversationLabel),
+      sender:
+        normalizePromptMetadataString(ctx.SenderName) ??
         normalizePromptMetadataString(ctx.SenderE164) ??
         normalizePromptMetadataString(ctx.SenderId) ??
-        normalizePromptMetadataString(ctx.SenderUsername))
-      : undefined,
-    timestamp: timestampStr,
-    source_modality: resolveInboundSourceModality(ctx),
-    group_subject: normalizePromptMetadataString(ctx.GroupSubject),
-    group_channel: normalizePromptMetadataString(ctx.GroupChannel),
-    group_space: normalizePromptMetadataString(ctx.GroupSpace),
-    group_members: sanitizePromptBody(ctx.GroupMembers),
-    thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
-    inbound_event_kind: ctx.InboundEventKind,
-    topic_id:
-      ctx.MessageThreadId != null
-        ? (normalizePromptMetadataString(String(ctx.MessageThreadId)) ?? undefined)
-        : undefined,
-    topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
-    is_forum: ctx.IsForum === true ? true : undefined,
-    ...buildConversationMentionMetadataPayload(ctx, isDirect),
-    has_reply_context:
-      replyChainPayload.length > 0 || sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
-    has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
-    has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
-    history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
-    history_media_count: historyMediaCount > 0 ? historyMediaCount : undefined,
-    history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
-  };
-  if (Object.values(conversationInfo).some((v) => v !== undefined)) {
-    blocks.push(
-      formatUntrustedJsonBlock("Conversation info (untrusted metadata):", conversationInfo),
-    );
+        normalizePromptMetadataString(ctx.SenderUsername),
+      timestamp: timestampStr,
+      source_modality: resolveInboundSourceModality(ctx),
+      group_subject: normalizePromptMetadataString(ctx.GroupSubject),
+      group_channel: normalizePromptMetadataString(ctx.GroupChannel),
+      group_space: normalizePromptMetadataString(ctx.GroupSpace),
+      group_members: sanitizePromptBody(ctx.GroupMembers),
+      thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
+      inbound_event_kind: ctx.InboundEventKind,
+      topic_id:
+        ctx.MessageThreadId != null
+          ? (normalizePromptMetadataString(String(ctx.MessageThreadId)) ?? undefined)
+          : undefined,
+      topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
+      is_forum: ctx.IsForum === true ? true : undefined,
+      ...buildConversationMentionMetadataPayload(ctx, isDirect),
+      has_reply_context:
+        replyChainPayload.length > 0 || sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
+      has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
+      has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
+      history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
+      history_media_count: historyMediaCount > 0 ? historyMediaCount : undefined,
+      history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
+    };
+    if (Object.values(conversationInfo).some((v) => v !== undefined)) {
+      blocks.push(
+        formatUntrustedJsonBlock("Conversation info (untrusted metadata):", conversationInfo),
+      );
+    }
   }
 
   const senderInfo = {
@@ -649,7 +649,7 @@ export function buildInboundUserContextPrefix(
     tag: normalizePromptMetadataString(ctx.SenderTag),
     e164: normalizePromptMetadataString(ctx.SenderE164),
   };
-  if (senderInfo?.label) {
+  if (senderInfo?.label && shouldIncludeConversationInfo) {
     blocks.push(formatUntrustedJsonBlock("Sender (untrusted metadata):", senderInfo));
   }
 
