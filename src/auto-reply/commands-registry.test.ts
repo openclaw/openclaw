@@ -740,24 +740,37 @@ describe("commands registry args", () => {
     expect(seenChoice.catalogLength).toBe(0);
   });
 
-  it("uses configured model catalog reasoning for /think arg menus", () => {
-    installOllamaThinkingProvider();
-    const command = requireNativeCommand("think");
-
-    const menu = requireCommandArgMenu({
-      command,
-      args: undefined,
+  it.each([
+    {
+      source: "configured",
       cfg: {
         models: {
           providers: {
             ollama: {
-              models: [{ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", reasoning: true }],
+              models: [{ id: "glm-5.2:cloud", name: "GLM 5.2 Cloud", reasoning: true }],
             },
           },
         },
-      } as never,
+      },
+      catalog: undefined,
+    },
+    {
+      source: "runtime",
+      cfg: { agents: { defaults: { models: { "ollama/*": {} } } } },
+      catalog: [
+        { provider: "ollama", id: "glm-5.2:cloud", name: "GLM 5.2 Cloud", reasoning: true },
+      ],
+    },
+  ])("uses $source model catalog reasoning for /think arg menus", ({ cfg, catalog }) => {
+    installOllamaThinkingProvider();
+    const command = requireNativeCommand("think");
+    const menu = requireCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: cfg as never,
       provider: "ollama",
-      model: "glm-5.1:cloud",
+      model: "glm-5.2:cloud",
+      catalog,
     });
 
     expect(menu.arg.name).toBe("level");

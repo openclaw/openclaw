@@ -118,7 +118,7 @@ export function buildDiscordCommandOptions(params: {
               ? await resolveChoiceContext(interaction)
               : null;
           const currentCfg = resolveConfig?.() ?? cfg;
-          // Load the runtime catalog for /think (default model can be live-discovered, e.g. Ollama reasoning); empty keeps the configured fallback.
+          // Native /think choices need live-discovery metadata; empty keeps config fallback.
           const choiceCatalog =
             command.key === "think" ? await loadModelCatalog({ config: currentCfg }) : undefined;
           const choices = resolveCommandArgChoices({

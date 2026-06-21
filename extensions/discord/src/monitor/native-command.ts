@@ -486,9 +486,11 @@ async function dispatchDiscordCommandInteraction(params: {
         threadBindings,
       })
     : null;
-  // Load the runtime catalog for /think (default model can be live-discovered, e.g. Ollama reasoning); empty keeps the configured fallback.
+  // Native /think choices need live-discovery metadata; empty keeps config fallback.
   const menuModelCatalog =
-    command.key === "think" ? await loadModelCatalog({ config: cfg }) : undefined;
+    command.key === "think" && menuNeedsModelContext
+      ? await loadModelCatalog({ config: cfg })
+      : undefined;
   const menu = resolveCommandArgMenu({
     command,
     args: commandArgs,

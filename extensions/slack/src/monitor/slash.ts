@@ -596,9 +596,11 @@ export async function registerSlackMonitorSlashCommands(params: {
               sessionKey: menuRoute.sessionKey,
             })
           : {};
-        // Load the runtime catalog for /think (default model can be live-discovered, e.g. Ollama reasoning); empty keeps the configured fallback.
+        // Native /think choices need live-discovery metadata; empty keeps config fallback.
         const menuModelCatalog =
-          commandDefinition.key === "think" ? await loadModelCatalog({ config: cfg }) : undefined;
+          commandDefinition.key === "think" && menuNeedsModelContext
+            ? await loadModelCatalog({ config: cfg })
+            : undefined;
         const menu = resolveCommandArgMenu({
           command: commandDefinition,
           args: commandArgs,

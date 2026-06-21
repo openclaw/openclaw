@@ -658,9 +658,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   });
 
   it("resolves /think menu choices against the runtime catalog for live-discovered models", async () => {
-    // #93835: a wildcard-allowed Ollama model is reasoning-capable per live
-    // /api/show discovery, but the configured catalog carries no reasoning flag.
-    // The menu must resolve choices against the runtime catalog, not config-only.
     const cfg = {
       agents: { defaults: { models: { "ollama/*": {} } } },
     } as OpenClawConfig;
@@ -697,10 +694,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   });
 
   it("loads the runtime catalog for /think when no session model override is set", async () => {
-    // #93835 default-model gap: when the agent default is a live-discovered
-    // Ollama reasoning model and the user has not picked one via /model, the
-    // menu context has no provider. The catalog must still load so the default
-    // model's reasoning levels survive instead of the configured-only fallback.
     const cfg = {
       agents: { defaults: { model: "ollama/glm-5.2:cloud", models: { "ollama/*": {} } } },
     } as OpenClawConfig;
@@ -924,6 +917,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramPrivateCommandContext({ match: "high" }));
 
     expect(sessionMocks.loadSessionStore).not.toHaveBeenCalled();
+    expect(agentRuntimeMocks.loadModelCatalog).not.toHaveBeenCalled();
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 
