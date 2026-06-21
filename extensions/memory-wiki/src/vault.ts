@@ -8,6 +8,7 @@ import {
 import { FsSafeError, pathExists, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
+import { WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 
 export const WIKI_VAULT_DIRECTORIES = [
@@ -66,6 +67,7 @@ This vault is maintained by the OpenClaw memory-wiki plugin.
 
 ## Architecture
 - Raw sources remain the evidence layer.
+- To keep unmanaged raw Markdown in \`sources/\`, add \`${WIKI_RAW_SOURCE_MARKER}\` near the top of the page.
 - Wiki pages are the human-readable synthesis layer.
 - \`.openclaw-wiki/cache/agent-digest.json\` is the agent-facing compiled digest.
 

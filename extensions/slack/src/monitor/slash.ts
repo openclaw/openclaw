@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/native-command-config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -374,7 +375,7 @@ export async function registerSlackMonitorSlashCommands(params: {
   trackEvent?: () => void;
 }): Promise<void> {
   const { ctx, account, trackEvent } = params;
-  const cfg = ctx.cfg;
+  const startupCfg = ctx.cfg;
   const runtime = ctx.runtime;
 
   const supportsInteractiveArgMenus =
@@ -395,6 +396,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     commandDefinition?: ChatCommandDefinition;
   }) => {
     const { command, ack, respond, body, prompt, commandArgs, commandDefinition } = p;
+    const cfg = getRuntimeConfigSnapshot() ?? ctx.cfg;
     try {
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();
@@ -661,6 +663,10 @@ export async function registerSlackMonitorSlashCommands(params: {
         targetSessionKey: route.sessionKey,
         lowercaseSessionKey: true,
       });
+      const slashReplyTarget =
+        !slashCommand.ephemeral && isRoomish
+          ? `channel:${command.channel_id}`
+          : `user:${command.user_id}`;
       const ctxPayload = finalizeInboundContext({
         Body: prompt,
         BodyForAgent: prompt,
@@ -702,7 +708,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         CommandSource: "native" as const,
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "slack" as const,
-        OriginatingTo: `user:${command.user_id}`,
+        OriginatingTo: slashReplyTarget,
       });
 
       await recordInboundSessionMetaSafe({
@@ -731,12 +737,18 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
       });
 
+      const messageSentHookTarget = ctxPayload.OriginatingTo ?? ctxPayload.To ?? slashReplyTarget;
       const deliverSlashPayloads = async (replies: ReplyPayload[]) => {
         await deliverSlackSlashReplies({
           replies,
           respond,
           ephemeral: slashCommand.ephemeral,
           textLimit: ctx.textLimit,
+          messageSentHookTarget,
+          accountId: route.accountId,
+          sessionKeyForInternalHooks: ctxPayload.SessionKey ?? route.sessionKey,
+          isGroup: isRoomish,
+          groupId: isRoomish ? command.channel_id : undefined,
           chunkMode: resolveChunkMode(cfg, "slack", route.accountId),
           tableMode: resolveMarkdownTableMode({
             cfg,
@@ -778,12 +790,12 @@ export async function registerSlackMonitorSlashCommands(params: {
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "slack",
     providerSetting: account.config.commands?.native,
-    globalSetting: cfg.commands?.native,
+    globalSetting: startupCfg.commands?.native,
   });
   const nativeSkillsEnabled = resolveNativeSkillsEnabled({
     providerId: "slack",
     providerSetting: account.config.commands?.nativeSkills,
-    globalSetting: cfg.commands?.nativeSkills,
+    globalSetting: startupCfg.commands?.nativeSkills,
   });
 
   let nativeCommands: Array<{ name: string }> = [];
@@ -791,9 +803,9 @@ export async function registerSlackMonitorSlashCommands(params: {
   if (nativeEnabled) {
     slashCommandsRuntime = await loadSlashCommandsRuntime();
     const skillCommands = nativeSkillsEnabled
-      ? (await loadSlashSkillCommandsRuntime()).listSkillCommandsForAgents({ cfg })
+      ? (await loadSlashSkillCommandsRuntime()).listSkillCommandsForAgents({ cfg: startupCfg })
       : [];
-    nativeCommands = slashCommandsRuntime.listNativeCommandSpecsForConfig(cfg, {
+    nativeCommands = slashCommandsRuntime.listNativeCommandSpecsForConfig(startupCfg, {
       skillCommands,
       provider: "slack",
     });

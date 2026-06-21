@@ -22,7 +22,6 @@ export async function runQaTelegramCommand(opts: LiveTransportQaCommandOptions) 
   printLiveTransportQaArtifacts("Telegram QA", {
     report: result.reportPath,
     summary: result.summaryPath,
-    "observed messages": result.observedMessagesPath,
   });
   if (!runOptions.allowFailures) {
     const failedScenarioCount = await readQaSuiteFailedScenarioCountFromFile(result.summaryPath);

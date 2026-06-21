@@ -131,6 +131,31 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     // Final payload with no replyToId should be recognized as already sent
     expect(pipeline.hasSentPayload({ text: "response text" })).toBe(true);
     expect(pipeline.hasSentPayload({ text: "response text", replyToId: "other-id" })).toBe(true);
+    expect(pipeline.hasSentExactPayload?.({ text: "response text" })).toBe(true);
+    expect(pipeline.hasSentExactPayload?.({ text: "response text", replyToId: "other-id" })).toBe(
+      true,
+    );
+  });
+
+  it("keeps exact payload evidence separate from streamed text coverage", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "constx=1" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "const x = 1" })).toBe(true);
+    expect(pipeline.hasSentExactPayload?.({ text: "const x = 1" })).toBe(false);
+    expect(
+      pipeline.hasSentExactPayload?.({
+        text: "constx=1",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("tracks media URLs delivered via block replies", async () => {

@@ -18,7 +18,6 @@ let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.j
 let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
-let isOversizedToolResult: typeof import("./tool-result-truncation.js").isOversizedToolResult;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
@@ -37,7 +36,6 @@ async function loadFreshToolResultTruncationModuleForTest() {
     getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
     truncateOversizedToolResultsInSession,
-    isOversizedToolResult,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -244,28 +242,6 @@ describe("calculateMaxToolResultChars", () => {
       agentId: "writer",
     });
     expect(result).toBe(24_000);
-  });
-});
-
-describe("isOversizedToolResult", () => {
-  it("returns false for small tool results", () => {
-    const msg = makeToolResult("small content");
-    expect(isOversizedToolResult(msg, 200_000)).toBe(false);
-  });
-
-  it("returns true for oversized tool results", () => {
-    const msg = makeToolResult("x".repeat(500_000));
-    expect(isOversizedToolResult(msg, 128_000)).toBe(true);
-  });
-
-  it("honors an explicit higher maxChars override", () => {
-    const msg = makeToolResult("x".repeat(20_000));
-    expect(isOversizedToolResult(msg, 128_000, 24_000)).toBe(false);
-  });
-
-  it("returns false for non-toolResult messages", () => {
-    const msg = makeUserMessage("x".repeat(500_000));
-    expect(isOversizedToolResult(msg, 128_000)).toBe(false);
   });
 });
 

@@ -11,7 +11,7 @@ import {
   noteOpencodeProviderOverrides,
 } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
@@ -231,6 +231,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
+  const pluginActivationSourceConfig = candidate;
   const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
   const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
   if (autoEnable.changes.length > 0) {
@@ -329,8 +330,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
     const previewNotes = await collectDoctorPreviewNotes({
       cfg: candidate,
+      activationSourceConfig: pluginActivationSourceConfig,
       doctorFixCommand,
       env: process.env,
+      allowExec: params.options.allowExec === true,
     });
     emitDoctorNotes({
       note,

@@ -21,7 +21,7 @@ import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
-import { confirm, select, text } from "./configure.shared.js";
+import { confirm, password, select, text } from "./configure.shared.js";
 import {
   guardCancel,
   normalizeGatewayTokenInput,
@@ -233,9 +233,8 @@ export async function promptGatewayConfig(
       note(`Validated ${envVarName}. OpenClaw will store a token SecretRef.`, "Gateway token");
     } else {
       const tokenInput = guardCancel(
-        await text({
+        await password({
           message: "Gateway token (blank to generate)",
-          initialValue: randomToken(),
         }),
         runtime,
       );
@@ -245,14 +244,14 @@ export async function promptGatewayConfig(
   }
 
   if (authMode === "password") {
-    const password = guardCancel(
-      await text({
+    const passwordInput = guardCancel(
+      await password({
         message: "Gateway password",
         validate: validateGatewayPasswordInput,
       }),
       runtime,
     );
-    gatewayPassword = normalizeOptionalString(password) ?? "";
+    gatewayPassword = normalizeOptionalString(passwordInput) ?? "";
   }
 
   if (authMode === "trusted-proxy") {

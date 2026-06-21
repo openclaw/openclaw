@@ -1,6 +1,6 @@
 // Mattermost tests cover monitor helpers plugin behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeMention } from "./monitor-helpers.js";
+import { normalizeMention, shouldDropEmptyMattermostBody } from "./monitor-helpers.js";
 
 describe("normalizeMention", () => {
   it("returns trimmed text when no mention provided", () => {
@@ -79,5 +79,108 @@ describe("normalizeMention", () => {
     const input = "@echobot\n    code line 1\n    code line 2";
     const result = normalizeMention(input, "echobot");
     expect(result).toBe("    code line 1\n    code line 2");
+  });
+});
+
+describe("shouldDropEmptyMattermostBody", () => {
+  it("drops a non-mention message that normalizes to an empty body", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        rawText: "   ",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a message that still has body text", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "hello",
+        rawText: "hello",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a bare mention in a group", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        rawText: "@openclaw",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a bare mention in a direct message", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        rawText: "@OpenClaw",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("drops an empty body when the bot username is unknown", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        rawText: "@someoneelse",
+        botUsername: undefined,
+      }),
+    ).toBe(true);
+  });
+
+  it("drops a blank post even when a generic mention pattern matched it", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        rawText: "",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
+  it("drops a bot mention with only a Unicode control residual", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "\u0085",
+        rawText: "@openclaw\u0085",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
+  it("drops a bot mention with only a combining-mark residual", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "\ufe0f",
+        rawText: "@openclaw\ufe0f",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    "@openclaw @openclaw",
+    "@openclaw\n@openclaw",
+    "@openclaw\n",
+    "\n@openclaw",
+    "@openclaw\r\n",
+    "@openclaw\u2028",
+    "@openclaw\u2029",
+    "\v@openclaw\f",
+    "@openclaw\u00a0",
+    "\u2003@openclaw",
+  ])("drops an invalid empty-body candidate: %j", (rawText) => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        rawText,
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
   });
 });

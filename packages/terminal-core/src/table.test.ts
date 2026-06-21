@@ -1,7 +1,8 @@
+import { note as clackNote } from "@clack/prompts";
 // Terminal Core tests cover table behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./ansi.js";
-import { resolveNoteColumns, wrapNoteMessage } from "./note.js";
+import { resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
 
 function mockProcessPlatform(platform: NodeJS.Platform): void {
@@ -346,6 +347,33 @@ describe("wrapNoteMessage", () => {
     expect(resolveNoteColumns(1)).toBe(80);
     expect(resolveNoteColumns(79)).toBe(80);
     expect(resolveNoteColumns(120)).toBe(120);
+  });
+
+  it("widens note output columns so clack does not re-wrap copy-sensitive lines", () => {
+    const wrapped = wrapNoteMessage(
+      [
+        "- Found 1 session lock file.",
+        "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock pid=86519 (alive) age=2m47s stale=no",
+      ].join("\n"),
+      { columns: 80 },
+    );
+    const writes: string[] = [];
+    const output = {
+      columns: resolveNoteOutputColumns(wrapped, 80),
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+
+    clackNote(wrapped, "Session locks", { output, format: (line) => line });
+
+    const rendered = writes.join("");
+    expect(rendered).toContain(".jsonl.lock");
+    expect(rendered).not.toContain(".js\n");
+    expect(rendered).toContain(
+      "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock",
+    );
   });
 
   it("coerces nullish and non-string note messages before wrapping", () => {

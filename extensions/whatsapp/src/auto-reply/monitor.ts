@@ -35,7 +35,7 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../session.js";
+import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
@@ -142,43 +142,6 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
   );
 }
 
-async function clearTerminalWebAuthState(params: {
-  account: ReturnType<typeof resolveWhatsAppAccount>;
-  runtime: RuntimeEnv;
-  statusLabel: number | "unknown";
-  healthState: "logged-out" | "conflict";
-  log: ReturnType<typeof getChildLogger>;
-}) {
-  try {
-    const cleared = await logoutWeb({
-      authDir: params.account.authDir,
-      isLegacyAuthDir: params.account.isLegacyAuthDir,
-      runtime: params.runtime,
-    });
-    params.log.warn(
-      {
-        accountId: params.account.accountId,
-        cleared,
-        healthState: params.healthState,
-        status: params.statusLabel,
-      },
-      "web reconnect: cleared cached auth after terminal close",
-    );
-  } catch (error) {
-    params.log.warn(
-      {
-        accountId: params.account.accountId,
-        error: formatError(error),
-        healthState: params.healthState,
-        status: params.statusLabel,
-      },
-      "web reconnect: failed clearing cached auth after terminal close",
-    );
-    params.runtime.error(
-      `WhatsApp Web cleanup failed after terminal close (status ${params.statusLabel}). Run \`${formatCliCommand("openclaw channels logout --channel whatsapp")}\`, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`.`,
-    );
-  }
-}
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
 
 export async function monitorWebChannel(
@@ -196,9 +159,6 @@ export async function monitorWebChannel(
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
-  const statusController = createWebChannelStatusController(tuning.statusSink);
-  statusController.emit();
-
   const baseCfg = getRuntimeConfig();
   const sourceCfg = getRuntimeConfigSourceSnapshot();
   const { cfg, account } = resolveWebMonitorConfigSnapshot({
@@ -271,6 +231,8 @@ export async function monitorWebChannel(
     sleep,
     isNonRetryableStatus: isNonRetryableWebCloseStatus,
   });
+  const statusController = createWebChannelStatusController(tuning.statusSink);
+  statusController.emit();
 
   try {
     while (true) {
@@ -333,6 +295,7 @@ export async function monitorWebChannel(
               mediaMaxMb: account.mediaMaxMb,
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
+              socketTiming,
               debounceMs: inboundDebounceMs,
               shouldDebounce,
               socketRef: controller.socketRef,
@@ -430,26 +393,12 @@ export async function monitorWebChannel(
               "web reconnect: setup status error; max attempts reached",
             );
             if (setupDecision.healthState === "logged-out") {
-              await clearTerminalWebAuthState({
-                account,
-                runtime,
-                statusLabel: setupDecision.normalized.statusLabel,
-                healthState: setupDecision.healthState,
-                log: reconnectLogger,
-              });
               runtime.error(
                 `WhatsApp session logged out during setup. Run \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` to relink.`,
               );
             } else if (setupDecision.healthState === "conflict") {
-              await clearTerminalWebAuthState({
-                account,
-                runtime,
-                statusLabel: setupDecision.normalized.statusLabel,
-                healthState: setupDecision.healthState,
-                log: reconnectLogger,
-              });
               runtime.error(
-                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
+                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then restart the channel. To force a fresh QR, run \`${formatCliCommand("openclaw channels logout --channel whatsapp")}\` before \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
               );
             } else {
               runtime.error(
@@ -667,24 +616,10 @@ export async function monitorWebChannel(
         });
 
         if (decision.healthState === "logged-out") {
-          await clearTerminalWebAuthState({
-            account,
-            runtime,
-            statusLabel: decision.normalized.statusLabel,
-            healthState: decision.healthState,
-            log: reconnectLogger,
-          });
           runtime.error(
             `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` to relink.`,
           );
         } else if (decision.healthState === "conflict") {
-          await clearTerminalWebAuthState({
-            account,
-            runtime,
-            statusLabel: decision.normalized.statusLabel,
-            healthState: decision.healthState,
-            log: reconnectLogger,
-          });
           reconnectLogger.warn(
             {
               connectionId: connection.connectionId,
@@ -694,7 +629,7 @@ export async function monitorWebChannel(
             "web reconnect: non-retryable close status; stopping monitor",
           );
           runtime.error(
-            `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
+            `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then restart the channel. To force a fresh QR, run \`${formatCliCommand("openclaw channels logout --channel whatsapp")}\` before \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
           );
         } else {
           reconnectLogger.warn(

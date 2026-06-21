@@ -9,14 +9,14 @@ import {
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
-  addDurableCommandApproval,
   commandRequiresSecurityAuditSuppressionApproval,
   hasDurableExecApproval,
   maxAsk,
   minSecurity,
-  persistAllowAlwaysPatterns,
+  persistAllowAlwaysDecision,
   recordAllowlistMatchesUse,
   resolveApprovalAuditTrustPath,
+  resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovals,
   resolveExecModePolicy,
   resolveExecPolicyForMode,
@@ -28,6 +28,7 @@ import {
   type ExecSecurity,
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
+import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -129,6 +130,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   autoAllowSkills: boolean;
   segments: ExecCommandSegment[];
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+  authorizationPlan: ExecAuthorizationPlan | undefined;
   plannedAllowlistArgv: string[] | undefined;
   isWindows: boolean;
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
@@ -508,7 +510,7 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  const allowlistEvaluation = evaluateSystemRunAllowlist({
+  const allowlistEvaluation = await evaluateSystemRunAllowlist({
     shellCommand: parsed.shellPayload,
     argv: parsed.argv,
     approvals,
@@ -737,6 +739,7 @@ async function evaluateSystemRunPolicyPhase(
     autoAllowSkills,
     segments,
     segmentSatisfiedBy,
+    authorizationPlan: allowlistEvaluation.authorizationPlan,
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
     isWindows,
     approvedCwdSnapshot,
@@ -797,7 +800,7 @@ async function executeSystemRunPhase(
     return;
   }
 
-  const execArgv = resolveSystemRunExecArgv({
+  const execArgv = await resolveSystemRunExecArgv({
     plannedAllowlistArgv: phase.plannedAllowlistArgv,
     argv: phase.argv,
     security: phase.security,
@@ -812,6 +815,7 @@ async function executeSystemRunPhase(
     shellCommand: phase.shellPayload,
     segments: phase.segments,
     segmentSatisfiedBy: phase.segmentSatisfiedBy,
+    authorizationPlan: phase.authorizationPlan,
     cwd: phase.cwd,
     env: phase.env,
   });
@@ -863,22 +867,21 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (phase.policy.approvalDecision === "allow-always" && phase.inlineEvalHit === null) {
-    const patterns = phase.policy.analysisOk
-      ? persistAllowAlwaysPatterns({
-          approvals: phase.approvals.file,
-          agentId: phase.agentId,
-          segments: phase.segments,
-          cwd: phase.cwd,
-          env: phase.env,
-          platform: process.platform,
-          commandText: phase.commandText,
-          strictInlineEval: phase.strictInlineEval,
-        })
-      : [];
-    if (patterns.length === 0) {
-      addDurableCommandApproval(phase.approvals.file, phase.agentId, phase.commandText);
-    }
+  if (phase.policy.approvalDecision === "allow-always") {
+    persistAllowAlwaysDecision({
+      approvals: phase.approvals.file,
+      agentId: phase.agentId,
+      decision: resolveAllowAlwaysPersistenceDecision({
+        segments: phase.segments,
+        cwd: phase.cwd,
+        env: phase.env,
+        platform: process.platform,
+        commandText: phase.commandText,
+        strictInlineEval: phase.strictInlineEval,
+        authorizationPlan: phase.authorizationPlan,
+        runtimePayload: phase.inlineEvalHit !== null,
+      }),
+    });
   }
 
   recordAllowlistMatchesUse({

@@ -362,8 +362,8 @@ OpenClaw also enforces a safety floor for embedded runs:
 
 Why: leave enough headroom for multi-turn "housekeeping" (like memory writes) before compaction becomes unavoidable.
 
-Implementation: `ensureAgentCompactionReserveTokens()` in `src/agents/agent-settings.ts`
-(called from `src/agents/embedded-agent-runner.ts`).
+Implementation: `applyAgentCompactionSettingsFromConfig()` in `src/agents/agent-settings.ts`
+(called from embedded-runner turn and compaction setup paths).
 
 ---
 

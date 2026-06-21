@@ -172,8 +172,11 @@ describe("runMessageAction core send routing", () => {
         media: "https://example.com/file.txt",
         message: "hello",
         pollDurationHours: 0,
-        pollDurationSeconds: 0,
+        pollDurationSeconds: 60,
         pollMulti: false,
+        pollPublic: true,
+        pollAnonymous: false,
+        pollOptionIndex: 0,
         pollQuestion: "",
         pollOption: [],
       },
@@ -235,6 +238,86 @@ describe("runMessageAction core send routing", () => {
     expect(result.to).toBe("telegram:-1001234567890:topic:42");
     expect(payload.to).toBe("telegram:-1001234567890:topic:42");
     expect(payload.dryRun).toBe(true);
+  });
+
+  it("preserves an explicit provider reply target with its canonical thread root", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "m1",
+      chatId: "C1",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "testchat",
+              outbound: {
+                deliveryMode: "direct",
+                sendText,
+              },
+            }),
+            threading: {
+              resolveAutoThreadId: ({
+                toolContext,
+                replyToId,
+              }: {
+                toolContext?: {
+                  currentMessageId?: string | number;
+                  currentThreadTs?: string;
+                };
+                replyToId?: string | null;
+              }) =>
+                replyToId === toolContext?.currentMessageId
+                  ? toolContext?.currentThreadTs
+                  : undefined,
+              resolveReplyTransport: ({
+                threadId,
+                replyToId,
+              }: {
+                threadId?: string | number | null;
+                replyToId?: string | null;
+              }) => {
+                const root = replyToId ?? (threadId == null ? undefined : String(threadId));
+                return { replyToId: root, threadId: root };
+              },
+            },
+          },
+        },
+      ]),
+    );
+
+    await runMessageAction({
+      cfg: {
+        channels: {
+          testchat: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:C1",
+        message: "threaded",
+        replyTo: "child-1",
+      },
+      toolContext: {
+        currentChannelProvider: "testchat",
+        currentChannelId: "channel:C1",
+        currentThreadTs: "root-1",
+        currentMessageId: "child-1",
+        replyToMode: "all",
+      },
+      dryRun: false,
+    });
+
+    expect(firstMockArg(sendText, "send text")).toMatchObject({
+      replyToId: "child-1",
+      threadId: "root-1",
+    });
   });
 
   it("uses best-effort delivery for implicit message-tool-only source replies", async () => {

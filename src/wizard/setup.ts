@@ -728,6 +728,7 @@ export async function runSetupWizard(
       prompter,
       runtime,
       setDefaultModel: true,
+      preserveExistingDefaultModel: true,
       opts: {
         ...opts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,

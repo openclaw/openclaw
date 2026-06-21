@@ -150,6 +150,61 @@ describe("resolveClaudeCliExecutionArgs", () => {
       }),
     ).toEqual(["-p", "--effort", "max"]);
   });
+
+  it("forces isolated no-tool one-shot args for side-question execution", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        thinkingLevel: "max",
+        useResume: true,
+        executionMode: "side-question",
+        baseArgs: [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--allowedTools=mcp__openclaw__*",
+          "--allowedTools",
+          "Read",
+          "Grep",
+          "--permission-mode",
+          "bypassPermissions",
+          "--session-id=abc",
+          "--resume",
+          "old-session",
+          "--resume-session-at",
+          "old-message",
+          "--resume-session-at=old-message-equals",
+          "--mcp-config",
+          "/tmp/side-question-mcp.json",
+          "--bare",
+          "--safe-mode",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--max-turns",
+          "4",
+          "--effort",
+          "high",
+        ],
+      }),
+    ).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--safe-mode",
+      "--tools",
+      "",
+      "--disallowedTools",
+      "mcp__*",
+      "--strict-mcp-config",
+      "--no-session-persistence",
+      "--max-turns",
+      "1",
+      "--permission-mode",
+      "default",
+    ]);
+  });
 });
 
 describe("normalizeClaudeBackendConfig", () => {

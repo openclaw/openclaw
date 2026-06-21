@@ -153,13 +153,9 @@ import Testing
         let destinationsSource = try String(contentsOf: Self.agentProTabDestinationsSourceURL(), encoding: .utf8)
         let nodesSource = try String(contentsOf: Self.agentProNodesDestinationSourceURL(), encoding: .utf8)
         let dreamingSource = try String(contentsOf: Self.agentProDreamingDestinationSourceURL(), encoding: .utf8)
-        let directDestination = try Self.extract(
-            source,
-            from: "private func directDestination(for route: AgentRoute) -> some View",
-            to: "private func applyInitialRouteIfNeeded()")
 
-        #expect(!directDestination.contains("ToolbarItem"))
-        #expect(directDestination.contains("self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden"))
+        #expect(!source.contains("ToolbarItem"))
+        #expect(source.contains("self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden"))
         #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .instances)"))
         #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .dreaming)"))
         #expect(destinationsSource.contains("self.directHeader(\n                        for: .usage"))
@@ -498,7 +494,6 @@ import Testing
         let chatSource = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
         let docsSource = try String(contentsOf: Self.docsSourceURL(), encoding: .utf8)
         let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
-        let channelsSource = try String(contentsOf: Self.channelsSourceURL(), encoding: .utf8)
 
         #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
         #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 1)
@@ -522,9 +517,7 @@ import Testing
         #expect(rootSource.contains("SettingsProTab(initialRoute: self.selectedSidebarDestination.settingsRoute)"))
         #expect(settingsSource.contains("title: \"Channels / Integrations\""))
         #expect(settingsSource.contains("route: .channels"))
-        #expect(channelsSource.contains("let gatewayAction: (() -> Void)?"))
         #expect(docsSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
-        #expect(channelsSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
     }
 
     @Test func gatewaySettingsKeepsPairingTrustDiagnosticsAndTailscaleActions() throws {

@@ -116,6 +116,120 @@ async function runHelperWithExistingSentinel(params: {
   return { result, sentinelPath };
 }
 
+async function spawnExitedPid(): Promise<number> {
+  const { spawn } =
+    await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return await new Promise<number>((resolve) => {
+    const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+    const pid = child.pid ?? 0;
+    child.once("exit", () => resolve(pid));
+  });
+}
+
+async function runHelperWithCommand(params: {
+  commandArgv: string[];
+  serviceRecovery?: Record<string, unknown>;
+  pathPrepend?: string;
+}): Promise<{ code: number }> {
+  const { execFile } =
+    await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-recovery-test-"));
+  tempDirs.add(tmpDir);
+
+  await startManagedServiceUpdateHandoff({
+    root: tmpDir,
+    timeoutMs: 1_800_000,
+    restartDelayMs: 0,
+    parentPid: process.pid,
+    execPath: "/usr/local/bin/node",
+    argv1: "/opt/openclaw/openclaw.mjs",
+    env: {},
+    meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+  });
+
+  const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
+  const helperScriptPath = args[0] ?? "";
+  tempDirs.add(path.dirname(helperScriptPath));
+  const baseParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as Record<
+    string,
+    unknown
+  >;
+
+  const helperParamsPath = path.join(tmpDir, "helper-params.json");
+  await fs.writeFile(
+    helperParamsPath,
+    `${JSON.stringify(
+      {
+        ...baseParams,
+        parentPid: await spawnExitedPid(),
+        parentExitTimeoutMs: 5000,
+        cwd: tmpDir,
+        commandArgv: params.commandArgv,
+        sentinelPath: path.join(tmpDir, "restart-sentinel.json"),
+        logPath: path.join(tmpDir, "handoff.log"),
+        sensitivePaths: [],
+        ...(params.serviceRecovery ? { serviceRecovery: params.serviceRecovery } : {}),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const childEnv = {
+    ...process.env,
+    ...(params.pathPrepend
+      ? { PATH: `${params.pathPrepend}${path.delimiter}${process.env.PATH ?? ""}` }
+      : {}),
+  };
+  return await new Promise<{ code: number }>((resolve) => {
+    execFile(process.execPath, [helperScriptPath, helperParamsPath], { env: childEnv }, (err) => {
+      const childError = err as NodeJS.ErrnoException | null;
+      resolve({ code: typeof childError?.code === "number" ? childError.code : 0 });
+    });
+  });
+}
+
+async function writeFakeSystemctl(): Promise<{ binDir: string; recordPath: string }> {
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-bin-"));
+  tempDirs.add(binDir);
+  const recordPath = path.join(binDir, "systemctl-calls.log");
+  await fs.writeFile(
+    path.join(binDir, "systemctl"),
+    `#!/bin/sh\necho "$@" >> '${recordPath}'\nexit 0\n`,
+    { mode: 0o755 },
+  );
+  return { binDir, recordPath };
+}
+
+async function writeFakeLaunchctl(): Promise<{ binDir: string; recordPath: string }> {
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launchctl-bin-"));
+  tempDirs.add(binDir);
+  const recordPath = path.join(binDir, "launchctl-calls.log");
+  const countPath = path.join(binDir, "launchctl-kickstart-count");
+  await fs.writeFile(
+    path.join(binDir, "launchctl"),
+    `#!/bin/sh
+echo "$@" >> '${recordPath}'
+if [ "$1" = "kickstart" ]; then
+  count=0
+  if [ -f '${countPath}' ]; then
+    count=$(cat '${countPath}')
+  fi
+  count=$((count + 1))
+  echo "$count" > '${countPath}'
+  [ "$count" -gt 1 ]
+  exit $?
+fi
+[ "$1" = "enable" ] && exit 0
+[ "$1" = "bootstrap" ] && exit 1
+exit 1
+`,
+    { mode: 0o755 },
+  );
+  return { binDir, recordPath };
+}
+
 describe("managed service update handoff", () => {
   it("strips process supervisor hints while preserving service identity for the CLI handoff", async () => {
     const { startManagedServiceUpdateHandoff, stripSupervisorHintEnv } =
@@ -244,7 +358,12 @@ describe("managed service update handoff", () => {
     const helperParams = JSON.parse(await fs.readFile(args[6] ?? "", "utf-8")) as {
       commandArgv?: string[];
       handoffId?: string;
+      serviceRecovery?: unknown;
     };
+    expect(helperParams.serviceRecovery).toEqual({
+      kind: "systemd",
+      unit: "openclaw-gateway.service",
+    });
     expect(helperParams.commandArgv).toEqual([
       "/usr/local/bin/node",
       "/opt/openclaw/openclaw.mjs",
@@ -262,6 +381,100 @@ describe("managed service update handoff", () => {
     expect(options.env.INVOCATION_ID).toBeUndefined();
     expect(options.env.KEEP_ME).toBe("1");
     expect(options.env.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
+  });
+
+  it("starts the managed gateway service when the update command fails after handoff", async () => {
+    const { binDir, recordPath } = await writeFakeSystemctl();
+    const result = await runHelperWithCommand({
+      commandArgv: [process.execPath, "-e", "process.exit(7)"],
+      serviceRecovery: { kind: "systemd", unit: "openclaw-gateway.service" },
+      pathPrepend: binDir,
+    });
+
+    expect(result.code).toBe(7);
+    await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
+      "--user start openclaw-gateway.service\n",
+    );
+  });
+
+  it("leaves the gateway service alone when the update command succeeds", async () => {
+    const { binDir, recordPath } = await writeFakeSystemctl();
+    const result = await runHelperWithCommand({
+      commandArgv: [process.execPath, "-e", "process.exit(0)"],
+      serviceRecovery: { kind: "systemd", unit: "openclaw-gateway.service" },
+      pathPrepend: binDir,
+    });
+
+    expect(result.code).toBe(0);
+    await expect(pathExists(recordPath)).resolves.toBe(false);
+  });
+
+  it("retries launchd start when bootstrap reports an already-loaded label", async () => {
+    const { binDir, recordPath } = await writeFakeLaunchctl();
+    const result = await runHelperWithCommand({
+      commandArgv: [process.execPath, "-e", "process.exit(7)"],
+      serviceRecovery: {
+        kind: "launchd",
+        uid: 501,
+        label: "com.example.openclaw",
+        plistPath: "/Users/test/Library/LaunchAgents/com.example.openclaw.plist",
+      },
+      pathPrepend: binDir,
+    });
+
+    expect(result.code).toBe(7);
+    await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
+      [
+        "kickstart gui/501/com.example.openclaw",
+        "enable gui/501/com.example.openclaw",
+        "bootstrap gui/501 /Users/test/Library/LaunchAgents/com.example.openclaw.plist",
+        "kickstart gui/501/com.example.openclaw",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("passes a gateway service recovery descriptor for each supervisor", async () => {
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    const cases = [
+      {
+        supervisor: "launchd" as const,
+        env: { OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw.test", HOME: "/Users/test" },
+        expected: {
+          kind: "launchd",
+          uid: typeof process.getuid === "function" ? process.getuid() : 501,
+          label: "com.example.openclaw.test",
+          plistPath: "/Users/test/Library/LaunchAgents/com.example.openclaw.test.plist",
+        },
+      },
+      {
+        supervisor: "schtasks" as const,
+        env: { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Test Gateway" },
+        expected: { kind: "schtasks", taskName: "OpenClaw Test Gateway" },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = await startManagedServiceUpdateHandoff({
+        root: "/tmp/openclaw",
+        timeoutMs: 1_800_000,
+        restartDelayMs: 500,
+        parentPid: 12345,
+        execPath: "/usr/local/bin/node",
+        argv1: "/opt/openclaw/openclaw.mjs",
+        supervisor: testCase.supervisor,
+        env: testCase.env,
+        meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+      });
+      expect(result.status).toBe("started");
+      const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
+      tempDirs.add(path.dirname(args[0] ?? ""));
+      const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as {
+        serviceRecovery?: unknown;
+      };
+      expect(helperParams.serviceRecovery).toEqual(testCase.expected);
+    }
   });
 
   it("does not overwrite a restart sentinel owned by another startup task", async () => {

@@ -623,6 +623,24 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("session rows preserve fresh zero-token usage", () => {
+    const row = buildGatewaySessionRow({
+      cfg: {} as OpenClawConfig,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "fresh-zero-token-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    });
+
+    expect(row.totalTokens).toBe(0);
+    expect(row.totalTokensFresh).toBe(true);
+  });
+
   test("selected global rows read transcript usage from the selected agent", async () => {
     await withStateDirEnv("session-utils-selected-global-usage-", async ({ stateDir }) => {
       const sessionId = "selected-global-usage";

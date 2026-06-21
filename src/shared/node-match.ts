@@ -142,14 +142,6 @@ function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): Score
     .filter((entry): entry is ScoredNodeMatch => entry !== null);
 }
 
-/** Returns candidates matching a node id, remote ip, normalized display name, or long id prefix. */
-export function resolveNodeMatches(
-  nodes: NodeMatchCandidate[],
-  query: string,
-): NodeMatchCandidate[] {
-  return resolveScoredMatches(nodes, query).map((entry) => entry.node);
-}
-
 /** Resolves a single node id or throws an operator-readable unknown/ambiguous-node error. */
 export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: string): string {
   const q = query.trim();

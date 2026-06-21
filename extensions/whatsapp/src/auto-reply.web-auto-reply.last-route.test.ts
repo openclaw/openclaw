@@ -90,10 +90,16 @@ function buildInboundMessage(params: {
       senderName: params.senderName,
       selfE164: params.selfE164,
     },
-    from: params.from,
-    conversationId: params.conversationId,
-    chatType: params.chatType,
-    accountId: params.accountId ?? "default",
+    admission: {
+      accountId: params.accountId ?? "default",
+      conversation: {
+        kind: params.chatType,
+        id: params.conversationId,
+      },
+      sender: {
+        id: params.senderE164 ?? params.from,
+      },
+    },
   });
 }
 
@@ -196,6 +202,7 @@ describe("web auto-reply last-route", () => {
         conversationId: "123@g.us",
         chatType: "group",
         chatId: "123@g.us",
+        body: "hello +2000",
         timestamp: now,
         accountId: "work",
         senderE164: "+1000",

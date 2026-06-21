@@ -50,6 +50,7 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
 
 type McpRequestContext = {
   sessionKey: string;
+  sessionId: string | undefined;
   messageProvider: string | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
@@ -58,6 +59,7 @@ type McpRequestContext = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  requireExplicitMessageTarget: boolean | undefined;
   senderIsOwner: boolean | undefined;
 };
 
@@ -78,7 +80,7 @@ function normalizeMcpSourceReplyDeliveryMode(
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
 }
 
-function normalizeMcpCurrentInboundAudio(value: string | undefined): boolean | undefined {
+function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed ? isTruthyEnvValue(trimmed) : undefined;
 }
@@ -353,6 +355,10 @@ export function resolveMcpHttpBodyTimeoutMs(): number {
   return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
 }
 
+export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefined {
+  return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
+}
+
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
@@ -360,18 +366,22 @@ export function resolveMcpRequestContext(
 ): McpRequestContext {
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
+    sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
-    currentInboundAudio: normalizeMcpCurrentInboundAudio(
+    currentInboundAudio: normalizeMcpBooleanHeader(
       getHeader(req, "x-openclaw-current-inbound-audio"),
     ),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
       getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+    ),
+    requireExplicitMessageTarget: normalizeMcpBooleanHeader(
+      getHeader(req, "x-openclaw-require-explicit-message-target"),
     ),
     senderIsOwner: auth.senderIsOwner,
   };

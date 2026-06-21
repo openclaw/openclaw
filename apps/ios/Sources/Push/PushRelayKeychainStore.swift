@@ -13,7 +13,7 @@ private struct StoredPushRelayRegistrationState: Codable {
 }
 
 enum PushRelayRegistrationStore {
-    private static let service = "ai.openclaw.pushrelay"
+    private static let service = "ai.openclawfoundation.app.pushrelay"
     private static let registrationStateAccount = "registration-state"
     private static let appAttestKeyIDAccount = "app-attest-key-id"
     private static let appAttestedKeyIDAccount = "app-attested-key-id"
@@ -69,11 +69,6 @@ enum PushRelayRegistrationStore {
             return false
         }
         return KeychainStore.saveString(raw, service: self.service, account: self.registrationStateAccount)
-    }
-
-    @discardableResult
-    static func clearRegistrationState() -> Bool {
-        KeychainStore.delete(service: self.service, account: self.registrationStateAccount)
     }
 
     static func loadAppAttestKeyID() -> String? {

@@ -9,7 +9,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { parsePort } from "../cli/shared/parse-port.js";
-import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import {
+  createConfigIO,
+  readConfigFileSnapshotForWrite,
+  resolveGatewayPort,
+} from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -333,10 +337,14 @@ async function promptWebToolsConfig(
           };
         }
       } else {
-        workingConfig = await setupSearch(workingConfig, runtime, prompter);
+        workingConfig = await setupSearch(workingConfig, runtime, prompter, {
+          preserveDisabledSearchState: false,
+        });
+        const selectedSearch = workingConfig.tools?.web?.search;
         nextSearch = {
-          ...workingConfig.tools?.web?.search,
-          enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+          ...selectedSearch,
+          enabled:
+            selectedSearch?.enabled ?? (selectedSearch?.provider ? true : existingSearch?.enabled),
           openaiCodex: {
             ...existingSearch?.openaiCodex,
             ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
@@ -355,7 +363,7 @@ async function promptWebToolsConfig(
   );
 
   const nextFetch = {
-    ...existingFetch,
+    ...workingConfig.tools?.web?.fetch,
     enabled: enableFetch,
   };
 
@@ -381,7 +389,23 @@ export async function runConfigureWizard(
     intro(opts.command === "update" ? "OpenClaw update wizard" : "OpenClaw configure");
     const prompter = createClackPrompter();
 
-    const snapshot = await readConfigFileSnapshot();
+    const prepared = await readConfigFileSnapshotForWrite();
+    const snapshot = prepared.snapshot;
+    // Keep only path ownership across the interactive wizard. Each commit re-reads under
+    // the mutation lock and must use that fresh snapshot's env/include conflict facts.
+    const configWriteOwnership = {
+      ...(prepared.writeOptions.assertConfigPathForWrite
+        ? { assertConfigPathForWrite: prepared.writeOptions.assertConfigPathForWrite }
+        : {}),
+      expectedConfigPath: prepared.writeOptions.expectedConfigPath,
+      ownedConfigPathForWrite: prepared.writeOptions.ownedConfigPathForWrite,
+    };
+    const readOwnedConfigSnapshot = async () =>
+      (
+        await createConfigIO({
+          configPath: configWriteOwnership.ownedConfigPathForWrite,
+        }).readConfigFileSnapshotForWrite()
+      ).snapshot;
     let currentBaseHash = snapshot.hash;
     const baseConfig: OpenClawConfig = snapshot.valid
       ? (snapshot.sourceConfig ?? snapshot.config)
@@ -493,6 +517,7 @@ export async function runConfigureWizard(
       const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: remoteConfig,
         ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+        writeOptions: configWriteOwnership,
       });
       remoteConfig = committed.config;
       currentBaseHash = undefined;
@@ -533,22 +558,27 @@ export async function runConfigureWizard(
           const committed = await commitConfigWithPendingPluginInstalls({
             nextConfig,
             ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+            writeOptions: configWriteOwnership,
           });
           nextConfig = committed.config;
 
           // After successful write, re-read the snapshot to get the new hash
-          const freshSnapshot = await readConfigFileSnapshot();
+          const freshSnapshot = await readOwnedConfigSnapshot();
           currentBaseHash = freshSnapshot.hash ?? undefined;
           mergeBaseConfig = structuredClone(nextConfig);
 
           logConfigUpdated(runtime);
           return;
         } catch (err) {
-          if (err instanceof ConfigMutationConflictError && attempt < maxRetries - 1) {
+          if (
+            err instanceof ConfigMutationConflictError &&
+            err.retryable &&
+            attempt < maxRetries - 1
+          ) {
             // Config was mutated externally (e.g. plugin wrote token during auth setup).
             // Re-read the on-disk config and merge plugin changes into nextConfig so
             // the retry won't silently overwrite them.
-            const freshSnapshot = await readConfigFileSnapshot();
+            const freshSnapshot = await readOwnedConfigSnapshot();
             currentBaseHash = freshSnapshot.hash ?? undefined;
             const diskConfig = freshSnapshot.valid
               ? (freshSnapshot.sourceConfig ?? freshSnapshot.config)

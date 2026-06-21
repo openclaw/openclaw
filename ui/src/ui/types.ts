@@ -33,8 +33,6 @@ export type ChannelUiMetaEntry = {
   systemImage?: string;
 };
 
-export const CRON_CHANNEL_LAST = "last";
-
 export type ChannelAccountSnapshot = {
   accountId: string;
   name?: string | null;
@@ -264,23 +262,6 @@ export type NostrStatus = {
   profile?: NostrProfile | null;
 };
 
-export type MSTeamsProbe = {
-  ok: boolean;
-  error?: string | null;
-  appId?: string | null;
-};
-
-export type MSTeamsStatus = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  port?: number | null;
-  probe?: MSTeamsProbe | null;
-  lastProbeAt?: number | null;
-};
-
 export type ConfigSnapshotIssue = {
   path: string;
   message: string;
@@ -385,6 +366,66 @@ export type AgentsFilesSetResult = {
   agentId: string;
   workspace: string;
   file: AgentFileEntry;
+};
+
+export type SessionWorkspaceFileEntry = {
+  path: string;
+  name: string;
+  kind: "modified" | "read";
+  missing: boolean;
+  size?: number;
+  updatedAtMs?: number;
+  content?: string;
+};
+
+export type SessionWorkspaceBrowserEntry = {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+  sessionKind?: "modified" | "read" | "mixed";
+  size?: number;
+  updatedAtMs?: number;
+};
+
+export type SessionWorkspaceBrowserResult = {
+  path: string;
+  parentPath?: string;
+  search?: string;
+  entries: SessionWorkspaceBrowserEntry[];
+  truncated?: boolean;
+};
+
+export type SessionWorkspaceArtifactEntry = {
+  id: string;
+  type: string;
+  title: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  source?: string;
+  download: {
+    mode: "bytes" | "url" | "unsupported";
+  };
+};
+
+export type SessionWorkspaceListResult = {
+  sessionKey: string;
+  root?: string;
+  files: SessionWorkspaceFileEntry[];
+  browser?: SessionWorkspaceBrowserResult;
+  artifacts?: SessionWorkspaceArtifactEntry[];
+};
+
+export type SessionWorkspaceGetResult = {
+  sessionKey: string;
+  root?: string;
+  file: SessionWorkspaceFileEntry;
+};
+
+export type ArtifactDownloadResult = {
+  artifact: SessionWorkspaceArtifactEntry;
+  encoding?: "base64";
+  data?: string;
+  url?: string;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";

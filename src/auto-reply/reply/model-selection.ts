@@ -3,6 +3,7 @@ import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
 } from "../../agents/agent-scope.js";
+import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -57,6 +58,8 @@ type ModelSelectionState = {
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
   needsModelCatalog: boolean;
+  modelContextWindow?: number;
+  modelContextTokens?: number;
 };
 
 /** Creates minimal model-selection state for fast test mode. */
@@ -76,6 +79,8 @@ export function createFastTestModelSelectionState(params: {
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
     needsModelCatalog: false,
+    modelContextWindow: undefined,
+    modelContextTokens: undefined,
   };
 }
 
@@ -86,8 +91,8 @@ function shouldLogModelSelectionTiming(): boolean {
 const modelCatalogRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/model-catalog.runtime.js"),
 );
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
+const sessionAccessorRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-accessor.js"),
 );
 function normalizeRuntimeModelRef(provider: string, model: string) {
   return normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
@@ -97,8 +102,8 @@ function loadModelCatalogRuntime() {
   return modelCatalogRuntimeLoader.load();
 }
 
-function loadSessionStoreRuntime() {
-  return sessionStoreRuntimeLoader.load();
+function loadSessionAccessorRuntime() {
+  return sessionAccessorRuntimeLoader.load();
 }
 
 function findSelectedCatalogEntry(params: {
@@ -290,11 +295,8 @@ export async function createModelSelectionState(params: {
       if (updated) {
         sessionStore[sessionKey] = sessionEntry;
         if (storePath) {
-          await (
-            await loadSessionStoreRuntime()
-          ).updateSessionStore(storePath, (store) => {
-            store[sessionKey] = sessionEntry;
-          });
+          const { replaceSessionEntry } = await loadSessionAccessorRuntime();
+          await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
         }
       }
       resetModelOverride = updated;
@@ -372,7 +374,6 @@ export async function createModelSelectionState(params: {
     });
     logStage("auth-profile-store-loaded", `profiles=${Object.keys(store.profiles).length}`);
     const profile = store.profiles[sessionEntry.authProfileOverride];
-    const profileProvider = profile ? normalizeProviderId(profile.provider) : undefined;
     const harnessPolicy = resolveAgentHarnessPolicy({
       provider,
       modelId: model,
@@ -385,7 +386,22 @@ export async function createModelSelectionState(params: {
       harnessRuntime: harnessPolicy.runtime,
       config: cfg,
     }).map(normalizeProviderId);
-    if (!profile || !acceptedAuthProviders.includes(profileProvider ?? "")) {
+    // Alias-aware eligibility: a stored credential can be valid for the run
+    // provider through provider-auth aliases (e.g. an `anthropic` credential
+    // serving a `claude-cli` run). A raw provider-string compare wrongly
+    // cleared such overrides, which then let auto-selection re-pick a
+    // different profile on a later turn — flapping the CLI session's auth
+    // profile and invalidating it. Mirror session-override.ts's check.
+    const overrideStillEligible =
+      profile != null &&
+      acceptedAuthProviders.some((accepted) =>
+        isStoredCredentialCompatibleWithAuthProvider({
+          cfg,
+          provider: accepted,
+          credential: profile,
+        }),
+      );
+    if (!overrideStillEligible) {
       await clearSessionAuthProfileOverride({
         sessionEntry,
         sessionStore,
@@ -564,6 +580,11 @@ export async function createModelSelectionState(params: {
     });
     return defaultReasoningLevel;
   };
+  const selectedCatalogEntry = findSelectedCatalogEntry({
+    catalog: modelCatalog ?? allowedModelCatalog,
+    provider,
+    model,
+  });
 
   return {
     provider,
@@ -576,6 +597,8 @@ export async function createModelSelectionState(params: {
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,
     needsModelCatalog,
+    modelContextWindow: selectedCatalogEntry?.contextWindow,
+    modelContextTokens: selectedCatalogEntry?.contextTokens,
   };
 }
 
@@ -585,11 +608,15 @@ export function resolveContextTokens(params: {
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   provider: string;
   model: string;
+  modelContextWindow?: number;
+  modelContextTokens?: number;
 }): number {
   const modelContextTokens = resolveContextTokensForModel({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
+    modelContextWindow: params.modelContextWindow,
+    modelContextTokens: params.modelContextTokens,
     allowAsyncLoad: false,
   });
   const agentContextTokens =

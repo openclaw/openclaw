@@ -51,11 +51,31 @@ async function addCompileCacheProbe(fixtureRoot: string): Promise<void> {
     [
       'import module from "node:module";',
       "process.stdout.write(",
-      '  `${module.getCompileCacheDir?.() ? "cache:enabled" : "cache:disabled"};respawn:${process.env.OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED ?? "0"}`',
+      '  `${module.getCompileCacheDir?.() ? "cache:enabled" : "cache:disabled"};respawn:${process.env.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED ?? "0"}`',
       ");",
     ].join("\n"),
     "utf8",
   );
+}
+
+async function addLauncherRuntimeMock(
+  fixtureRoot: string,
+  params: { nodeVersion: string; platform: NodeJS.Platform },
+): Promise<string> {
+  const mockPath = path.join(fixtureRoot, "mock-launcher-runtime.mjs");
+  await fs.writeFile(
+    mockPath,
+    [
+      "Object.defineProperty(process, 'platform', {",
+      `  value: ${JSON.stringify(params.platform)},`,
+      "});",
+      "Object.defineProperty(process.versions, 'node', {",
+      `  value: ${JSON.stringify(params.nodeVersion)},`,
+      "});",
+    ].join("\n"),
+    "utf8",
+  );
+  return mockPath;
 }
 
 async function waitForJsonFile<T>(filePath: string, timeoutMs: number): Promise<T> {
@@ -109,6 +129,9 @@ function isProcessAlive(pid: number | undefined): boolean {
 
 function launcherEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env, ...extra };
+  delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  delete env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  delete env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
   delete env.NODE_COMPILE_CACHE;
   delete env.NODE_DISABLE_COMPILE_CACHE;
   for (const [key, value] of Object.entries(extra)) {
@@ -854,6 +877,97 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(path.join("node-compile-cache", "openclaw", "2026.4.29"));
     expect(result.stdout).not.toContain(path.join(runCwd, "openclaw"));
+  });
+
+  it("skips compile cache for Windows packaged launchers on early Node 24.x", async () => {
+    for (const nodeVersion of ["24.1.0", "24.14.0"]) {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      const tmpRoot = makeTempDir(fixtureRoots, "openclaw-launcher-tmp-");
+      const mockRuntime = await addLauncherRuntimeMock(fixtureRoot, {
+        nodeVersion,
+        platform: "win32",
+      });
+      await addCompileCacheProbe(fixtureRoot);
+
+      const result = spawnSync(
+        process.execPath,
+        ["--import", mockRuntime, path.join(fixtureRoot, "openclaw.mjs")],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({
+            TMP: tmpRoot,
+            TEMP: tmpRoot,
+            TMPDIR: tmpRoot,
+          }),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("cache:disabled;respawn:0");
+    }
+  });
+
+  it("respawns Windows early Node 24 packaged launchers without inherited NODE_COMPILE_CACHE", async () => {
+    for (const nodeVersion of ["24.1.0", "24.14.0"]) {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      const tmpRoot = makeTempDir(fixtureRoots, "openclaw-launcher-tmp-");
+      const mockRuntime = await addLauncherRuntimeMock(fixtureRoot, {
+        nodeVersion,
+        platform: "win32",
+      });
+      await addCompileCacheProbe(fixtureRoot);
+
+      const result = spawnSync(
+        process.execPath,
+        ["--import", mockRuntime, path.join(fixtureRoot, "openclaw.mjs")],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({
+            NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+            TMP: tmpRoot,
+            TEMP: tmpRoot,
+            TMPDIR: tmpRoot,
+          }),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("cache:disabled;respawn:1");
+    }
+  });
+
+  it("keeps compile cache enabled for unaffected packaged launcher runtimes", async () => {
+    const cases: Array<{ nodeVersion: string; platform: NodeJS.Platform }> = [
+      { nodeVersion: "24.15.0", platform: "win32" },
+      { nodeVersion: "24.1.0", platform: "linux" },
+      { nodeVersion: "24.14.0", platform: "darwin" },
+    ];
+
+    for (const runtime of cases) {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      const tmpRoot = makeTempDir(fixtureRoots, "openclaw-launcher-tmp-");
+      const mockRuntime = await addLauncherRuntimeMock(fixtureRoot, runtime);
+      await addCompileCacheProbe(fixtureRoot);
+
+      const result = spawnSync(
+        process.execPath,
+        ["--import", mockRuntime, path.join(fixtureRoot, "openclaw.mjs")],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({
+            TMP: tmpRoot,
+            TEMP: tmpRoot,
+            TMPDIR: tmpRoot,
+          }),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("cache:enabled;respawn:0");
+    }
   });
 
   it("enables compile cache for packaged launchers", async () => {

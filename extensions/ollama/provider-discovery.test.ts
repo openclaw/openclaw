@@ -150,7 +150,7 @@ describe("Ollama provider", () => {
     });
   });
 
-  it("should preserve explicit ollama baseUrl on implicit provider injection", async () => {
+  it("should preserve explicit ollama baseUrl and api on implicit provider injection", async () => {
     const fetchMock = stubTagsFetch();
 
     await withOllamaApiKey(async () => {
@@ -171,8 +171,33 @@ describe("Ollama provider", () => {
 
       expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
 
-      // Native API strips /v1 suffix via resolveOllamaApiBase()
+      expect(provider?.baseUrl).toBe("http://192.168.20.14:11434/v1");
+      expect(provider?.api).toBe("openai-completions");
+    });
+  });
+
+  it("should normalize explicit native ollama baseUrl on implicit provider injection", async () => {
+    const fetchMock = stubTagsFetch();
+
+    await withOllamaApiKey(async () => {
+      const provider = await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://192.168.20.14:11434/v1",
+                api: "ollama",
+                models: [],
+              },
+            },
+          },
+        },
+        env: { OLLAMA_API_KEY: "test-key" },
+      });
+
+      expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
       expect(provider?.baseUrl).toBe("http://192.168.20.14:11434");
+      expect(provider?.api).toBe("ollama");
     });
   });
 
@@ -650,7 +675,7 @@ describe("Ollama provider", () => {
       });
 
       expect(provider?.apiKey).toBe("config-ollama-key");
-      expect(provider?.baseUrl).toBe("http://remote-ollama:11434");
+      expect(provider?.baseUrl).toBe("http://remote-ollama:11434/v1");
       expect(provider?.api).toBe("openai-completions");
       expect(fetchMock).not.toHaveBeenCalled();
     });

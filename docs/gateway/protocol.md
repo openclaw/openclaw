@@ -542,7 +542,9 @@ runtime state.
 `TaskSummary` includes `id`, `status`, and optional metadata such as `kind`,
 `runtime`, `title`, `agentId`, `sessionKey`, `childSessionKey`, `ownerKey`,
 `runId`, `taskId`, `flowId`, `parentTaskId`, `sourceId`, timestamps, progress,
-terminal summary, and sanitized error text.
+terminal summary, and sanitized error text. `agentId` identifies the agent
+executing the task; `sessionKey` and `ownerKey` preserve requester and control
+context.
 
 ### Operator helper methods
 

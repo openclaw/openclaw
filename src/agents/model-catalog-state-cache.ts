@@ -21,7 +21,7 @@ type CachedAgentModelCatalogPayload = {
   entries: readonly unknown[];
 };
 
-export type AgentModelCatalogCacheKeyInput = {
+type AgentModelCatalogCacheKeyInput = {
   agentDir: string;
   cacheScope?: unknown;
   config: OpenClawConfig;
@@ -29,13 +29,13 @@ export type AgentModelCatalogCacheKeyInput = {
   workspaceDir?: string;
 };
 
-export type ReadCachedAgentModelCatalogParams = {
+type ReadCachedAgentModelCatalogParams = {
   agentDir: string;
   catalogKey: string;
   nowMs?: number;
 };
 
-export type WriteCachedAgentModelCatalogParams = {
+type WriteCachedAgentModelCatalogParams = {
   agentDir: string;
   catalogKey: string;
   entries: readonly unknown[];

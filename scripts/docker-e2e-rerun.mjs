@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readDockerE2eJsonArtifact } from "./lib/docker-e2e-json-artifacts.mjs";
 
 const DEFAULT_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 
@@ -76,7 +77,7 @@ function run(command, args, options = {}) {
 }
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+  return readDockerE2eJsonArtifact(file);
 }
 
 function shellQuote(value) {

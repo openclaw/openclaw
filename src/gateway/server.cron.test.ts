@@ -484,6 +484,29 @@ describe("gateway server cron", () => {
         detail: "webhook",
       });
 
+      const compactListRes = await directCronReq(cronState, "cron.list", {
+        compact: true,
+        includeDisabled: true,
+      });
+      expect(compactListRes.ok).toBe(true);
+      const compactJobs = (
+        compactListRes.payload as { jobs?: Array<Record<string, unknown>> } | null
+      )?.jobs;
+      expect(compactJobs).toHaveLength(1);
+      expect(compactJobs?.[0]).toMatchObject({
+        id: dailyJobId,
+        name: "daily",
+        enabled: true,
+        scheduleKind: "every",
+        lastRunStatus: null,
+      });
+      expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
+        ["enabled", "id", "lastRunStatus", "name", "nextRunAtMs", "scheduleKind"].toSorted(),
+      );
+      expect(
+        (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,
+      ).toBeUndefined();
+
       const getRes = await directCronReq(cronState, "cron.get", { id: String(dailyJobId) });
       expect(getRes.ok).toBe(true);
       expect((getRes.payload as { id?: unknown } | null)?.id).toBe(dailyJobId);

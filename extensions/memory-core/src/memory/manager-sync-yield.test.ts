@@ -42,6 +42,7 @@ vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
+  resolveEmbeddingProviderIndexIdentity: () => undefined,
   createEmbeddingProvider: vi.fn(),
 }));
 
@@ -114,6 +115,10 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
   protected computeProviderKey(): string {
     return "test";
+  }
+
+  protected resolveProviderIndexIdentities() {
+    return [];
   }
 
   protected async sync(): Promise<void> {}

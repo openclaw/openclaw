@@ -22,10 +22,10 @@ import {
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
-export type ImageGenerateActionResult = MediaGenerateActionResult;
+type ImageGenerateActionResult = MediaGenerateActionResult;
 
 /** Formats provider auth setup hints for the image generation `list` action. */
-export function formatImageGenerationAuthHint(provider: {
+function formatImageGenerationAuthHint(provider: {
   id: string;
   authEnvVars: readonly string[];
 }): string | undefined {
@@ -39,12 +39,12 @@ export function formatImageGenerationAuthHint(provider: {
 }
 
 /** Lists supported image-generation modes exposed by a provider. */
-export function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
+function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
   return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
 }
 
 /** Formats provider capability details for the image generation `list` action. */
-export function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
+function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
   const caps: string[] = [];
   if (provider.capabilities.edit.enabled) {
     const maxRefs = provider.capabilities.edit.maxInputImages;

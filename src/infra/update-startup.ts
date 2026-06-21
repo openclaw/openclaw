@@ -315,7 +315,9 @@ async function runAutoUpdateCommand(params: {
   timeoutMs: number;
   root?: string;
 }): Promise<AutoUpdateRunResult> {
-  const supervisor = detectRespawnSupervisor(process.env, process.platform);
+  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
+    includeLinuxOpenClawGatewayServiceMarker: true,
+  });
   if (supervisor) {
     return await startManagedServiceAutoUpdateHandoff({
       channel: params.channel,

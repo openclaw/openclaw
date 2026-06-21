@@ -33,7 +33,7 @@ type ConfigMcpWriteResult =
   | { ok: false; path: string; error: string };
 
 /** Include/exclude tool selection stored for a configured MCP server. */
-export type McpServerToolSelection = {
+type McpServerToolSelection = {
   include?: string[];
   exclude?: string[];
 };

@@ -35,7 +35,7 @@ export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string 
  * - Normalize Unicode dashes/hyphens to ASCII hyphen
  * - Normalize special Unicode spaces to regular space
  */
-export function normalizeForFuzzyMatch(text: string): string {
+function normalizeForFuzzyMatch(text: string): string {
   return (
     text
       .normalize("NFKC")
@@ -58,7 +58,7 @@ export function normalizeForFuzzyMatch(text: string): string {
   );
 }
 
-export interface FuzzyMatchResult {
+interface FuzzyMatchResult {
   /** Whether a match was found */
   found: boolean;
   /** The index where the match starts (in the content that should be used for replacement) */
@@ -86,18 +86,13 @@ interface MatchedEdit {
   newText: string;
 }
 
-export interface AppliedEditsResult {
-  baseContent: string;
-  newContent: string;
-}
-
 /**
  * Find oldText in content, trying exact match first, then fuzzy match.
  * When fuzzy matching is used, the returned contentForReplacement is the
  * fuzzy-normalized version of the content (trailing whitespace stripped,
  * Unicode quotes/dashes normalized to ASCII).
  */
-export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
+function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
   // Try exact match first
   const exactIndex = content.indexOf(oldText);
   if (exactIndex !== -1) {
@@ -205,7 +200,7 @@ export function applyEditsToNormalizedContent(
   normalizedContent: string,
   edits: Edit[],
   path: string,
-): AppliedEditsResult {
+): { baseContent: string; newContent: string } {
   const normalizedEdits = edits.map((edit) => ({
     oldText: normalizeToLF(edit.oldText),
     newText: normalizeToLF(edit.newText),
@@ -423,11 +418,6 @@ export interface EditDiffError {
   error: string;
 }
 
-export interface EditDiffOperations {
-  readFile: (absolutePath: string) => Promise<Buffer | string>;
-  access: (absolutePath: string) => Promise<void>;
-}
-
 /**
  * Compute the diff for one or more edit operations without applying them.
  * Used for preview rendering in the TUI before the tool executes.
@@ -436,7 +426,10 @@ export async function computeEditsDiff(
   path: string,
   edits: Edit[],
   cwd: string,
-  operations?: EditDiffOperations,
+  operations?: {
+    readFile: (absolutePath: string) => Promise<Buffer | string>;
+    access: (absolutePath: string) => Promise<void>;
+  },
 ): Promise<EditDiffResult | EditDiffError> {
   const absolutePath = resolveToCwd(path, cwd);
 
@@ -477,17 +470,4 @@ export async function computeEditsDiff(
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }
-}
-
-/**
- * Compute the diff for a single edit operation without applying it.
- * Kept as a convenience wrapper for single-edit callers.
- */
-export async function computeEditDiff(
-  path: string,
-  oldText: string,
-  newText: string,
-  cwd: string,
-): Promise<EditDiffResult | EditDiffError> {
-  return computeEditsDiff(path, [{ oldText, newText }], cwd);
 }

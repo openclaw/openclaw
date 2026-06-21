@@ -479,6 +479,9 @@ names that plugin registers. Active Memory lists those tools in the recall
 prompt and passes the same list to the embedded sub-agent. If none of the
 configured tools are available, or the memory sub-agent fails, Active Memory
 skips recall for that turn and the main reply continues without memory context.
+For custom recall tools, non-empty model-visible tool output counts as recall
+evidence unless structured result fields explicitly report an empty result or
+failure.
 `toolsAllow` only accepts concrete memory tool names. Wildcards, `group:*`
 entries, and core agent tools such as `read`, `exec`, `message`, and
 `web_search` are ignored before the hidden memory sub-agent starts.
@@ -743,7 +746,11 @@ Before v2026.5.2 the plugin silently extended your configured `timeoutMs` by an
 extra 30000 ms during cold-start so model warm-up, embedding-index load, and
 the first recall could share one larger budget. v2026.5.2 moved that grace
 behind an explicit `setupGraceTimeoutMs` config — your configured `timeoutMs`
-is now the budget by default, unless you opt in.
+is now the recall-work budget by default, unless you opt in. The blocking hook
+uses two bounded phases around that budget: up to 1500 ms for session/config
+preflight before recall starts, then a separate fixed 1500 ms for abort
+settlement and transcript recovery after recall work stops. Neither allowance
+extends model or tool execution.
 
 If you upgraded from v2026.4.x and you set `timeoutMs` to a value tuned for the
 old implicit-grace world (the recommended starter `timeoutMs: 15000` is one
@@ -765,14 +772,16 @@ outer watchdog budgets back to the pre-v5.2 effective values:
 }
 ```
 
-Per the v2026.5.2 changelog: _"use the configured recall timeout as the
-blocking prompt-build hook budget by default and move cold-start setup grace
-behind explicit `setupGraceTimeoutMs` config, so the plugin no longer silently
-extends 15000 ms configs to 45000 ms on the main lane."_
+The v2026.5.2 change removed the old implicit 30000 ms cold-start extension.
+Beyond the configured recall-work budget, the hook can use up to 1500 ms for
+preflight and another 1500 ms for post-recall completion. Its worst-case
+blocking time is therefore `timeoutMs + setupGraceTimeoutMs + 3000` ms.
 
 The embedded recall runner uses the same effective timeout budget, so
 `setupGraceTimeoutMs` covers both the outer prompt-build watchdog and the inner
-blocking recall run.
+blocking recall run. The preflight cap covers session/config checks before that
+budget begins. The post-recall allowance lets the outer hook settle abort
+cleanup and read any final transcript state.
 
 For resource-tight gateways where cold-start latency is a known trade-off,
 lower values (5000–15000 ms) work too — the trade-off is a higher chance of

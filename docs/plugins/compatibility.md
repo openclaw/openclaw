@@ -132,6 +132,9 @@ Current compatibility records include:
   `reply(...)`, and `mediaPath` while callback consumers migrate to the nested
   `WebInboundCallbackMessage` `event`, `payload`, `quote`, `group`, and
   `platform` contexts
+- WhatsApp `WebInboundMessage` top-level admission fields such as `from`,
+  `conversationId`, `accountId`, `accessControlPassed`, and `chatType` while
+  callback consumers migrate to the `admission` envelope
 - legacy memory-plugin split registration while memory plugins move to
   `registerMemoryCapability`
 - legacy memory-specific embedding provider registration while embedding
@@ -190,6 +193,23 @@ name its exact nested replacement. Common examples:
 `payload.untrustedStructuredContext` is extracted from inbound provider payloads.
 Plugins should inspect the `label`, `source`, and `type` before treating its
 `payload` as authoritative.
+
+### WhatsApp Inbound Admission Fields
+
+Accepted WhatsApp callback messages now carry `admission`, a public-safe
+envelope for the access-control decision that admitted the message. New callback
+code should read admission facts from `msg.admission` instead of the older
+top-level admission fields.
+
+The top-level fields remain available until **2026-08-30**. The TypeScript
+`@deprecated` annotations name each replacement:
+
+- `from` and `conversationId` move to `admission.conversation.id`.
+- `accountId` moves to `admission.accountId`.
+- `accessControlPassed` is a derived compatibility view of
+  `admission.ingress.decision === "allow"`; on messages that already carry
+  `admission`, writing the legacy boolean does not rewrite the ingress graph.
+- `chatType` moves to `admission.conversation.kind`.
 
 ## Release notes
 

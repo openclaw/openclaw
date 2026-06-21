@@ -14,7 +14,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
@@ -857,6 +857,7 @@ function mergeExistingTaskForCreate(
     parentFlowId?: string;
     parentTaskId?: string;
     agentId?: string;
+    requesterAgentId?: string;
     label?: string;
     task: string;
     preferMetadata?: boolean;
@@ -897,6 +898,9 @@ function mergeExistingTaskForCreate(
   if (params.agentId?.trim() && !existing.agentId?.trim()) {
     patch.agentId = params.agentId.trim();
   }
+  if (params.requesterAgentId?.trim() && !existing.requesterAgentId?.trim()) {
+    patch.requesterAgentId = params.requesterAgentId.trim();
+  }
   const nextLabel = params.label?.trim();
   if (params.preferMetadata) {
     if (nextLabel && (normalizeOptionalString(existing.label) ?? "") !== nextLabel) {
@@ -929,11 +933,26 @@ function mergeExistingTaskForCreate(
 
 function resolveTaskAgentId(params: {
   explicitAgentId?: string;
+  childSessionKey?: string;
   ownerKey: string;
   requesterSessionKey: string;
 }): string | undefined {
   return (
     normalizeOptionalString(params.explicitAgentId) ??
+    parseAgentSessionKey(params.childSessionKey)?.agentId ??
+    parseAgentSessionKey(params.ownerKey)?.agentId ??
+    parseAgentSessionKey(params.requesterSessionKey)?.agentId
+  );
+}
+
+function resolveTaskRequesterAgentId(params: {
+  explicitRequesterAgentId?: string;
+  ownerKey: string;
+  requesterSessionKey: string;
+}): string | undefined {
+  const explicitRequesterAgentId = normalizeOptionalString(params.explicitRequesterAgentId);
+  return (
+    (explicitRequesterAgentId ? normalizeAgentId(explicitRequesterAgentId) : undefined) ??
     parseAgentSessionKey(params.ownerKey)?.agentId ??
     parseAgentSessionKey(params.requesterSessionKey)?.agentId
   );
@@ -1235,10 +1254,32 @@ function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
     return false;
   }
-  const origin = owner.requesterOrigin;
+  return canDeliverToRequesterOrigin(owner.requesterOrigin);
+}
+
+function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"]): boolean {
   const channel = origin?.channel?.trim();
   const to = origin?.to?.trim();
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
+}
+
+function canDeliverParentReviewTaskToBoundDiscordThread(task: TaskRecord): boolean {
+  if (!shouldUseParentReviewTaskTerminalMessage(task)) {
+    return false;
+  }
+  const owner = resolveTaskDeliveryOwner(task);
+  const origin = owner.requesterOrigin;
+  const channel = origin?.channel?.trim().toLowerCase();
+  const to = origin?.to?.trim().toLowerCase();
+  const threadId = String(origin?.threadId ?? "").trim();
+  // This is a narrow transport exception for explicitly bound Discord threads,
+  // not a general parent-review direct-delivery relaxation.
+  return Boolean(
+    channel === "discord" &&
+    to?.startsWith("channel:") &&
+    threadId &&
+    canDeliverToRequesterOrigin(origin),
+  );
 }
 
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
@@ -1324,13 +1365,15 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       });
     }
     const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
-    const canDeliverDirect = canDeliverTaskToRequesterOrigin(latest);
+    const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToBoundDiscordThread(latest);
+    const canDeliverDirect =
+      canDeliverTaskToRequesterOrigin(latest) || shouldDeliverParentReviewDirect;
     const directEventText = formatTaskTerminalMessage(latest);
     const sessionEventText = formatTaskTerminalMessage(
       latest,
       shouldRouteParentReview ? { surface: "parent_session" } : undefined,
     );
-    if (shouldRouteParentReview || !canDeliverDirect) {
+    if ((shouldRouteParentReview && !shouldDeliverParentReviewDirect) || !canDeliverDirect) {
       try {
         queueTaskSystemEvent(latest, sessionEventText);
         if (latest.terminalOutcome === "blocked") {
@@ -1362,7 +1405,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         to: owner.requesterOrigin?.to ?? "",
         accountId: owner.requesterOrigin?.accountId,
         threadId: owner.requesterOrigin?.threadId,
-        content: directEventText,
+        content: shouldDeliverParentReviewDirect ? sessionEventText : directEventText,
         agentId: requesterAgentId,
         idempotencyKey,
         mirror: {
@@ -1687,6 +1730,7 @@ export function createTaskRecord(params: {
   parentFlowId?: string;
   parentTaskId?: string;
   agentId?: string;
+  requesterAgentId?: string;
   runId?: string;
   label?: string;
   task: string;
@@ -1713,6 +1757,12 @@ export function createTaskRecord(params: {
   });
   const agentId = resolveTaskAgentId({
     explicitAgentId: params.agentId,
+    childSessionKey: params.childSessionKey,
+    ownerKey,
+    requesterSessionKey,
+  });
+  const requesterAgentId = resolveTaskRequesterAgentId({
+    explicitRequesterAgentId: params.requesterAgentId,
     ownerKey,
     requesterSessionKey,
   });
@@ -1766,6 +1816,7 @@ export function createTaskRecord(params: {
     parentFlowId: normalizeOptionalString(params.parentFlowId),
     parentTaskId: normalizeOptionalString(params.parentTaskId),
     agentId,
+    requesterAgentId,
     runId: normalizeOptionalString(params.runId),
     label: normalizeOptionalString(params.label),
     task: params.task,
@@ -2254,11 +2305,6 @@ function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskR
     )
     .toSorted(compareTasksNewestFirst)
     .map(({ insertionIndex: _, ...task }) => task);
-}
-
-export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
-  const task = listTasksForSessionKey(sessionKey)[0];
-  return task ? cloneTaskRecord(task) : undefined;
 }
 
 export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {

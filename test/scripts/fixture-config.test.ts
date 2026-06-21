@@ -44,6 +44,18 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
     }
   });
 
+  it("rejects out-of-range gateway port env values", () => {
+    const root = makeTempRoot();
+    try {
+      const result = runFixture(root, "config-reload", [], { PORT: "65536" });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("invalid PORT: 65536");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("writes strict positive browser CDP ports into generated config", () => {
     const root = makeTempRoot();
     try {
@@ -65,6 +77,18 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("invalid CDP_PORT: 19222http");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects out-of-range browser CDP port env values", () => {
+    const root = makeTempRoot();
+    try {
+      const result = runFixture(root, "browser-cdp", [], { CDP_PORT: "65536" });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("invalid CDP_PORT: 65536");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

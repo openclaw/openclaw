@@ -8,7 +8,12 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import {
+  isAuthorizedTextSlashCommandTurn,
+  isNativeCommandTurn,
+  resolveCommandTurnContext,
+} from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -50,7 +55,8 @@ function loadStatusCommandRuntime() {
 }
 
 function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
-  if (!isNativeCommandTurn(resolveCommandTurnContext(ctx))) {
+  const commandTurn = resolveCommandTurnContext(ctx);
+  if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return undefined;
   }
   const commandText = stripStructuralPrefixes(
@@ -61,8 +67,31 @@ function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
 }
 
 function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
+  const commandTurn = resolveCommandTurnContext(ctx);
   const commandName = resolveNativeSlashCommandName(ctx);
-  return Boolean(commandName && commandName !== "new" && commandName !== "reset");
+  return Boolean(
+    commandName &&
+    commandName !== "new" &&
+    commandName !== "reset" &&
+    (isNativeCommandTurn(commandTurn) ||
+      shouldRunInternalTextSlashCommandFastPath(ctx, commandTurn, commandName)),
+  );
+}
+
+function shouldRunInternalTextSlashCommandFastPath(
+  ctx: MsgContext,
+  commandTurn: ReturnType<typeof resolveCommandTurnContext>,
+  commandName: string,
+): boolean {
+  return (
+    isAuthorizedTextSlashCommandTurn(commandTurn) &&
+    (commandName === "export-trajectory" || commandName === "trajectory") &&
+    ctx.ChatType !== "group" &&
+    isInternalMessageChannel(normalizeOptionalString(ctx.Provider)) &&
+    (ctx.Surface === undefined || isInternalMessageChannel(normalizeOptionalString(ctx.Surface))) &&
+    (ctx.OriginatingChannel === undefined ||
+      isInternalMessageChannel(normalizeOptionalString(ctx.OriginatingChannel)))
+  );
 }
 
 async function resolveNativeSlashDefaultThinkingLevel(params: {

@@ -1124,7 +1124,17 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       session.submitToolResult(callId, { text: exactSpeechText });
       return;
     }
-    const consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
+    let consultMessage: string;
+    try {
+      consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      logger.warn(
+        `discord voice: realtime consult rejected malformed args call=${callId || "unknown"}: ${message}`,
+      );
+      session.submitToolResult(callId, { error: message });
+      return;
+    }
     logger.info(
       `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatRealtimeLogPreview(consultMessage)}`,
     );

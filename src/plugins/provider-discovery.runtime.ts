@@ -217,7 +217,7 @@ function resolveManifestModelCatalogProviders(
     }
     const plan = planManifestModelCatalogRows({ registry: { plugins: [plugin] } });
     for (const entry of plan.entries) {
-      if (entry.rows.length === 0 || entry.discovery === "runtime") {
+      if (entry.rows.length === 0 || entry.discovery === "runtime" || entry.discovery === "refreshable") {
         continue;
       }
       const providerConfig = providerConfigFromManifestRows(entry.rows);
@@ -249,7 +249,7 @@ function resolveRuntimeManifestCatalogPluginIds(
     );
     const ownsRuntimeDiscovery = Object.entries(plugin.modelCatalog?.discovery ?? {}).some(
       ([provider, discovery]) =>
-        discovery === "runtime" && ownedProviders.has(normalizeProviderId(provider)),
+        (discovery === "runtime" || discovery === "refreshable") && ownedProviders.has(normalizeProviderId(provider)),
     );
     if (ownsRuntimeDiscovery) {
       pluginIds.add(plugin.id);
@@ -259,7 +259,7 @@ function resolveRuntimeManifestCatalogPluginIds(
       continue;
     }
     const plan = planManifestModelCatalogRows({ registry: { plugins: [plugin] } });
-    if (plan.entries.some((entry) => entry.discovery === "runtime")) {
+    if (plan.entries.some((entry) => entry.discovery === "runtime" || entry.discovery === "refreshable")) {
       pluginIds.add(plugin.id);
     }
   }
@@ -274,6 +274,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  includeManifestModelCatalogProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
@@ -295,7 +296,10 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   const runtimeManifestCatalogPluginIds = resolveRuntimeManifestCatalogPluginIds(pluginRecords);
   const entryRecords = pluginRecords.filter((plugin) => plugin.providerDiscoverySource);
   const entryPluginIds = new Set(entryRecords.map((plugin) => plugin.id));
-  const manifestProviders = resolveManifestModelCatalogProviders(pluginRecords);
+  const manifestProviders =
+    params.includeManifestModelCatalogProviders === false
+      ? []
+      : resolveManifestModelCatalogProviders(pluginRecords);
   const manifestEntryPluginIds = new Set<string>();
   for (const pluginId of manifestProviders.map((provider) => provider.pluginId)) {
     if (pluginId) {
@@ -427,6 +431,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  includeManifestModelCatalogProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;

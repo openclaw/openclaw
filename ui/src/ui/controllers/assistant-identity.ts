@@ -44,17 +44,18 @@ function shouldApplyAssistantIdentityResult(
 
 export async function loadAssistantIdentity(
   state: AssistantIdentityState,
-  opts?: { sessionKey?: string },
+  opts?: { sessionKey?: string; expectedSessionKey?: string },
 ) {
   if (!state.client || !state.connected) {
     return;
   }
   const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
+  const expectedSessionKey = opts?.expectedSessionKey?.trim() || sessionKey;
   const params = sessionKey ? { sessionKey } : {};
   const requestVersion = beginAssistantIdentityRequest(state);
   try {
     const res = await state.client.request("agent.identity.get", params);
-    if (!shouldApplyAssistantIdentityResult(state, requestVersion, sessionKey)) {
+    if (!shouldApplyAssistantIdentityResult(state, requestVersion, expectedSessionKey)) {
       return;
     }
     if (!res) {
@@ -67,8 +68,9 @@ export async function loadAssistantIdentity(
     state.assistantAvatarStatus = normalized.avatarStatus ?? null;
     state.assistantAvatarReason = normalized.avatarReason ?? null;
     state.assistantAgentId = normalized.agentId ?? null;
-    // Local override always wins — same pattern as the user avatar.
-    const localAvatar = loadLocalAssistantIdentity().avatar;
+    const localAvatar = loadLocalAssistantIdentity({
+      agentId: state.assistantAgentId,
+    }).avatar;
     if (localAvatar) {
       state.assistantAvatar = localAvatar;
       state.assistantAvatarSource = localAvatar;
@@ -83,8 +85,9 @@ export async function loadAssistantIdentity(
 export function setAssistantAvatarOverride(
   state: AssistantAvatarOverrideState,
   avatar: string | null,
+  agentId?: string | null,
 ) {
-  saveLocalAssistantIdentity({ avatar });
+  saveLocalAssistantIdentity({ avatar, agentId });
   if (avatar) {
     state.assistantAvatar = avatar;
     state.assistantAvatarSource = avatar;

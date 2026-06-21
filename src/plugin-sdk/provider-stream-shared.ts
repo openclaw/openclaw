@@ -9,7 +9,10 @@ import {
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
+import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
+import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -274,6 +277,44 @@ export function createPayloadPatchStreamWrapper(
     return streamWithPayloadPatch(underlying, model, context, options, (payload) =>
       patchPayload({ payload, model, context, options }),
     );
+  };
+}
+
+/**
+ * Applies explicit disabled-thinking intent to OpenAI-compatible Chat
+ * Completions payloads without changing enabled reasoning levels.
+ */
+export function createOpenAICompatibleCompletionsThinkingOffWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (thinkingLevel !== "off") {
+    return underlying;
+  }
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (!("reasoning_effort" in payload)) {
+        return;
+      }
+      const disabled = resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "none",
+        fallbackMap: resolveOpenAIReasoningEffortMap({
+          provider: typeof model.provider === "string" ? model.provider : null,
+          id: typeof model.id === "string" ? model.id : null,
+          compat: model.compat,
+        }),
+      });
+      if (disabled) {
+        payload.reasoning_effort = disabled;
+      } else {
+        delete payload.reasoning_effort;
+      }
+    });
   };
 }
 

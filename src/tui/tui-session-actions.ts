@@ -253,6 +253,13 @@ export function createSessionActions(context: SessionActionContext) {
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
+      next.totalTokensFresh = entry.totalTokensFresh === true;
+    } else if (entry?.totalTokensFresh === true) {
+      // Fresh session: the total is known to be 0. The gateway strips the 0 via
+      // resolvePositiveNumber but still flags it fresh, so render 0 (not "?"),
+      // mirroring the /status fix in #93798. See followup to #93771.
+      next.totalTokens = 0;
+      next.totalTokensFresh = true;
     }
     if (params.clearMissingUsage) {
       if (entry?.inputTokens === undefined) {
@@ -261,8 +268,9 @@ export function createSessionActions(context: SessionActionContext) {
       if (entry?.outputTokens === undefined) {
         next.outputTokens = null;
       }
-      if (entry?.totalTokens === undefined) {
+      if (entry?.totalTokens === undefined && entry?.totalTokensFresh !== true) {
         next.totalTokens = null;
+        next.totalTokensFresh = undefined;
       }
     }
     if (hasEntryUpdate) {

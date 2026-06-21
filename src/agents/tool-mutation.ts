@@ -3,11 +3,11 @@
  *
  * Identifies mutating tool calls and file targets so retry/recovery logic can reason about side effects.
  */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { asRecord } from "./tool-display-record.js";
 
 const MUTATING_TOOL_NAMES = new Set([
   "write",
@@ -58,25 +58,67 @@ const READ_ONLY_ACTIONS = new Set([
   "inspect",
   "check",
   "probe",
+  "runs",
 ]);
 
-const PROCESS_MUTATING_ACTIONS = new Set(["write", "send_keys", "submit", "paste", "kill"]);
-
-const MESSAGE_MUTATING_ACTIONS = new Set([
-  "send",
-  "reply",
-  "thread_reply",
-  "threadreply",
-  "edit",
-  "delete",
-  "react",
-  "pin",
-  "unpin",
+const PROCESS_MUTATING_ACTIONS = new Set([
+  "write",
+  "send_keys",
+  "submit",
+  "paste",
+  "kill",
+  "clear",
+  "remove",
 ]);
+
+const PROCESS_REPLAY_SAFE_ACTIONS = new Set(["list", "log"]);
+
+const MESSAGE_READ_ONLY_ACTIONS = new Set([
+  "reactions",
+  "read",
+  "list_pins",
+  "permissions",
+  "thread_list",
+  "search",
+  "sticker_search",
+  "member_info",
+  "role_info",
+  "emoji_list",
+  "channel_info",
+  "channel_list",
+  "voice_status",
+  "event_list",
+]);
+
+const REPLAY_SAFE_TOOL_NAMES = new Set([
+  "agents_list",
+  "find",
+  "get_goal",
+  "glob",
+  "grep",
+  "image",
+  "ls",
+  "memory_get",
+  "memory_search",
+  "pdf",
+  "read",
+  "search",
+  "sessions_history",
+  "sessions_list",
+  "tool_describe",
+  "tool_search",
+  "update_plan",
+  "web_fetch",
+  "web_search",
+  "x_search",
+]);
+
+const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
+const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
+const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
 
 const READ_ONLY_SHELL_COMMANDS = new Set([
   "cat",
-  "file",
   "grep",
   "head",
   "ls",
@@ -87,21 +129,12 @@ const READ_ONLY_SHELL_COMMANDS = new Set([
   "wc",
 ]);
 
-const READ_ONLY_GIT_SUBCOMMANDS = new Set([
-  "diff",
-  "grep",
-  "log",
-  "ls-files",
-  "rev-parse",
-  "show",
-  "status",
-]);
-
 const READ_ONLY_GH_PR_SUBCOMMANDS = new Set(["checks", "diff", "list", "status", "view"]);
 const READ_ONLY_GH_ISSUE_SUBCOMMANDS = new Set(["list", "status", "view"]);
 
-const UNSAFE_RG_FLAGS = new Set(["--pre", "--pre-glob"]);
-const UNSAFE_GIT_FLAGS = new Set(["--ext-diff", "--output", "-o", "--open-files-in-pager"]);
+const UNSAFE_RG_FLAGS = new Set(["--hostname-bin", "--pre", "--pre-glob", "--search-zip", "-z"]);
+const UNSAFE_RG_VALUE_FLAGS = ["--hostname-bin", "--pre", "--pre-glob"] as const;
+const SHELL_EXPANSION_CHARS = new Set(["$", "*", "?", "[", "]", "{", "}", "~"]);
 
 // Structured file-target identity for cross-tool same-target recovery.
 // Carried alongside `actionFingerprint` so comparison does not have to
@@ -116,6 +149,7 @@ export type FileTarget = {
 
 type ToolMutationState = {
   mutatingAction: boolean;
+  replaySafe: boolean;
   actionFingerprint?: string;
   fileTarget?: FileTarget;
 };
@@ -142,8 +176,13 @@ function readShellCommand(record: Record<string, unknown> | undefined): string |
 }
 
 function tokenizeSimpleShellCommand(command: string): string[] | undefined {
-  if (/[;&|<>\n\r`]/.test(command) || command.includes("$(") || command.includes("\\")) {
+  if (/[;&|<>\n\r`]/.test(command) || command.includes("\\")) {
     return undefined;
+  }
+  for (const char of SHELL_EXPANSION_CHARS) {
+    if (command.includes(char)) {
+      return undefined;
+    }
   }
   const tokens: string[] = [];
   let current = "";
@@ -222,33 +261,9 @@ function hasUnsafeRipgrepFlag(tokens: readonly string[]): boolean {
     const normalized = normalizeLowercaseStringOrEmpty(token);
     return (
       UNSAFE_RG_FLAGS.has(normalized) ||
-      normalized.startsWith("--pre=") ||
-      normalized.startsWith("--pre-glob=")
+      UNSAFE_RG_VALUE_FLAGS.some((flag) => normalized.startsWith(`${flag}=`))
     );
   });
-}
-
-function hasUnsafeGitFlag(tokens: readonly string[]): boolean {
-  return tokens.some((token) => {
-    const normalized = normalizeLowercaseStringOrEmpty(token);
-    return (
-      UNSAFE_GIT_FLAGS.has(normalized) ||
-      token.startsWith("-O") ||
-      normalized.startsWith("--output=") ||
-      normalized.startsWith("--open-files-in-pager=")
-    );
-  });
-}
-
-function isReadOnlyGitCommand(tokens: readonly string[]): boolean {
-  const subcommand = normalizeLowercaseStringOrEmpty(tokens[1]);
-  if (hasUnsafeGitFlag(tokens)) {
-    return false;
-  }
-  if (READ_ONLY_GIT_SUBCOMMANDS.has(subcommand)) {
-    return true;
-  }
-  return subcommand === "remote" && tokens.length === 3 && tokens[2] === "-v";
 }
 
 function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
@@ -295,9 +310,6 @@ function isPlainReadOnlyShellCommand(command: string | undefined): boolean {
   }
   if (executable === "sed") {
     return isReadOnlySedCommand(tokens);
-  }
-  if (executable === "git") {
-    return isReadOnlyGitCommand(tokens);
   }
   if (executable === "gh") {
     return isReadOnlyGhCommand(tokens);
@@ -355,6 +367,7 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "write":
     case "edit":
     case "apply_patch":
+    case "sessions_spawn":
     case "sessions_send":
     case "create_goal":
     case "update_goal":
@@ -365,21 +378,20 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "process":
       return action != null && PROCESS_MUTATING_ACTIONS.has(action);
     case "message":
-      return (
-        (action != null && MESSAGE_MUTATING_ACTIONS.has(action)) ||
-        typeof record?.content === "string" ||
-        typeof record?.message === "string"
-      );
+      // Message actions are an extensible plugin surface. Only known lookup
+      // actions are replay-safe; missing and future actions fail closed.
+      return action == null || !MESSAGE_READ_ONLY_ACTIONS.has(action);
     case "subagents":
       return action === "kill" || action === "steer";
     case "session_status":
       return typeof record?.model === "string" && record.model.trim().length > 0;
+    case "gateway":
+      return action == null || !GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "nodes":
+      return action == null || !NODES_REPLAY_SAFE_ACTIONS.has(action);
     default: {
-      if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
+      if (normalized === "cron" || normalized === "canvas") {
         return action == null || !READ_ONLY_ACTIONS.has(action);
-      }
-      if (normalized === "nodes") {
-        return action == null || action !== "list";
       }
       if (normalized.endsWith("_actions")) {
         return action == null || !READ_ONLY_ACTIONS.has(action);
@@ -392,7 +404,46 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
   }
 }
 
-export function buildToolActionFingerprint(
+/** Return true only for tool calls whose structured contract proves replay safety. */
+export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
+  const record = asRecord(args);
+  const action = normalizeActionName(record?.action);
+  if (REPLAY_SAFE_TOOL_NAMES.has(normalized)) {
+    return true;
+  }
+  switch (normalized) {
+    case "exec":
+    case "bash":
+      return false;
+    case "process":
+      return action != null && PROCESS_REPLAY_SAFE_ACTIONS.has(action);
+    case "message":
+      return action != null && MESSAGE_READ_ONLY_ACTIONS.has(action);
+    case "subagents":
+      return action == null || action === "list";
+    case "session_status":
+      return !isMutatingToolCall(normalized, args);
+    case "browser":
+      return action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
+    case "skill_workshop":
+      return action === "list" || action === "inspect";
+    case "transcripts":
+      return action === "status";
+    case "gateway":
+      return action != null && GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "nodes":
+      return action != null && NODES_REPLAY_SAFE_ACTIONS.has(action);
+    default: {
+      if (normalized === "cron" || normalized === "canvas") {
+        return action != null && READ_ONLY_ACTIONS.has(action);
+      }
+      return false;
+    }
+  }
+}
+
+function buildToolActionFingerprint(
   toolName: string,
   args: unknown,
   meta?: string,
@@ -462,7 +513,7 @@ function readArgFingerprintValue(
   return undefined;
 }
 
-export function extractFileTarget(toolName: string, args: unknown): FileTarget | undefined {
+function extractFileTarget(toolName: string, args: unknown): FileTarget | undefined {
   if (!isFileMutatingToolName(toolName)) {
     return undefined;
   }
@@ -491,6 +542,7 @@ export function buildToolMutationState(
   const fileTarget = extractFileTarget(toolName, args);
   return {
     mutatingAction: actionFingerprint != null,
+    replaySafe: isReplaySafeToolCall(toolName, args),
     actionFingerprint,
     ...(fileTarget !== undefined ? { fileTarget } : {}),
   };

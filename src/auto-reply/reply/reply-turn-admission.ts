@@ -4,7 +4,9 @@ import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   ReplyRunAlreadyActiveError,
+  ReplyRunFollowupAdmissionBlockedError,
   type ReplyOperation,
+  waitForReplyRunFollowupAdmission,
 } from "./reply-run-registry.js";
 
 /** Kinds of turns that compete for one reply run slot per session. */
@@ -35,6 +37,9 @@ export async function admitReplyTurn(params: {
   waitForActive?: boolean;
 }): Promise<ReplyTurnAdmission> {
   let sessionId = params.sessionId;
+  const waitTimeoutMs =
+    params.waitTimeoutMs ??
+    (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
   while (true) {
     if (isAbortSignalAborted(params.upstreamAbortSignal)) {
       return { status: "skipped", reason: "aborted" };
@@ -48,9 +53,29 @@ export async function admitReplyTurn(params: {
           resetTriggered: params.resetTriggered,
           routeThreadId: params.routeThreadId,
           upstreamAbortSignal: params.upstreamAbortSignal,
+          respectFollowupAdmissionBarrier:
+            params.kind === "queued_followup" || params.kind === "heartbeat",
         }),
       };
     } catch (error) {
+      if (error instanceof ReplyRunFollowupAdmissionBlockedError) {
+        if (params.kind === "heartbeat") {
+          return { status: "skipped", reason: "active-run" };
+        }
+        const followupAdmission = await waitForReplyRunFollowupAdmission(
+          params.sessionKey,
+          waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+          { signal: params.upstreamAbortSignal },
+        );
+        if (!followupAdmission.settled) {
+          return {
+            status: "skipped",
+            reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
+          };
+        }
+        sessionId = followupAdmission.sessionId ?? sessionId;
+        continue;
+      }
       if (!(error instanceof ReplyRunAlreadyActiveError)) {
         throw error;
       }
@@ -62,9 +87,6 @@ export async function admitReplyTurn(params: {
       if (params.waitForActive === false) {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
-      const waitTimeoutMs =
-        params.waitTimeoutMs ??
-        (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
       const ended = await replyRunRegistry.waitForIdle(params.sessionKey, waitTimeoutMs, {
         signal: params.upstreamAbortSignal,
       });

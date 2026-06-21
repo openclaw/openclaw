@@ -28,7 +28,11 @@ import {
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
-import { testing as replyRunRegistryTesting, replyRunRegistry } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  testing as replyRunRegistryTesting,
+  replyRunRegistry,
+} from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -490,6 +494,72 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a provided reply operation active until final delivery completes", async () => {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    const replyOperation = createReplyOperation({
+      sessionKey,
+      sessionId: sessionEntry.sessionId,
+      resetTriggered: false,
+    });
+    const deliveryOrder: string[] = [];
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { agentMeta: {} },
+    });
+
+    vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
+      expect(key).toBe(sessionKey);
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      deliveryOrder.push("followup");
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+      replyOperation,
+    });
+
+    expectReplyText(result, "ok");
+    expect(replyRunRegistry.get(sessionKey)).toBe(replyOperation);
+    expect(replyOperation.result).toBeNull();
+    expect(scheduleFollowupDrain).not.toHaveBeenCalled();
+
+    deliveryOrder.push("final");
+    replyOperation.complete();
+
+    expect(deliveryOrder).toEqual(["final", "followup"]);
+    expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
+  });
+
   it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
     const { usageEvent } = await runBaseReplyWithAgentMeta({
       tmpPrefix: "openclaw-usage-diagnostic-",
@@ -707,7 +777,10 @@ describe("runReplyAgent block streaming", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
-    expect(result).toBeUndefined();
+    // The block pipeline streamed "Hello" but never sent "Final message",
+    // so the unsent text-only final is preserved (not dropped).
+    expect(result).toBeDefined();
+    expect((result as { text?: string }).text).toBe("Final message");
   });
 
   it("returns the final payload when onBlockReply times out", async () => {
@@ -2642,7 +2715,7 @@ describe("runReplyAgent response usage footer", () => {
     });
   }
 
-  it("appends session key when responseUsage=full", async () => {
+  it("uses the built-in compact footer when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -2658,9 +2731,11 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("Usage:");
-    expect(text).toContain("cache 4 cached / 2 new");
-    expect(text).toContain(`· session \`${sessionKey}\``);
+    expect(text).toContain("anthropic🤖 claude 🌘 🐌");
+    expect(text).toContain("↕️ 12/3");
+    expect(text).toContain("🗄 22%");
+    expect(text).not.toContain("Usage:");
+    expect(text).not.toContain("· session ");
   });
 
   it("does not append session key when responseUsage=tokens", async () => {
@@ -2705,6 +2780,61 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
+  it("keeps partial token counts in the built-in full footer", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { output: 125 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+    expect(text).toContain("↕️ ?/125");
+    expect(text).not.toContain("Usage:");
+  });
+
+  it("shows aggregate-only token totals in the built-in full footer", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { total: 1250 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              models: [{ id: "claude", cost: { input: 3, output: 15 } }],
+            },
+          },
+        },
+      },
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+    expect(text).toContain("↕️ 1.3k");
+    expect(text).not.toContain("↕️ ?/?");
+    expect(text).not.toContain("💰");
+    expect(text).not.toContain("Usage:");
+  });
+
   it("shows configured costs for aws-sdk providers when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -2747,10 +2877,12 @@ describe("runReplyAgent response usage footer", () => {
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
 
-    expect(text).toContain("Usage: 1.0k in / 2.0k out");
-    expect(text).toContain("cache 500 cached / 2.0k new");
-    expect(text).toContain("est $0.04");
-    expect(text).toContain(`· session \`${sessionKey}\``);
+    expect(text).toContain("amazon-bedrock🤖 us.anthropic.claude-sonnet-4-6 🌘 🐌");
+    expect(text).toContain("↕️ 1.0k/2.0k");
+    expect(text).toContain("🗄 14%");
+    expect(text).toContain("💰0.0406");
+    expect(text).not.toContain("Usage:");
+    expect(text).not.toContain("· session ");
   });
 });
 

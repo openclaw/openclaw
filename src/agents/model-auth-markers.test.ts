@@ -2,9 +2,11 @@
  * Regression coverage for non-secret model-auth marker helpers.
  * Verifies core, plugin, env-var, OAuth, AWS, and secret-ref marker handling.
  */
+import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 
+const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
 const PLUGIN_MANIFEST_ENV_KEYS = [
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
@@ -14,9 +16,12 @@ const PLUGIN_MANIFEST_ENV_KEYS = [
   "OPENCLAW_TEST_MINIMAL_GATEWAY",
 ] as const;
 
-function cleanPluginManifestEnv(): Record<(typeof PLUGIN_MANIFEST_ENV_KEYS)[number], undefined> {
+function cleanPluginManifestEnv(): Record<
+  (typeof PLUGIN_MANIFEST_ENV_KEYS)[number],
+  string | undefined
+> {
   return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     OPENCLAW_SKIP_PROVIDERS: undefined,
     OPENCLAW_SKIP_CHANNELS: undefined,
@@ -35,6 +40,7 @@ let listKnownNonSecretApiKeyMarkers: typeof import("./model-auth-markers.js").li
 let resolveOAuthApiKeyMarker: typeof import("./model-auth-markers.js").resolveOAuthApiKeyMarker;
 
 async function loadMarkerModules() {
+  vi.doUnmock("../plugins/manifest-metadata-scan.js");
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();

@@ -2490,7 +2490,7 @@ describe("qa mock openai server", () => {
           {
             type: "function_call_output",
             output:
-              "repo/qa/scenarios/index.md includes scenario: subagent-handoff and repo/extensions/qa-lab/src/suite.ts.",
+              "repo/qa/scenarios/index.yaml includes scenario: subagent-handoff and repo/extensions/qa-lab/src/suite.ts.",
           },
           makeUserInput("Continue."),
         ],
@@ -4593,7 +4593,7 @@ describe("qa mock openai server provider variant tagging", () => {
       stream: false,
       input: [makeUserInput(sourcePrompt)],
     });
-    expect(outputToolArgs(openaiSource)).toEqual({ path: "repo/qa/scenarios/index.md" });
+    expect(outputToolArgs(openaiSource)).toEqual({ path: "repo/qa/scenarios/index.yaml" });
 
     const anthropicSourceServer = await startMockServer();
     const anthropicSource = await expectResponsesJson(anthropicSourceServer, {

@@ -173,6 +173,7 @@ plugins.
     | --- | --- |
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
+    | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
@@ -185,7 +186,8 @@ plugins.
       dashboard session, except when `session.dmScope: "main"` is configured
       and the current parent is the agent's main session — in that case `/new`
       resets the main session in place. Typed `/reset` still runs the Gateway's
-      in-place reset.
+      in-place reset. Use `/model default` when you want to clear a pinned
+      session model selection.
     </Note>
 
   </Accordion>
@@ -230,7 +232,8 @@ plugins.
     | `/help` | Show the short help summary |
     | `/commands` | Show the generated command catalog |
     | `/tools [compact\|verbose]` | Show what the current agent can use right now |
-    | `/status` | Show execution/runtime status, Gateway and system uptime, plus provider usage/quota |
+    | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
+    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel failures, dependency issues, compatibility notices |
     | `/goal [status\|start\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/crestodian <request>` | Run the Crestodian setup and repair helper from an owner DM |
@@ -358,6 +361,7 @@ use the Control UI Tools panel or config surfaces.
 /model 3           # select by number from picker
 /model openai/gpt-5.4
 /model opus@anthropic:default
+/model default     # clear the session model selection
 /model status      # detailed view with endpoint and API mode
 ```
 

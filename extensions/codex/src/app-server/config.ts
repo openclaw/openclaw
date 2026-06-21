@@ -1,5 +1,5 @@
 // Codex helper module supports config behavior.
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
 import path from "node:path";
@@ -13,10 +13,15 @@ import {
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  buildSecretInputSchema,
+  normalizeResolvedSecretInputString,
+  type SecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
+import type { CodexSandboxPolicy, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -28,6 +33,8 @@ const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
+export type CodexAppServerConnectionClass = "local-loopback" | "remote";
+export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
 type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 type OpenClawExecSecurity = "deny" | "allowlist" | "full";
 type OpenClawExecAsk = "off" | "on-miss" | "always";
@@ -67,7 +74,8 @@ export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "dange
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
-export type CodexPluginDestructivePolicy = boolean;
+export type CodexPluginDestructivePolicy = boolean | "auto";
+export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -110,18 +118,48 @@ export type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
 };
 
+export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
+export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
+export type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
+export type CodexAppServerNetworkProxyMode = "limited" | "full";
+
+export type CodexAppServerNetworkProxyConfig = {
+  enabled?: boolean;
+  profileName?: string;
+  baseProfile?: CodexAppServerNetworkProxyBaseProfile;
+  mode?: CodexAppServerNetworkProxyMode;
+  domains?: Record<string, CodexAppServerNetworkProxyDomainPermission>;
+  unixSockets?: Record<string, CodexAppServerNetworkProxyUnixSocketPermission>;
+  proxyUrl?: string;
+  socksUrl?: string;
+  enableSocks5?: boolean;
+  enableSocks5Udp?: boolean;
+  allowUpstreamProxy?: boolean;
+  allowLocalBinding?: boolean;
+  dangerouslyAllowNonLoopbackProxy?: boolean;
+  dangerouslyAllowAllUnixSockets?: boolean;
+};
+
+export type ResolvedCodexAppServerNetworkProxyConfig = {
+  profileName: string;
+  configFingerprint: string;
+  configPatch: JsonObject;
+};
+
 export type ResolvedCodexPluginPolicy = {
   configKey: string;
   marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
   pluginName: string;
   enabled: boolean;
-  allowDestructiveActions: CodexPluginDestructivePolicy;
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 };
 
 export type ResolvedCodexPluginsPolicy = {
   configured: boolean;
   enabled: boolean;
-  allowDestructiveActions: CodexPluginDestructivePolicy;
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
   pluginPolicies: ResolvedCodexPluginPolicy[];
 };
 
@@ -139,6 +177,9 @@ export type CodexAppServerStartOptions = {
 
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
+  connectionClass: CodexAppServerConnectionClass;
+  remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
+  remoteWorkspaceRoot?: string;
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
@@ -148,6 +189,7 @@ export type CodexAppServerRuntimeOptions = {
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
+  networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
 export type CodexModelBackedReviewerContext = {
@@ -174,9 +216,10 @@ export type CodexPluginConfig = {
     command?: string;
     args?: string[] | string;
     url?: string;
-    authToken?: string;
-    headers?: Record<string, string>;
+    authToken?: SecretInput;
+    headers?: Record<string, SecretInput>;
     clearEnv?: string[];
+    remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
@@ -185,15 +228,20 @@ export type CodexPluginConfig = {
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
+    networkProxy?: CodexAppServerNetworkProxyConfig;
     defaultWorkspaceDir?: string;
     experimental?: CodexAppServerExperimentalConfig;
   };
 };
 
 export function shouldAutoApproveCodexAppServerApprovals(
-  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "sandbox">,
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "networkProxy" | "sandbox">,
 ): boolean {
-  return appServer.approvalPolicy === "never" && appServer.sandbox === "danger-full-access";
+  return (
+    appServer.networkProxy === undefined &&
+    appServer.approvalPolicy === "never" &&
+    appServer.sandbox === "danger-full-access"
+  );
 }
 
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
@@ -205,6 +253,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "authToken",
   "headers",
   "clearEnv",
+  "remoteWorkspaceRoot",
   "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
@@ -213,6 +262,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "sandbox",
   "approvalsReviewer",
   "serviceTier",
+  "networkProxy",
   "defaultWorkspaceDir",
   "experimental",
 ] as const;
@@ -246,8 +296,10 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
 const codexAppServerApprovalPolicySchema = z.enum([
   "never",
@@ -258,6 +310,7 @@ const codexAppServerApprovalPolicySchema = z.enum([
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
+const codexPluginDestructivePolicySchema = z.union([z.boolean(), z.literal("auto")]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
     (value) => (value === null ? null : normalizeCodexServiceTier(value)),
@@ -269,20 +322,41 @@ const codexAppServerExperimentalSchema = z
     sandboxExecServer: z.boolean().optional(),
   })
   .strict();
+const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
+const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
+const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
+const codexAppServerNetworkProxySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    profileName: z.string().trim().min(1).optional(),
+    baseProfile: z.enum(["read-only", "workspace"]).optional(),
+    mode: z.enum(["limited", "full"]).optional(),
+    domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
+    unixSockets: z.record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema).optional(),
+    proxyUrl: z.string().trim().min(1).optional(),
+    socksUrl: z.string().trim().min(1).optional(),
+    enableSocks5: z.boolean().optional(),
+    enableSocks5Udp: z.boolean().optional(),
+    allowUpstreamProxy: z.boolean().optional(),
+    allowLocalBinding: z.boolean().optional(),
+    dangerouslyAllowNonLoopbackProxy: z.boolean().optional(),
+    dangerouslyAllowAllUnixSockets: z.boolean().optional(),
+  })
+  .strict();
 
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME).optional(),
     pluginName: z.string().trim().min(1).optional(),
-    allow_destructive_actions: z.boolean().optional(),
+    allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
   })
   .strict();
 
 const codexPluginsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    allow_destructive_actions: z.boolean().optional(),
+    allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
     plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
   })
   .strict();
@@ -319,9 +393,10 @@ const codexPluginConfigSchema = z
         command: z.string().optional(),
         args: z.union([z.array(z.string()), z.string()]).optional(),
         url: z.string().optional(),
-        authToken: z.string().optional(),
-        headers: z.record(z.string(), z.string()).optional(),
+        authToken: SecretInputSchema.optional(),
+        headers: z.record(z.string(), SecretInputSchema).optional(),
         clearEnv: z.array(z.string()).optional(),
+        remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
@@ -330,6 +405,7 @@ const codexPluginConfigSchema = z
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
+        networkProxy: codexAppServerNetworkProxySchema.optional(),
         defaultWorkspaceDir: z.string().optional(),
         experimental: codexAppServerExperimentalSchema.optional(),
       })
@@ -380,19 +456,25 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   const config = readCodexPluginConfig(pluginConfig).codexPlugins;
   const configured = config !== undefined;
   const enabled = config?.enabled === true;
-  const allowDestructiveActions = config?.allow_destructive_actions ?? true;
+  const destructivePolicy = resolveCodexPluginDestructivePolicy(
+    config?.allow_destructive_actions ?? true,
+  );
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
       if (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME || !entry.pluginName) {
         return [];
       }
+      const entryDestructivePolicy = resolveCodexPluginDestructivePolicy(
+        entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
+      );
       return [
         {
           configKey,
           marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
-          allowDestructiveActions: entry.allow_destructive_actions ?? allowDestructiveActions,
+          allowDestructiveActions: entryDestructivePolicy.allowDestructiveActions,
+          destructiveApprovalMode: entryDestructivePolicy.destructiveApprovalMode,
         },
       ];
     })
@@ -400,8 +482,22 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   return {
     configured,
     enabled,
-    allowDestructiveActions,
+    allowDestructiveActions: destructivePolicy.allowDestructiveActions,
+    destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,
+  };
+}
+
+function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolicy): {
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
+} {
+  if (policy === "auto") {
+    return { allowDestructiveActions: true, destructiveApprovalMode: "auto" };
+  }
+  return {
+    allowDestructiveActions: policy,
+    destructiveApprovalMode: policy ? "allow" : "deny",
   };
 }
 
@@ -441,8 +537,14 @@ export function resolveCodexAppServerRuntimeOptions(
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const clearEnv = normalizeStringList(config.clearEnv);
-  const authToken = readNonEmptyString(config.authToken);
+  const authToken = normalizeCodexAppServerSecretInput({
+    value: config.authToken,
+    path: "plugins.entries.codex.config.appServer.authToken",
+  });
   const url = readNonEmptyString(config.url);
+  const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
+  const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
+  const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
   const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
     execMode: params.execMode,
     execPolicy: params.execPolicy,
@@ -525,11 +627,21 @@ export function resolveCodexAppServerRuntimeOptions(
     ? normalizedPolicyMode
     : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
+  const resolvedSandbox =
+    forcedPolicy?.sandbox ??
+    configuredSandbox ??
+    defaultPolicy?.sandbox ??
+    (policyMode === "guardian" ? "workspace-write" : "danger-full-access");
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
     );
   }
+  assertCodexAppServerConnectionClassConfig({
+    connectionClass,
+    authToken,
+    headers,
+  });
 
   const configApprovalPolicy = resolveApprovalPolicy(config.approvalPolicy);
   const envApprovalPolicy = resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
@@ -557,6 +669,9 @@ export function resolveCodexAppServerRuntimeOptions(
       headers,
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
+    connectionClass,
+    remoteAppsSubstrate,
+    ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
     codeModeOnly: config.codeModeOnly === true,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
@@ -573,17 +688,14 @@ export function resolveCodexAppServerRuntimeOptions(
       : {}),
     approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
     approvalPolicySource,
-    sandbox:
-      forcedPolicy?.sandbox ??
-      configuredSandbox ??
-      defaultPolicy?.sandbox ??
-      (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
+    sandbox: resolvedSandbox,
     approvalsReviewer:
       forcedPolicy?.approvalsReviewer ??
       explicitApprovalsReviewer ??
       defaultPolicy?.approvalsReviewer ??
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
+    ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
   };
 }
 
@@ -765,9 +877,9 @@ export function codexAppServerStartOptionsKey(
     args: options.args,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),
-    headers: Object.entries(options.headers).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ),
+    headers: Object.entries(options.headers)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, hashSecretForKey(value, `header:${key}`)]),
     env: Object.entries(options.env ?? {})
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
@@ -795,6 +907,104 @@ export function codexSandboxPolicyForTurn(
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
+}
+
+function resolveCodexAppServerNetworkProxy(
+  config: CodexAppServerNetworkProxyConfig | undefined,
+  sandbox: CodexAppServerSandboxMode,
+): { networkProxy?: ResolvedCodexAppServerNetworkProxyConfig } {
+  if (config?.enabled !== true) {
+    return {};
+  }
+  const fileSystemMode =
+    config.baseProfile === "read-only" || (!config.baseProfile && sandbox === "read-only")
+      ? "read"
+      : "write";
+  const networkConfig = removeUndefinedJsonFields({
+    enabled: true,
+    mode: config.mode,
+    domains: normalizeNetworkProxyPermissionMap(config.domains),
+    unix_sockets: normalizeNetworkProxyPermissionMap(config.unixSockets),
+    proxy_url: readNonEmptyString(config.proxyUrl),
+    socks_url: readNonEmptyString(config.socksUrl),
+    enable_socks5: config.enableSocks5,
+    enable_socks5_udp: config.enableSocks5Udp,
+    allow_upstream_proxy: config.allowUpstreamProxy,
+    allow_local_binding: config.allowLocalBinding,
+    dangerously_allow_non_loopback_proxy: config.dangerouslyAllowNonLoopbackProxy,
+    dangerously_allow_all_unix_sockets: config.dangerouslyAllowAllUnixSockets,
+  });
+  const profile = {
+    filesystem: {
+      ":minimal": "read",
+      ":project_roots": {
+        ".": fileSystemMode,
+      },
+    },
+    network: networkConfig,
+  };
+  const profileName = resolveNetworkProxyPermissionProfileName(config, profile);
+  const configPatch: JsonObject = {
+    "features.network_proxy.enabled": true,
+    default_permissions: profileName,
+    permissions: {
+      [profileName]: profile,
+    },
+  };
+  return {
+    networkProxy: {
+      profileName,
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
+    },
+  };
+}
+
+function resolveNetworkProxyPermissionProfileName(
+  config: CodexAppServerNetworkProxyConfig,
+  profile: JsonObject,
+): string {
+  const explicitProfileName = readNonEmptyString(config.profileName);
+  if (explicitProfileName) {
+    return explicitProfileName;
+  }
+  const suffix = createHash("sha256")
+    .update(stableStringifyJson({ version: 1, profile }))
+    .digest("hex")
+    .slice(0, 16);
+  return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
+}
+
+export function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
+  return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
+}
+
+function normalizeNetworkProxyPermissionMap<TPermission extends string>(
+  value: Record<string, TPermission> | undefined,
+): Record<string, TPermission> | undefined {
+  const entries = Object.entries(value ?? {})
+    .map(([key, permission]) => [key.trim(), permission] as const)
+    .filter(([key]) => key.length > 0);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function removeUndefinedJsonFields(value: Record<string, JsonValue | undefined>): JsonObject {
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
+  );
+}
+
+function stableStringifyJson(value: JsonValue): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringifyJson(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringifyJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 export function withMcpElicitationsApprovalPolicy(
@@ -828,6 +1038,71 @@ export function withMcpElicitationsApprovalPolicy(
 
 function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" ? "websocket" : "stdio";
+}
+
+function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
+  return readNonEmptyString(value);
+}
+
+function inferCodexAppServerConnectionClass(params: {
+  transport: CodexAppServerTransportMode;
+  url?: string;
+}): CodexAppServerConnectionClass {
+  if (params.transport !== "websocket") {
+    return "local-loopback";
+  }
+  return params.url && isLoopbackWebSocketUrl(params.url) ? "local-loopback" : "remote";
+}
+
+function assertCodexAppServerConnectionClassConfig(params: {
+  connectionClass: CodexAppServerConnectionClass;
+  authToken?: string;
+  headers: Record<string, string>;
+}): void {
+  if (
+    params.connectionClass === "remote" &&
+    !hasIdentityBearingWebSocketAuth({
+      authToken: params.authToken,
+      headers: params.headers,
+    })
+  ) {
+    throw new Error(
+      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
+    );
+  }
+}
+
+function isLoopbackWebSocketUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host.startsWith("127.")
+  );
+}
+
+function hasIdentityBearingWebSocketAuth(params: {
+  authToken?: string;
+  headers: Record<string, string>;
+}): boolean {
+  if (readNonEmptyString(params.authToken)) {
+    return true;
+  }
+  return Object.entries(params.headers).some(
+    ([key, value]) =>
+      key.trim().toLowerCase() === "authorization" && Boolean(readNonEmptyString(value)),
+  );
 }
 
 function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {
@@ -1771,9 +2046,25 @@ function normalizeHeaders(value: unknown): Record<string, string> {
   }
   return Object.fromEntries(
     Object.entries(value)
-      .map(([key, child]) => [key.trim(), readNonEmptyString(child)] as const)
+      .map(
+        ([key, child]) =>
+          [
+            key.trim(),
+            normalizeCodexAppServerSecretInput({
+              value: child,
+              path: `plugins.entries.codex.config.appServer.headers.${key}`,
+            }),
+          ] as const,
+      )
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
   );
+}
+
+function normalizeCodexAppServerSecretInput(params: {
+  value: unknown;
+  path: string;
+}): string | undefined {
+  return normalizeResolvedSecretInputString(params);
 }
 
 function normalizeStringList(value: unknown): string[] {

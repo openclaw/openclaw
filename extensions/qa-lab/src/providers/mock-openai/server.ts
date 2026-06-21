@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
+import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -149,6 +150,7 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa check/i;
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
+const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE = /anthropic thinking error qa check/i;
 const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i;
 const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
@@ -189,6 +191,7 @@ const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
+  anthropicThinkingErrorPhase: number;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
 };
@@ -196,7 +199,7 @@ type MockScenarioState = {
 function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
   return providerVariant === "anthropic"
     ? "repo/docs/help/testing.md"
-    : "repo/qa/scenarios/index.md";
+    : "repo/qa/scenarios/index.yaml";
 }
 
 function subagentHandoffTaskForProvider(providerVariant: MockOpenAiProviderVariant) {
@@ -230,16 +233,6 @@ function transcriptionTextForAudioRequest(rawBody: string) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
   }
   return QA_AUDIO_TRANSCRIPTION_TEXT;
-}
-
-function writeJson(res: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(text),
-    "cache-control": "no-store",
-  });
-  res.end(text);
 }
 
 function writeSse(res: ServerResponse, events: StreamEvent[]) {
@@ -1459,7 +1452,7 @@ function buildAssistantText(
   ) {
     return [
       "Worked:",
-      "- Read all three seeded files: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
+      "- Read all three seeded files: repo/qa/scenarios/index.yaml, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
       "- Extra QA scenario candidates: config restart capability flip and image generation roundtrip.",
       "Failed:",
       "- None observed in mock mode.",
@@ -3128,6 +3121,90 @@ function buildAnthropicMessageResponse(params: {
   };
 }
 
+const QA_ANTHROPIC_THINKING_ERROR_TEXT =
+  "QA replay-safe read completed, but the provider stream failed after signed thinking.";
+const QA_ANTHROPIC_THINKING_ERROR_SIGNATURE = "qa_signed_thinking_block_91953";
+const QA_ANTHROPIC_THINKING_ERROR_MESSAGE = "QA injected provider stream failure";
+
+function buildAnthropicThinkingErrorResponse(params: { model: string }): Record<string, unknown> {
+  return {
+    type: "error",
+    error: {
+      type: "api_error",
+      message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
+    },
+    model: params.model || "claude-opus-4-8",
+  };
+}
+
+function buildAnthropicThinkingErrorStreamEvents(params: {
+  model: string;
+}): AnthropicStreamEvent[] {
+  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
+  return [
+    {
+      type: "message_start",
+      message: {
+        id: messageId,
+        type: "message",
+        role: "assistant",
+        model: params.model || "claude-opus-4-8",
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: 64,
+          output_tokens: 0,
+        },
+      },
+    },
+    {
+      type: "content_block_start",
+      index: 0,
+      content_block: {
+        type: "thinking",
+        thinking: "",
+        signature: "",
+      },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "thinking_delta",
+        thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT,
+      },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "signature_delta",
+        signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE,
+      },
+    },
+    {
+      type: "content_block_stop",
+      index: 0,
+    },
+    {
+      type: "message_delta",
+      delta: {},
+      usage: {
+        input_tokens: 64,
+        output_tokens: 1120,
+      },
+    },
+    {
+      type: "error",
+      error: {
+        type: "api_error",
+        message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
+      },
+    },
+  ];
+}
+
 function buildAnthropicMessageStreamEvents(params: {
   model: string;
   extracted: ExtractedAssistantOutput;
@@ -3254,6 +3331,35 @@ async function buildMessagesPayload(
     stream: false,
     ...(Array.isArray(body.tools) ? { tools: body.tools } : {}),
   };
+  const allInputText = extractAllRequestTexts(input, dispatchBody);
+  if (QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE.test(allInputText)) {
+    const toolOutput = extractToolOutput(input);
+    const shouldEmitThinkingError =
+      toolOutput.length > 0 && scenarioState.anthropicThinkingErrorPhase === 0;
+    const events =
+      toolOutput.length === 0
+        ? buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" })
+        : shouldEmitThinkingError
+          ? (() => {
+              scenarioState.anthropicThinkingErrorPhase = 1;
+              return buildAssistantEvents("");
+            })()
+          : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+    const extracted = extractFinalAssistantOutputFromEvents(events);
+    const responseBody = shouldEmitThinkingError
+      ? buildAnthropicThinkingErrorResponse({ model: normalizedModel })
+      : buildAnthropicMessageResponse({
+          model: normalizedModel,
+          extracted,
+        });
+    const streamEvents = shouldEmitThinkingError
+      ? buildAnthropicThinkingErrorStreamEvents({ model: normalizedModel })
+      : buildAnthropicMessageStreamEvents({
+          model: normalizedModel,
+          extracted,
+        });
+    return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
+  }
   const events = await buildResponsesPayload(dispatchBody, scenarioState);
   const extracted = extractFinalAssistantOutputFromEvents(events);
   const responseBody = buildAnthropicMessageResponse({
@@ -3270,6 +3376,7 @@ async function buildMessagesPayload(
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
   const host = params?.host ?? "127.0.0.1";
   const scenarioState: MockScenarioState = {
+    anthropicThinkingErrorPhase: 0,
     subagentFanoutPhase: 0,
     subagentHandoffSpawned: false,
   };

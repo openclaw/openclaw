@@ -11,7 +11,7 @@ import {
   resetApiProviders,
 } from "../llm/providers/register-builtins.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { ensureCustomApiRegistered, getCustomApiRegistrySourceId } from "./custom-api-registry.js";
+import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 
 function getRegisteredTestProvider() {
   const provider = getApiProvider("test-custom-api");
@@ -23,7 +23,6 @@ function getRegisteredTestProvider() {
 
 describe("ensureCustomApiRegistered", () => {
   afterEach(() => {
-    unregisterApiProviders(getCustomApiRegistrySourceId("test-custom-api"));
     clearApiProviders();
     registerBuiltInApiProviders();
   });

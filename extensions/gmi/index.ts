@@ -11,7 +11,7 @@ const PROVIDER_ID = "gmi";
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "GMI Cloud Provider",
-  description: "Bundled GMI Cloud provider plugin",
+  description: "GMI Cloud provider plugin",
   provider: {
     label: "GMI Cloud",
     docsPath: "/providers/gmi",

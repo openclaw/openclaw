@@ -537,6 +537,9 @@ describe("update-startup", () => {
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(detectRespawnSupervisorMock).toHaveBeenCalledWith(process.env, process.platform, {
+      includeLinuxOpenClawGatewayServiceMarker: true,
+    });
     const [argv, options] = requireFirstRunCommandCall();
     expect(argv).toEqual([
       process.execPath,
@@ -605,6 +608,36 @@ describe("update-startup", () => {
       tag: "beta",
       command: "openclaw update --yes --channel beta --timeout 2700",
       logPath: "/tmp/openclaw-handoff.log",
+    });
+  });
+
+  it("uses managed systemd handoff for Linux gateway service auto-updates", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
+
+    await runAutoUpdateCheckWithDefaults({
+      cfg: createBetaAutoUpdateConfig(),
+    });
+
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(detectRespawnSupervisorMock).toHaveBeenCalledWith(process.env, process.platform, {
+      includeLinuxOpenClawGatewayServiceMarker: true,
+    });
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/opt/openclaw",
+        timeoutMs: 45 * 60 * 1000,
+        channel: "beta",
+        restartDelayMs: 2000,
+        supervisor: "systemd",
+      }),
+    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
+      delayMs: 2000,
+      reason: "update.auto",
+      skipCooldown: true,
+      skipDeferral: true,
     });
   });
 

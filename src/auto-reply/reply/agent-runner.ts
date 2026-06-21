@@ -15,19 +15,19 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  applySessionStoreEntryPatch,
-  loadSessionStore,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
-  updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
@@ -40,6 +40,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -67,6 +68,9 @@ import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { buildUsageContract } from "../usage-bar/contract.js";
+import { loadUsageBarTemplate } from "../usage-bar/template.js";
+import { renderUsageBar } from "../usage-bar/translator.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
   runAgentTurnWithFallback,
@@ -114,9 +118,15 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import {
+  replyRunRegistry,
+  runAfterReplyOperationClear,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import { recordReplyUsageState } from "./reply-usage-state.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -124,6 +134,26 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function scheduleFollowupDrainAfterReplyOperationClear(params: {
+  operation: ReplyOperation;
+  queueKey: string;
+  runFollowup: (run: FollowupRun) => Promise<void>;
+}): void {
+  runAfterReplyOperationClear(params.operation, (admissionSessionId) => {
+    const completedSessionId = params.operation.sessionId;
+    const runFollowupAfterClear =
+      admissionSessionId === completedSessionId
+        ? params.runFollowup
+        : (queued: FollowupRun) =>
+            params.runFollowup(
+              queued.run.sessionId === completedSessionId
+                ? { ...queued, admissionSessionId }
+                : queued,
+            );
+    scheduleFollowupDrain(params.queueKey, runFollowupAfterClear);
+  });
+}
 
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
@@ -239,10 +269,12 @@ function hasSuccessfulSideEffectDelivery(params: {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
+  didSendViaMessagingTool?: boolean;
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
+    params.didSendViaMessagingTool === true ||
     hasSuccessfulSourceReplyDelivery(params) ||
     (params.successfulCronAdds ?? 0) > 0 ||
     params.didSendDeterministicApprovalPrompt === true
@@ -458,7 +490,11 @@ function mergeExecutionTrace(params: {
   provider?: string;
   model?: string;
   runner: "embedded" | "cli";
+  exhausted?: boolean;
 }): TraceExecutionView | undefined {
+  const executionAttempts = params.exhausted
+    ? (params.executionTrace?.attempts ?? []).filter((attempt) => attempt.result !== "success")
+    : (params.executionTrace?.attempts ?? []);
   const attempts: TraceAttemptView[] = [
     ...(params.fallbackAttempts ?? []).map((attempt) =>
       Object.assign(
@@ -471,11 +507,14 @@ function mergeExecutionTrace(params: {
         typeof attempt.status === `number` ? { status: attempt.status } : {},
       ),
     ),
-    ...(params.executionTrace?.attempts ?? []),
+    ...executionAttempts,
   ];
-  const winnerProvider =
-    params.executionTrace?.winnerProvider ?? normalizeOptionalString(params.provider);
-  const winnerModel = params.executionTrace?.winnerModel ?? normalizeOptionalString(params.model);
+  const winnerProvider = params.exhausted
+    ? undefined
+    : (params.executionTrace?.winnerProvider ?? normalizeOptionalString(params.provider));
+  const winnerModel = params.exhausted
+    ? undefined
+    : (params.executionTrace?.winnerModel ?? normalizeOptionalString(params.model));
   if (
     winnerProvider &&
     winnerModel &&
@@ -1089,8 +1128,10 @@ function refreshSessionEntryFromStore(params: {
     return fallbackEntry;
   }
   try {
-    const latestStore = loadSessionStore(storePath, { skipCache: true, clone: false });
-    const latestEntry = latestStore?.[sessionKey];
+    const latestEntry = loadSessionEntry({
+      storePath,
+      sessionKey,
+    });
     if (!latestEntry) {
       return fallbackEntry;
     }
@@ -1182,6 +1223,7 @@ export async function runReplyAgent(params: {
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const replyOperationRunState = resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
@@ -1225,12 +1267,9 @@ export async function runReplyAgent(params: {
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
-      await applySessionStoreEntryPatch({
-        storePath,
-        sessionKey,
+      await updateSessionEntry({ storePath, sessionKey }, () => ({ updatedAt }), {
         skipMaintenance: true,
         takeCacheOwnership: true,
-        patch: { updatedAt },
       });
     }
   };
@@ -1278,12 +1317,15 @@ export async function runReplyAgent(params: {
   });
 
   if (activeRunQueueAction === "drop") {
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
+    }
     typing.cleanup();
     return undefined;
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(
+    const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
       resolvedQueue,
@@ -1291,12 +1333,23 @@ export async function runReplyAgent(params: {
       queuedRunFollowupTurn,
       false,
     );
-    // Re-check liveness after enqueue so a stale active snapshot cannot leave
-    // the followup queue idle if the original run already finished.
-    const queuedBehindActiveRun = isRunActive?.() === true;
-    if (!queuedBehindActiveRun) {
+    if (!enqueued) {
+      typing.cleanup();
+      return undefined;
+    }
+    // The queue must stay dormant while the active owner can still collect
+    // messages. Registering after enqueue closes the owner-clear race.
+    const activeReplyOperation = replyRunRegistry.get(queueKey);
+    if (activeReplyOperation) {
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: activeReplyOperation,
+        queueKey,
+        runFollowup: queuedRunFollowupTurn,
+      });
+    } else {
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
+    const queuedBehindActiveRun = isRunActive?.() === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
       await typingSignals.signalToolStart();
@@ -1384,6 +1437,9 @@ export async function runReplyAgent(params: {
   let replyOperation: ReplyOperation;
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "owned" };
+    }
   } else {
     const replyTurnKind = resolveReplyTurnKind(opts);
     const admission = await admitReplyTurn({
@@ -1394,6 +1450,12 @@ export async function runReplyAgent(params: {
       routeThreadId: replyRouteThreadId,
       upstreamAbortSignal: opts?.abortSignal,
     });
+    if (replyOperationRunState) {
+      replyOperationRunState.admission =
+        admission.status === "owned"
+          ? { status: "owned" }
+          : { status: "skipped", reason: admission.reason };
+    }
     if (admission.status === "skipped") {
       typing.cleanup();
       if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
@@ -1429,9 +1491,6 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  const drainQueuedFollowupsAfterClear = () => {
-    scheduleFollowupDrain(queueKey, runFollowupTurn);
-  };
   const restartRecoveryDeliveryRunId = crypto.randomUUID();
   let trackedRestartRecoveryDeliveryContext = false;
   const persistRestartRecoveryDeliveryContext = async (): Promise<void> => {
@@ -1456,14 +1515,16 @@ export async function runReplyAgent(params: {
       restartRecoveryDeliveryRunId,
       updatedAt,
     };
-    const persisted = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (current) =>
+    const persisted = await updateSessionEntry(
+      {
+        storePath,
+        sessionKey,
+      },
+      async (current) =>
         current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
           ? patch
           : null,
-    });
+    );
     if (persisted) {
       activeSessionEntry = persisted;
       if (activeSessionStore) {
@@ -1482,16 +1543,18 @@ export async function runReplyAgent(params: {
       restartRecoveryDeliveryRunId: undefined,
       updatedAt: Date.now(),
     };
-    const persisted = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (current) =>
+    const persisted = await updateSessionEntry(
+      {
+        storePath,
+        sessionKey,
+      },
+      async (current) =>
         current.sessionId === replyOperation.sessionId &&
         current.abortedLastRun !== true &&
         current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
           ? patch
           : null,
-    });
+    );
     if (persisted) {
       activeSessionEntry = persisted;
       if (activeSessionStore) {
@@ -1552,6 +1615,7 @@ export async function runReplyAgent(params: {
     if (visibleMemoryFlushErrorPayloads.length > 0) {
       const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
       const payloadResult = await buildReplyPayloads({
+        config: cfg,
         payloads: visibleMemoryFlushErrorPayloads,
         isHeartbeat,
         didLogHeartbeatStrip: false,
@@ -1564,10 +1628,12 @@ export async function runReplyAgent(params: {
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         messageProvider: followupRun.run.messageProvider,
         originatingChannel: sessionCtx.OriginatingChannel,
+        originatingChatType: sessionCtx.ChatType,
         originatingTo: resolveOriginMessageTo({
           originatingTo: sessionCtx.OriginatingTo,
           to: sessionCtx.To,
         }),
+        originatingThreadId: replyRouteThreadId,
         accountId: sessionCtx.AccountId,
         normalizeMediaPaths: replyMediaContext.normalizePayload,
       });
@@ -1685,6 +1751,7 @@ export async function runReplyAgent(params: {
       runResult,
       fallbackProvider,
       fallbackModel,
+      fallbackExhausted,
       fallbackAttempts,
       directlySentBlockKeys,
       directlySentBlockPayloads,
@@ -1704,16 +1771,17 @@ export async function runReplyAgent(params: {
       activeSessionEntry.updatedAt = updatedAt;
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             groupActivationNeedsSystemIntro: false,
             updatedAt,
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
 
@@ -1731,10 +1799,91 @@ export async function runReplyAgent(params: {
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
+    const hasBillableUsageBuckets =
+      usage &&
+      (usage.input !== undefined ||
+        usage.output !== undefined ||
+        usage.cacheRead !== undefined ||
+        usage.cacheWrite !== undefined);
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+
+    let replyUsageState: PluginHookReplyUsageState | undefined;
+    {
+      const winnerProvider = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerProvider ?? providerUsed);
+      const winnerModel = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerModel ?? modelUsed);
+      const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
+      const compactions = runResult.meta?.agentMeta?.compactionCount;
+      const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
+      replyUsageState = {
+        provider: providerUsed,
+        model: modelUsed,
+        resolvedRef: winnerProvider && winnerModel ? `${winnerProvider}/${winnerModel}` : undefined,
+        reasoningEffort:
+          typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
+        fastMode: resolveFastModeState({
+          cfg,
+          provider: providerUsed ?? "",
+          model: modelUsed ?? "",
+          agentId: followupRun.run.agentId,
+          sessionEntry: activeSessionEntry,
+        }).enabled,
+        fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
+        agentId: followupRun.run.agentId,
+        sessionId: followupRun.run.sessionId,
+        chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
+        authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
+        overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
+        requested:
+          followupRun.run.provider && followupRun.run.model
+            ? `${followupRun.run.provider}/${followupRun.run.model}`
+            : undefined,
+        turnUsd: hasBillableUsageBuckets
+          ? estimateUsageCost({
+              usage,
+              cost: resolveModelCostConfig({
+                provider: providerUsed,
+                model: modelUsed,
+                config: cfg,
+              }),
+            })
+          : undefined,
+        durationMs: Date.now() - runStartedAt,
+        identity: resolveAgentIdentity(cfg, followupRun.run.agentId),
+        compactionCount: typeof compactions === "number" ? compactions : undefined,
+        contextTokenBudget:
+          typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
+        contextUsedTokens:
+          typeof promptTokens === "number" && Number.isFinite(promptTokens)
+            ? promptTokens
+            : undefined,
+        usage: usage
+          ? {
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheWrite: usage.cacheWrite,
+              total: usage.total,
+            }
+          : undefined,
+        lastUsage: lastCallUsage
+          ? {
+              input: lastCallUsage.input,
+              output: lastCallUsage.output,
+              cacheRead: lastCallUsage.cacheRead,
+              cacheWrite: lastCallUsage.cacheWrite,
+              total: lastCallUsage.total,
+            }
+          : undefined,
+      };
+      recordReplyUsageState(runId, replyUsageState);
+    }
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
       followupRun.run.inputProvenance,
@@ -1756,7 +1905,7 @@ export async function runReplyAgent(params: {
       state: fallbackStateEntry,
       cfg,
     });
-    if (fallbackTransition.stateChanged && !preserveUserFacingSessionState) {
+    if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
         fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
@@ -1768,17 +1917,18 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = fallbackStateEntry;
       }
       if (sessionKey && storePath) {
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
             fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
             fallbackNoticeReason: fallbackTransition.nextState.reason,
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
     const usedCliProvider = isCliProvider(providerUsed, cfg);
@@ -1818,6 +1968,7 @@ export async function runReplyAgent(params: {
       promptTokens,
       usageIsContextSnapshot: usedCliProvider ? true : undefined,
       isHeartbeat,
+      preserveRuntimeModel: fallbackExhausted,
       preserveUserFacingSessionModelState: preserveUserFacingSessionState,
       modelUsed,
       providerUsed,
@@ -1835,6 +1986,7 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
+      didSendViaMessagingTool: runResult.didSendViaMessagingTool,
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
@@ -1878,7 +2030,11 @@ export async function runReplyAgent(params: {
     };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
-    if (!preserveUserFacingSessionState && fallbackTransition.fallbackTransitioned) {
+    if (
+      !fallbackExhausted &&
+      !preserveUserFacingSessionState &&
+      fallbackTransition.fallbackTransitioned
+    ) {
       emitAgentEvent({
         runId,
         sessionKey,
@@ -1911,7 +2067,11 @@ export async function runReplyAgent(params: {
         );
       }
     }
-    if (!preserveUserFacingSessionState && fallbackTransition.fallbackCleared) {
+    if (
+      !fallbackExhausted &&
+      !preserveUserFacingSessionState &&
+      fallbackTransition.fallbackCleared
+    ) {
       emitAgentEvent({
         runId,
         sessionKey,
@@ -1950,6 +2110,7 @@ export async function runReplyAgent(params: {
 
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
+      config: cfg,
       payloads:
         fallbackNoticePayloads.length > 0
           ? [...fallbackNoticePayloads, ...payloadArray]
@@ -1970,10 +2131,12 @@ export async function runReplyAgent(params: {
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       originatingChannel: sessionCtx.OriginatingChannel,
+      originatingChatType: sessionCtx.ChatType,
       originatingTo: resolveOriginMessageTo({
         originatingTo: sessionCtx.OriginatingTo,
         to: sessionCtx.To,
       }),
+      originatingThreadId: replyRouteThreadId,
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
@@ -2052,7 +2215,9 @@ export async function runReplyAgent(params: {
         model: modelUsed,
         config: cfg,
       });
-      const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      const costUsd = hasBillableUsageBuckets
+        ? estimateUsageCost({ usage, cost: costConfig })
+        : undefined;
       emitTrustedDiagnosticEvent({
         type: "model.usage",
         ...(runResult.diagnosticTrace
@@ -2103,7 +2268,16 @@ export async function runReplyAgent(params: {
         showCost,
         costConfig,
       });
-      if (formatted && responseUsageMode === "full" && sessionKey) {
+      const usageTemplate =
+        responseUsageMode === "full" && replyUsageState
+          ? loadUsageBarTemplate(cfg.messages?.usageTemplate)
+          : undefined;
+      const renderedUsageLine = usageTemplate
+        ? renderUsageBar(usageTemplate, buildUsageContract(replyUsageState, replyToChannel))
+        : undefined;
+      if (renderedUsageLine) {
+        formatted = renderedUsageLine;
+      } else if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session \`${sessionKey}\``;
       }
       if (formatted) {
@@ -2196,6 +2370,7 @@ export async function runReplyAgent(params: {
       provider: providerUsed,
       model: modelUsed,
       runner: isCliProvider(providerUsed, cfg) ? "cli" : "embedded",
+      exhausted: fallbackExhausted,
     });
     const requestShaping = {
       authMode:
@@ -2386,19 +2561,20 @@ export async function runReplyAgent(params: {
           runtimePolicySessionKey,
           opts,
         });
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
             pendingFinalDeliveryContext,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
 
@@ -2463,8 +2639,15 @@ export async function runReplyAgent(params: {
       );
     }
     if (shouldDrainQueuedFollowupsAfterClear) {
-      replyOperation.completeThen(drainQueuedFollowupsAfterClear);
-    } else {
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: replyOperation,
+        queueKey,
+        runFollowup: runFollowupTurn,
+      });
+      if (!providedReplyOperation) {
+        replyOperation.complete();
+      }
+    } else if (!providedReplyOperation) {
       replyOperation.complete();
     }
     blockReplyPipeline?.stop();

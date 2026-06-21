@@ -102,6 +102,8 @@ export type CompactEmbeddedAgentSessionParams = {
   }) => void | Promise<void>;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
 };
 
 export type CompactionMessageMetrics = {

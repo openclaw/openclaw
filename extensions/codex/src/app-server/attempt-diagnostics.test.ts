@@ -29,6 +29,8 @@ describe("Codex app-server attempt diagnostics", () => {
       approvalPolicy: "never" as const,
       approvalsReviewer: "user" as const,
       sandbox: "danger-full-access" as const,
+      connectionClass: "local-loopback" as const,
+      remoteAppsSubstrate: "preconfigured" as const,
       serviceTier: "priority" as const,
     };
     const resolvedPluginPolicy = resolveCodexPluginsPolicy({

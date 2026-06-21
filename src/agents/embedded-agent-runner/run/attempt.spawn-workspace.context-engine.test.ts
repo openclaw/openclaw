@@ -291,6 +291,42 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
   });
 
+  it("keeps client tool names out of context engine capability guidance", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+
+    await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: {
+          tools: {
+            toolSearch: { enabled: true, mode: "directory" },
+          },
+        } as OpenClawConfig,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "memory_search",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      },
+    });
+
+    const assembleParams = mockParams(
+      contextEngine.assemble as MockCallSource,
+      0,
+      "assemble params",
+    );
+    const availableTools = assembleParams.availableTools;
+    expect(availableTools).toBeInstanceOf(Set);
+    expect((availableTools as Set<string>).has("memory_search")).toBe(false);
+  });
+
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
     await createContextEngineAttemptRunner({
       contextEngine: {
@@ -536,6 +572,193 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
     ]);
+  });
+
+  it("keeps newly generated thinking after repairing rejected Anthropic replay", async () => {
+    const { SessionManager: ActualSessionManager } =
+      await vi.importActual<typeof import("../../sessions/index.js")>("../../sessions/index.js");
+    const staleAssistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "historical stale thinking",
+          thinkingSignature: "stale-signature",
+        },
+        { type: "text", text: "historical answer" },
+      ],
+      stopReason: "stop",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      timestamp: 2,
+    } as AgentMessage;
+    const sessionMessages = [
+      { role: "user", content: "historical question", timestamp: 1 } as AgentMessage,
+      staleAssistant,
+    ];
+    const sessionManager = ActualSessionManager.inMemory();
+    const appendSessionMessage = (message: AgentMessage) =>
+      sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
+    for (const message of sessionMessages) {
+      appendSessionMessage(message);
+    }
+    const retryAssistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "fresh valid retry thinking",
+          thinkingSignature: "fresh-valid-signature",
+        },
+        { type: "text", text: "retry answer" },
+      ],
+      stopReason: "stop",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      timestamp: 4,
+    } as AgentMessage;
+    const providerContexts: AgentMessage[][] = [];
+    const afterTurn = vi.fn(async (_params: { messages: AgentMessage[] }) => {});
+
+    hoisted.sessionManagerOpenMock.mockReturnValue(sessionManager);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        ...createContextEngineBootstrapAndAssemble(),
+        afterTurn,
+      },
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        model: {
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          contextWindow: 128_000,
+          input: ["text"],
+        } as never,
+        runtimePlan: {
+          prompt: {
+            resolveSystemPromptContribution: () => undefined,
+          },
+          transcript: {
+            resolvePolicy: () => ({
+              sanitizeMode: "full",
+              sanitizeToolCallIds: true,
+              preserveNativeAnthropicToolUseIds: false,
+              repairToolUseResultPairing: true,
+              preserveSignatures: true,
+              sanitizeThinkingSignatures: false,
+              dropThinkingBlocks: false,
+              dropReasoningFromHistory: false,
+              applyGoogleTurnOrdering: false,
+              validateGeminiTurns: false,
+              validateAnthropicTurns: false,
+              allowSyntheticToolResults: false,
+            }),
+          },
+          transport: {
+            extraParams: {},
+            resolveExtraParams: () => ({}),
+          },
+          tools: {
+            normalize: (tools: unknown[]) => tools,
+            logDiagnostics: () => {},
+          },
+          auth: {
+            providerForAuth: "anthropic",
+            authProfileProviderForAuth: "",
+            forwardedAuthProfileId: undefined,
+          },
+          delivery: {
+            isSilentPayload: () => false,
+            resolveFollowupRoute: () => undefined,
+          },
+          outcome: {
+            classifyRunResult: () => undefined,
+          },
+          observability: {
+            resolvedRef: "anthropic/claude-sonnet-4-6",
+            provider: "anthropic",
+            modelId: "claude-sonnet-4-6",
+            modelApi: "anthropic-messages",
+          },
+        } as never,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ initialMessages: sessionMessages });
+        let streamCalls = 0;
+        session.agent.streamFn = async (_model, context) => {
+          streamCalls += 1;
+          providerContexts.push([
+            ...((context as { messages?: AgentMessage[] } | undefined)?.messages ?? []),
+          ]);
+          if (streamCalls === 1) {
+            throw new Error("invalid signature in thinking block");
+          }
+          return {
+            async result() {
+              return retryAssistant;
+            },
+            [Symbol.asyncIterator]() {
+              return (async function* () {})();
+            },
+          };
+        };
+        session.prompt = async (prompt, options) => {
+          options?.preflightResult?.(true);
+          const userMessage = {
+            role: "user",
+            content: [{ type: "text", text: prompt }],
+            timestamp: 3,
+          } as AgentMessage;
+          session.messages = [...session.messages, userMessage];
+          appendSessionMessage(userMessage);
+          const stream = await session.agent.streamFn?.(
+            {} as never,
+            { messages: session.messages } as never,
+            {},
+          );
+          const assistantMessage = await (
+            stream as { result: () => Promise<AgentMessage> }
+          ).result();
+          session.messages = [...session.messages, assistantMessage];
+          appendSessionMessage(assistantMessage);
+        };
+        return session;
+      },
+    });
+
+    const firstProviderContext = providerContexts[0] ?? [];
+    const retryProviderContext = providerContexts[1] ?? [];
+    expect(JSON.stringify(firstProviderContext)).toContain("stale-signature");
+    expect(JSON.stringify(retryProviderContext)).not.toContain("stale-signature");
+
+    const finalMessages = sessionManager.buildSessionContext().messages;
+    expect(JSON.stringify(finalMessages[1])).not.toContain("historical stale thinking");
+    expect(JSON.stringify(finalMessages.at(-1))).toContain("fresh valid retry thinking");
+    expect(JSON.stringify(finalMessages.at(-1))).toContain("fresh-valid-signature");
+    expect(afterTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "thinking",
+                thinking: "fresh valid retry thinking",
+                thinkingSignature: "fresh-valid-signature",
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    );
   });
 
   it("sends transcriptPrompt visibly and keeps runtime context out of transcript messages", async () => {

@@ -19,6 +19,7 @@ export type BuildStatusTextParams = {
   sessionScope?: SessionScope;
   storePath?: string;
   statusChannel: string;
+  statusAccountId?: string;
   workspaceDir?: string;
   provider: string;
   model: string;
@@ -34,6 +35,7 @@ export type BuildStatusTextParams = {
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
   taskLineOverride?: string;
+  pluginHealthLineOverride?: string;
   skipDefaultTaskLookup?: boolean;
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;

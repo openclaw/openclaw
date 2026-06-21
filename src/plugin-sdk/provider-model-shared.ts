@@ -174,6 +174,8 @@ type BuildProviderReplayFamilyHooksOptions =
       family: "openai-compatible";
       /** Whether replay policy should rewrite tool call ids for provider compatibility. */
       sanitizeToolCallIds?: boolean;
+      /** Optional output style for repeated tool call ids. */
+      duplicateToolCallIdStyle?: "openai";
       /** Whether replay policy should strip reasoning blocks from history. */
       dropReasoningFromHistory?: boolean;
     }
@@ -210,6 +212,7 @@ export function buildProviderReplayFamilyHooks(
     case "openai-compatible": {
       const policyOptions = {
         sanitizeToolCallIds: options.sanitizeToolCallIds,
+        duplicateToolCallIdStyle: options.duplicateToolCallIdStyle,
         dropReasoningFromHistory: options.dropReasoningFromHistory,
       };
       return {

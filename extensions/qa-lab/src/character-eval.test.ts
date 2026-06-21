@@ -127,6 +127,7 @@ async function makeSuiteResult(params: {
   );
   return {
     outputDir: params.outputDir,
+    evidencePath: path.join(params.outputDir, "qa-evidence.json"),
     reportPath: path.join(params.outputDir, "qa-suite-report.md"),
     summaryPath,
     report: "# report",

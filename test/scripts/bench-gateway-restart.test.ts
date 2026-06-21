@@ -42,6 +42,7 @@ describe("gateway restart benchmark script", () => {
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
+    expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
     expect(testing.parsePositiveInt("5", 1, "--restarts")).toBe(5);
     expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
     expect(
@@ -71,6 +72,26 @@ describe("gateway restart benchmark script", () => {
       "--restarts requires a value",
     );
     expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
+  });
+
+  it("rejects unknown benchmark CLI args before checking platform or running cases", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--wat"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stderr).not.toContain("\n    at ");
   });
 
   it("guards the SIGUSR1 restart benchmark on Windows", () => {
@@ -171,6 +192,14 @@ node    1234 user    1w   REG    1,2      123    6 /tmp/stdout
 node    1234 user   12u  IPv4    0t0      TCP localhost:1234
 `),
     ).toBe(3);
+  });
+
+  it("rejects malformed ps RSS samples", () => {
+    expect(testing.parseProcessRssKb("4096\n")).toBe(4096);
+    expect(testing.parseProcessRssKb("4096kb\n")).toBeNull();
+    expect(testing.parseProcessRssKb("4096 8192\n")).toBeNull();
+    expect(testing.parseProcessRssKb("0\n")).toBeNull();
+    expect(testing.parseProcessRssKb("")).toBeNull();
   });
 
   it("enables both startup and restart trace in the child gateway environment", () => {
