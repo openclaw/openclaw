@@ -534,7 +534,7 @@ export class CodexAppServerEventProjector {
       };
       this.emitAgentEvent({
         stream: "assistant",
-        data: streamPayload,
+        data: { ...streamPayload, replaceable: true as const },
       });
       await this.params.onPartialReply?.(streamPayload);
     }

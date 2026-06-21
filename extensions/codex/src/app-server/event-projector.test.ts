@@ -367,8 +367,8 @@ describe("CodexAppServerEventProjector", () => {
       { text: "hello", delta: "lo" },
     ]);
     expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
-      { stream: "assistant", data: { text: "hel", delta: "hel" } },
-      { stream: "assistant", data: { text: "hello", delta: "lo" } },
+      { stream: "assistant", data: { text: "hel", delta: "hel", replaceable: true } },
+      { stream: "assistant", data: { text: "hello", delta: "lo", replaceable: true } },
     ]);
   });
 
@@ -394,10 +394,19 @@ describe("CodexAppServerEventProjector", () => {
       { text: "final answer", delta: "answer" },
     ]);
     expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
-      { stream: "assistant", data: { text: "coordination ", delta: "coordination " } },
-      { stream: "assistant", data: { text: "coordination draft", delta: "draft" } },
-      { stream: "assistant", data: { text: "final ", delta: "", replace: true } },
-      { stream: "assistant", data: { text: "final answer", delta: "answer" } },
+      {
+        stream: "assistant",
+        data: { text: "coordination ", delta: "coordination ", replaceable: true },
+      },
+      {
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "draft", replaceable: true },
+      },
+      {
+        stream: "assistant",
+        data: { text: "final ", delta: "", replace: true, replaceable: true },
+      },
+      { stream: "assistant", data: { text: "final answer", delta: "answer", replaceable: true } },
     ]);
   });
 
