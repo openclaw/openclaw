@@ -1106,6 +1106,12 @@ export async function handleOpenResponsesHttpRequest(
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
       const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
+      const resultPayloadText = Array.isArray(resultAny.payloads)
+        ? resultAny.payloads
+            .map((p) => (typeof p.text === "string" ? p.text : ""))
+            .filter(Boolean)
+            .join("\n\n")
+        : "";
       const meta = resultAny.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1146,14 +1152,7 @@ export async function handleOpenResponsesHttpRequest(
       ) {
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
-          accumulatedText ||
-          bufferedReplaceableAssistantContent ||
-          (Array.isArray(resultAny.payloads)
-            ? resultAny.payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "");
+          accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
 
         if (toolChoiceConstraint && finalText && !sawAssistantDelta) {
           sawAssistantDelta = true;
@@ -1247,27 +1246,16 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      maybeFinalize();
-
-      if (closed) {
-        return;
-      }
-
       // Fallback: if no streaming deltas were received, send the full response as text
       if (!sawAssistantDelta) {
-        const payloads = resultAny.payloads;
         const content =
-          accumulatedText ||
-          bufferedReplaceableAssistantContent ||
-          (Array.isArray(payloads) && payloads.length > 0
-            ? payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "No response from OpenClaw.");
+          resultPayloadText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
 
         accumulatedText = content;
         sawAssistantDelta = true;
+        if (finalizeRequested) {
+          finalizeRequested = { ...finalizeRequested, text: content };
+        }
 
         writeSseEvent(res, {
           type: "response.output_text.delta",
@@ -1277,6 +1265,8 @@ export async function handleOpenResponsesHttpRequest(
           delta: content,
         });
       }
+
+      maybeFinalize();
     } catch (err) {
       if (closed || abortController.signal.aborted) {
         return;

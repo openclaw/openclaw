@@ -1328,8 +1328,8 @@ export async function handleOpenAiHttpRequest(
         if (!sawAssistantDelta) {
           const commentary =
             bufferedAssistantContent ||
-            bufferedReplaceableAssistantContent ||
-            resolveAgentResponseCommentary(result);
+            resolveAgentResponseCommentary(result) ||
+            bufferedReplaceableAssistantContent;
           if (commentary) {
             sawAssistantDelta = true;
             writeAssistantContentChunk(res, {
@@ -1355,7 +1355,10 @@ export async function handleOpenAiHttpRequest(
           writeAssistantRoleChunk(res, { runId, model });
         }
 
-        const content = bufferedReplaceableAssistantContent || resolveAgentResponseText(result);
+        const content =
+          resolveAgentResponseCommentary(result) ||
+          bufferedReplaceableAssistantContent ||
+          "No response from OpenClaw.";
 
         sawAssistantDelta = true;
         writeAssistantContentChunk(res, {
