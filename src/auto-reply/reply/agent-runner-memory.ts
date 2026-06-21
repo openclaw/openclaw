@@ -978,7 +978,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
-      abortSignal: params.replyOperation.abortSignal,
     });
 
     if (!result?.ok) {
