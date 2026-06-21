@@ -27,7 +27,6 @@ export const page = definePage({
       loadWorkboard({
         host,
         client: app.client,
-        force: true,
         requestUpdate: host.requestUpdate,
         refreshDiagnostics: hasOperatorWriteAccess(app.hello?.auth ?? null),
       }),
