@@ -1,7 +1,11 @@
 // Plugin approval tests cover requested/resolved plugin approval events,
 // requester visibility, broadcast behavior, and approval manager integration.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -250,14 +254,29 @@ const invalidRequestCases = [
 
 describe("createPluginApprovalHandlers", () => {
   let manager: ExecApprovalManager<PluginApprovalRequestPayload>;
+  let tempStateDirs: string[];
 
   beforeEach(() => {
     manager = createManager();
+    tempStateDirs = [];
   });
 
   afterEach(() => {
+    resetPluginStateStoreForTests();
+    vi.unstubAllEnvs();
+    for (const dir of tempStateDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
     vi.restoreAllMocks();
   });
+
+  function useTempStateDir(): string {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-approval-"));
+    tempStateDirs.push(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    resetPluginStateStoreForTests();
+    return stateDir;
+  }
 
   it("returns handlers for every plugin approval method", () => {
     const handlers = createPluginApprovalHandlers(manager);
@@ -459,6 +478,125 @@ describe("createPluginApprovalHandlers", () => {
       ]);
       manager.resolve(approvalId, "deny");
       await handlerPromise;
+    });
+
+    it("persists allow-always by plugin, tool, and allowAlwaysKey", async () => {
+      useTempStateDir();
+      const handlers = createPluginApprovalHandlers(manager);
+      const firstRespond = vi.fn();
+      const requestParams = {
+        pluginId: "deploy-plugin",
+        title: "Deploy service",
+        description: "Deploy service to staging",
+        toolName: "deploy_service",
+        allowAlwaysKey: "deploy_service:staging",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        twoPhase: true,
+      };
+      const firstOpts = createMockOptions("plugin.approval.request", requestParams, {
+        respond: firstRespond,
+      });
+
+      const firstRequest = handlers["plugin.approval.request"](firstOpts);
+      const approvalId = await waitForAcceptedApproval(firstRespond);
+      await handlers["plugin.approval.resolve"](
+        createMockOptions("plugin.approval.resolve", {
+          id: approvalId,
+          decision: "allow-always",
+        }),
+      );
+      await firstRequest;
+
+      const secondRespond = vi.fn();
+      await handlers["plugin.approval.request"](
+        createMockOptions("plugin.approval.request", requestParams, {
+          respond: secondRespond,
+          context: createNoExecApprovalContext(),
+        }),
+      );
+
+      const result = expectResponseOk(secondRespond);
+      expect(result.id).toMatch(/^plugin:allow-always:[0-9a-f]{24}$/);
+      expect(result.decision).toBe("allow-always");
+      expect(manager.listPendingRecords()).toHaveLength(0);
+    });
+
+    it("does not reuse allow-always across different plugin approval scopes", async () => {
+      useTempStateDir();
+      const handlers = createPluginApprovalHandlers(manager);
+      const baseParams = {
+        pluginId: "deploy-plugin",
+        title: "Deploy service",
+        description: "Deploy service to staging",
+        toolName: "deploy_service",
+        allowAlwaysKey: "deploy_service:staging",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        twoPhase: true,
+      };
+      const firstRespond = vi.fn();
+      const firstRequest = handlers["plugin.approval.request"](
+        createMockOptions("plugin.approval.request", baseParams, { respond: firstRespond }),
+      );
+      const approvalId = await waitForAcceptedApproval(firstRespond);
+      await handlers["plugin.approval.resolve"](
+        createMockOptions("plugin.approval.resolve", {
+          id: approvalId,
+          decision: "allow-always",
+        }),
+      );
+      await firstRequest;
+
+      const changedScopeCases = [
+        { ...baseParams, pluginId: "other-plugin" },
+        { ...baseParams, toolName: "rollback_service" },
+        { ...baseParams, allowAlwaysKey: "deploy_service:production" },
+      ];
+
+      for (const requestParams of changedScopeCases) {
+        const respond = vi.fn();
+        const request = handlers["plugin.approval.request"](
+          createMockOptions("plugin.approval.request", requestParams, { respond }),
+        );
+        const scopedApprovalId = await waitForAcceptedApproval(respond);
+        expect(scopedApprovalId).toMatch(/^plugin:/);
+        expect(scopedApprovalId).not.toContain("allow-always");
+        manager.resolve(scopedApprovalId, "deny");
+        await request;
+      }
+    });
+
+    it("does not persist allow-always when allowAlwaysKey is omitted", async () => {
+      useTempStateDir();
+      const handlers = createPluginApprovalHandlers(manager);
+      const requestParams = {
+        pluginId: "deploy-plugin",
+        title: "Deploy service",
+        description: "Deploy service to staging",
+        toolName: "deploy_service",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        twoPhase: true,
+      };
+      const firstRespond = vi.fn();
+      const firstRequest = handlers["plugin.approval.request"](
+        createMockOptions("plugin.approval.request", requestParams, { respond: firstRespond }),
+      );
+      const approvalId = await waitForAcceptedApproval(firstRespond);
+      await handlers["plugin.approval.resolve"](
+        createMockOptions("plugin.approval.resolve", {
+          id: approvalId,
+          decision: "allow-always",
+        }),
+      );
+      await firstRequest;
+
+      const secondRespond = vi.fn();
+      const secondRequest = handlers["plugin.approval.request"](
+        createMockOptions("plugin.approval.request", requestParams, { respond: secondRespond }),
+      );
+      const secondApprovalId = await waitForAcceptedApproval(secondRespond);
+      expect(secondApprovalId).not.toContain("allow-always");
+      manager.resolve(secondApprovalId, "deny");
+      await secondRequest;
     });
   });
 

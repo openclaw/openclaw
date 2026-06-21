@@ -1,5 +1,7 @@
 // Workshop policy helpers validate generated skill drafts against workspace policy.
+import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/hook-before-tool-call-result.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
@@ -43,11 +45,28 @@ function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
   };
 }
 
+function resolveLifecycleApprovalWorkspaceScope(params: {
+  workspaceDir?: string;
+  cwd?: string;
+}): string | undefined {
+  const workspaceDir = normalizeOptionalString(params.workspaceDir ?? params.cwd);
+  return workspaceDir ? path.resolve(workspaceDir) : undefined;
+}
+
+function buildLifecycleApprovalAllowAlwaysKey(params: {
+  action: SkillWorkshopLifecycleAction;
+  workspaceDir: string;
+}): string {
+  return `skill-workshop:lifecycle:${params.action}:${params.workspaceDir}`;
+}
+
 /** Returns approval policy for skill workshop lifecycle tool calls. */
 export function resolveSkillWorkshopToolApproval(params: {
   toolName: string;
   toolParams: unknown;
   config?: OpenClawConfig;
+  workspaceDir?: string;
+  cwd?: string;
 }): PluginHookBeforeToolCallResult | undefined {
   if (params.toolName !== "skill_workshop") {
     return undefined;
@@ -60,11 +79,23 @@ export function resolveSkillWorkshopToolApproval(params: {
   if (config.approvalPolicy === "auto") {
     return undefined;
   }
+  const workspaceScope = resolveLifecycleApprovalWorkspaceScope(params);
   const text = lifecycleApprovalText(action);
+  const allowedDecisions = workspaceScope
+    ? (["allow-once", "allow-always", "deny"] as const)
+    : (["allow-once", "deny"] as const);
   return {
     requireApproval: {
       ...text,
-      allowedDecisions: ["allow-once", "deny"],
+      allowedDecisions: [...allowedDecisions],
+      ...(workspaceScope
+        ? {
+            allowAlwaysKey: buildLifecycleApprovalAllowAlwaysKey({
+              action,
+              workspaceDir: workspaceScope,
+            }),
+          }
+        : {}),
     },
   };
 }

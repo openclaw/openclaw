@@ -20,6 +20,7 @@ export type PluginApprovalRequestPayload = {
   severity?: "info" | "warning" | "critical" | null;
   toolName?: string | null;
   toolCallId?: string | null;
+  allowAlwaysKey?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
   actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;

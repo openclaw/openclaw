@@ -9,6 +9,10 @@ import {
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import {
+  rememberPluginApprovalResolvedAllowAlways,
+  resolvePluginApprovalAllowAlwaysReuse,
+} from "../../infra/plugin-approval-allow-always.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import {
   resolvePluginApprovalRequestAllowedDecisions,
@@ -57,6 +61,7 @@ export function createPluginApprovalHandlers(
         severity?: string | null;
         toolName?: string | null;
         toolCallId?: string | null;
+        allowAlwaysKey?: string | null;
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
@@ -80,6 +85,7 @@ export function createPluginApprovalHandlers(
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: p.toolName ?? null,
         toolCallId: p.toolCallId ?? null,
+        allowAlwaysKey: normalizeTrimmedString(p.allowAlwaysKey),
         ...(Array.isArray(p.allowedDecisions)
           ? {
               allowedDecisions: resolvePluginApprovalRequestAllowedDecisions({
@@ -94,6 +100,16 @@ export function createPluginApprovalHandlers(
         turnSourceAccountId: normalizeTrimmedString(p.turnSourceAccountId),
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
+
+      try {
+        const reuse = resolvePluginApprovalAllowAlwaysReuse(request);
+        if (reuse) {
+          respond(true, reuse, undefined);
+          return;
+        }
+      } catch (err) {
+        context.logGateway?.error?.(`plugin approvals: allow-always lookup failed: ${String(err)}`);
+      }
 
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
@@ -193,6 +209,14 @@ export function createPluginApprovalHandlers(
         forwardResolved: (resolvedEvent) =>
           opts?.forwarder?.handlePluginApprovalResolved?.(resolvedEvent),
         forwardResolvedErrorLabel: "plugin approvals: forward resolve failed",
+        extraResolvedHandlers: [
+          {
+            run: (resolvedEvent) => {
+              rememberPluginApprovalResolvedAllowAlways(resolvedEvent);
+            },
+            errorLabel: "plugin approvals: allow-always persistence failed",
+          },
+        ],
       });
     },
   };

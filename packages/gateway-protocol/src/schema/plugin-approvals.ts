@@ -12,6 +12,7 @@ import { NonEmptyString } from "./primitives.js";
 const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
+const PLUGIN_APPROVAL_ALLOW_ALWAYS_KEY_MAX_LENGTH = 512;
 
 /** Approval request raised by a plugin before a sensitive tool action proceeds. */
 export const PluginApprovalRequestParamsSchema = Type.Object(
@@ -22,6 +23,9 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     severity: Type.Optional(Type.String({ enum: ["info", "warning", "critical"] })),
     toolName: Type.Optional(Type.String()),
     toolCallId: Type.Optional(Type.String()),
+    allowAlwaysKey: Type.Optional(
+      Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_ALLOW_ALWAYS_KEY_MAX_LENGTH }),
+    ),
     allowedDecisions: Type.Optional(
       Type.Array(Type.String({ enum: ["allow-once", "allow-always", "deny"] }), {
         minItems: 1,

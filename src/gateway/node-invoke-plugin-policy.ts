@@ -2,8 +2,12 @@
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolvePluginApprovalAllowAlwaysReuse } from "../infra/plugin-approval-allow-always.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
+import {
+  resolvePluginApprovalRequestAllowedDecisions,
+  resolvePluginApprovalTimeoutMs,
+} from "../infra/plugin-approvals.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type {
@@ -68,9 +72,27 @@ function createApprovalRuntime(params: {
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
+        allowAlwaysKey: normalizeOptionalString(input.allowAlwaysKey) ?? null,
+        ...(Array.isArray(input.allowedDecisions)
+          ? {
+              allowedDecisions: resolvePluginApprovalRequestAllowedDecisions({
+                allowedDecisions: input.allowedDecisions,
+              }),
+            }
+          : {}),
         agentId: normalizeOptionalString(input.agentId) ?? null,
         sessionKey: normalizeOptionalString(input.sessionKey) ?? null,
       };
+      try {
+        const reuse = resolvePluginApprovalAllowAlwaysReuse(request);
+        if (reuse) {
+          return { id: reuse.id, decision: reuse.decision };
+        }
+      } catch (err) {
+        params.context.logGateway?.error?.(
+          `plugin approvals: allow-always lookup failed: ${String(err)}`,
+        );
+      }
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       record.requestedByConnId = params.client?.connId ?? null;
       record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;

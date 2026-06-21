@@ -3,6 +3,9 @@
  * Ensures gateway approval requests use non-blocking semantics and preserve
  * plugin hook decisions.
  */
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -67,8 +70,16 @@ function requireBeforeToolCall(
 describe("runBeforeToolCallHook — embedded mode approvals", () => {
   let hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolCall">;
   let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
+  let previousStateDir: string | undefined;
+  let stateDir = "";
+  let workspaceDir = "";
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-approval-test-"));
+    workspaceDir = path.join(stateDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     runBeforeToolCallMock = vi.fn<HookRunner["runBeforeToolCall"]>();
     hookRunner = {
       hasHooks: vi.fn<HookRunner["hasHooks"]>().mockReturnValue(true),
@@ -79,9 +90,15 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     setEmbeddedMode(false);
     setActivePluginRegistry(createEmptyPluginRegistry());
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
@@ -329,6 +346,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
       toolCallId: "call-skill-apply",
       ctx: {
+        workspaceDir,
         agentId: "main",
         sessionKey: "main",
         config: {
@@ -353,7 +371,10 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       "Apply a pending workspace skill proposal into live workspace skills.",
     );
     expect(approvalCall.request.severity).toBe("warning");
-    expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "allow-always", "deny"]);
+    expect(approvalCall.request.allowAlwaysKey).toBe(
+      `skill-workshop:lifecycle:apply:${workspaceDir}`,
+    );
     expect(approvalCall.request.toolName).toBe("skill_workshop");
     expect(approvalCall.request.toolCallId).toBe("call-skill-apply");
     expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
@@ -374,6 +395,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         params: { action: "inspect", proposal_id: "weather-20260530-a1b2c3d4e5" },
         toolCallId: "call-skill-hook-apply",
         ctx: {
+          workspaceDir,
           config: {
             skills: {
               workshop: {

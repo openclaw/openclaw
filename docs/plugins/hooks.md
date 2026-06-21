@@ -202,6 +202,7 @@ type BeforeToolCallResult = {
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
+    allowAlwaysKey?: string;
     pluginId?: string;
     onResolution?: (
       decision: "allow-once" | "allow-always" | "deny" | "timeout" | "cancelled",
@@ -223,6 +224,9 @@ Hook guard behavior for typed lifecycle hooks:
   requested approval.
 - `onResolution` receives the resolved approval decision - `allow-once`,
   `allow-always`, `deny`, `timeout`, or `cancelled`.
+- `allowAlwaysKey` makes `allow-always` durable for later requests from the same
+  plugin and tool name. Keep the key stable for the exact future action scope
+  being trusted, and do not include secrets.
 
 See [Plugin permission requests](/plugins/plugin-permission-requests) for
 approval routing, decision behavior, and when to use `requireApproval` instead

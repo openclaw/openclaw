@@ -660,6 +660,7 @@ async function requestPluginToolApproval(params: {
         description: approval.description,
         severity: approval.severity,
         allowedDecisions: approval.allowedDecisions,
+        allowAlwaysKey: approval.allowAlwaysKey,
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
@@ -888,6 +889,8 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
     toolName: params.toolName,
     toolParams: isPlainObject(params.params) ? params.params : {},
     ...(params.ctx?.config ? { config: params.ctx.config } : {}),
+    ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
+    ...(params.ctx?.cwd ? { cwd: params.ctx.cwd } : {}),
   });
   return await resolveBeforeToolCallApprovalOutcome({
     result,
@@ -1120,6 +1123,8 @@ export async function runBeforeToolCallHook(args: {
       toolName,
       toolParams: normalizedParams,
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
+      ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
+      ...(args.ctx?.cwd ? { cwd: args.ctx.cwd } : {}),
     });
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return { blocked: false, params };

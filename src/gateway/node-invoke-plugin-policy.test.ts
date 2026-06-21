@@ -121,11 +121,19 @@ function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegi
 
 function createApprovalRequestPolicy(params?: {
   timeoutMs?: number;
+  toolName?: string;
+  allowAlwaysKey?: string;
+  allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
 }): NodeInvokePolicyRegistration {
   return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
     const approval = await ctx.approvals?.request({
       title: "Sensitive action",
       description: "Needs approval",
+      ...(params?.toolName === undefined ? {} : { toolName: params.toolName }),
+      ...(params?.allowAlwaysKey === undefined ? {} : { allowAlwaysKey: params.allowAlwaysKey }),
+      ...(params?.allowedDecisions === undefined
+        ? {}
+        : { allowedDecisions: params.allowedDecisions }),
       ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
     });
     return { ok: true, payload: approval ?? null };
@@ -283,6 +291,38 @@ describe("applyPluginNodeInvokePolicy", () => {
 
     const record = await expectSinglePendingApproval(manager);
     expect(record.expiresAtMs - record.createdAtMs).toBe(MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
+
+    await expectApprovalResolution(resultPromise, manager, record);
+  });
+
+  it("passes allow-always scope fields into plugin policy approval requests", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    setDangerousDemoCommandRegistry([
+      createApprovalRequestPolicy({
+        toolName: "node.invoke.demo",
+        allowAlwaysKey: "node.invoke.demo:/tmp/x",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+      }),
+    ]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createApprovalClient({
+          connId: "conn-owner-approval",
+          clientId: "client-owner",
+          deviceId: "device-owner",
+        }),
+      ]),
+    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request).toMatchObject({
+      pluginId: DEMO_PLUGIN_ID,
+      toolName: "node.invoke.demo",
+      allowAlwaysKey: "node.invoke.demo:/tmp/x",
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    });
 
     await expectApprovalResolution(resultPromise, manager, record);
   });

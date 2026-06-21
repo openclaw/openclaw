@@ -52,6 +52,8 @@ export default definePluginEntry({
 
       const environment =
         typeof event.params.environment === "string" ? event.params.environment : "unknown";
+      const allowAlwaysKey =
+        environment === "production" ? undefined : `deploy_service:${environment}`;
 
       return {
         requireApproval: {
@@ -62,6 +64,7 @@ export default definePluginEntry({
             environment === "production"
               ? ["allow-once", "deny"]
               : ["allow-once", "allow-always", "deny"],
+          allowAlwaysKey,
           timeoutMs: 120_000,
           timeoutBehavior: "deny",
           onResolution(decision) {
@@ -86,27 +89,30 @@ Write prompt text for the person who will approve the action:
   cause production damage or data loss.
 - Use `allowedDecisions: ["allow-once", "deny"]` when persistent trust is
   unsafe for that action.
+- Set `allowAlwaysKey` when you offer `allow-always` and want OpenClaw to
+  remember it. The key is scoped by plugin id and tool name, hashed before
+  storage, and should name the exact future action scope, such as
+  `deploy_service:staging`. Do not put secrets in it.
 
 ## Decision behavior
 
 OpenClaw creates a pending approval with a `plugin:` ID, delivers it to the
 available approval surfaces, and waits for a decision.
 
-| Decision          | Result                                                                    |
-| ----------------- | ------------------------------------------------------------------------- |
-| `allow-once`      | The current call continues.                                               |
-| `allow-always`    | The current call continues and the decision is passed to the plugin.      |
-| `deny`            | The call is blocked with a denied tool result.                            |
-| Timeout           | The call is blocked unless `timeoutBehavior` is `"allow"`.                |
-| Cancellation      | The call is blocked when the run is aborted.                              |
-| No approval route | The call is blocked because no connected approval surface can resolve it. |
+| Decision          | Result                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| `allow-once`      | The current call continues.                                                               |
+| `allow-always`    | The current call continues. With `allowAlwaysKey`, matching future requests auto-approve. |
+| `deny`            | The call is blocked with a denied tool result.                                            |
+| Timeout           | The call is blocked unless `timeoutBehavior` is `"allow"`.                                |
+| Cancellation      | The call is blocked when the run is aborted.                                              |
+| No approval route | The call is blocked because no connected approval surface can resolve it.                 |
 
-`allow-always` is only durable when the requesting plugin or runtime implements
-that persistence. For ordinary `before_tool_call.requireApproval` hooks,
-OpenClaw treats `allow-once` and `allow-always` as approval decisions for the
-current call and passes the resolved value to `onResolution`. If your plugin
-offers `allow-always`, document and implement exactly what future calls it
-trusts.
+For ordinary `before_tool_call.requireApproval` hooks, OpenClaw persists
+`allow-always` when the request includes `allowAlwaysKey`. Later requests with
+the same plugin id, tool name, and key return `allow-always` immediately without
+creating a pending approval. Without `allowAlwaysKey`, `allow-always` is only a
+decision for the current call and is passed to `onResolution`.
 
 If the hook also returns `params`, OpenClaw applies those parameter changes only
 after the approval succeeds. A lower-priority hook can still block after a
