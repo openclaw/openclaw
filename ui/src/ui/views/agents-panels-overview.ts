@@ -86,16 +86,16 @@ function resolveAgentTts(
     | Record<string, unknown>
     | undefined;
   const entryTts = config.entry?.tts as Record<string, unknown> | undefined;
-  const defaultsTts = config.defaults?.tts as Record<string, unknown> | undefined;
 
-  // Deep-merge layers: base (messages.tts) → defaults → entry (agent-specific)
+  // Deep-merge layers: base (messages.tts) → entry (agent-specific)
+  // This mirrors the runtime contract in `resolveEffectiveTtsConfig` (src/tts/tts-config.ts):
+  // only `messages.tts` and `agents.list[].tts` are recognized layers.
   let mergedTts: Record<string, unknown> = deepMergeDefined(baseTts ?? {}, {}) as Record<
     string,
     unknown
   >;
-  for (const layer of [defaultsTts, entryTts]) {
-    if (!layer) continue;
-    mergedTts = deepMergeDefined(mergedTts, layer) as Record<string, unknown>;
+  if (entryTts) {
+    mergedTts = deepMergeDefined(mergedTts, entryTts) as Record<string, unknown>;
   }
 
   const provider = (mergedTts.provider as string) ?? null;
