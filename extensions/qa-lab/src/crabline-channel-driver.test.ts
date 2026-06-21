@@ -33,8 +33,8 @@ if (command === "providers") {
     ]
   }));
 } else if (command === "doctor") {
-  if (!process.env.TELEGRAM_BOT_TOKEN) {
-    process.stderr.write("provider telegram missing telegram.botToken or TELEGRAM_BOT_TOKEN");
+  if (process.env.QA_FAKE_CRABLINE_DOCTOR_FAIL) {
+    process.stderr.write("provider telegram mock doctor failed");
     process.exit(1);
   }
   process.stdout.write(JSON.stringify({ findings: [], ok: true }));
@@ -99,8 +99,6 @@ describe("crabline channel driver metadata", () => {
           env: {
             ...process.env,
             OPENCLAW_QA_CRABLINE_BIN: crablineBin,
-            OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "telegram-token",
-            TELEGRAM_BOT_TOKEN: "",
           },
           outputDir,
         },
@@ -121,7 +119,7 @@ describe("crabline channel driver metadata", () => {
     }
   });
 
-  it("fails Crabline's Chat SDK provider doctor when required env is unavailable", async () => {
+  it("fails Crabline's Chat SDK provider doctor when the CLI reports a failure", async () => {
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-crabline-driver-"));
     tempDirs.push(outputDir);
     const crablineBin = await createFakeCrablineCli();
@@ -138,12 +136,12 @@ describe("crabline channel driver metadata", () => {
             env: {
               ...process.env,
               OPENCLAW_QA_CRABLINE_BIN: crablineBin,
-              TELEGRAM_BOT_TOKEN: "",
+              QA_FAKE_CRABLINE_DOCTOR_FAIL: "1",
             },
             outputDir,
           },
         ),
-      ).rejects.toThrow("provider telegram missing telegram.botToken or TELEGRAM_BOT_TOKEN");
+      ).rejects.toThrow("provider telegram mock doctor failed");
     } finally {
       // tempDirs cleanup covers outputDir and the fake CLI dir.
     }
