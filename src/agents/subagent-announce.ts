@@ -264,6 +264,23 @@ type SessionStoreUpdateModule = {
   resolveAgentIdFromSessionKey: (sessionKey: string) => string;
 };
 
+type ContinuationWorkModule = {
+  scheduleContinuationWorkBatch: (params: {
+    sessionKey: string;
+    chainState: ContinuationChainState;
+    requests: readonly { reason: string; delaySeconds: number; traceparent?: string }[];
+    config: ReturnType<typeof resolveContinuationRuntimeConfig>;
+    parentRunId?: string;
+    log?: (message: string) => void;
+  }) => Promise<{
+    scheduledCount: number;
+    cappedCount: number;
+    capped: boolean;
+    chainState: ContinuationChainState;
+  }>;
+  hasLiveOrRecentlyDispatchedContinuationWork: (sessionKey: string) => boolean;
+};
+
 async function rejectCrossSessionTargetingForSubagentDispatch(params: {
   crossSessionTargeting: "disabled" | "enabled";
   dispatchingSessionKey: string;
@@ -421,6 +438,112 @@ async function drainChildContinuationQueue(params: {
   } catch (err) {
     defaultRuntime.error?.(
       `Subagent continuation delegate drain failed for ${params.childSessionKey}: ${String(err)}`,
+    );
+  }
+}
+
+/**
+ * Arm a same-session continue_work wake for a completing subagent whose final
+ * findings carry a bare CONTINUE_WORK token (a self-continuation: the child
+ * claims its own next turn).
+ *
+ * The spawn-init / turn-1 path (attempt-execution.ts) is the primary site that
+ * arms this wake, reading the token from the run-result payloads. This
+ * completion-flow path reads the canonical transcript findings instead, so it
+ * closes the gap when the payload-based path could not see the token (e.g. a
+ * reply-transform hook rewrote the payloads, or the final payload was
+ * classified silent). The liveness guard makes it a strict fallback: when a
+ * same-session wake is already queued/running it does nothing, so the two paths
+ * never double-arm the child's next turn (#952). Best-effort — scheduling
+ * failures are logged and swallowed so they cannot break the announce path.
+ */
+async function scheduleSubagentSelfContinuationWork(params: {
+  childSessionKey: string;
+  childRunId: string;
+  delayMs?: number;
+  cfg: ReturnType<typeof subagentAnnounceDeps.getRuntimeConfig>;
+}): Promise<void> {
+  try {
+    const [workModule, stateModule, sessionStoreModule] = await Promise.all([
+      importRuntimeModule<ContinuationWorkModule>(import.meta.url, [
+        "./subagent-announce.continuation.runtime",
+        ".js",
+      ]),
+      importRuntimeModule<ContinuationStateModule>(import.meta.url, [
+        "./subagent-announce.continuation.runtime",
+        ".js",
+      ]),
+      importRuntimeModule<SessionStoreUpdateModule>(import.meta.url, [
+        "./subagent-announce.continuation.runtime",
+        ".js",
+      ]),
+    ]);
+    const { scheduleContinuationWorkBatch, hasLiveOrRecentlyDispatchedContinuationWork } =
+      workModule;
+    // Strict fallback: the spawn-init/turn-1 path already owns the wake in the
+    // common case, so never arm a second one for the same child session.
+    if (hasLiveOrRecentlyDispatchedContinuationWork(params.childSessionKey)) {
+      return;
+    }
+    const { loadContinuationChainState, persistContinuationChainState } = stateModule;
+    const {
+      updateSessionStore: updateSessionStoreLazy,
+      resolveStorePath: resolveStorePathLazy,
+      resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyLazy,
+    } = sessionStoreModule;
+    const config = subagentAnnounceDeps.resolveContinuationRuntimeConfig(params.cfg);
+    const childEntry = loadSessionEntryByKey(params.childSessionKey) as
+      | (ContinuationChainSource & Record<string, unknown>)
+      | undefined;
+    const delaySeconds =
+      params.delayMs !== undefined ? params.delayMs / 1000 : config.defaultDelayMs / 1000;
+    const result = await scheduleContinuationWorkBatch({
+      sessionKey: params.childSessionKey,
+      chainState: loadContinuationChainState(childEntry),
+      requests: [{ reason: "subagent self-continuation (CONTINUE_WORK token)", delaySeconds }],
+      config,
+      parentRunId: params.childRunId,
+      log: (message) => defaultRuntime.log(message),
+    });
+    if (result.scheduledCount === 0) {
+      return;
+    }
+    defaultRuntime.log(
+      `[subagent-chain-hop] Armed self-continuation continue_work wake for ${params.childSessionKey} (hop ${result.chainState.currentChainCount}) from completion-flow findings`,
+    );
+    // Advance the child chain state so a later self-continuation re-enforces the
+    // chain/cost cap from the right baseline. Mirror the delegate-drain persist.
+    persistContinuationChainState({
+      sessionEntry: childEntry,
+      count: result.chainState.currentChainCount,
+      startedAt: result.chainState.chainStartedAt,
+      tokens: result.chainState.accumulatedChainTokens,
+      ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
+    });
+    try {
+      const agentId = resolveAgentIdFromSessionKeyLazy(params.childSessionKey);
+      const storePath = resolveStorePathLazy(params.cfg.session?.store, { agentId });
+      await updateSessionStoreLazy(storePath, (store) => {
+        const existing = store[params.childSessionKey];
+        if (!existing) {
+          return;
+        }
+        store[params.childSessionKey] = {
+          ...existing,
+          continuationChainCount: result.chainState.currentChainCount,
+          continuationChainStartedAt: result.chainState.chainStartedAt,
+          continuationChainTokens: result.chainState.accumulatedChainTokens,
+          ...(result.chainState.chainId ? { continuationChainId: result.chainState.chainId } : {}),
+        };
+      });
+    } catch (writeErr) {
+      defaultRuntime.error?.(
+        `[continuation:self-continuation-persist-failed] child=${params.childSessionKey} error=${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
+      );
+    }
+  } catch (err) {
+    defaultRuntime.error?.(
+      `[continuation:self-continuation-failed] child=${params.childSessionKey} error=${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
@@ -973,9 +1096,23 @@ export async function runSubagentAnnounceFlow(params: {
     if (continuationEnabled && (findings !== "(no output)" || toolDelegates.length > 0)) {
       const continuationResult = stripContinuationSignal(findings);
       if (continuationResult.signal?.kind === "work") {
-        defaultRuntime.log(
-          `[subagent-chain-hop] CONTINUE_WORK not supported in sub-agent chain (from ${params.childSessionKey}), ignoring`,
-        );
+        // A subagent's bare CONTINUE_WORK token is a same-session
+        // self-continuation (the child claims its own next turn), NOT a chain
+        // hop to a new child (that is [[CONTINUE_DELEGATE:]], handled below).
+        // Strip the token from the announced findings so the parent's
+        // orchestration update never carries the child's internal continuation
+        // marker, then route it through the SAME durable continue_work scheduler
+        // the tool form uses. The scheduler call is a strict fallback: if the
+        // spawn-init/turn-1 path already armed the wake from the run payloads it
+        // is a no-op (#952).
+        const workSignal = continuationResult.signal;
+        findings = continuationResult.text || "(no output)";
+        await scheduleSubagentSelfContinuationWork({
+          childSessionKey: params.childSessionKey,
+          childRunId: params.childRunId,
+          ...(workSignal.delayMs !== undefined ? { delayMs: workSignal.delayMs } : {}),
+          cfg,
+        });
       } else if (continuationResult.signal?.kind === "delegate") {
         bracketDelegateConsumed = true;
         findings = continuationResult.text || "(no output)";

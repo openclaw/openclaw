@@ -20,5 +20,13 @@ export {
   loadContinuationChainState,
   persistContinuationChainState,
 } from "../auto-reply/continuation/state.js";
+// Same-session continue_work wake scheduling + liveness check. A subagent's
+// bare CONTINUE_WORK token is a self-continuation (the child claims its own next
+// turn), normally armed by the spawn-init/turn-1 path from the run payloads.
+// Routing it through the same durable scheduler here lets the completion flow
+// arm the wake from the canonical transcript findings when the payload-based
+// path could not (#952), guarded by the liveness check to avoid double-arming.
+export { scheduleContinuationWorkBatch } from "../auto-reply/continuation/work-dispatch.js";
+export { hasLiveOrRecentlyDispatchedContinuationWork } from "../auto-reply/continuation/work-store.js";
 export { updateSessionStore } from "../config/sessions/store.js";
 export { resolveStorePath, resolveAgentIdFromSessionKey } from "../config/sessions.js";
