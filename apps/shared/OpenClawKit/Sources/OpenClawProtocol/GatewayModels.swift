@@ -833,7 +833,7 @@ public struct AgentParams: Codable, Sendable {
         voicewaketrigger: String?,
         idempotencykey: String,
         label: String?,
-        clientcontext: [String: AnyCodable]?)
+        clientcontext: [String: AnyCodable]? = nil)
     {
         self.message = message
         self.agentid = agentid
