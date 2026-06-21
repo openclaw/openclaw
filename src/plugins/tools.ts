@@ -923,7 +923,11 @@ function collectAuthProviderIds(
   availability: ToolAvailabilityExpression | undefined,
   providerIds: Set<string>,
 ): void {
-  if (!availability) {
+  // Availability comes from plugin-authored metadata, so nested allOf/anyOf
+  // entries can be malformed primitives (e.g. `{ allOf: ["bad"] }`). Reject
+  // anything that is not a real object before the `in` checks below, which
+  // would otherwise throw on a string/number and abort tool resolution.
+  if (!availability || typeof availability !== "object") {
     return;
   }
   if ("kind" in availability) {

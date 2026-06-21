@@ -1990,6 +1990,32 @@ describe("resolvePluginTools optional tools", () => {
     );
   });
 
+  it("resolves tools without throwing when availability holds malformed nested entries", () => {
+    // Auth-provider collection walks nested allOf/anyOf entries; plugin-authored
+    // primitives like { allOf: ["bad"] } must not crash resolution.
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        names: ["optional_tool"],
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => ({
+          ...makeTool("optional_tool"),
+          availability: { allOf: ["bad", null] },
+        }),
+      },
+    ]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+        hasAuthForProvider: () => true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+  });
+
   it("warns with plugin factory timing details when a factory is slow", () => {
     vi.useFakeTimers({ now: 0 });
     const warnSpy = installConsoleMethodSpy("warn");
