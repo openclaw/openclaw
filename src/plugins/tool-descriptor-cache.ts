@@ -154,7 +154,7 @@ function isAvailabilityLikeRecord(value: unknown): value is Record<string, unkno
 }
 
 function readAgentToolAvailability(tool: AnyAgentTool): ToolDescriptor["availability"] | undefined {
-  const availability = tool.availability;
+  const availability = (tool as { availability?: unknown }).availability;
   if (isToolAvailabilityExpression(availability)) {
     return availability;
   }
