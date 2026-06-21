@@ -71,7 +71,6 @@ const appRoutes = APP_ROUTE_TREE as readonly PageDefinition<
 
 export const appRouter = createRouter<RouteId, RouteLoadContext, AppRouteModule>({
   routes: appRoutes,
-  defaultRouteId: "chat",
 });
 
 export function normalizeBasePath(basePath: string): string {
@@ -87,7 +86,25 @@ export function pathForRoute(routeId: RouteId, basePath = ""): string {
 }
 
 export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
-  return appRouter.routeIdFromPath(pathname, basePath);
+  return (
+    appRouter.routeIdFromPath(pathname, basePath) ??
+    (normalizePath(pathname) === normalizePath(basePath) ? "chat" : null)
+  );
+}
+
+export function startAppRouter(
+  history: Parameters<typeof appRouter.start>[0],
+  basePath: string,
+  context: RouteLoadContext,
+): Promise<void> {
+  const location = history.location();
+  if (routeIdFromPath(location.pathname, basePath) === null) {
+    history.replace({
+      ...location,
+      pathname: appRouter.pathForRoute("chat", basePath),
+    });
+  }
+  return appRouter.start(history, basePath, context);
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
@@ -100,7 +117,7 @@ export function inferBasePathFromPathname(pathname: string): string {
   }
   const segments = normalized.split("/").filter(Boolean);
   for (let index = 0; index < segments.length; index += 1) {
-    if (appRouter.routeIdFromPath(`/${segments.slice(index).join("/")}`)) {
+    if (routeIdFromPath(`/${segments.slice(index).join("/")}`)) {
       return index ? `/${segments.slice(0, index).join("/")}` : "";
     }
   }
