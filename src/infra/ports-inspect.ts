@@ -15,6 +15,11 @@ import type {
   PortUsage,
   PortUsageStatus,
 } from "./ports-types.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+  getWindowsWmicExePath,
+} from "./windows-install-roots.js";
 
 type CommandResult = {
   stdout: string;
@@ -495,7 +500,13 @@ function parseNetstatConnections(output: string, port: number): PortConnection[]
 }
 
 async function resolveWindowsImageName(pid: number): Promise<string | undefined> {
-  const res = await runCommandSafe(["tasklist", "/FI", `PID eq ${pid}`, "/FO", "LIST"]);
+  const res = await runCommandSafe([
+    getWindowsSystem32ExePath("tasklist.exe"),
+    "/FI",
+    `PID eq ${pid}`,
+    "/FO",
+    "LIST",
+  ]);
   if (res.code !== 0) {
     return undefined;
   }
@@ -512,7 +523,7 @@ async function resolveWindowsImageName(pid: number): Promise<string | undefined>
 
 async function resolveWindowsCommandLine(pid: number): Promise<string | undefined> {
   const powershell = await runCommandSafe([
-    "powershell",
+    getWindowsPowerShellExePath(),
     "-NoProfile",
     "-Command",
     `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -ExpandProperty CommandLine)`,
@@ -525,7 +536,7 @@ async function resolveWindowsCommandLine(pid: number): Promise<string | undefine
   }
 
   const wmic = await runCommandSafe([
-    "wmic",
+    getWindowsWmicExePath(),
     "process",
     "where",
     `ProcessId=${pid}`,
@@ -551,7 +562,7 @@ async function readWindowsListeners(
   port: number,
 ): Promise<{ listeners: PortListener[]; detail?: string; errors: string[] }> {
   const errors: string[] = [];
-  const res = await runCommandSafe(["netstat", "-ano", "-p", "tcp"]);
+  const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano", "-p", "tcp"]);
   if (res.code !== 0) {
     if (res.error) {
       errors.push(res.error);
@@ -587,7 +598,7 @@ async function readWindowsEstablishedConnections(
   port: number,
 ): Promise<{ connections: PortConnection[]; detail?: string; errors: string[] }> {
   const errors: string[] = [];
-  const res = await runCommandSafe(["netstat", "-ano", "-p", "tcp"]);
+  const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano", "-p", "tcp"]);
   if (res.code !== 0) {
     if (res.error) {
       errors.push(res.error);

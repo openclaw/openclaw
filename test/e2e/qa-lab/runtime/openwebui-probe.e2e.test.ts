@@ -1,17 +1,16 @@
-// Openwebui Probe tests cover openwebui probe script behavior.
+// OpenWebUI probe tests cover QA Lab OpenAI-compatible API evidence.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
 
 const probePath = path.resolve("scripts/e2e/openwebui-probe.mjs");
 
 interface ProbeResult {
   error?: Error;
-  signal: NodeJS.Signals | null;
   status: number | null;
   stderr: string;
   stdout: string;
@@ -67,13 +66,12 @@ function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3
     }, timeout);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolve({ error, signal: null, status: null, stderr: stderr.text(), stdout: stdout.text() });
+      resolve({ error, status: null, stderr: stderr.text(), stdout: stdout.text() });
     });
-    child.on("exit", (status, signal) => {
+    child.on("exit", (status) => {
       clearTimeout(timer);
       resolve({
         error: timedOut ? new Error(`probe timed out after ${timeout}ms`) : undefined,
-        signal,
         status,
         stderr: stderr.text(),
         stdout: stdout.text(),

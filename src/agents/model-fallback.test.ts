@@ -746,6 +746,24 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0].reason).toBe("unknown");
   });
 
+  it("falls back on a Zhipu GLM 1305 overload body and classifies it as overloaded", async () => {
+    const cfg = makeCfg();
+    const glmOverload = new Error("[1305][该模型当前访问量过大，请您稍后再试]");
+    const run = vi.fn().mockRejectedValueOnce(glmOverload).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "glm",
+      model: "GLM-5.2",
+      run,
+    });
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual(["anthropic", "claude-haiku-3-5"]);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0].reason).toBe("overloaded");
+  });
+
   it("does not prepare agent harness plugins for forced OpenClaw candidates", async () => {
     const cfg = makeCfg({
       models: {

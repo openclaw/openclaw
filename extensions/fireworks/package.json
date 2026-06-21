@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/fireworks-provider",
-  "version": "2026.6.8",
+  "version": "2026.6.9",
   "private": true,
   "description": "OpenClaw Fireworks provider plugin",
   "type": "module",

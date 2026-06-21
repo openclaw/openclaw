@@ -325,9 +325,22 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
   ];
 
   for (const row of report.rows) {
-    lines.push(
-      `| ${row.tool} | ${row.bucket} | ${row.expectedLayer} | ${row.capabilityLayer} | ${row.required ? "yes" : "no"} | ${row.fixtureCount} | ${row.openclaw} | ${row.codex} | ${row.drift} | ${row.codexDefaultImpact ?? ""} | ${row.qaImpact ?? ""} | ${row.action ?? ""} | ${row.tracking ?? ""} |`,
-    );
+    const cells = [
+      row.tool,
+      row.bucket,
+      row.expectedLayer,
+      row.capabilityLayer,
+      row.required ? "yes" : "no",
+      row.fixtureCount.toString(),
+      row.openclaw,
+      row.codex,
+      row.drift,
+      row.codexDefaultImpact ?? "",
+      row.qaImpact ?? "",
+      row.action ?? "",
+      row.tracking ?? "",
+    ].map(escapeTableCell);
+    lines.push(`| ${cells.join(" | ")} |`);
   }
 
   if (report.failures.length > 0) {
@@ -343,4 +356,8 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
   }
 
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function escapeTableCell(value: string): string {
+  return value.replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }

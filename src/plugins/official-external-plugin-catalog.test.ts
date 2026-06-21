@@ -53,11 +53,12 @@ describe("official external plugin catalog", () => {
     }
   });
 
-  it("keeps StepFun npm-only because its ClawHub package name is unavailable", () => {
+  it("advertises StepFun with its ClawHub package and plugin API floor", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("stepfun"))).toEqual({
+      clawhubSpec: "clawhub:@openclaw/stepfun-provider",
       npmSpec: "@openclaw/stepfun-provider",
       defaultChoice: "npm",
-      minHostVersion: ">=2026.6.8",
+      minHostVersion: ">=2026.6.9",
     });
   });
 

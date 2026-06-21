@@ -1,6 +1,6 @@
-// Openai Web Search Minimal Client tests cover openai web search minimal client script behavior.
+// OpenAI web-search minimal tests cover QA Lab hosted provider schema evidence.
 import { describe, expect, it } from "vitest";
-import { testing } from "../../scripts/e2e/lib/openai-web-search-minimal/client.mjs";
+import { testing } from "../../../../scripts/e2e/lib/openai-web-search-minimal/client.mjs";
 
 describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
   it("accepts only the expected raw schema rejection in reject mode", () => {
