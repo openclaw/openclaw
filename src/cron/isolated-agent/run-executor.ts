@@ -161,8 +161,30 @@ function buildCronDeliveryTargetRuntimeContext(params: {
   ].join("\n");
 }
 
-function resolveCliRuntimeToolsAllow(toolsAllow?: string[]): string[] | undefined {
-  return toolsAllow?.some((toolName) => normalizeToolName(toolName) === "*")
+function resolveCliRuntimeToolsAllow(
+  toolsAllow?: string[],
+  toolsAllowIsDefault?: boolean,
+): string[] | undefined {
+  if (toolsAllow === undefined) {
+    return undefined;
+  }
+  // CLI backends do not enforce a runtime toolsAllow: cli-runner/prepare.ts
+  // rejects any defined allow-list, and a CLI backend runs with its own
+  // configured tool set as the operator on the local machine — it is not a
+  // runtime tool-policy boundary. #91499 auto-stamps the creator surface as a
+  // *default* cap on agentTurn payloads (toolsAllowIsDefault); on a CLI backend
+  // that default is unenforceable theatre, so drop it and let the scheduled run
+  // proceed instead of failing to start.
+  //
+  // An EXPLICIT per-cron restriction (the user narrowed this job; no isDefault
+  // flag) is deliberately NOT dropped: it falls through and prepare.ts fails it
+  // closed, surfacing that the requested policy needs an embedded runtime. So
+  // only the unenforceable inherited default is relaxed on CLI; explicit intent
+  // is still honoured.
+  if (toolsAllowIsDefault) {
+    return undefined;
+  }
+  return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
     ? undefined
     : toolsAllow;
 }
@@ -326,7 +348,10 @@ export function createCronPromptExecutor(params: {
             messageChannel,
             sourceReplyDeliveryMode,
             requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
-            toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
+            toolsAllow: resolveCliRuntimeToolsAllow(
+              params.agentPayload?.toolsAllow,
+              params.agentPayload?.toolsAllowIsDefault,
+            ),
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,

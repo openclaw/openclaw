@@ -27,6 +27,12 @@ function cronAgentTurnPayloadSchema(params: {
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
       toolsAllow: Type.Optional(params.toolsAllow),
+      // Server-managed marker: set when toolsAllow is an auto-applied creator
+      // default (vs an explicit per-cron restriction). The cron tool stamps it,
+      // and it round-trips through persistence so a CLI-resolved run can drop an
+      // unenforceable default cap. Must be on the wire contract or the stamped
+      // payload is rejected by additionalProperties:false.
+      toolsAllowIsDefault: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
   );
