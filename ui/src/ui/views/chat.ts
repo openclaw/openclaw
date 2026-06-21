@@ -2513,7 +2513,7 @@ export function renderChat(props: ChatProps) {
         target.value = "";
       }
       adjustTextareaHeight(target);
-      updateSlashMenu("", requestUpdate);
+      updateSlashMenu("", requestUpdate, props);
       return;
     }
     if (e instanceof InputEvent && (vs.composerComposing || e.isComposing)) {
