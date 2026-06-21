@@ -6,6 +6,7 @@ import {
   appRouter,
   pathForRoute,
   routeLoadContext,
+  resolveAppNotFound,
   type AppRouteModule,
   type RouteId,
 } from "../app-routes.ts";
@@ -292,7 +293,17 @@ export function renderApp(state: AppViewState) {
   if (!state.connected) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
-  return routerOutlet(appRouter, state, (selection) => renderConnectedApp(state, selection));
+  return routerOutlet(
+    appRouter,
+    state,
+    {
+      onNotFound: () =>
+        void resolveAppNotFound(routeLoadContext(state as unknown as SettingsHost)).catch(
+          () => undefined,
+        ),
+    },
+    (selection) => renderConnectedApp(state, selection),
+  );
 }
 
 function renderConnectedApp(
