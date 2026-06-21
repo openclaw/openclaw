@@ -5,7 +5,8 @@ import {
   navigationIconForRoute,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../app-routes.ts";
+import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
+import type { SettingsHost } from "../app/app-host.ts";
 import { t } from "../i18n/index.ts";
 import {
   createChatSessionsLoadOverrides,
@@ -152,6 +153,9 @@ const NEW_CHAT_SESSIONS_LOADING_MESSAGE =
 const NEW_CHAT_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
 
+const ROUTE_PRELOAD_DELAY_MS = 50;
+const routePreloadTimers = new WeakMap<EventTarget, ReturnType<typeof setTimeout>>();
+
 export function renderRouteNavItem(
   state: AppViewState,
   routeId: RouteId,
@@ -162,10 +166,48 @@ export function renderRouteNavItem(
   const isActive =
     routeId === "config" ? isSettingsNavigationRoute(activeRouteId) : activeRouteId === routeId;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
+  const preload = (event: Event, immediate = false) => {
+    if (isActive) {
+      return;
+    }
+    const target = event.currentTarget;
+    if (!target) {
+      return;
+    }
+    const start = () => {
+      routePreloadTimers.delete(target);
+      void appRouter
+        .preloadRoute(routeId, routeLoadContext(state as unknown as SettingsHost))
+        .catch(() => undefined);
+    };
+    if (immediate) {
+      start();
+      return;
+    }
+    if (!routePreloadTimers.has(target)) {
+      routePreloadTimers.set(target, globalThis.setTimeout(start, ROUTE_PRELOAD_DELAY_MS));
+    }
+  };
+  const cancelPreload = (event: Event) => {
+    const target = event.currentTarget;
+    if (!target) {
+      return;
+    }
+    const timer = routePreloadTimers.get(target);
+    if (timer !== undefined) {
+      globalThis.clearTimeout(timer);
+      routePreloadTimers.delete(target);
+    }
+  };
   return html`
     <a
       href=${href}
       class="nav-item ${isActive ? "nav-item--active" : ""}"
+      @focus=${preload}
+      @blur=${cancelPreload}
+      @pointerenter=${preload}
+      @pointerleave=${cancelPreload}
+      @touchstart=${(event: TouchEvent) => preload(event, true)}
       @click=${(event: MouseEvent) => {
         if (
           event.defaultPrevented ||
