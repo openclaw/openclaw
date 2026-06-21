@@ -234,4 +234,35 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     >;
     expect(snapshotParams.snapshotVersion).toBe(0);
   });
+
+  it("refreshes persisted snapshots missing skills[].skillKey after #94146 upgrade", () => {
+    // Simulate a pre-#94146 persisted snapshot whose skills array entries
+    // have name but no skillKey.  The resolver must detect the missing
+    // fields and force a rebuild so the new snapshot carries skillKey for
+    // env-override resolution.
+    ensureSkillsWatcherMock.mockImplementation(() => undefined);
+    getSkillsSnapshotVersionMock.mockReturnValue(1);
+    shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
+
+    const oldSnapshot: SkillSnapshot = {
+      prompt: "skills prompt",
+      // skillKey intentionally omitted — pre-#94146 serialized snapshot
+      skills: [{ name: "old-skill", primaryEnv: "OLD_KEY" }],
+      version: 1,
+      promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+    };
+
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: { skills: { entries: { "old-skill": { apiKey: "k" } } } }, // pragma: allowlist secret
+      existingSnapshot: oldSnapshot,
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+      [string, { snapshotVersion?: number }]
+    >;
+    expect(snapshotParams.snapshotVersion).toBe(1);
+  });
 });
