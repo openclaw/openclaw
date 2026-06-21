@@ -7,9 +7,9 @@ import { findBundledPackageChannelMetadata } from "../../plugins/bundled-package
 import type { PluginPackageChannelDoctorCapabilities } from "../../plugins/manifest.js";
 import type { AllowFromMode } from "./shared/allow-from-mode.types.js";
 
-export type DoctorGroupModel = "sender" | "route" | "hybrid";
+type DoctorGroupModel = "sender" | "route" | "hybrid";
 
-export type DoctorChannelCapabilities = {
+type DoctorChannelCapabilities = {
   dmAllowFromMode: AllowFromMode;
   groupModel: DoctorGroupModel;
   groupAllowFromFallbackToAllowFrom: boolean;

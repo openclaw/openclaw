@@ -57,6 +57,10 @@ jobs:
             echo "could not read required Blacksmith metadata" >&2
             exit 1
           fi
+          if ! jq -e 'type == "number"' <<<"$installation_model_id" >/dev/null; then
+            echo "invalid Blacksmith installation model id: ${installation_model_id}" >&2
+            exit 1
+          fi
 
           if [ -n "${BLACKSMITH_HOSTNAME:-}" ]; then
             runner_host="$BLACKSMITH_HOSTNAME"
@@ -65,21 +69,32 @@ jobs:
           fi
           runner_ssh_port="${BLACKSMITH_SSH_PORT:-22}"
 
+          hydrating_body="$RUNNER_TEMP/testbox-hydrating.json"
           hydrating_response="$RUNNER_TEMP/testbox-hydrating.response"
+          jq -n \
+            --arg testbox_id "$TESTBOX_ID" \
+            --argjson installation_model_id "$installation_model_id" \
+            --arg status "hydrating" \
+            --arg ip_address "$runner_host" \
+            --arg ssh_port "$runner_ssh_port" \
+            --arg working_directory "$GITHUB_WORKSPACE" \
+            --arg adopted_run_id "$GITHUB_RUN_ID" \
+            '{
+              testbox_id: $testbox_id,
+              installation_model_id: $installation_model_id,
+              status: $status,
+              ip_address: $ip_address,
+              ssh_port: $ssh_port,
+              working_directory: $working_directory,
+              adopted_run_id: $adopted_run_id,
+              metadata: {}
+            }' > "$hydrating_body"
+
           hydrating_http_code="$(curl -sS -L --post302 --post303 -o "$hydrating_response" -w '%{http_code}' \
             -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
-            -d "{
-              \"testbox_id\": \"${TESTBOX_ID}\",
-              \"installation_model_id\": ${installation_model_id},
-              \"status\": \"hydrating\",
-              \"ip_address\": \"${runner_host}\",
-              \"ssh_port\": \"${runner_ssh_port}\",
-              \"working_directory\": \"${GITHUB_WORKSPACE}\",
-              \"adopted_run_id\": \"${GITHUB_RUN_ID}\",
-              \"metadata\": {}
-            }" || true)"
+            --data-binary @"$hydrating_body" || true)"
 
           echo "phone_home_hydrating_http=${hydrating_http_code}"
           if [[ ! "$hydrating_http_code" =~ ^2 ]]; then
@@ -120,7 +135,7 @@ jobs:
           chmod 600 ~/.ssh/authorized_keys
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           submodules: false
@@ -152,20 +167,30 @@ jobs:
           runner_ssh_port="$(cat "$state/runner_ssh_port")"
           working_directory="$(cat "$state/working_directory")"
           adopted_run_id="$(cat "$state/adopted_run_id")"
+          if ! jq -e 'type == "number"' <<<"$installation_model_id" >/dev/null; then
+            echo "invalid Blacksmith installation model id: ${installation_model_id}" >&2
+            exit 1
+          fi
 
           ready_body="$RUNNER_TEMP/testbox-ready.json"
-          cat > "$ready_body" <<JSON
-          {
-            "testbox_id": "${testbox_id}",
-            "installation_model_id": ${installation_model_id},
-            "status": "ready",
-            "ip_address": "${runner_host}",
-            "ssh_port": "${runner_ssh_port}",
-            "working_directory": "${working_directory}",
-            "adopted_run_id": "${adopted_run_id}",
-            "metadata": {}
-          }
-          JSON
+          jq -n \
+            --arg testbox_id "$testbox_id" \
+            --argjson installation_model_id "$installation_model_id" \
+            --arg status "ready" \
+            --arg ip_address "$runner_host" \
+            --arg ssh_port "$runner_ssh_port" \
+            --arg working_directory "$working_directory" \
+            --arg adopted_run_id "$adopted_run_id" \
+            '{
+              testbox_id: $testbox_id,
+              installation_model_id: $installation_model_id,
+              status: $status,
+              ip_address: $ip_address,
+              ssh_port: $ssh_port,
+              working_directory: $working_directory,
+              adopted_run_id: $adopted_run_id,
+              metadata: {}
+            }' > "$ready_body"
 
           http_code="$(curl -sS -L --post302 --post303 -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
             -X POST "${api_url}/api/testbox/phone-home" \

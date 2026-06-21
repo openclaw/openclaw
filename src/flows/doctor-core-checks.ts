@@ -13,7 +13,10 @@ import {
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
-import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
+import {
+  disableUnavailableSkillsInConfig,
+  formatMissingSkillSummary,
+} from "../commands/doctor-skills-core.js";
 import {
   detectUiProtocolFreshnessIssues,
   uiProtocolFreshnessIssueToHealthFinding,
@@ -578,7 +581,7 @@ const openAIOAuthTlsCheck: HealthCheck = {
       formatOpenAIOAuthTlsPreflightFix,
       runOpenAIOAuthTlsPreflight,
       shouldRunOpenAIOAuthTlsPrerequisites,
-    } = await import("../commands/oauth-tls-preflight.js");
+    } = await import("../plugins/provider-openai-chatgpt-oauth-tls.js");
     if (!shouldRunOpenAIOAuthTlsPrerequisites({ cfg: ctx.cfg, deep: ctx.mode === "doctor" })) {
       return [];
     }
@@ -604,7 +607,7 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
   source: "doctor",
   async detect() {
     const { collectLegacyWhatsAppCrontabHealthWarning } =
-      await import("../commands/doctor-cron.js");
+      await import("../commands/doctor/cron/index.js");
     const warning = await collectLegacyWhatsAppCrontabHealthWarning();
     if (!warning) {
       return [];
@@ -964,6 +967,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
 
 let registered = false;
 
+/** @deprecated Core doctor flows use ordered doctor contributions; keep this only for SDK compatibility. */
 export function registerCoreHealthChecks(): void {
   if (registered) {
     return;
@@ -993,23 +997,3 @@ export function createCoreHealthChecks(
 }
 
 export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
-
-function formatMissingSkillSummary(skill: SkillStatusEntry): string {
-  const missing: string[] = [];
-  if (skill.missing.bins.length > 0) {
-    missing.push(`bins: ${skill.missing.bins.join(", ")}`);
-  }
-  if (skill.missing.anyBins.length > 0) {
-    missing.push(`any bins: ${skill.missing.anyBins.join(", ")}`);
-  }
-  if (skill.missing.env.length > 0) {
-    missing.push(`env: ${skill.missing.env.join(", ")}`);
-  }
-  if (skill.missing.config.length > 0) {
-    missing.push(`config: ${skill.missing.config.join(", ")}`);
-  }
-  if (skill.missing.os.length > 0) {
-    missing.push(`os: ${skill.missing.os.join(", ")}`);
-  }
-  return missing.join("; ") || "unknown requirement";
-}

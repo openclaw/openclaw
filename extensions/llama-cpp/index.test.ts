@@ -110,6 +110,49 @@ describe("llama.cpp provider plugin", () => {
     });
   });
 
+  it("includes output dimensionality in local cache and index identities", async () => {
+    memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockResolvedValue({
+      id: "local",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      embedQuery: vi.fn(),
+      embedBatch: vi.fn(),
+    });
+
+    const result = await createLlamaCppMemoryEmbeddingProvider(
+      {
+        config: {},
+        provider: "local",
+        fallback: "none",
+        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+        outputDimensionality: 512,
+      },
+      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
+    );
+    const resolvedIdentity = llamaCppEmbeddingProviderAdapter.resolveIndexIdentity?.({
+      config: {},
+      provider: "local",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      dimensions: 512,
+    });
+
+    expect(result.runtime?.cacheKeyData).toMatchObject({ outputDimensionality: 512 });
+    expect(result.runtime?.indexIdentityAliases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          cacheKeyData: expect.objectContaining({ outputDimensionality: 512 }),
+        }),
+      ]),
+    );
+    expect(resolvedIdentity?.cacheKeyData).toMatchObject({ outputDimensionality: 512 });
+    expect(resolvedIdentity?.aliases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          cacheKeyData: expect.objectContaining({ outputDimensionality: 512 }),
+        }),
+      ]),
+    );
+  });
+
   it("keeps the default model identity when configured with its exact cache artifact path", async () => {
     const modelPath = path.join(
       os.homedir(),

@@ -1,6 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Openclaw Npm Postpublish Verify script supports OpenClaw repository automation.
 
+import { createPublicKey, verify as verifySignature } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -25,6 +26,7 @@ import {
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
+import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
@@ -97,6 +99,41 @@ export type PublishedInstallScenario = {
   expectedVersion: string;
 };
 
+export type OpenClawNpmPostpublishVerifyArgs =
+  | {
+      help: false;
+      version: string;
+    }
+  | {
+      help: true;
+      version: "";
+    };
+
+export function openClawNpmPostpublishVerifyUsage(): string {
+  return "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>";
+}
+
+export function parseOpenClawNpmPostpublishVerifyArgs(
+  argv: readonly string[],
+): OpenClawNpmPostpublishVerifyArgs {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const version = args[0]?.trim() ?? "";
+  if (version === "--help" || version === "-h") {
+    return { help: true, version: "" };
+  }
+  if (!version) {
+    throw new Error(openClawNpmPostpublishVerifyUsage());
+  }
+  if (version.startsWith("-")) {
+    throw new Error(`Unknown openclaw npm postpublish verifier option: ${version}`);
+  }
+  const extraArg = args[1]?.trim();
+  if (extraArg) {
+    throw new Error(`Unexpected openclaw npm postpublish verifier argument: ${extraArg}`);
+  }
+  return { help: false, version };
+}
+
 export function buildPublishedInstallScenarios(version: string): PublishedInstallScenario[] {
   const parsed = parseReleaseVersion(version);
   if (parsed === null) {
@@ -121,6 +158,234 @@ export function buildPublishedInstallScenarios(version: string): PublishedInstal
   }
 
   return scenarios;
+}
+
+type NpmRegistryKey = {
+  key: string;
+  keyid: string;
+};
+
+type NpmRegistrySignature = {
+  keyid: string;
+  sig: string;
+};
+
+type NpmRegistryAttestation = {
+  bundle?: {
+    dsseEnvelope?: {
+      payload?: string;
+    };
+  };
+  predicateType?: string;
+};
+
+type NpmProvenanceVerificationPolicy = {
+  certificateIdentityURI: string;
+  certificateIssuer: string;
+};
+
+type VerifyNpmProvenanceBundle = (
+  bundle: unknown,
+  policy: NpmProvenanceVerificationPolicy,
+) => Promise<void>;
+
+type NpmProvenanceStatement = {
+  predicate?: {
+    buildDefinition?: {
+      externalParameters?: {
+        workflow?: {
+          path?: string;
+          ref?: string;
+          repository?: string;
+        };
+      };
+    };
+    runDetails?: {
+      builder?: {
+        id?: string;
+      };
+    };
+  };
+  subject?: Array<{
+    digest?: Record<string, string>;
+    name?: string;
+  }>;
+};
+
+const NPM_PROVENANCE_PREDICATE_TYPE = "https://slsa.dev/provenance/v1";
+const NPM_PROVENANCE_REPOSITORY = "https://github.com/openclaw/openclaw";
+const NPM_PROVENANCE_WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml";
+const NPM_PROVENANCE_CERTIFICATE_ISSUER = "https://token.actions.githubusercontent.com";
+const NPM_PROVENANCE_BUILDER_ID = "https://github.com/actions/runner/github-hosted";
+const NPM_REGISTRY_REQUEST_TIMEOUT_MS = 30_000;
+const NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
+const NPM_REGISTRY_PROVENANCE_ATTEMPTS = 30;
+const NPM_REGISTRY_PROVENANCE_RETRY_MAX_DELAY_MS = 10_000;
+
+type FetchRegistryJsonOptions = {
+  fetchImpl?: typeof fetch;
+  maxBodyBytes?: number;
+  timeoutMs?: number;
+};
+
+export function verifyNpmRegistrySignatures(params: {
+  integrity: string;
+  keys: NpmRegistryKey[];
+  packageName: string;
+  signatures: NpmRegistrySignature[];
+  version: string;
+}): void {
+  if (!params.integrity.startsWith("sha512-")) {
+    throw new Error(`npm registry integrity is missing a sha512 digest for ${params.packageName}.`);
+  }
+  if (params.signatures.length === 0) {
+    throw new Error(
+      `npm registry returned no signatures for ${params.packageName}@${params.version}.`,
+    );
+  }
+
+  const payload = `${params.packageName}@${params.version}:${params.integrity}`;
+  for (const signature of params.signatures) {
+    const key = params.keys.find((candidate) => candidate.keyid === signature.keyid);
+    if (!key) {
+      continue;
+    }
+    const publicKey = createPublicKey({
+      key: Buffer.from(key.key, "base64"),
+      format: "der",
+      type: "spki",
+    });
+    if (
+      verifySignature(
+        "sha256",
+        Buffer.from(payload, "utf8"),
+        publicKey,
+        Buffer.from(signature.sig, "base64"),
+      )
+    ) {
+      return;
+    }
+  }
+
+  throw new Error(
+    `npm registry signatures did not verify for ${params.packageName}@${params.version}.`,
+  );
+}
+
+function resolveNpmProvenanceVerificationPolicy(
+  statement: NpmProvenanceStatement,
+  version: string,
+): NpmProvenanceVerificationPolicy {
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+  const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
+  const workflowRef = workflow?.ref;
+  const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
+  const isTrustedRef =
+    workflowRef === "refs/heads/main" ||
+    workflowRef === expectedReleaseRef ||
+    (parsedVersion.channel === "alpha" &&
+      /^refs\/heads\/tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(
+        workflowRef ?? "",
+      ));
+
+  if (
+    workflow?.repository !== NPM_PROVENANCE_REPOSITORY ||
+    workflow?.path !== NPM_PROVENANCE_WORKFLOW_PATH ||
+    !isTrustedRef ||
+    statement.predicate?.runDetails?.builder?.id !== NPM_PROVENANCE_BUILDER_ID
+  ) {
+    throw new Error(
+      `npm provenance attestation does not bind ${version} to the trusted OpenClaw GitHub release workflow.`,
+    );
+  }
+
+  return {
+    certificateIssuer: NPM_PROVENANCE_CERTIFICATE_ISSUER,
+    certificateIdentityURI: `${NPM_PROVENANCE_REPOSITORY}/${NPM_PROVENANCE_WORKFLOW_PATH}@${workflowRef}`,
+  };
+}
+
+async function verifySigstoreNpmProvenanceBundle(
+  bundle: unknown,
+  policy: NpmProvenanceVerificationPolicy,
+): Promise<void> {
+  const sigstore = require("sigstore") as { verify: VerifyNpmProvenanceBundle };
+  await sigstore.verify(bundle, policy);
+}
+
+export async function verifyNpmProvenanceAttestation(params: {
+  attestations: NpmRegistryAttestation[];
+  integrity: string;
+  packageName: string;
+  verifyBundle?: VerifyNpmProvenanceBundle;
+  version: string;
+}): Promise<void> {
+  const expectedSubject = `pkg:npm/${params.packageName}@${params.version}`;
+  const expectedSha512 = Buffer.from(params.integrity.slice("sha512-".length), "base64").toString(
+    "hex",
+  );
+  const verifyBundle = params.verifyBundle ?? verifySigstoreNpmProvenanceBundle;
+  let verificationError: unknown;
+  let policyError: unknown;
+
+  for (const attestation of params.attestations) {
+    if (attestation.predicateType !== NPM_PROVENANCE_PREDICATE_TYPE) {
+      continue;
+    }
+    const payload = attestation.bundle?.dsseEnvelope?.payload;
+    if (!payload) {
+      continue;
+    }
+    try {
+      const statement = JSON.parse(
+        Buffer.from(payload, "base64").toString("utf8"),
+      ) as NpmProvenanceStatement;
+      if (
+        statement.subject?.some(
+          (subject) =>
+            subject.name === expectedSubject && subject.digest?.sha512 === expectedSha512,
+        )
+      ) {
+        let policy: NpmProvenanceVerificationPolicy;
+        try {
+          policy = resolveNpmProvenanceVerificationPolicy(statement, params.version);
+        } catch (error) {
+          policyError = error;
+          continue;
+        }
+        try {
+          await verifyBundle(attestation.bundle, policy);
+          return;
+        } catch (error) {
+          verificationError = error;
+        }
+      }
+    } catch {
+      // Try the remaining attestations before reporting the missing match.
+    }
+  }
+
+  if (verificationError) {
+    throw new Error(
+      `npm provenance attestation failed Sigstore verification for ${params.packageName}@${params.version}: ${formatErrorMessage(verificationError)}`,
+    );
+  }
+
+  if (policyError instanceof Error) {
+    throw policyError;
+  }
+  if (policyError) {
+    throw new Error(
+      `npm provenance attestation policy evaluation failed for ${params.packageName}@${params.version}: ${formatErrorMessage(policyError)}`,
+    );
+  }
+
+  throw new Error(
+    `npm provenance attestation does not match ${params.packageName}@${params.version} and its registry integrity.`,
+  );
 }
 
 export function collectInstalledPackageErrors(params: {
@@ -698,6 +963,179 @@ function installSpec(prefixDir: string, spec: string, cwd: string): void {
   npmExec(buildPublishedInstallCommandArgs(prefixDir, spec), cwd);
 }
 
+export async function fetchRegistryJson(
+  url: string,
+  options: FetchRegistryJsonOptions = {},
+): Promise<unknown> {
+  const timeoutMs = options.timeoutMs ?? NPM_REGISTRY_REQUEST_TIMEOUT_MS;
+  const maxBodyBytes = options.maxBodyBytes ?? NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES;
+  const controller = new AbortController();
+  const timeoutError = Object.assign(
+    new Error(`npm registry request timed out after ${timeoutMs}ms: ${url}`),
+    { code: "ETIMEDOUT" },
+  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    const response = await Promise.race([
+      (options.fetchImpl ?? fetch)(url, {
+        headers: {
+          Accept: "application/json",
+        },
+        redirect: "error",
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    if (!response.ok) {
+      throw new Error(`npm registry request failed (${response.status}): ${url}`);
+    }
+    return JSON.parse(
+      await readBoundedResponseText(response, `npm registry ${url}`, maxBodyBytes, {
+        signal: controller.signal,
+        timeoutPromise,
+      }),
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isRetryableRegistryProvenanceError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /npm registry request failed \((?:404|408|425|429|5\d\d)\)/u.test(message) ||
+    message.includes("npm registry metadata is incomplete") ||
+    message.includes("npm registry provenance metadata is incomplete") ||
+    /aborted|fetch failed|network|timeout|timed out/u.test(message)
+  );
+}
+
+export async function retryNpmRegistryProvenanceRead<T>(
+  read: () => Promise<T>,
+  options: {
+    attempts?: number;
+    delay?: (delayMs: number) => Promise<void>;
+  } = {},
+): Promise<T> {
+  const attempts = options.attempts ?? NPM_REGISTRY_PROVENANCE_ATTEMPTS;
+  const delay =
+    options.delay ??
+    ((delayMs: number) =>
+      new Promise<void>((resolveDelay) => {
+        setTimeout(resolveDelay, delayMs);
+      }));
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableRegistryProvenanceError(error) || attempt === attempts) {
+        throw error;
+      }
+      await delay(Math.min(attempt * 1000, NPM_REGISTRY_PROVENANCE_RETRY_MAX_DELAY_MS));
+    }
+  }
+
+  throw lastError;
+}
+
+async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<void> {
+  const registry = new URL(process.env.npm_config_registry ?? "https://registry.npmjs.org");
+  if (registry.protocol !== "https:") {
+    throw new Error(`npm registry must use HTTPS: ${registry}`);
+  }
+  if (!registry.pathname.endsWith("/")) {
+    registry.pathname = `${registry.pathname}/`;
+  }
+  const packageName = "openclaw";
+  const packageDocument = (await fetchRegistryJson(
+    new URL(
+      `${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`,
+      registry,
+    ).toString(),
+  )) as {
+    dist?: {
+      attestations?: {
+        provenance?: {
+          predicateType?: string;
+        };
+        url?: string;
+      };
+      integrity?: string;
+      signatures?: NpmRegistrySignature[];
+    };
+  };
+  const keysDocument = (await fetchRegistryJson(new URL("-/npm/v1/keys", registry).toString())) as {
+    keys?: NpmRegistryKey[];
+  };
+  const integrity = packageDocument.dist?.integrity;
+  const signatures = packageDocument.dist?.signatures;
+  const provenance = packageDocument.dist?.attestations?.provenance;
+  const attestationUrl = packageDocument.dist?.attestations?.url;
+  if (!integrity || !signatures || !keysDocument.keys) {
+    throw new Error(`npm registry metadata is incomplete for ${packageName}@${version}.`);
+  }
+  if (
+    provenance?.predicateType !== NPM_PROVENANCE_PREDICATE_TYPE ||
+    typeof attestationUrl !== "string" ||
+    attestationUrl.length === 0
+  ) {
+    throw new Error(
+      `npm registry provenance metadata is incomplete for ${packageName}@${version}.`,
+    );
+  }
+  const parsedAttestationUrl = new URL(attestationUrl);
+  const attestationPathPrefix = new URL("-/npm/v1/attestations/", registry).pathname;
+  if (
+    parsedAttestationUrl.protocol !== "https:" ||
+    parsedAttestationUrl.origin !== registry.origin ||
+    !parsedAttestationUrl.pathname.startsWith(attestationPathPrefix)
+  ) {
+    throw new Error(
+      `npm registry returned an untrusted provenance attestation URL for ${packageName}@${version}.`,
+    );
+  }
+
+  verifyNpmRegistrySignatures({
+    packageName,
+    version,
+    integrity,
+    signatures,
+    keys: keysDocument.keys,
+  });
+  const attestationDocument = (await fetchRegistryJson(parsedAttestationUrl.toString())) as {
+    attestations?: NpmRegistryAttestation[];
+  };
+  const attestations = attestationDocument.attestations ?? [];
+  if (attestations.length === 0) {
+    throw new Error(
+      `npm registry provenance metadata is incomplete for ${packageName}@${version}.`,
+    );
+  }
+  await verifyNpmProvenanceAttestation({
+    packageName,
+    version,
+    integrity,
+    attestations,
+  });
+  console.log(
+    `openclaw-npm-postpublish-verify: registry signature and provenance attestation verified (${version})`,
+  );
+}
+
+async function verifyPublishedRegistryProvenance(version: string): Promise<void> {
+  await retryNpmRegistryProvenanceRead(() => verifyPublishedRegistryProvenanceOnce(version));
+}
+
 function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
   const invocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
   return runNpmVerifyCommand(invocation, cwd);
@@ -744,15 +1182,16 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
   }
 }
 
-function main(): void {
-  const version = process.argv[2]?.trim();
-  if (!version) {
-    throw new Error(
-      "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>",
-    );
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseOpenClawNpmPostpublishVerifyArgs(argv);
+  if (args.help) {
+    console.log(openClawNpmPostpublishVerifyUsage());
+    return;
   }
 
+  const { version } = args;
   const scenarios = buildPublishedInstallScenarios(version);
+  await verifyPublishedRegistryProvenance(version);
   for (const scenario of scenarios) {
     verifyScenario(version, scenario);
   }
@@ -765,7 +1204,7 @@ function main(): void {
 const entrypoint = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
 if (entrypoint !== null && import.meta.url === entrypoint) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(`openclaw-npm-postpublish-verify: ${formatErrorMessage(error)}`);
     process.exitCode = 1;

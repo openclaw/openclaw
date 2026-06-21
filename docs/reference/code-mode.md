@@ -675,9 +675,10 @@ is disabled, uninstalled, or rolled back:
 clearCodeModeNamespacesForPlugin(pluginId);
 ```
 
-Use `unregisterCodeModeNamespace(namespaceId)` only when removing one known
-namespace. Tests can call `clearCodeModeNamespacesForTest()` to avoid leaking
-registrations across cases.
+Code-mode cleanup is plugin-owned; clear the plugin's namespace registrations
+when its lifecycle ends instead of keeping per-namespace teardown handles. Tests
+can call `clearCodeModeNamespacesForTest()` to avoid leaking registrations
+across cases.
 
 ### Test checklist
 

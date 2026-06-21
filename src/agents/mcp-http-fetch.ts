@@ -12,9 +12,6 @@ import {
 } from "../infra/net/ssrf.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
 
-/** MCP SDK-compatible fetch function type. */
-export type { FetchLike };
-
 /** Default MCP HTTP fetch backed by lazy-loaded undici runtime deps. */
 const fetchWithUndici: FetchLike = async (url, init) =>
   (await loadUndiciRuntimeDeps().fetch(

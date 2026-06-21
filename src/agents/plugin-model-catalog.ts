@@ -23,7 +23,7 @@ export type PluginModelCatalogMetadataSnapshot = Pick<PluginMetadataSnapshot, "o
   normalizePluginId?: (pluginId: string) => string;
 };
 
-export type PluginModelCatalogFile = {
+type PluginModelCatalogFile = {
   path: string;
   pluginId: string;
   relativePath: string;

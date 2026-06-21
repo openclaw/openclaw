@@ -465,7 +465,12 @@ function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
     group.push(match);
     groups.set(match.executionKind, group);
   }
-  const executionOrder: QaScenarioSearchMatch["executionKind"][] = ["flow", "vitest", "playwright"];
+  const executionOrder: QaScenarioSearchMatch["executionKind"][] = [
+    "flow",
+    "script",
+    "vitest",
+    "playwright",
+  ];
   return executionOrder.flatMap((executionKind) => {
     const group = groups.get(executionKind);
     return group && group.length > 0 ? [{ executionKind, matches: group }] : [];

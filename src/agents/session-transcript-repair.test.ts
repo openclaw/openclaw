@@ -2,13 +2,15 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_MISSING_TOOL_RESULT_TEXT,
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
   stripToolResultDetails,
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+
+const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 
 const TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",

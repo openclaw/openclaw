@@ -257,12 +257,6 @@ export function resolveThinkingProfile(params: {
   return profile;
 }
 
-/** Return whether provider/model exposes only off/on thinking controls. */
-export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
-  const profile = resolveThinkingProfile({ provider, model });
-  return profile.levels.length === 2 && profile.levels.some((level) => level.label === "on");
-}
-
 function supportsThinkingLevel(
   provider: string | null | undefined,
   model: string | null | undefined,
@@ -338,24 +332,6 @@ export function resolveThinkingDefaultForModel(params: {
     return "off";
   }
   return resolveSupportedThinkingLevelFromProfile(profile, "medium");
-}
-
-/** Resolve the highest non-off thinking level supported by provider/model. */
-export function resolveLargestSupportedThinkingLevel(
-  provider?: string | null,
-  model?: string | null,
-): ThinkLevel {
-  const profile = resolveThinkingProfile({ provider, model });
-  let bestLevel: ResolvedThinkingProfile["levels"][number] | undefined;
-  for (const level of profile.levels) {
-    if (level.id === "off") {
-      continue;
-    }
-    if (!bestLevel || level.rank > bestLevel.rank) {
-      bestLevel = level;
-    }
-  }
-  return bestLevel?.id ?? "off";
 }
 
 /** Return whether a specific thinking level is supported by provider/model. */

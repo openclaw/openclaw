@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpCoords,
   clickChromeMcpElement,
-  buildChromeMcpArgs,
   decodeChromeMcpStderrTail,
   ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
@@ -210,114 +209,6 @@ describe("chrome MCP page parsing", () => {
         format: "jpeg",
       }),
     ).resolves.toEqual(Buffer.from("screenshot:jpeg"));
-  });
-
-  it("adds --userDataDir when an explicit Chromium profile path is configured", () => {
-    expect(buildChromeMcpArgs("/tmp/brave-profile")).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--autoConnect",
-      "--no-usage-statistics",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-      "--userDataDir",
-      "/tmp/brave-profile",
-    ]);
-  });
-
-  it("uses browserUrl for existing-session cdpUrl without also passing userDataDir", () => {
-    expect(
-      buildChromeMcpArgs({
-        cdpUrl: "http://127.0.0.1:9222",
-        userDataDir: "/tmp/brave-profile",
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--browserUrl",
-      "http://127.0.0.1:9222",
-      "--no-usage-statistics",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-    ]);
-  });
-
-  it("uses wsEndpoint for direct existing-session websocket cdpUrl", () => {
-    expect(
-      buildChromeMcpArgs({
-        cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--wsEndpoint",
-      "ws://127.0.0.1:9222/devtools/browser/abc",
-      "--no-usage-statistics",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-    ]);
-  });
-
-  it("appends custom Chrome MCP args and lets explicit endpoint args override auto-connect", () => {
-    expect(
-      buildChromeMcpArgs({
-        userDataDir: "/tmp/brave-profile",
-        mcpArgs: ["--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-      "--browserUrl",
-      "http://127.0.0.1:9222",
-      "--no-usage-statistics",
-    ]);
-  });
-
-  it("lets explicit Chrome MCP usage-statistics args override the default opt-out", () => {
-    expect(
-      buildChromeMcpArgs({
-        mcpArgs: ["--usage-statistics"],
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--autoConnect",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-      "--usage-statistics",
-    ]);
-  });
-
-  it("does not duplicate an explicit Chrome MCP usage-statistics opt-out", () => {
-    expect(
-      buildChromeMcpArgs({
-        mcpArgs: ["--no-usage-statistics"],
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--autoConnect",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-      "--no-usage-statistics",
-    ]);
-  });
-
-  it("omits the npx package prefix for a custom Chrome MCP command", () => {
-    expect(
-      buildChromeMcpArgs({
-        mcpCommand: "/usr/local/bin/chrome-devtools-mcp",
-        cdpUrl: "http://127.0.0.1:9222",
-      }),
-    ).toEqual([
-      "--browserUrl",
-      "http://127.0.0.1:9222",
-      "--no-usage-statistics",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-    ]);
   });
 
   it("terminates the owned Chrome MCP subprocess tree when closing temporary sessions", async () => {

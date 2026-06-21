@@ -45,8 +45,6 @@ import {
 import { normalizeProviderId } from "./model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
-export type { ProviderAuthWarmSnapshot } from "./model-provider-auth-state.js";
-
 type ProviderAuthWarmWorkerResult =
   | {
       status: "ok";
@@ -394,30 +392,6 @@ export async function buildCurrentProviderAuthStateSnapshot(
     });
   }
   return serializeProviderAuthStates(states);
-}
-
-/** Warms process-current provider auth state on the main thread. */
-export async function warmCurrentProviderAuthState(
-  cfg: OpenClawConfig,
-  options: { isCancelled?: () => boolean } = {},
-): Promise<void> {
-  // Claim a fresh generation; any concurrent warm or clear bumps this and
-  // turns our published state stale.
-  const ownGeneration = claimCurrentProviderAuthStateGeneration();
-  const isWarmStale = () =>
-    options.isCancelled?.() === true || !isCurrentProviderAuthStateGeneration(ownGeneration);
-  const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
-    isCancelled: isWarmStale,
-  });
-  if (isWarmStale()) {
-    return;
-  }
-  if (options.isCancelled?.() || !isCurrentProviderAuthStateGeneration(ownGeneration)) {
-    // A newer warm or clear ran while we were building; skip publication so
-    // the newer answer wins.
-    return;
-  }
-  publishProviderAuthWarmSnapshot(snapshot);
 }
 
 function resolveProviderAuthWarmWorkerUrl(currentModuleUrl: string): URL {

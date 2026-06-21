@@ -628,7 +628,6 @@ export const testOnlyOpenAiHttp = {
   resolveOpenAiChatCompletionsLimits,
   resolveChatCompletionUsage,
 };
-export { testOnlyOpenAiHttp as __testOnlyOpenAiHttp };
 
 function buildAgentPrompt(
   messagesUnknown: unknown,

@@ -8,7 +8,7 @@ import {
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 
-export type ServiceStatusSummary = {
+type ServiceStatusSummary = {
   label: string;
   installed: boolean | null;
   loaded: boolean;

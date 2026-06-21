@@ -477,6 +477,7 @@ export function buildChannelInboundEventContext(
     InboundEventKind: params.message.inboundEventKind ?? "user_request",
     BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
     InboundHistory: params.message.inboundHistory,
+    SourceModality: params.message.sourceModality,
     RawBody: params.message.rawBody,
     CommandBody: params.message.commandBody ?? params.message.rawBody,
     BodyForCommands: params.message.commandBody ?? params.message.rawBody,

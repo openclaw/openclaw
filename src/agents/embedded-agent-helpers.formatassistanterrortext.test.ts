@@ -673,6 +673,38 @@ describe("raw API error payload helpers", () => {
   });
 });
 
+describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
+  // OAuth/Max users should NOT see "API key" or "top up" language.
+  it("returns neutral copy for oauth authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "oauth");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+    expect(result).toContain("check your account");
+  });
+
+  it("returns neutral copy for token authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "token");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+  });
+
+  it("REGRESSION: api_key authMode still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "api_key");
+    expect(result).toMatch(/api key/i);
+    expect(result).toMatch(/top up/i);
+  });
+
+  it("REGRESSION: undefined authMode (legacy call-sites) still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5");
+    expect(result).toMatch(/api key/i);
+  });
+
+  it("REGRESSION: no-provider call still returns generic 'API key' copy", () => {
+    const result = formatBillingErrorMessage();
+    expect(result).toMatch(/api key/i);
+  });
+});
+
 describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () => {
   it("rewrites transport-classified malformed streaming fragments in error context", () => {
     const result = sanitizeUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {

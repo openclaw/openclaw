@@ -12,13 +12,13 @@ import {
   truncateTail,
 } from "./truncate.js";
 
-export interface OutputAccumulatorOptions {
+interface OutputAccumulatorOptions {
   maxLines?: number;
   maxBytes?: number;
   tempFilePrefix?: string;
 }
 
-export interface OutputSnapshot {
+interface OutputSnapshot {
   content: string;
   truncation: TruncationResult;
   fullOutputPath?: string;

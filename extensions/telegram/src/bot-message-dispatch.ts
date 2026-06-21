@@ -137,7 +137,6 @@ import {
   buildTelegramNonInterruptingReplyFenceKey,
   buildTelegramReplyFenceLaneKey,
   endTelegramReplyFence,
-  getTelegramReplyFenceSizeForTests,
   isTelegramReplyFenceSuperseded,
   releaseTelegramReplyFenceAbortController,
   resetTelegramReplyFenceForTests,
@@ -146,7 +145,7 @@ import {
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
 
-export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
+export { resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
@@ -458,7 +457,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
       parts.push(renderTelegramProgressStringLine(text));
     }
   }
-  if (line.status && line.status !== line.detail) {
+  if (line.status && line.status !== "completed" && line.status !== line.detail) {
     parts.push(`<i>${escapeTelegramProgressHtml(line.status)}</i>`);
   }
   return parts.join(" ");
@@ -467,6 +466,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
 function renderTelegramProgressDraftPreview(
   text: string,
   lines: readonly ChannelProgressDraftCompositorLine[],
+  richMessages: boolean,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   const [heading] = trimmed.split(/\r?\n/u, 1);
@@ -474,9 +474,13 @@ function renderTelegramProgressDraftPreview(
   const htmlParts = heading?.trim()
     ? [`<b>${escapeTelegramProgressHtml(heading.trim())}</b>`, ...renderedLines]
     : renderedLines;
+  const html = htmlParts.join("<br>");
+  if (!richMessages) {
+    return { text: html, parseMode: "HTML" };
+  }
   return {
     text: trimmed,
-    richMessage: buildTelegramRichHtml(htmlParts.join("<br>"), { skipEntityDetection: true }),
+    richMessage: buildTelegramRichHtml(html, { skipEntityDetection: true }),
   };
 }
 
@@ -1075,7 +1079,11 @@ export const dispatchTelegramMessage = async ({
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
       answerLane.stream?.updatePreview(
-        renderTelegramProgressDraftPreview(streamText, options?.lines ?? []),
+        renderTelegramProgressDraftPreview(
+          streamText,
+          options?.lines ?? [],
+          telegramCfg.richMessages === true,
+        ),
       );
       if (options?.flush) {
         await answerLane.stream?.flush();

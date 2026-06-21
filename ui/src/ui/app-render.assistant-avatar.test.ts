@@ -37,6 +37,7 @@ vi.mock("./views/chat.ts", () => ({
     chatProps.current = props;
     return html`<div data-testid="chat">${props.composerControls}</div>`;
   },
+  resetChatViewState: vi.fn(),
 }));
 
 vi.mock("./app-render.helpers.ts", async (importOriginal) => {
@@ -239,7 +240,7 @@ beforeEach(async () => {
 describe("renderApp assistant avatar routing", () => {
   it("passes the browser-local assistant override to Quick Settings ahead of stale identity metadata", () => {
     const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
-    saveLocalAssistantIdentity({ avatar: dataUrl });
+    saveLocalAssistantIdentity({ avatar: dataUrl, agentId: "main" });
 
     renderApp(createState());
 
@@ -249,6 +250,80 @@ describe("renderApp assistant avatar routing", () => {
     expect(quickSettingsProps.current?.assistantAvatarStatus).toBe("data");
     expect(quickSettingsProps.current?.assistantAvatarReason).toBeNull();
     expect(quickSettingsProps.current?.assistantAvatarOverride).toBe(dataUrl);
+  });
+
+  it("uses the active session agent override while identity metadata is stale", () => {
+    saveLocalAssistantIdentity({
+      avatar: "data:image/png;base64,bWFpbg==",
+      agentId: "main",
+    });
+    saveLocalAssistantIdentity({
+      avatar: "data:image/png;base64,d29ya2Vy",
+      agentId: "worker",
+    });
+
+    renderApp(
+      createState({
+        sessionKey: "agent:worker:main",
+        assistantAgentId: "main",
+      }),
+    );
+
+    expect(quickSettingsProps.current?.assistantAvatarOverride).toBe(
+      "data:image/png;base64,d29ya2Vy",
+    );
+  });
+
+  it("uses the default agent override for a bare main session while identity metadata is stale", () => {
+    saveLocalAssistantIdentity({
+      avatar: "data:image/png;base64,bWFpbg==",
+      agentId: "main",
+    });
+    saveLocalAssistantIdentity({
+      avatar: "data:image/png;base64,d29ya2Vy",
+      agentId: "worker",
+    });
+
+    renderApp(
+      createState({
+        sessionKey: "main",
+        assistantAgentId: "worker",
+      }),
+    );
+
+    expect(quickSettingsProps.current?.assistantAvatarOverride).toBe(
+      "data:image/png;base64,bWFpbg==",
+    );
+  });
+
+  it("reloads the default agent identity after clearing its override from a bare main session", async () => {
+    const loadAssistantIdentity = vi.fn(async () => undefined);
+    saveLocalAssistantIdentity({
+      avatar: "data:image/png;base64,YWxwaGE=",
+      agentId: "alpha",
+    });
+
+    renderApp(
+      createState({
+        sessionKey: "main",
+        assistantAgentId: "worker",
+        agentsList: {
+          defaultId: "alpha",
+          agents: [
+            { id: "alpha", name: "Alpha" },
+            { id: "worker", name: "Worker" },
+          ],
+        } as AppViewState["agentsList"],
+        loadAssistantIdentity,
+      }),
+    );
+
+    await quickSettingsProps.current?.onAssistantAvatarClearOverride?.();
+
+    expect(loadAssistantIdentity).toHaveBeenCalledWith({
+      sessionKey: "agent:alpha:main",
+      expectedSessionKey: "main",
+    });
   });
 
   it("applies the configured chat message width as a shell CSS variable", () => {
@@ -307,6 +382,37 @@ describe("renderApp assistant avatar routing", () => {
     expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBe(
       "node list failed",
     );
+  });
+
+  it("shows a retryable Workboard config error after config loading fails", async () => {
+    const request = vi.fn(async () => ({
+      config: {},
+      hash: "hash-reloaded",
+      issues: [],
+      raw: "{}",
+      valid: true,
+    }));
+    const state = createState({
+      tab: "workboard",
+      client: { request } as unknown as AppViewState["client"],
+      configLoading: false,
+      configSnapshot: null,
+      lastError: "config.get failed",
+    });
+    const container = document.createElement("div");
+
+    await vi.waitFor(() => {
+      render(renderApp(state), container);
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("config.get failed");
+    });
+
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Retry")
+      ?.click();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("config.get", {});
+    });
   });
 
   it("routes chat errors through the chat view instead of the shared header", () => {

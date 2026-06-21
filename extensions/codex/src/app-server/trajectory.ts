@@ -15,6 +15,7 @@ import {
   resolveRegularFileAppendFlags,
 } from "openclaw/plugin-sdk/security-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
+import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
 /** Runtime trajectory recorder used by Codex run attempts and event projectors. */
 export type CodexTrajectoryRecorder = {
@@ -28,7 +29,7 @@ type CodexTrajectoryInit = {
   cwd: string;
   developerInstructions?: string;
   prompt?: string;
-  tools?: Array<{ name?: string; description?: string; inputSchema?: unknown }>;
+  tools?: CodexDynamicToolSpec[];
   env?: NodeJS.ProcessEnv;
 };
 
@@ -298,12 +299,12 @@ function resolveContainedPath(baseDir: string, fileName: string): string {
 }
 
 function toTrajectoryToolDefinitions(
-  tools: Array<{ name?: string; description?: string; inputSchema?: unknown }> | undefined,
+  tools: readonly CodexDynamicToolSpec[] | undefined,
 ): Array<{ name: string; description?: string; parameters?: unknown }> | undefined {
   if (!tools || tools.length === 0) {
     return undefined;
   }
-  return tools
+  return flattenCodexDynamicToolFunctions(tools)
     .flatMap((tool) => {
       const name = tool.name?.trim();
       if (!name) {

@@ -523,17 +523,13 @@ export async function hasRecentWorkspaceAttestation(
   }
 }
 
-export async function isWorkspaceAttestationMarker(attestationPath: string): Promise<boolean> {
-  return (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker";
-}
-
 export async function shouldRemoveWorkspaceAttestation(
   attestationPath: string,
   opts?: { trustUnknown?: boolean },
 ): Promise<boolean> {
   try {
     return (
-      (await isWorkspaceAttestationMarker(attestationPath)) ||
+      (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker" ||
       (await hasRecentWorkspaceAttestation(attestationPath, opts))
     );
   } catch {
@@ -768,23 +764,6 @@ export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean>
   return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
 }
 
-export async function reconcileWorkspaceBootstrapCompletion(
-  dir: string,
-): Promise<WorkspaceBootstrapCompletionReconcileResult> {
-  const resolvedDir = resolveUserPath(dir);
-  const statePath = resolveWorkspaceStatePath(resolvedDir);
-  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const state = await readWorkspaceSetupStateForDir(resolvedDir, {
-    persistLegacyMigration: true,
-  });
-  return await reconcileWorkspaceBootstrapCompletionState({
-    dir: resolvedDir,
-    bootstrapPath,
-    statePath,
-    state,
-  });
-}
-
 async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,
@@ -954,6 +933,15 @@ export async function ensureAgentWorkspace(params?: {
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   const skipOptionalBootstrapFiles = new Set(params?.skipOptionalBootstrapFiles ?? []);
+  // When the workspace is already configured, skip optional bootstrap files to
+  // prevent subagent spawns from recreating root-level SOUL.md, USER.md,
+  // IDENTITY.md, or HEARTBEAT.md that were removed intentionally or only exist
+  // under agent-specific subdirectories.
+  if (await isWorkspaceSetupCompleted(dir)) {
+    for (const filename of OPTIONAL_BOOTSTRAP_FILENAMES) {
+      skipOptionalBootstrapFiles.add(filename);
+    }
+  }
   const shouldWriteBootstrapFile = (fileName: string): boolean =>
     !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
 
@@ -1233,14 +1221,6 @@ async function resolveExtraBootstrapPatternPaths(
     }
   }
   return matches.length > 0 ? matches : [pattern];
-}
-
-export async function loadExtraBootstrapFiles(
-  dir: string,
-  extraPatterns: string[],
-): Promise<WorkspaceBootstrapFile[]> {
-  const loaded = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
-  return loaded.files;
 }
 
 export async function loadExtraBootstrapFilesWithDiagnostics(

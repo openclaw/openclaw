@@ -25,10 +25,10 @@ function clampTtl(value: number | undefined) {
 let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
 
 /** Lifecycle status recorded for background process sessions. */
-export type ProcessStatus = "running" | "completed" | "failed" | "killed";
+type ProcessStatus = "running" | "completed" | "failed" | "killed";
 
 /** Writable stdin surface shared by child-process and PTY-backed sessions. */
-export type SessionStdin = {
+type SessionStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
   // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
@@ -87,7 +87,7 @@ export interface ProcessSession {
 }
 
 /** Retained summary for a completed background session. */
-export interface FinishedSession {
+interface FinishedSession {
   id: string;
   command: string;
   scopeKey?: string;
@@ -306,7 +306,7 @@ function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: numb
 }
 
 /** Keeps only the last `max` characters for bounded aggregate output storage. */
-export function trimWithCap(text: string, max: number) {
+function trimWithCap(text: string, max: number) {
   if (text.length <= max) {
     return text;
   }

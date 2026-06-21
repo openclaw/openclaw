@@ -30,6 +30,7 @@ import {
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
@@ -455,7 +456,10 @@ import {
   TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES,
 } from "./attempt.tool-search-run-plan.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
-import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
+import {
+  hasActiveCompactionRetryWork,
+  waitForCompactionRetryWithAggregateTimeout,
+} from "./compaction-retry-aggregate-timeout.js";
 import {
   resolveRunTimeoutDuringCompaction,
   selectCompactionTimeoutSnapshot,
@@ -1260,6 +1264,7 @@ export async function runEmbeddedAttempt(
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
+            messageChannel: params.messageChannel,
             exec: {
               ...params.execOverrides,
               config: params.config,
@@ -2233,6 +2238,12 @@ export async function runEmbeddedAttempt(
             activeAgentId: sessionAgentId,
             contextEnginePluginId: resolveActiveContextEnginePluginId(),
           }),
+          contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+          providerId: params.provider,
+          requestedModelId: params.requestedModelId,
+          modelId: params.modelId,
+          fallbackReason: params.fallbackReason,
+          degradedReason: params.degradedReason,
           runMaintenance: async (contextParams) =>
             await runContextEngineMaintenance({
               contextEngine: contextParams.contextEngine as never,
@@ -2242,6 +2253,7 @@ export async function runEmbeddedAttempt(
               reason: contextParams.reason,
               sessionManager: contextParams.sessionManager as never,
               runtimeContext: contextParams.runtimeContext,
+              runtimeSettings: contextParams.runtimeSettings,
               config: params.config,
               agentId: sessionAgentId,
             }),
@@ -2641,6 +2653,19 @@ export async function runEmbeddedAttempt(
           }
         : {};
       if (activeContextEngine?.info.ownsCompaction === true) {
+        const selectedContextEngineId = activeContextEngine.info.id;
+        const contextEngineLoopRuntimeSettings = buildContextEngineRuntimeSettings({
+          contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+          provider: params.provider,
+          requestedModel: params.requestedModelId,
+          resolvedModel: params.modelId,
+          selectedContextEngineId,
+          contextEngineSelectionSource:
+            selectedContextEngineId === "legacy" ? "default" : "configured",
+          promptTokenBudget: params.contextTokenBudget,
+          fallbackReason: params.fallbackReason,
+          degradedReason: params.degradedReason,
+        });
         const removeContextEngineLoopHook = installContextEngineLoopHook({
           agent: activeSession.agent,
           contextEngine: activeContextEngine,
@@ -2678,6 +2703,7 @@ export async function runEmbeddedAttempt(
                   }),
                 }),
             }),
+          runtimeSettings: contextEngineLoopRuntimeSettings,
           isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
         });
         const removeGuard = installToolResultContextGuard({
@@ -3291,6 +3317,11 @@ export async function runEmbeddedAttempt(
               availableTools: new Set(capabilityToolNames),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
+              contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+              providerId: params.provider,
+              requestedModelId: params.requestedModelId,
+              fallbackReason: params.fallbackReason,
+              degradedReason: params.degradedReason,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
             });
             if (!assembled) {
@@ -3361,7 +3392,9 @@ export async function runEmbeddedAttempt(
           }
         }
         if (isTimeout) {
-          runAbortController.abort(reason ?? makeTimeoutAbortReason());
+          const timeoutReason = reason instanceof Error ? reason : makeTimeoutAbortReason();
+          params.onAttemptTimeout?.(timeoutReason);
+          runAbortController.abort(timeoutReason);
         } else {
           runAbortController.abort(reason);
         }
@@ -3671,6 +3704,7 @@ export async function runEmbeddedAttempt(
 
       const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
         externalAbort = true;
+        params.onAttemptAbort?.();
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
       const queueHandle: EmbeddedAgentQueueHandle & {
@@ -3766,6 +3800,7 @@ export async function runEmbeddedAttempt(
         );
       };
       scheduleAbortTimer(params.timeoutMs, "initial");
+      params.onAttemptTimeoutArmed?.();
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
@@ -4911,7 +4946,11 @@ export async function runEmbeddedAttempt(
                 waitForCompactionRetry,
                 abortable,
                 aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
-                isCompactionStillInFlight: isCompactionInFlight,
+                isCompactionRetryStillActive: () =>
+                  hasActiveCompactionRetryWork({
+                    isCompactionInFlight: isCompactionInFlight(),
+                    isSessionStreaming: activeSession.isStreaming,
+                  }),
               });
           if (compactionRetryWait.timedOut) {
             timedOutDuringCompaction = true;
@@ -5078,6 +5117,12 @@ export async function runEmbeddedAttempt(
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
             runtimeContext: afterTurnRuntimeContext,
+            contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+            providerId: params.provider,
+            requestedModelId: params.requestedModelId,
+            modelId: params.modelId,
+            fallbackReason: params.fallbackReason,
+            degradedReason: params.degradedReason,
             runMaintenance: async (contextParams) =>
               await runContextEngineMaintenance({
                 contextEngine: contextParams.contextEngine as never,
@@ -5089,6 +5134,7 @@ export async function runEmbeddedAttempt(
                 withSessionManagerRewriteLock: async (operation) =>
                   await withOwnedSessionWriteLock(operation),
                 runtimeContext: contextParams.runtimeContext,
+                runtimeSettings: contextParams.runtimeSettings,
                 config: params.config,
                 agentId: sessionAgentId,
               }),

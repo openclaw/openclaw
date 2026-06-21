@@ -84,6 +84,17 @@ function runOnboardAssert(home: string) {
   });
 }
 
+function runMockModelAssert(home: string, command: string, port: string) {
+  return spawnSync(process.execPath, [assertionsPath, command, port], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: home,
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+    },
+  });
+}
+
 function runStatusAssert(
   channel: string,
   channelsStatus: unknown,
@@ -110,6 +121,22 @@ function runStatusAssert(
 }
 
 describe("npm onboard channel agent assertions", () => {
+  it("rejects loose mock OpenAI port args", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+
+    try {
+      for (const command of ["configure-mock-model", "assert-mock-model-config"]) {
+        const result = runMockModelAssert(tempDir, command, "1e3");
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("mock OpenAI port must be a TCP port from 1 to 65535");
+        expect(result.stderr).toContain('"1e3"');
+      }
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("validates OpenAI env refs from the SQLite auth profile store", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
     const agentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");

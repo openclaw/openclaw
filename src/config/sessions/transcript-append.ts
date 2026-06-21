@@ -26,7 +26,10 @@ import {
   streamSessionTranscriptLinesReverse,
 } from "./transcript-stream.js";
 import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
-import { resolveOwnedSessionTranscriptWriteLockRunner } from "./transcript-write-context.js";
+import {
+  resolveOwnedSessionTranscriptWriteLockRunner,
+  type OwnedSessionTranscriptPublishedEntry,
+} from "./transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
@@ -338,7 +341,7 @@ async function resolveTranscriptAppendQueueKey(transcriptPath: string): Promise<
   }
 }
 
-async function withTranscriptAppendQueue<T>(
+export async function withSessionTranscriptAppendQueue<T>(
   transcriptPath: string,
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -363,7 +366,7 @@ async function withTranscriptAppendQueue<T>(
   }
 }
 
-type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
+export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   transcriptPath: string;
   message: TMessage;
   now?: number;
@@ -375,12 +378,21 @@ type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   /** Runs under the transcript write lock after idempotency replay checks and before append. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   config?: OpenClawConfig;
+  /** Internal owned-batch hook for publishing a newly created transcript header. */
+  onHeaderCreated?: (serializedHeader: string) => void;
 };
 
-type AppendSessionTranscriptMessageResult<TMessage> = {
+export type AppendSessionTranscriptMessageResult<TMessage> = {
   messageId: string;
   message: TMessage;
   appended: boolean;
+};
+
+export type SessionTranscriptAppendTransactionContext = {
+  appendEvent: (event: unknown) => Promise<void>;
+  appendMessage: <TMessage>(
+    params: Omit<AppendSessionTranscriptMessageParams<TMessage>, "config" | "transcriptPath">,
+  ) => Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
 };
 
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
@@ -413,7 +425,7 @@ export async function appendSessionTranscriptMessage<TMessage>(
     let publishedHeader: string | undefined;
     return await activeLockRunner(
       () =>
-        withTranscriptAppendQueue(params.transcriptPath, () =>
+        withSessionTranscriptAppendQueue(params.transcriptPath, () =>
           appendSessionTranscriptMessageLocked({
             ...params,
             onHeaderCreated: (header) => {
@@ -432,12 +444,88 @@ export async function appendSessionTranscriptMessage<TMessage>(
       },
     );
   }
-  return await withTranscriptAppendQueue(params.transcriptPath, () =>
+  return await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
     withSessionTranscriptWriteLock(params, () => appendSessionTranscriptMessageLocked(params)),
   );
 }
 
-export type AppendSessionTranscriptEventParams = {
+/**
+ * Appends a message while the caller already owns the transcript write lock and
+ * append FIFO. Batch writers use this to keep queue-before-lock ordering while
+ * reusing the same file lock for multiple transcript rows.
+ */
+export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage> & {
+    prepareMessageAfterIdempotencyCheck: (message: TMessage) => TMessage | undefined;
+  },
+): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
+export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+): Promise<AppendSessionTranscriptMessageResult<TMessage>>;
+export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
+  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
+    sessionFile: params.transcriptPath,
+  });
+  if (!activeLockRunner) {
+    throw new Error("Owned transcript write lock is required for batch transcript append");
+  }
+  return await activeLockRunner(() => appendSessionTranscriptMessageLocked(params));
+}
+
+/**
+ * Runs a group of transcript appends through one append queue and write lock.
+ */
+export async function runSessionTranscriptAppendTransaction<T>(
+  params: Pick<AppendSessionTranscriptMessageParams, "config" | "transcriptPath">,
+  run: (context: SessionTranscriptAppendTransactionContext) => Promise<T> | T,
+): Promise<T> {
+  const publishedEntries: OwnedSessionTranscriptPublishedEntry[] = [];
+  const runTransaction = async (): Promise<T> =>
+    await run({
+      appendEvent: async (event) => {
+        const result = await appendSessionTranscriptEventLocked({
+          config: params.config,
+          event,
+          transcriptPath: params.transcriptPath,
+        });
+        publishedEntries.push({ kind: "serialized", serialized: result.serializedEntry });
+      },
+      appendMessage: async (messageParams) => {
+        const result = await appendSessionTranscriptMessageLocked({
+          ...messageParams,
+          config: params.config,
+          onHeaderCreated: (header) => {
+            publishedEntries.push({ kind: "header", serialized: header });
+          },
+          transcriptPath: params.transcriptPath,
+        });
+        if (result?.appended === true) {
+          publishedEntries.push({ kind: "id", id: result.messageId });
+        }
+        return result;
+      },
+    });
+  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
+    sessionFile: params.transcriptPath,
+  });
+  if (activeLockRunner) {
+    return await activeLockRunner(
+      () => withSessionTranscriptAppendQueue(params.transcriptPath, runTransaction),
+      {
+        publishOwnedWrite: true,
+        resolvePublishedEntries: () => publishedEntries,
+        resolvePublishedEntriesAfterFailure: () => publishedEntries,
+      },
+    );
+  }
+  return await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
+    withSessionTranscriptWriteLock(params, runTransaction),
+  );
+}
+
+type AppendSessionTranscriptEventParams = {
   config?: OpenClawConfig;
   event: unknown;
   transcriptPath: string;
@@ -453,7 +541,7 @@ export async function appendSessionTranscriptEvent(
   if (activeLockRunner) {
     await activeLockRunner(
       () =>
-        withTranscriptAppendQueue(params.transcriptPath, () =>
+        withSessionTranscriptAppendQueue(params.transcriptPath, () =>
           appendSessionTranscriptEventLocked(params),
         ),
       {
@@ -465,7 +553,7 @@ export async function appendSessionTranscriptEvent(
     );
     return;
   }
-  await withTranscriptAppendQueue(params.transcriptPath, () =>
+  await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
     withSessionTranscriptWriteLock(params, () => appendSessionTranscriptEventLocked(params)),
   );
 }
@@ -496,9 +584,7 @@ async function appendSessionTranscriptEventLocked(
 }
 
 async function appendSessionTranscriptMessageLocked<TMessage>(
-  params: AppendSessionTranscriptMessageParams<TMessage> & {
-    onHeaderCreated?: (serializedHeader: string) => void;
-  },
+  params: AppendSessionTranscriptMessageParams<TMessage>,
 ): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
   const now = params.now ?? Date.now();
   const serializedHeader = await ensureTranscriptHeader(params.transcriptPath, {

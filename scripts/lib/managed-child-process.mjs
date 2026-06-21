@@ -70,9 +70,9 @@ export async function runManagedCommand({
   cwd,
   env,
   stdio = "inherit",
-  shell = process.platform === "win32",
-  windowsVerbatimArguments,
   platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
   comSpec,
   onReady,
 }) {
@@ -102,6 +102,9 @@ export async function runManagedCommand({
       child.once("close", (status, signal) => {
         if (managedChild.forceKillTimer) {
           clearTimeout(managedChild.forceKillTimer);
+        }
+        if (managedChild.receivedSignal) {
+          terminateManagedChild(child, "SIGKILL");
         }
         resolve(
           managedChild.receivedSignal
@@ -197,9 +200,9 @@ export function createManagedCommandSpawnSpec({
   cwd,
   env,
   stdio = "inherit",
-  shell = process.platform === "win32",
-  windowsVerbatimArguments,
   platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
   comSpec,
 }) {
   const invocation = createManagedCommandInvocation({
@@ -241,9 +244,9 @@ export function createManagedCommandInvocation({
   bin,
   args = [],
   env,
-  shell = process.platform === "win32",
-  windowsVerbatimArguments,
   platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
   comSpec,
 }) {
   if (platform === "win32" && shell && args.length > 0) {

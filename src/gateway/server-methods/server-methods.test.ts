@@ -2337,7 +2337,7 @@ describe("gateway chat transcript writes (guardrail)", () => {
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
     expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
-    expect(helperSrc).toContain("appendSessionTranscriptMessage({");
+    expect(helperSrc).toContain("persistSessionTranscriptTurn(");
     expect(helperSrc).toContain("useRawWhenLinear: true");
     expect(helperSrc).not.toContain("SessionManager.open(params.transcriptPath)");
   });
@@ -2519,6 +2519,15 @@ describe("exec approval handlers", () => {
     };
   }
 
+  async function waitForRequestedExecApprovalPayload(
+    broadcasts: Array<{ event: string; payload: unknown }>,
+  ): Promise<{ id: string; request: Record<string, unknown> }> {
+    await vi.waitFor(() => {
+      expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
+    });
+    return getRequestedExecApprovalPayload(broadcasts);
+  }
+
   function createForwardingExecApprovalFixture(opts?: {
     iosPushDelivery?: {
       handleRequested: ReturnType<typeof vi.fn>;
@@ -2538,6 +2547,7 @@ describe("exec approval handlers", () => {
     });
     const respond = vi.fn();
     const context = {
+      getRuntimeConfig: () => ({}),
       broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
     };
@@ -2573,6 +2583,24 @@ describe("exec approval handlers", () => {
     ])("accepts request with resolvedPath $label", ({ extra }) => {
       const params = { ...baseParams, ...extra };
       expect(validateExecApprovalRequestParams(params)).toBe(true);
+    });
+
+    it("accepts unavailable optional decisions", () => {
+      expect(
+        validateExecApprovalRequestParams({
+          ...baseParams,
+          unavailableDecisions: ["allow-always"],
+        }),
+      ).toBe(true);
+    });
+
+    it.each(["allow-once", "deny"])("rejects baseline unavailable decision %s", (decision) => {
+      expect(
+        validateExecApprovalRequestParams({
+          ...baseParams,
+          unavailableDecisions: [decision],
+        }),
+      ).toBe(false);
     });
   });
 
@@ -2669,10 +2697,7 @@ describe("exec approval handlers", () => {
         nodeId: undefined,
       },
     });
-
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const id = (requested?.payload as { id?: string })?.id ?? "";
-    expect(id).not.toBe("");
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     const getRespond = vi.fn();
     await getExecApproval({ handlers, id, respond: getRespond });
@@ -2715,9 +2740,7 @@ describe("exec approval handlers", () => {
         nodeId: undefined,
       },
     });
-
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const request = requested?.payload as { id?: string; request?: { commandAnalysis?: unknown } };
+    const request = await waitForRequestedExecApprovalPayload(broadcasts);
     const commandAnalysis = request.request?.commandAnalysis as Record<string, unknown>;
     expect(commandAnalysis.commandCount).toBe(1);
     expect(commandAnalysis.riskKinds).toEqual(["inline-eval"]);
@@ -2746,6 +2769,9 @@ describe("exec approval handlers", () => {
         systemRunPlan: undefined,
         nodeId: undefined,
       },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
     const listRespond = vi.fn();
@@ -2854,6 +2880,9 @@ describe("exec approval handlers", () => {
       context,
       params: { twoPhase: true, host: "gateway", systemRunPlan: undefined, nodeId: undefined },
     });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
     const acceptedId = respond.mock.calls.find((call) => call[1]?.status === "accepted")?.[1]?.id;
     expect(typeof acceptedId).toBe("string");
 
@@ -2885,8 +2914,7 @@ describe("exec approval handlers", () => {
       context,
       params: { twoPhase: true },
     });
-
-    const { id } = getRequestedExecApprovalPayload(broadcasts);
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     expect(mockCallArg(respond)).toBe(true);
     expectRecordFields(mockCallArg(respond, 0, 1), { status: "accepted", id });
@@ -2918,6 +2946,7 @@ describe("exec approval handlers", () => {
       context,
       params: { id: "approval-repeat-1", twoPhase: true },
     });
+    await drainApprovalRequestTicks();
 
     const firstResolveRespond = vi.fn();
     await resolveExecApproval({
@@ -2971,8 +3000,7 @@ describe("exec approval handlers", () => {
       context,
       params: { twoPhase: true, ask: "always" },
     });
-
-    const { id } = getRequestedExecApprovalPayload(broadcasts);
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -2989,6 +3017,78 @@ describe("exec approval handlers", () => {
       message:
         "allow-always is unavailable because the effective policy requires approval every time",
     });
+
+    const denyRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "deny",
+      respond: denyRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("rejects allow-always when the request marks it unavailable", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        unavailableDecisions: ["allow-always"],
+      },
+    });
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "allow-always",
+      respond: resolveRespond,
+      context,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      message:
+        "allow-always is unavailable because the effective policy requires approval every time",
+    });
+
+    const allowOnceRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "allow-once",
+      respond: allowOnceRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(allowOnceRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("keeps baseline decisions available when allow-always is unavailable", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        unavailableDecisions: ["allow-always"],
+      },
+    });
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    expect(request.allowedDecisions).toEqual(["allow-once", "deny"]);
 
     const denyRespond = vi.fn();
     await resolveExecApproval({
@@ -3345,9 +3445,7 @@ describe("exec approval handlers", () => {
       context,
       params: { id: "approval-123", host: "gateway" },
     });
-
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const id = (requested?.payload as { id?: string })?.id ?? "";
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
     expect(id).toBe("approval-123");
 
     const resolveRespond = vi.fn();
@@ -3463,26 +3561,12 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
+      getRuntimeConfig: () => ({}),
       broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
-    const respondOne = vi.fn();
-    const respondTwo = vi.fn();
-
-    const requestOne = requestExecApproval({
-      handlers,
-      respond: respondOne,
-      context,
-      params: { id: "approval-one", host: "gateway", timeoutMs: 60_000 },
-    });
-    const requestTwo = requestExecApproval({
-      handlers,
-      respond: respondTwo,
-      context,
-      params: { id: "approval-two", host: "gateway", timeoutMs: 60_000 },
-    });
-
-    await drainApprovalRequestTicks();
+    void manager.register(manager.create({ command: "echo one" }, 60_000, "approval-one"), 60_000);
+    void manager.register(manager.create({ command: "echo two" }, 60_000, "approval-two"), 60_000);
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -3498,21 +3582,6 @@ describe("exec approval handlers", () => {
     expect(manager.getSnapshot("approval-two")?.resolvedAtMs).toBeUndefined();
 
     expect(manager.expire("approval-two", "test-expire")).toBe(true);
-    await requestOne;
-    await requestTwo;
-
-    expect(lastMockCallArg(respondOne)).toBe(true);
-    expectRecordFields(lastMockCallArg(respondOne, 1), {
-      id: "approval-one",
-      decision: "allow-once",
-    });
-    expect(lastMockCallArg(respondOne, 2)).toBeUndefined();
-    expect(lastMockCallArg(respondTwo)).toBe(true);
-    expectRecordFields(lastMockCallArg(respondTwo, 1), {
-      id: "approval-two",
-      decision: null,
-    });
-    expect(lastMockCallArg(respondTwo, 2)).toBeUndefined();
   });
 
   it("forwards turn-source metadata to exec approval forwarding", async () => {
@@ -3578,7 +3647,10 @@ describe("exec approval handlers", () => {
         turnSourceThreadId: "thread-456",
       },
     });
-    await drainApprovalRequestTicks();
+    await waitForRequestedExecApprovalPayload(broadcasts);
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -3740,7 +3812,9 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-ios-cleanup", host: "gateway" },
     });
-    await drainApprovalRequestTicks();
+    await vi.waitFor(() => {
+      expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    });
 
     await resolveExecApproval({
       handlers,
@@ -3848,9 +3922,9 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
     });
-    await drainApprovalRequestTicks();
-
-    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    });
     expect(expireSpy).not.toHaveBeenCalled();
 
     await resolveExecApproval({

@@ -13,10 +13,19 @@ scenario:
     - The mock provider plans exactly one happy-path web_search call.
     - The mock provider plans one denied-input failure-path web_search call.
     - Runtime parity coverage hard-fails call/result drift in the standard direct-loading gate.
+  plugins:
+    - qa-lab
+  gatewayConfigPatch:
+    tools:
+      web:
+        search:
+          enabled: true
+          provider: qa-lab-search
   docsRefs:
     - qa/scenarios/index.yaml
   codeRefs:
     - src/agents/tools/web-search.ts
+    - extensions/qa-lab/src/qa-web-search-provider.ts
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow

@@ -286,7 +286,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(events).toEqual(["lock", "lock"]);
+    expect(events).toEqual(["lock"]);
   });
 
   it("keeps matching owned transcript appends locked from bound callbacks", async () => {

@@ -17,7 +17,7 @@ const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
 const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
 
 /** Context needed to mirror a child ACP turn into the requester task registry. */
-export type BackgroundTaskContext = {
+type BackgroundTaskContext = {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   childSessionKey: string;
@@ -27,7 +27,7 @@ export type BackgroundTaskContext = {
 };
 
 /** Produces the bounded task label shown for a child ACP background run. */
-export function summarizeBackgroundTaskText(text: string): string {
+function summarizeBackgroundTaskText(text: string): string {
   const normalized = normalizeText(text) ?? "ACP background task";
   if (normalized.length <= ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH) {
     return normalized;

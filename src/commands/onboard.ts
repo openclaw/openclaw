@@ -119,5 +119,3 @@ export async function setupWizardCommand(
 }
 
 export const onboardCommand = setupWizardCommand;
-
-export type { OnboardOptions } from "./onboard-types.js";

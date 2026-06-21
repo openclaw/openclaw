@@ -92,6 +92,7 @@ import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   createTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
@@ -104,13 +105,7 @@ import { parseTelegramTopicConversation } from "./topic-conversation.js";
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramUpdateOffsetRuntime = typeof import("../update-offset-runtime-api.js");
 
-let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
 let telegramUpdateOffsetRuntimePromise: Promise<TelegramUpdateOffsetRuntime> | undefined;
-
-async function loadTelegramSendModule() {
-  telegramSendModulePromise ??= import("./send.js");
-  return await telegramSendModulePromise;
-}
 
 async function loadTelegramUpdateOffsetRuntime() {
   telegramUpdateOffsetRuntimePromise ??= import("../update-offset-runtime-api.js");

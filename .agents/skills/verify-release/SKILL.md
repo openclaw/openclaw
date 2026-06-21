@@ -29,11 +29,17 @@ publish skill; use `$release-openclaw-maintainer` before changing release state.
    - Confirm release body has npm, CI, plugin npm, ClawHub, mac/appcast evidence
      links when expected.
    - Confirm assets expected for stable mac releases are uploaded: zip, dmg,
-     dSYM, dependency evidence when present.
+     dSYM, dependency evidence, immutable full-validation manifest,
+     postpublish evidence, and stable-main closeout manifest.
+   - Download each immutable evidence asset and its `.sha256` companion, then
+     verify the checksum before trusting the release record.
 2. Root npm:
    - `npm view openclaw@<VERSION> version dist-tags.latest dist.tarball dist.integrity time.<VERSION> --json`
    - `latest` must equal `<VERSION>` for stable.
    - Record tarball, integrity, publish time.
+   - Confirm the release postpublish evidence records
+     `npmRegistrySignaturesVerified: true` and
+     `npmProvenanceAttestationMatched: true`.
 3. Plugin publish set:
    - Get exact tag metadata from GitHub, not the local checkout when dirty:
      download `https://api.github.com/repos/openclaw/openclaw/tarball/v<VERSION>`
@@ -57,6 +63,9 @@ publish skill; use `$release-openclaw-maintainer` before changing release state.
      Full Release Validation, OpenClaw Release Checks, OpenClaw NPM Release,
      Plugin NPM Release, Plugin ClawHub Release, mac preflight/validation/publish
      when stable mac assets are expected.
+   - For stable, verify `OpenClaw Stable Main Closeout` succeeded and its
+     manifest records the matching release tag, current rollback drill, stable
+     soak, and blocking performance evidence.
    - Summarize only relevant successful/failed jobs; ignore routine skipped
      optional lanes unless the release body promised them.
 6. Published package smoke:

@@ -31,6 +31,7 @@ import {
 import { couldNormalizeToolNamePrefixToAllowedTool, normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
+import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
@@ -238,10 +239,6 @@ function normalizeToolCallNameForDispatch(
   return resolveStructuredAllowedToolName(trimmed, allowedToolNames) ?? trimmed;
 }
 
-function isToolCallBlockType(type: unknown): boolean {
-  return type === "toolCall" || type === "toolUse" || type === "functionCall";
-}
-
 const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
 
 type ReplayToolCallBlock = {
@@ -298,7 +295,7 @@ function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
   }
-  return isToolCallBlockType((block as { type?: unknown }).type);
+  return isRunnerToolCallBlockType((block as { type?: unknown }).type);
 }
 
 function replayToolCallHasInput(block: ReplayToolCallBlock): boolean {
@@ -533,7 +530,7 @@ function sanitizeAnthropicReplayToolResults(
             continue;
           }
           const typedBlock = block as { type?: unknown; id?: unknown };
-          if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+          if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
             continue;
           }
           const trimmedId = typedBlock.id.trim();
@@ -625,7 +622,7 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
       continue;
     }
     const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+    if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
       continue;
     }
     const trimmedId = typedBlock.id.trim();
@@ -642,7 +639,7 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
       continue;
     }
     const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       continue;
     }
     if (typeof typedBlock.id === "string") {
@@ -674,7 +671,7 @@ function trimWhitespaceFromToolCallNamesInMessage(
 ): void {
   visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       return;
     }
     const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
@@ -721,7 +718,7 @@ function classifyToolCallMessage(
       continue;
     }
     const typedBlock = block as { type?: unknown; name?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       continue;
     }
     sawToolCall = true;

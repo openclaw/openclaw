@@ -180,7 +180,39 @@ const parseDateParts = (
   if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
     return undefined;
   }
+  // The regex only checks shape; Date.* silently rolls impossible calendar dates over
+  // (e.g. 2026-02-30 -> 2026-03-02), so a typo'd day would return usage for the wrong day.
+  // Reject parts that don't round-trip through a UTC probe (also catches the JS 2-digit-year remap).
+  const probe = new Date(Date.UTC(year, monthIndex, day));
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== monthIndex ||
+    probe.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
   return { year, monthIndex, day };
+};
+
+// usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
+// undefined for both absent and invalid input, so an explicitly supplied but unparseable
+// date (bad format or impossible calendar date like 2026-02-30) would otherwise silently
+// fall through to the default range and return a successful response for an unrelated range.
+// Return the offending field so handlers can reject it instead of querying the wrong window.
+const findInvalidExplicitDate = (params: {
+  startDate?: unknown;
+  endDate?: unknown;
+}): "startDate" | "endDate" | undefined => {
+  for (const field of ["startDate", "endDate"] as const) {
+    const raw = params[field];
+    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+      continue;
+    }
+    if (parseDateParts(raw) === undefined) {
+      return field;
+    }
+  }
+  return undefined;
 };
 
 /**
@@ -902,6 +934,7 @@ function mergeUsageCacheStatus(
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
   parseDateParts,
+  findInvalidExplicitDate,
   parseUtcOffsetToMinutes,
   resolveDateInterpretation,
   parseDateToMs,
@@ -922,6 +955,21 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
+    const invalidDate = findInvalidExplicitDate({
+      startDate: params?.startDate,
+      endDate: params?.endDate,
+    });
+    if (invalidDate) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
+        ),
+      );
+      return;
+    }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = parseDateRange({
       startDate: params?.startDate,
@@ -956,6 +1004,18 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     const p = params;
+    const invalidDate = findInvalidExplicitDate({ startDate: p.startDate, endDate: p.endDate });
+    if (invalidDate) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
+        ),
+      );
+      return;
+    }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = parseDateRange({
       startDate: p.startDate,
@@ -1335,7 +1395,8 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
         const hiddenSession = hiddenSessions[hiddenIndex];
         const merged = mergedEntries[hiddenSession.entryIndex];
-        const usage = usageByEntryIndex[hiddenSession.entryIndex] ?? createEmptySessionCostSummary();
+        const usage =
+          usageByEntryIndex[hiddenSession.entryIndex] ?? createEmptySessionCostSummary();
         usage.sessionId = merged.sessionId;
         usage.sessionFile = merged.sessionFile;
         mergeSessionUsageInto(usage, summary);
