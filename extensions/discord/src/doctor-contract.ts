@@ -607,7 +607,9 @@ export function normalizeCompatibilityConfig({
         discord: updated,
       } as OpenClawConfig["channels"],
       bindings:
-        bindingsToAdd.length > 0 ? [...(cfg.bindings ?? []), ...bindingsToAdd] : cfg.bindings,
+        bindingsToAdd.length > 0
+          ? [...(Array.isArray(cfg.bindings) ? cfg.bindings : []), ...bindingsToAdd]
+          : cfg.bindings,
     },
     changes,
   };

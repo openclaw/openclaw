@@ -173,6 +173,18 @@ describe("resolveTelegramAccount", () => {
     expect(accounts[0]?.token).toBe("tok-default");
     expect(accounts[0]?.tokenSource).toBe("config");
   });
+
+  it("ignores non-array bindings while resolving accounts", () => {
+    const cfg = {
+      channels: {
+        telegram: { accounts: { work: { botToken: "tok-work" } } },
+      },
+      bindings: { $include: "config.d/openclaw.bindings.json" },
+    } as unknown as OpenClawConfig;
+
+    expect(listTelegramAccountIds(cfg)).toEqual(["work"]);
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("work");
+  });
 });
 
 describe("resolveDefaultTelegramAccountId", () => {

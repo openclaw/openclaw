@@ -68,7 +68,8 @@ function resolveBindingAccount(params: {
 
 function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const ids = new Set<string>();
-  for (const binding of cfg.bindings ?? []) {
+  const bindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
+  for (const binding of bindings) {
     const resolved = resolveBindingAccount({ binding, channelId });
     if (resolved) {
       ids.add(resolved.accountId);
@@ -79,7 +80,8 @@ function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
 
 function resolveDefaultAgentBoundAccountId(cfg: OpenClawConfig, channelId: string): string | null {
   const defaultAgentId = resolveDefaultAgentId(cfg);
-  for (const binding of cfg.bindings ?? []) {
+  const bindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
+  for (const binding of bindings) {
     const resolved = resolveBindingAccount({ binding, channelId });
     if (resolved?.agentId === defaultAgentId) {
       return resolved.accountId;
