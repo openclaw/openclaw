@@ -245,6 +245,15 @@ export function startExtensionBridgeServer(opts: {
         }),
       );
     }
+    // Gate the CDP discovery routes (/json*) behind the same bridge token as the
+    // WS CDP face: they expose the debugger URL and every attached tab's
+    // title/URL, which must not be readable cross-origin (Private Network Access)
+    // without the secret. The node's Playwright client presents the token via
+    // getHeadersWithAuth; a tokenless loopback bridge stays trusted-local.
+    if (req.method === "GET" && (req.url || "").startsWith("/json") && !isAuthorizedPwUpgrade(req)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
     if (req.method === "GET" && (req.url === "/json/version" || req.url === "/json/version/")) {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(

@@ -56,4 +56,29 @@ describe("extension bridge CDP face auth", () => {
     handle = await startExtensionBridgeServer({ port: PORT });
     expect(await probeUpgrade()).not.toBe(1008);
   });
+
+  // Each fetch-based case uses its own port so undici cannot reuse a keep-alive
+  // connection to a previous test's already-stopped server.
+  async function fetchJson(port: number, path: string, headers?: Record<string, string>): Promise<number> {
+    const res = await fetch("http://127.0.0.1:" + port + path, { headers });
+    return res.status;
+  }
+
+  it("rejects /json discovery routes without the bridge token", async () => {
+    handle = await startExtensionBridgeServer({ port: 39531, authToken: "secret-tok" });
+    expect(await fetchJson(39531, "/json/version")).toBe(401);
+    expect(await fetchJson(39531, "/json/list")).toBe(401);
+  });
+
+  it("accepts /json discovery with the matching bearer token", async () => {
+    handle = await startExtensionBridgeServer({ port: 39532, authToken: "secret-tok" });
+    expect(await fetchJson(39532, "/json/version", { Authorization: "Bearer secret-tok" })).toBe(200);
+    expect(await fetchJson(39532, "/json/list", { Authorization: "Bearer secret-tok" })).toBe(200);
+  });
+
+  it("serves /json discovery openly when no token is configured (trusted-local)", async () => {
+    handle = await startExtensionBridgeServer({ port: 39533 });
+    expect(await fetchJson(39533, "/json/version")).toBe(200);
+    expect(await fetchJson(39533, "/json/list")).toBe(200);
+  });
 });
