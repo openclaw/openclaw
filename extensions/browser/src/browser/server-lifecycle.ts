@@ -53,12 +53,21 @@ export async function ensureExtensionRelayForProfiles(params: {
       env: process.env,
       persist: true,
     });
+    // The bridge HMAC key is the gateway's ACTIVE shared secret: the token in
+    // token mode, the password in password/trusted-proxy mode (mirroring how the
+    // gateway + control relay select), materialized from SecretRefs/env. Using
+    // only the token left password-mode gateways auth-less.
+    const gatewayAuth = ensuredGatewayAuth.auth;
+    const activeGatewaySecret =
+      gatewayAuth.mode === "password" || gatewayAuth.mode === "trusted-proxy"
+        ? gatewayAuth.password
+        : gatewayAuth.token;
     await ensureExtensionBridge({
       onWarn: params.onWarn,
-      // Require the extension to present the effective gateway token (as an HMAC)
-      // before it can drive the browser or originate turns; undefined on a
-      // tokenless loopback gateway, where the bridge stays trusted-local.
-      authToken: ensuredGatewayAuth.auth.token,
+      // Require the extension to present the effective gateway shared secret (as
+      // an HMAC) before it can drive the browser or originate turns; undefined on
+      // a tokenless loopback gateway, where the bridge stays trusted-local.
+      authToken: activeGatewaySecret,
       // Surface the hosting node's identity on /whoami so the side panel knows
       // this bridge is node-hosted (not gateway-only) and fails closed on a
       // dropped node route instead of an unconfined direct gateway turn.
