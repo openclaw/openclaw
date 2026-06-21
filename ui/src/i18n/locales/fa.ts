@@ -270,6 +270,11 @@ export const fa: TranslationMap = {
       enableTts: "Enable TTS",
       provider: "TTS Provider",
       providerInherit: "Inherit default",
+      providers: {
+        elevenlabs: "ElevenLabs",
+        openai: "OpenAI",
+        microsoft: "Microsoft",
+      },
       apiKey: "ElevenLabs API Key",
       apiKeyPlaceholder: "Paste ElevenLabs API key",
       voiceId: "Voice ID",

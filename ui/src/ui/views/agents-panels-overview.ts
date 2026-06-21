@@ -318,9 +318,15 @@ export function renderAgentOverview(params: {
               onTtsProviderChange(agent.id, (e.target as HTMLSelectElement).value || null)}
           >
             <option value="" ?selected=${!ttsProvider}>${t("agents.voice.providerInherit")}</option>
-            <option value="elevenlabs" ?selected=${ttsProvider === "elevenlabs"}>ElevenLabs</option>
-            <option value="openai" ?selected=${ttsProvider === "openai"}>OpenAI</option>
-            <option value="microsoft" ?selected=${ttsProvider === "microsoft"}>Microsoft</option>
+            <option value="elevenlabs" ?selected=${ttsProvider === "elevenlabs"}>
+              ${t("agents.voice.providers.elevenlabs")}
+            </option>
+            <option value="openai" ?selected=${ttsProvider === "openai"}>
+              ${t("agents.voice.providers.openai")}
+            </option>
+            <option value="microsoft" ?selected=${ttsProvider === "microsoft"}>
+              ${t("agents.voice.providers.microsoft")}
+            </option>
           </select>
         </label>
       </div>
