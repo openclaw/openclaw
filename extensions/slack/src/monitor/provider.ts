@@ -311,6 +311,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     authTestFailed = true;
     authTestError = err instanceof Error ? err.message : String(err);
   }
+
+  // Resolve the bot's profile display name — this is what users actually see in
+  // Slack UI and type as a prefix (e.g. "ada stop"). auth.test().user returns
+  // the username handle, which may differ from the visible display name.
+  if (!authTestFailed && botUserId) {
+    try {
+      const botInfo = await app.client.users.info({ user: botUserId });
+      const profileDisplayName = botInfo.user?.profile?.display_name?.trim();
+      if (profileDisplayName) {
+        botDisplayName = profileDisplayName;
+      }
+    } catch {
+      // users.info failure is non-fatal; keep auth.user as fallback
+    }
+  }
+
   if (authTestFailed) {
     runtime.log?.(
       warn(
