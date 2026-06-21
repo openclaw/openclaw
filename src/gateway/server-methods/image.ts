@@ -2,6 +2,7 @@ import {
   ErrorCodes,
   errorShape,
   validateImageProvidersResult,
+  formatValidationErrors,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 // Gateway RPC handlers for image generation provider inventory.
@@ -83,39 +84,35 @@ export const imageHandlers: GatewayRequestHandlers = {
       });
       // Use config primary as active, fallback to first configured provider, then first provider
       const configActive = resolveActiveImageProvider(cfg);
-      const activeProvider =
-        (configActive && providers.find((p) => p.id === configActive && p.configured))?.id ??
-        providers.find((p) => p.configured)?.id ??
-        providers[0]?.id ??
-        null;
+      const configuredProvider = providers.find((p) => p.configured);
+      const firstProvider = providers[0];
+      let activeProvider: string | null = null;
+      if (configActive) {
+        const matched = providers.find((p) => p.id === configActive && p.configured);
+        activeProvider = matched?.id ?? null;
+      } else if (configuredProvider) {
+        activeProvider = configuredProvider.id;
+      } else if (firstProvider) {
+        activeProvider = firstProvider.id;
+      }
 
       const result = { providers, active: activeProvider };
       // Validate response against protocol schema before returning
-      const validation = validateImageProvidersResult(result);
-      if (!validation.success) {
+      if (!validateImageProvidersResult(result)) {
         respond(
           false,
           undefined,
           errorShape(
-            ErrorCodes.INVALID_PARAMS,
-            `image.providers response failed schema validation: ${validation.error?.message ?? ""}`,
+            ErrorCodes.INVALID_REQUEST,
+            `image.providers response failed schema validation: ${formatValidationErrors(validateImageProvidersResult.errors)}`,
           ),
         );
         return;
       }
       respond(true, result);
     } catch (err) {
-      // Classify error by type for appropriate response code
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      let code = ErrorCodes.UNAVAILABLE;
-      // Distinguish config errors from runtime errors
-      if (errorMessage.includes("config") || errorMessage.includes("Config")) {
-        code = ErrorCodes.INVALID_PARAMS;
-      } else if (errorMessage.includes("registry") || errorMessage.includes("Registry")) {
-        code = ErrorCodes.UNAVAILABLE;
-      } else {
-        code = ErrorCodes.INTERNAL_ERROR;
-      }
+      // All errors return UNAVAILABLE (no INTERNAL_ERROR in ErrorCodes)
+      const code = ErrorCodes.UNAVAILABLE;
       // Log detailed error internally, return generic message to client
       console.error("[image.providers] Error:", formatForLog(err));
       respond(false, undefined, errorShape(code, "Failed to retrieve image providers"));
