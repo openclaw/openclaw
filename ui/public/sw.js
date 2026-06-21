@@ -45,7 +45,7 @@ self.addEventListener("activate", (event) => {
   // gateway updates that change the protocol version.
   self.clients.matchAll({ type: "window" }).then((clients) => {
     for (const client of clients) {
-      client.postMessage({ type: "sw-updated", version: CACHE_VERSION });
+      client.postMessage({ type: "sw-updated", version: CACHE_VERSION }, "*");
     }
   });
 });
