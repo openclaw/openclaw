@@ -50,10 +50,10 @@ function resolveAgentTts(
 }
 
 const ELEVENLABS_MODELS = [
-  { value: "eleven_multilingual_v2", label: "Multilingual v2" },
-  { value: "eleven_turbo_v2_5", label: "Turbo v2.5" },
-  { value: "eleven_flash_v2_5", label: "Flash v2.5" },
-  { value: "eleven_v3", label: "v3 (Alpha)" },
+  { value: "eleven_multilingual_v2", labelKey: "agents.voice.models.multilingualV2" },
+  { value: "eleven_turbo_v2_5", labelKey: "agents.voice.models.turboV25" },
+  { value: "eleven_flash_v2_5", labelKey: "agents.voice.models.flashV25" },
+  { value: "eleven_v3", labelKey: "agents.voice.models.v3Alpha" },
 ];
 
 export function renderAgentOverview(params: {
@@ -292,12 +292,12 @@ export function renderAgentOverview(params: {
     </section>
 
     <section class="card" style="margin-top: 16px;">
-      <div class="card-title">Voice / TTS</div>
-      <div class="card-sub">ElevenLabs voice configuration for this agent.</div>
+      <div class="card-title">${t("agents.voice.title")}</div>
+      <div class="card-sub">${t("agents.voice.subtitle")}</div>
 
       <div class="agent-model-fields" style="margin-top: 16px;">
         <label class="field">
-          <span>Enable TTS</span>
+          <span>${t("agents.voice.enableTts")}</span>
           <label class="toggle-switch">
             <input
               type="checkbox"
@@ -310,19 +310,17 @@ export function renderAgentOverview(params: {
         </label>
 
         <label class="field">
-          <span>TTS Provider</span>
+          <span>${t("agents.voice.provider")}</span>
           <select
             .value=${ttsProvider}
             ?disabled=${disabled}
             @change=${(e: Event) =>
               onTtsProviderChange(agent.id, (e.target as HTMLSelectElement).value || null)}
           >
-            <option value="" ?selected=${!ttsProvider}>Inherit default</option>
+            <option value="" ?selected=${!ttsProvider}>${t("agents.voice.providerInherit")}</option>
             <option value="elevenlabs" ?selected=${ttsProvider === "elevenlabs"}>ElevenLabs</option>
             <option value="openai" ?selected=${ttsProvider === "openai"}>OpenAI</option>
-            <option value="microsoft" ?selected=${ttsProvider === "microsoft"}>
-              Microsoft (no key)
-            </option>
+            <option value="microsoft" ?selected=${ttsProvider === "microsoft"}>Microsoft</option>
           </select>
         </label>
       </div>
@@ -331,30 +329,30 @@ export function renderAgentOverview(params: {
         ? html`
             <div class="agent-model-fields" style="margin-top: 12px;">
               <label class="field">
-                <span>ElevenLabs API Key</span>
+                <span>${t("agents.voice.apiKey")}</span>
                 <input
                   type="password"
                   .value=${ttsApiKey}
                   ?disabled=${disabled}
-                  placeholder="Paste ElevenLabs API key"
+                  placeholder="${t("agents.voice.apiKeyPlaceholder")}"
                   @change=${(e: Event) =>
                     onTtsApiKeyChange(agent.id, (e.target as HTMLInputElement).value)}
                 />
               </label>
               <label class="field">
-                <span>Voice ID</span>
+                <span>${t("agents.voice.voiceId")}</span>
                 <input
                   type="text"
                   .value=${ttsVoiceId}
                   ?disabled=${disabled}
-                  placeholder="e.g. EXAVITQu4vr4xnSDxMaL"
+                  placeholder="${t("agents.voice.voiceIdPlaceholder")}"
                   @change=${(e: Event) =>
                     onTtsVoiceIdChange(agent.id, (e.target as HTMLInputElement).value)}
                 />
               </label>
             </div>
             <label class="field" style="margin-top: 12px; display: block;">
-              <span>Model</span>
+              <span>${t("agents.voice.model")}</span>
               <select
                 .value=${ttsModel}
                 ?disabled=${disabled}
@@ -363,7 +361,9 @@ export function renderAgentOverview(params: {
               >
                 ${ELEVENLABS_MODELS.map(
                   (m) => html`
-                    <option value=${m.value} ?selected=${ttsModel === m.value}>${m.label}</option>
+                    <option value=${m.value} ?selected=${ttsModel === m.value}>
+                      ${t(m.labelKey)}
+                    </option>
                   `,
                 )}
               </select>
