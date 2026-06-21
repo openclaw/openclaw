@@ -1583,6 +1583,17 @@ export async function updateNpmInstalledPlugins(params: {
         logger.warn?.(
           `Could not check ${pluginId} before update; falling back to installer path: ${metadataResult.error}`,
         );
+        // When npm metadata is unavailable (transient registry error, rate
+        // limit, etc.), the spec validation in installPluginFromNpmSpec will
+        // reject ranges and produce a confusing second error.  Skip the update
+        // for this plugin instead of falling through to a guaranteed failure.
+        outcomes.push({
+          pluginId,
+          status: "error",
+          currentVersion: currentVersion ?? "unknown",
+          message: `Skipped update for ${pluginId}: ${metadataResult.error}`,
+        });
+        continue;
       }
     }
 
