@@ -11,7 +11,7 @@ type SessionTitleEntry = {
   label?: string;
 };
 
-function normalizeSessionTitleText(raw: string): string {
+export function normalizeSessionTitleText(raw: string): string {
   return raw.trim().normalize("NFC");
 }
 

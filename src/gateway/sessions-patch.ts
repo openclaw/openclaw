@@ -54,6 +54,7 @@ import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   applySessionTitle,
   getSessionTitleFromEntry,
+  normalizeSessionTitleText,
   parseSessionLabel,
   parseSessionTitle,
   sessionTitlesEqual,
@@ -353,8 +354,8 @@ export async function projectSessionsPatchEntry(params: {
   }
 
   if ("title" in patch || "label" in patch) {
-    const rawTitle = patch.title;
-    const rawLabel = patch.label;
+    const rawTitle = patch.title !== undefined ? normalizeSessionTitleText(patch.title) : undefined;
+    const rawLabel = patch.label !== undefined ? normalizeSessionTitleText(patch.label) : undefined;
     if (rawTitle !== undefined && rawLabel !== undefined && rawTitle !== rawLabel) {
       return invalid("title and label must match when both are provided");
     }

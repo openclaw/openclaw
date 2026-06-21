@@ -471,6 +471,7 @@ export type GatewaySessionRow = {
   spawnedBy?: string;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
+  title?: string;
   displayName?: string;
   surface?: string;
   subject?: string;
