@@ -934,6 +934,23 @@ describe("draft stream initial message debounce", () => {
       expectPreviewSend(api, "Processing");
     });
 
+    it("cancels a delayed first message when clear() removes the draft", async () => {
+      const api = createMockApi();
+      const stream = createDebouncedStream(api, 30, 5000);
+
+      stream.update("Processing");
+      await stream.flush();
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await stream.clear();
+      expect(vi.getTimerCount()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(api.editMessageText).not.toHaveBeenCalled();
+    });
+
     it("works with longer text above threshold", async () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);

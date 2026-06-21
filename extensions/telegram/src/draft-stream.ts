@@ -570,6 +570,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const clear = async () => {
+    clearInitialPreviewTimer();
     const messageId = await takeMessageIdAfterStop({
       stopForClear,
       readMessageId: () => streamMessageId,
