@@ -116,6 +116,10 @@ import {
 import { sendMessageMattermost } from "./send.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
+import {
+  hasMattermostThreadParticipationWithPersistence,
+  recordMattermostThreadParticipation,
+} from "./thread-participation.js";
 
 export {
   evaluateMattermostMentionGate,
@@ -1484,6 +1488,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           : { triggered: false, stripped: rawText };
         const oncharTriggered = oncharResult.triggered;
         const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+        // Threads the bot already replied in auto-engage: follow-ups resume without
+        // a re-mention even under requireMention. Keyed by the thread root id.
+        const threadAlreadyEngaged =
+          kind !== "direct" && effectiveReplyToId
+            ? await hasMattermostThreadParticipationWithPersistence({
+                accountId: account.accountId,
+                channelId,
+                threadRootId: effectiveReplyToId,
+              })
+            : false;
         const mentionDecision = evaluateMattermostMentionGate({
           kind,
           cfg,
@@ -1493,6 +1507,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           requireMentionOverride: account.requireMention,
           resolveRequireMention: core.channel.groups.resolveRequireMention,
           wasMentioned,
+          threadAlreadyEngaged,
           isControlCommand,
           commandAuthorized,
           oncharEnabled,
@@ -1809,6 +1824,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     sendMessage: sendMessageMattermost,
                     onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
                   });
+                  // Record only on a visible send so threads we merely observed
+                  // (reasoning-only/empty/suppressed) do not auto-engage later.
+                  if (
+                    kind !== "direct" &&
+                    effectiveReplyToId &&
+                    (outcome === "text" || outcome === "media")
+                  ) {
+                    recordMattermostThreadParticipation(
+                      account.accountId,
+                      channelId,
+                      effectiveReplyToId,
+                      { agentId: route.agentId },
+                    );
+                  }
                   const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
                     outcome,
                     payload: payloadToDeliver,
