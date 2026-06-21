@@ -15,6 +15,8 @@ export type RouterHistory = {
 
 export type RouteLoadCause = "navigation" | "preload" | "revalidate";
 
+export type RouteStaleReloadMode = "background" | "blocking";
+
 export type RouteMatchStatus = "pending" | "success" | "error" | "notFound" | "redirected";
 
 export type RouteMatchFetching = false | "loader";
@@ -66,6 +68,7 @@ export type PageDefinition<
   loaderDeps?: (context: TLoadContext, location: RouteLocation) => string;
   loader?: (context: TLoadContext, options: RouteLoaderOptions) => MaybePromise<TData>;
   staleTime?: number;
+  staleReloadMode?: RouteStaleReloadMode;
   preloadStaleTime?: number;
   preloadGcTime?: number;
   gcTime?: number;
@@ -113,6 +116,7 @@ export type RouterStateSelector<TState, TSelected> = (state: TState) => TSelecte
 export type RouterOptions<TRouteId extends string, TLoadContext, TModule, TData> = {
   routes: readonly PageDefinition<TRouteId, TLoadContext, TModule, TData>[];
   staleTime?: number;
+  defaultStaleReloadMode?: RouteStaleReloadMode;
   preloadStaleTime?: number;
   preloadGcTime?: number;
   gcTime?: number;
