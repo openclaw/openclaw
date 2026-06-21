@@ -525,7 +525,8 @@ interface ChatEphemeralState {
   searchQuery: string;
   pinnedExpanded: boolean;
   composerComposing: boolean;
-  composerInputVersion: number;
+  composerInputIntentKey: string | null;
+  composerInputVersions: Map<string, number>;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   historyRenderSessionKey: string | null;
   historyRenderMessagesRef: unknown[] | null;
@@ -554,7 +555,8 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchQuery: "",
     pinnedExpanded: false,
     composerComposing: false,
-    composerInputVersion: 0,
+    composerInputIntentKey: null,
+    composerInputVersions: new Map(),
     pendingClearedSubmittedDraft: null,
     historyRenderSessionKey: null,
     historyRenderMessagesRef: null,
@@ -612,12 +614,25 @@ function commitComposerDraft(props: ChatProps, value: string): void {
   props.onDraftChange(value);
 }
 
-function markComposerInputIntent(): void {
-  vs.composerInputVersion += 1;
+function currentComposerInputVersion(key: string): number {
+  return vs.composerInputVersions.get(key) ?? 0;
 }
 
-function clearPendingClearedSubmittedDraft(key?: string): void {
-  if (!key || vs.pendingClearedSubmittedDraft?.key === key) {
+function markComposerInputIntent(key: string): void {
+  vs.composerInputVersions.set(key, currentComposerInputVersion(key) + 1);
+  vs.composerInputIntentKey = key;
+}
+
+function consumeComposerInputIntent(key: string): boolean {
+  if (vs.composerInputIntentKey !== key) {
+    return false;
+  }
+  vs.composerInputIntentKey = null;
+  return true;
+}
+
+function clearPendingClearedSubmittedDraft(key: string): void {
+  if (vs.pendingClearedSubmittedDraft?.key === key) {
     vs.pendingClearedSubmittedDraft = null;
   }
 }
@@ -627,28 +642,25 @@ function isExplicitComposerInsertion(event: InputEvent): boolean {
 }
 
 function suppressStaleSubmittedDraftReplay(
-  props: ChatProps,
   target: HTMLTextAreaElement,
   event: InputEvent,
   draftMirror: ComposerDraftMirror,
+  hasInputIntent: boolean,
 ): boolean {
   const pending = vs.pendingClearedSubmittedDraft;
   if (!pending) {
     return false;
   }
-  const hostDraft = props.getDraft?.();
   if (
-    typeof hostDraft !== "string" ||
     target.value !== pending.value ||
-    pending.inputVersion !== vs.composerInputVersion ||
+    pending.inputVersion !== currentComposerInputVersion(pending.key) ||
+    hasInputIntent ||
     isExplicitComposerInsertion(event)
   ) {
     return false;
   }
 
-  target.value = hostDraft;
-  draftMirror.hostDraft = hostDraft;
-  draftMirror.value = hostDraft;
+  target.value = draftMirror.value;
   adjustTextareaHeight(target);
   return true;
 }
@@ -2326,7 +2338,7 @@ export function renderChat(props: ChatProps) {
       vs.pendingClearedSubmittedDraft = {
         key: mirrorKey,
         value: submittedDraft,
-        inputVersion: vs.composerInputVersion,
+        inputVersion: currentComposerInputVersion(mirrorKey),
       };
     } else {
       clearPendingClearedSubmittedDraft(mirrorKey);
@@ -2483,11 +2495,13 @@ export function renderChat(props: ChatProps) {
   };
   const handleBeforeInput = (e: InputEvent) => {
     if (!vs.composerComposing && !e.isComposing) {
-      markComposerInputIntent();
+      markComposerInputIntent(composerDraftMirrorKey(props));
     }
   };
   const handleInput = (e: InputEvent) => {
     const target = e.target as HTMLTextAreaElement;
+    const mirrorKey = composerDraftMirrorKey(props);
+    const hasInputIntent = consumeComposerInputIntent(mirrorKey);
     if (vs.composerComposing || e.isComposing) {
       // Skip adjustTextareaHeight during IME composition — each pinyin
       // keystroke fires `input` and the height read/write forces a
@@ -2496,10 +2510,10 @@ export function renderChat(props: ChatProps) {
       draftMirror.value = target.value;
       return;
     }
-    if (suppressStaleSubmittedDraftReplay(props, target, e, draftMirror)) {
+    if (suppressStaleSubmittedDraftReplay(target, e, draftMirror, hasInputIntent)) {
       return;
     }
-    clearPendingClearedSubmittedDraft();
+    clearPendingClearedSubmittedDraft(mirrorKey);
     syncComposerValue(target);
   };
   const handleCompositionEnd = (e: CompositionEvent) => {

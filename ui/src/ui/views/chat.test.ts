@@ -2059,6 +2059,73 @@ describe("chat slash menu accessibility", () => {
     expect(onDraftChange).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps an intervening session draft when a delayed stale replay arrives", () => {
+    const drafts: Record<string, string> = {
+      "delayed-replay-a": "",
+      "delayed-replay-b": "",
+    };
+    const onDraftChange = vi.fn((sessionKey: string, next: string) => {
+      drafts[sessionKey] = next;
+    });
+    const container = document.createElement("div");
+    const renderSession = (sessionKey: string) => {
+      render(
+        renderChat(
+          createChatProps({
+            currentAgentId: "delayed-replay-agent",
+            draft: drafts[sessionKey],
+            getDraft: () => drafts[sessionKey],
+            onDraftChange: (next) => onDraftChange(sessionKey, next),
+            onSend: () => {
+              drafts[sessionKey] = "";
+            },
+            sessionKey,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderSession("delayed-replay-a");
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+
+    renderSession("delayed-replay-b");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        data: "session b draft",
+        inputType: "insertText",
+      }),
+    );
+    textarea!.value = "session b draft";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "session b draft",
+        inputType: "insertText",
+      }),
+    );
+    expect(textarea?.value).toBe("session b draft");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("session b draft");
+    expect(drafts["delayed-replay-b"]).toBe("");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+  });
+
   it("commits local draft input before Enter sends", () => {
     const onDraftChange = vi.fn();
     const onSend = vi.fn();
