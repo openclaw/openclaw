@@ -407,6 +407,12 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   if (!snippet) {
     return false;
   }
+  // Skip markdown placeholder snippets: bare bullets, empty list items, and
+  // whitespace-only lines that serve as structural scaffolding rather than
+  // promotable content. These are common in daily-note bootstrap sections.
+  if (/^\s*[-*+]\s*$/.test(snippet) || /^\s*$/.test(snippet)) {
+    return true;
+  }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
     DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
