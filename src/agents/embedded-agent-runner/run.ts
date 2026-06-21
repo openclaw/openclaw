@@ -727,6 +727,13 @@ async function runEmbeddedAgentInternal(
     if (params.enqueue) {
       return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
     }
+    // #1057: a subagent continuation is routed onto its own session lane, so the
+    // global lane resolves to that same session lane. Re-enqueuing it through the
+    // global path here (already inside the enqueueSession wrapper for that lane)
+    // would self-deadlock; run it directly instead.
+    if (globalLane === sessionLane) {
+      return taskWithCurrentLifecycle();
+    }
     noteLaneWaitIfBusy(globalLane);
     return enqueueCommandInLane(
       globalLane,

@@ -220,7 +220,8 @@ async function driveContinuationTurn(
     { resolveStorePath },
     { loadSessionStore },
     { resolveSessionStoreEntry },
-    { parseAgentSessionKey },
+    { parseAgentSessionKey, isSubagentSessionKey },
+    { resolveSessionLane },
     { getReplyFromConfig },
     { replyRunRegistry },
     { getQueueSize, isGatewayDraining },
@@ -230,6 +231,7 @@ async function driveContinuationTurn(
     import("../../config/sessions/store-load.js"),
     import("../../config/sessions/store-entry.js"),
     import("../../sessions/session-key-utils.js"),
+    import("../../agents/embedded-agent-runner/lanes.js"),
     import("../reply/get-reply.js"),
     import("../reply/reply-run-registry.js"),
     import("../../process/command-queue.js"),
@@ -244,10 +246,14 @@ async function driveContinuationTurn(
   if (replyRunRegistry.isActive(work.sessionKey)) {
     return { status: "skipped", reason: CONTINUATION_TURN_BUSY_REASON };
   }
-  // Direct grants bypass heartbeat policy, but they must not jump ahead of
-  // already queued user/main-lane work. Requeue via TaskFlow instead of silently
-  // dropping the wake like the heartbeat path did.
-  if (getQueueSize(MAIN_COMMAND_LANE) > 0) {
+  // Direct grants bypass heartbeat policy, but a main-session continuation must
+  // not jump ahead of already queued user/main-lane work. A subagent continues
+  // on its own session via a direct grant that never enters the shared main lane;
+  // its readiness is the own-session active check above.
+  const continuationLane = isSubagentSessionKey(work.sessionKey)
+    ? resolveSessionLane(work.sessionKey)
+    : undefined;
+  if (continuationLane === undefined && getQueueSize(MAIN_COMMAND_LANE) > 0) {
     return { status: "skipped", reason: CONTINUATION_TURN_BUSY_REASON };
   }
 
@@ -276,6 +282,7 @@ async function driveContinuationTurn(
     {
       continuationTrigger: "work-wake",
       parentRunId: work.parentRunId,
+      lane: continuationLane,
       typingPolicy: "system_event",
       suppressTyping: true,
     },
