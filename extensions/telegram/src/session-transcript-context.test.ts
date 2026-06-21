@@ -62,4 +62,24 @@ describe("buildTelegramSessionTranscriptPromptMessages", () => {
       beforeTimestampMs: 3_000,
     });
   });
+
+  it("forwards topic-enabled DM session keys unchanged to the SDK reader", async () => {
+    readRecentUserAssistantTextForSessionMock.mockResolvedValue([]);
+
+    await buildTelegramSessionTranscriptPromptMessages({
+      agentId: "main",
+      sessionKey: "agent:main:main:thread:1234:42",
+      storePath: "/tmp/sessions.json",
+      beforeTimestampMs: 5_000,
+      limit: 10,
+    });
+
+    expect(readRecentUserAssistantTextForSessionMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:main:thread:1234:42",
+      storePath: "/tmp/sessions.json",
+      limit: 10,
+      beforeTimestampMs: 5_000,
+    });
+  });
 });

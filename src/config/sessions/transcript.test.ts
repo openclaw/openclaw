@@ -610,6 +610,54 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ]);
   });
 
+  it("skips transcript-only OpenClaw assistant entries when reading recent prompt context", async () => {
+    writeTranscriptStore();
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "user", content: "approved from gateway", timestamp: 1_000 },
+    });
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        ...createExactAssistantMessage({
+          text: "Transcript delivery bookkeeping",
+          provider: "openclaw",
+          model: "gateway-injected",
+        }),
+        timestamp: 2_000,
+      },
+    });
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        ...createExactAssistantMessage({ text: "Visible assistant reply" }),
+        timestamp: 3_000,
+      },
+    });
+
+    await expect(
+      readRecentUserAssistantTextFromSessionTranscript(sessionFile, {
+        beforeTimestampMs: 4_000,
+        limit: 10,
+      }),
+    ).resolves.toEqual([
+      {
+        id: expect.any(String),
+        role: "user",
+        text: "approved from gateway",
+        timestamp: 1_000,
+      },
+      {
+        id: expect.any(String),
+        role: "assistant",
+        text: "Visible assistant reply",
+        timestamp: 3_000,
+      },
+    ]);
+  });
+
   it("resolves recent transcript context from session identity", async () => {
     writeTranscriptStore();
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());

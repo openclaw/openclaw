@@ -1238,6 +1238,7 @@ export const registerTelegramHandlers = ({
             isGroup: false,
             isForum: false,
             messageThreadId: msg.message_thread_id,
+            botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
             senderId: msg.from?.id,
           }),
           limit: 10,

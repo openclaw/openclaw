@@ -177,6 +177,9 @@ function parseRecentConversationText(line: string): SessionRecentConversationTex
   if (!message || (message.role !== "user" && message.role !== "assistant")) {
     return undefined;
   }
+  if (message.role === "assistant" && isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return undefined;
+  }
   const text =
     message.role === "assistant"
       ? extractAssistantVisibleText(message)
