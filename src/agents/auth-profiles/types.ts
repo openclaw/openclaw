@@ -88,7 +88,8 @@ export type AuthProfileFailureReason =
   | "empty_response"
   | "no_error_details"
   | "unclassified"
-  | "unknown";
+  | "unknown"
+  | "tool_error";
 
 /** Profile-wide blocked reason reported by provider usage probes. */
 export type AuthProfileBlockedReason = "subscription_limit";

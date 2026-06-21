@@ -16,4 +16,5 @@ export type FailoverReason =
   | "empty_response"
   | "no_error_details"
   | "unclassified"
-  | "unknown";
+  | "unknown"
+  | "tool_error";

@@ -399,7 +399,8 @@ export type ProviderRuntimeFailureKind =
   | "empty_response"
   | "no_error_details"
   | "unclassified"
-  | "unknown";
+  | "unknown"
+  | "tool_error";
 
 const BILLING_402_HINTS = [
   "insufficient credits",
@@ -1055,6 +1056,11 @@ function classifyFailoverClassificationFromMessage(
   if (isGenericProviderInternalError(raw)) {
     return toReasonClassification("timeout");
   }
+  // Local tool-execution failures (e.g. hung bash → missing_tool_result) are
+  // not model/provider faults and must not trigger cross-provider failover.
+  if (/missing_tool_result/i.test(raw)) {
+    return toReasonClassification("tool_error");
+  }
   // Auth classifiers run before the broad isJsonApiInternalServerError check so that
   // provider errors like {"type":"api_error","message":"invalid api key"} are
   // correctly classified as "auth" rather than "timeout".
@@ -1266,6 +1272,11 @@ export function classifyProviderRuntimeFailureKind(
   }
   if (message && isSchemaErrorMessage(message)) {
     return "schema";
+  }
+  // Local tool-execution failures (e.g. hung bash → missing_tool_result) are
+  // not model/provider faults and must not trigger cross-provider failover.
+  if (message && /missing_tool_result/i.test(message)) {
+    return "tool_error";
   }
   // Plain HTTP 401 / invalid-token replies should be safe chat copy, but the
   // same failover reason also covers plain 403 and status-less auth payloads.
