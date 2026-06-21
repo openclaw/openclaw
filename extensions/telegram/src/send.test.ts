@@ -1075,6 +1075,36 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("keeps pretty-printed rich table structure without break tags", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const html = `<table>
+  <thead>
+    <tr>
+      <th>Head</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>one</td>
+      <td>two</td>
+    </tr>
+  </tbody>
+</table>after
+line`;
+
+    await sendMessageTelegram("123", html, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richHtml = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "";
+    expect(richHtml).not.toContain("</td><br><td>");
+    expect(richHtml).not.toContain("</th><br></tr>");
+    expect(richHtml).toContain("</table>after<br>line");
+  });
+
   it("keeps math rich HTML newlines literal", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
 
