@@ -79,6 +79,19 @@ describe("resolveAckReaction", () => {
     expect(resolveAckReaction(cfg, "main", { channel: "slack" })).toBe("👍");
   });
 
+  it('falls back to channels["*"].ackReaction when the concrete channel config exists but lacks ackReaction', () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackReaction: "✅" },
+      agents: { list: [{ id: "main", identity: { emoji: "😺" } }] },
+      channels: {
+        "*": { ackReaction: "🎯" },
+        slack: { token: "configured-but-no-ackreaction" },
+      },
+    };
+
+    expect(resolveAckReaction(cfg, "main", { channel: "slack" })).toBe("🎯");
+  });
+
   it("falls back to the agent identity emoji when global config is unset", () => {
     const cfg: OpenClawConfig = {
       agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
