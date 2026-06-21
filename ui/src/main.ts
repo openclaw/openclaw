@@ -19,6 +19,16 @@ if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
   swUrl.searchParams.set("v", OPENCLAW_CONTROL_UI_BUILD_ID || "dev");
   void navigator.serviceWorker.register(swUrl, { updateViaCache: "none" });
+
+  // When the service worker activates a new version (e.g. after a gateway
+  // update that changes the build id), reload the page so the Control UI
+  // picks up updated assets instead of showing a stale cached version that
+  // may be incompatible with the current gateway protocol.
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data?.type === "sw-updated") {
+      window.location.reload();
+    }
+  });
 } else if (!isProd && "serviceWorker" in navigator) {
   // Unregister any leftover dev SW to avoid stale cache issues.
   void navigator.serviceWorker.getRegistrations().then((registrations) => {

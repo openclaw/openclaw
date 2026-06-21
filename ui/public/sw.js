@@ -39,6 +39,15 @@ self.addEventListener("activate", (event) => {
       }),
     ]),
   );
+
+  // Notify all open clients that a new service worker version is active so
+  // they can reload and pick up updated assets. This prevents stale UI after
+  // gateway updates that change the protocol version.
+  self.clients.matchAll({ type: "window" }).then((clients) => {
+    for (const client of clients) {
+      client.postMessage({ type: "sw-updated", version: CACHE_VERSION });
+    }
+  });
 });
 
 self.addEventListener("fetch", (event) => {
