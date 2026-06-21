@@ -27,7 +27,7 @@ import {
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 
-const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel", "*"]);
 
 /** Source classes that can make a channel appear configured for read-only scopes. */
 export type ConfiguredChannelPresenceSource =

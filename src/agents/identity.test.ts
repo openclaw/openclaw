@@ -54,6 +54,31 @@ describe("resolveAckReaction", () => {
     expect(resolveAckReaction(cfg, "main", { channel: "discord" })).toBe("✅");
   });
 
+  it('falls back to channels["*"].ackReaction when the channel has no specific override', () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackReaction: "✅" },
+      agents: { list: [{ id: "main", identity: { emoji: "😺" } }] },
+      channels: {
+        "*": { ackReaction: "🎯" },
+      },
+    };
+
+    expect(resolveAckReaction(cfg, "main", { channel: "discord" })).toBe("🎯");
+  });
+
+  it('prefers a concrete channel-level ackReaction over the channels["*"] wildcard', () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackReaction: "✅" },
+      agents: { list: [{ id: "main", identity: { emoji: "😺" } }] },
+      channels: {
+        "*": { ackReaction: "🎯" },
+        slack: { ackReaction: "👍" },
+      },
+    };
+
+    expect(resolveAckReaction(cfg, "main", { channel: "slack" })).toBe("👍");
+  });
+
   it("falls back to the agent identity emoji when global config is unset", () => {
     const cfg: OpenClawConfig = {
       agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
