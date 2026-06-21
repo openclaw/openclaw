@@ -2681,7 +2681,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
     });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`");
+    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
+      telegramHtmlPreview("<b>Shelling</b><br><b>🛠️ Exec</b>"),
+    );
     expectDeliveredReply(0, { text: "Tool output visible to Telegram" });
     expectDeliveredReply(0, { text: "Final answer" }, 1);
     expect(answerDraftStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
@@ -2709,7 +2711,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
     });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`");
+    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
+      telegramHtmlPreview("<b>Shelling</b><br><b>🛠️ Exec</b>"),
+    );
     expectDeliveredReply(0, { mediaUrl: "https://example.com/validation.txt" });
     expectDeliveredReply(0, { text: "Final answer" }, 1);
     expect(answerDraftStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
