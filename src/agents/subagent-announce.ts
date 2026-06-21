@@ -388,6 +388,7 @@ export async function runSubagentAnnounceFlow(params: {
       }
       // Failed wake must not become a successful yield skip; keep cleanup retryable.
       if (params.requesterPausedForYield) {
+        shouldDeleteChildSession = false;
         return false;
       }
     }
