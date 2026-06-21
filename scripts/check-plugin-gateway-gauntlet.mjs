@@ -82,7 +82,7 @@ export function parseArgs(argv) {
     const arg = args[index];
     const readValue = () => {
       const value = args[index + 1];
-      if (!value) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`Missing value for ${arg}`);
       }
       index += 1;

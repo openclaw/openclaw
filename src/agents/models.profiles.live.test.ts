@@ -20,6 +20,7 @@ import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
+import { extractAssistantText } from "./embedded-agent-utils.js";
 import { collectAnthropicApiKeys } from "./live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
@@ -38,7 +39,6 @@ import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
-  extractAssistantText,
   fileProbeTextMatches,
   imageProbeTextMatches,
   isLiveModelProbeEnabled,

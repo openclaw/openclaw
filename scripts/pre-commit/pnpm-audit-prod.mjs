@@ -907,7 +907,7 @@ export async function runPnpmAuditProd({
 }
 
 function readSeverityValue(value, optionName) {
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;

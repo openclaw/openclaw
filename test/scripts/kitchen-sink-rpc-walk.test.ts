@@ -52,6 +52,8 @@ import {
   sampleProcess,
   sampleWindowsProcessByPort,
   shouldPrintHelp,
+  signalGateway,
+  signalProcessGroup,
   stopGateway,
   summarizeProcessSamples,
   tailFile,
@@ -60,9 +62,26 @@ import {
   validateCliArgs,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
+import {
+  resolveWindowsPowerShellPath,
+  resolveWindowsSystem32Path,
+  resolveWindowsTaskkillPath,
+} from "../../scripts/lib/windows-taskkill.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
+
+function expectedWindowsSystem32Path(executableName: string): string {
+  return resolveWindowsSystem32Path(executableName);
+}
+
+function expectedPowerShellPath(): string {
+  return resolveWindowsPowerShellPath();
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -278,6 +297,85 @@ describe("kitchen-sink RPC gateway teardown", () => {
     ).resolves.toBeUndefined();
 
     expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  it("signals Windows gateway process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const killProcess = vi.fn();
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    expect(
+      signalGateway(child, "SIGTERM", killProcess, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    expect(
+      signalGateway(child, "SIGKILL", killProcess, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const killProcess = vi.fn();
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    expect(
+      signalGateway(child, "SIGTERM", killProcess, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   posixIt("does not trust an exited wrapper while the gateway process group is alive", async () => {
@@ -628,6 +726,75 @@ setInterval(() => {}, 1000);
       }
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("signals Windows command process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalProcessGroup(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    signalProcessGroup(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows command process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalProcessGroup(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   posixIt("rejects timed commands that exit cleanly after SIGTERM", async () => {
@@ -1539,6 +1706,15 @@ describe("kitchen-sink RPC health/status assertions", () => {
 });
 
 describe("kitchen-sink RPC process sampling", () => {
+  it("rejects unsafe Windows System32 executable names", () => {
+    expect(() => resolveWindowsSystem32Path("..\\netstat.exe")).toThrow(
+      /Invalid Windows System32 executable name/u,
+    );
+    expect(() => resolveWindowsSystem32Path("netstat")).toThrow(
+      /Invalid Windows System32 executable name/u,
+    );
+  });
+
   it("samples RSS on Windows instead of silently disabling the resource guard", async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const sample = await sampleProcess(1234, {
@@ -1556,7 +1732,7 @@ describe("kitchen-sink RPC process sampling", () => {
       processId: 5678,
       rssMiB: 256,
     });
-    expect(calls[0]?.command).toBe("powershell.exe");
+    expect(calls[0]?.command).toBe(expectedPowerShellPath());
     expect(calls[0]?.args.join(" ")).toContain("$rootPid = 1234");
     expect(calls[0]?.args.join(" ")).toContain("ParentProcessId");
   });
@@ -1588,22 +1764,18 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(command).toContain("Sort-Object WorkingSet64 -Descending");
   });
 
-  it("falls back to the legacy powershell command name on Windows", async () => {
+  it("does not fall back to a PATH-resolved powershell command on Windows", async () => {
     const commands: string[] = [];
     const sample = await sampleProcess(1234, {
       platform: "win32",
       runCommand: async (command: string) => {
         commands.push(command);
-        if (command === "powershell.exe") {
-          throw new Error("missing powershell.exe");
-        }
-        return { stdout: `${96 * 1024 * 1024} 0 1234`, stderr: "" };
+        throw new Error("trusted powershell unavailable");
       },
     });
 
-    expect(commands).toEqual(["powershell.exe", "powershell"]);
-    expect(sample?.rssMiB).toBe(96);
-    expect(sample?.aggregateRssMiB).toBe(96);
+    expect(commands).toEqual([expectedPowerShellPath()]);
+    expect(sample).toBeNull();
   });
 
   it("does not truncate malformed Windows PowerShell CPU or id samples", async () => {
@@ -1686,7 +1858,7 @@ describe("kitchen-sink RPC process sampling", () => {
     const sample = await sampleWindowsProcessByPort(19675, {
       runCommand: async (command: string, args: string[]) => {
         calls.push({ command, args });
-        if (command === "netstat.exe") {
+        if (command === expectedWindowsSystem32Path("netstat.exe")) {
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
@@ -1697,7 +1869,7 @@ describe("kitchen-sink RPC process sampling", () => {
             stderr: "",
           };
         }
-        if (command === "powershell.exe") {
+        if (command === expectedPowerShellPath()) {
           return { stdout: `${384 * 1024 * 1024} 2.25 6789 ${512 * 1024 * 1024}`, stderr: "" };
         }
         throw new Error(`unexpected command ${command}`);
@@ -1712,9 +1884,9 @@ describe("kitchen-sink RPC process sampling", () => {
       rssMiB: 384,
     });
     expect(calls).toEqual([
-      { command: "netstat.exe", args: ["-ano", "-p", "tcp"] },
+      { command: expectedWindowsSystem32Path("netstat.exe"), args: ["-ano", "-p", "tcp"] },
       {
-        command: "powershell.exe",
+        command: expectedPowerShellPath(),
         args: expect.arrayContaining(["-Command", expect.stringContaining("$rootPid = 6789")]),
       },
     ]);
@@ -1725,7 +1897,7 @@ describe("kitchen-sink RPC process sampling", () => {
     const sample = await sampleWindowsProcessByPort(19675, {
       runCommand: async (command: string) => {
         calls.push(command);
-        if (command === "netstat.exe") {
+        if (command === expectedWindowsSystem32Path("netstat.exe")) {
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
@@ -1734,10 +1906,10 @@ describe("kitchen-sink RPC process sampling", () => {
             stderr: "",
           };
         }
-        if (command === "powershell.exe" || command === "powershell") {
+        if (command === expectedPowerShellPath()) {
           throw new Error("powershell unavailable");
         }
-        if (command === "tasklist.exe") {
+        if (command === expectedWindowsSystem32Path("tasklist.exe")) {
           return {
             stdout: '"node.exe","6789","Console","1","262,144 K"',
             stderr: "",
@@ -1753,13 +1925,17 @@ describe("kitchen-sink RPC process sampling", () => {
       processId: 6789,
       rssMiB: 256,
     });
-    expect(calls).toEqual(["netstat.exe", "powershell.exe", "powershell", "tasklist.exe"]);
+    expect(calls).toEqual([
+      expectedWindowsSystem32Path("netstat.exe"),
+      expectedPowerShellPath(),
+      expectedWindowsSystem32Path("tasklist.exe"),
+    ]);
   });
 
   it("falls back to the known Windows pid when tasklist reports malformed pid text", async () => {
     const sample = await sampleWindowsProcessByPort(19675, {
       runCommand: async (command: string) => {
-        if (command === "netstat.exe") {
+        if (command === expectedWindowsSystem32Path("netstat.exe")) {
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
@@ -1768,10 +1944,10 @@ describe("kitchen-sink RPC process sampling", () => {
             stderr: "",
           };
         }
-        if (command === "powershell.exe" || command === "powershell") {
+        if (command === expectedPowerShellPath()) {
           throw new Error("powershell unavailable");
         }
-        if (command === "tasklist.exe") {
+        if (command === expectedWindowsSystem32Path("tasklist.exe")) {
           return {
             stdout: '"node.exe","9999x","Console","1","262,144 K"',
             stderr: "",
@@ -1792,7 +1968,7 @@ describe("kitchen-sink RPC process sampling", () => {
   it("rejects malformed tasklist RSS instead of stripping digits", async () => {
     const sample = await sampleWindowsProcessByPort(19675, {
       runCommand: async (command: string) => {
-        if (command === "netstat.exe") {
+        if (command === expectedWindowsSystem32Path("netstat.exe")) {
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
@@ -1801,10 +1977,10 @@ describe("kitchen-sink RPC process sampling", () => {
             stderr: "",
           };
         }
-        if (command === "powershell.exe" || command === "powershell") {
+        if (command === expectedPowerShellPath()) {
           throw new Error("powershell unavailable");
         }
-        if (command === "tasklist.exe") {
+        if (command === expectedWindowsSystem32Path("tasklist.exe")) {
           return {
             stdout: '"node.exe","6789","Console","1","262x144 K"',
             stderr: "",
@@ -1853,6 +2029,23 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(sample).toEqual({
       aggregateRssMiB: 256,
       cpuPercent: null,
+      processId: 4321,
+      rssMiB: 256,
+    });
+  });
+
+  it("does not loop forever on self-parenting POSIX process rows", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "linux",
+      runCommand: async () => ({
+        stdout: " 4321  4321  262144  12.5 node dist/index.js gateway --port 19080",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: 12.5,
       processId: 4321,
       rssMiB: 256,
     });

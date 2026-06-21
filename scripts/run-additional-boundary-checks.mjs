@@ -558,7 +558,7 @@ export function parseCliArgs(args, env = process.env) {
     }
     if (arg === "--shard") {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error("--shard requires a value");
       }
       shardSpec = value;

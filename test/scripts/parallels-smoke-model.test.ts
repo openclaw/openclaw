@@ -351,6 +351,25 @@ describe("Parallels smoke model selection", () => {
     ).toBe(false);
   });
 
+  it("rejects short flags as Parallels smoke option values", () => {
+    const cases = [
+      [TS_PATHS.linux, "--mode", "-h"],
+      [TS_PATHS.macos, "--vm", "-h"],
+      [TS_PATHS.windows, "--model", "-h"],
+      [TS_PATHS.npmUpdate, "--target-tarball", "-h"],
+    ];
+
+    for (const [scriptPath, flag, value] of cases) {
+      const result = spawnNodeEvalSync(
+        `process.argv = ["node", "${scriptPath}", "${flag}", "${value}"]; await import("./${scriptPath}");`,
+        { env: process.env, imports: ["tsx"] },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`error: ${flag} requires a value`);
+    }
+  });
+
   it("keeps provider auth and model defaults in the shared TypeScript helper", () => {
     const providerAuth = readFileSync(TS_PATHS.providerAuth, "utf8");
 
@@ -1293,8 +1312,9 @@ if (isPrlctl) {
     expect(windowsGit.indexOf('"MinGit-2.53.0.2-64-bit.zip"')).toBeLessThan(
       windowsGit.indexOf('"MinGit-2.53.0.2-arm64.zip"'),
     );
-    expect(combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g))
-      .toHaveLength(2);
+    expect(
+      combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),
+    ).toHaveLength(2);
     expect(script).toContain("Invoke-RestMethod -Uri");
     expect(script).toContain("-TimeoutSec 120");
     expect(windowsGit).toContain('if "-64-bit." in name:');
@@ -1905,6 +1925,18 @@ setInterval(() => {}, 1000);
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("ignores ambient ComSpec for Windows host batch commands", () => {
+    expect(
+      resolveHostCommandInvocation("C:\\Tools\\helper.cmd", ["build"], {
+        env: {
+          ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
+          SystemRoot: "D:\\Windows",
+        },
+        platform: "win32",
+      }).command,
+    ).toBe("D:\\Windows\\System32\\cmd.exe");
   });
 
   it("runs the Windows agent turn through the detached done-file runner", () => {

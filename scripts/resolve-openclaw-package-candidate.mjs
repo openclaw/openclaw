@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -96,9 +97,13 @@ export function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = (name) => {
+    const readValue = (name, readOptions = {}) => {
       const value = argv[(index += 1)];
-      if (value === undefined) {
+      if (
+        value === undefined ||
+        (!readOptions.allowEmpty && value === "") ||
+        value.startsWith("-")
+      ) {
         throw new Error(`${name} requires a value`);
       }
       return value;
@@ -114,17 +119,17 @@ export function parseArgs(argv) {
     } else if (arg === "--output-name") {
       options.outputName = readValue(arg);
     } else if (arg === "--package-sha256") {
-      options.packageSha256 = readValue(arg).toLowerCase();
+      options.packageSha256 = readValue(arg, { allowEmpty: true }).toLowerCase();
     } else if (arg === "--package-ref") {
-      options.packageRef = readValue(arg);
+      options.packageRef = readValue(arg, { allowEmpty: true });
     } else if (arg === "--package-spec") {
-      options.packageSpec = readValue(arg);
+      options.packageSpec = readValue(arg, { allowEmpty: true });
     } else if (arg === "--package-url") {
-      options.packageUrl = readValue(arg);
+      options.packageUrl = readValue(arg, { allowEmpty: true });
     } else if (arg === "--source") {
       options.source = readValue(arg);
     } else if (arg === "--trusted-source-id") {
-      options.trustedSourceId = readValue(arg);
+      options.trustedSourceId = readValue(arg, { allowEmpty: true });
     } else if (arg === "--trusted-source-policy") {
       options.trustedSourcePolicy = readValue(arg);
     } else if (arg === "--help" || arg === "-h") {
@@ -197,17 +202,7 @@ function run(command, args, options = {}) {
     let timedOut = false;
     let killTimer;
     let forceKillAt;
-    const killChild = (signal) => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The process group can disappear between timeout and cleanup.
-        }
-      }
-      child.kill(signal);
-    };
+    const killChild = (signal) => signalChildProcessTree(child, signal, { useProcessGroup });
     const terminateChild = () => {
       killChild("SIGTERM");
       const killAfterMs = options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS;
@@ -310,6 +305,43 @@ async function finishTimedOutProcessTree(
     killChild("SIGKILL");
     await waitForProcessTreeExit(child, killAfterMs, useProcessGroup);
   }
+}
+
+export function signalChildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process group can disappear between timeout and cleanup.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
 }
 
 function childHasExited(child) {
@@ -458,6 +490,18 @@ export async function readArtifactPackageCandidateMetadata(dir) {
   const parsed = JSON.parse(raw);
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`artifact package-candidate.json must contain a JSON object`);
+  }
+  const packageSourceSha =
+    typeof parsed.packageSourceSha === "string" ? parsed.packageSourceSha.trim() : "";
+  if (packageSourceSha && !/^[0-9a-f]{40}$/iu.test(packageSourceSha)) {
+    throw new Error(
+      "artifact package-candidate.json packageSourceSha must be a 40-character commit SHA",
+    );
+  }
+  if (typeof parsed.packageSourceSha === "string") {
+    return packageSourceSha
+      ? { ...parsed, packageSourceSha: packageSourceSha.toLowerCase() }
+      : { ...parsed, packageSourceSha: "" };
   }
   return parsed;
 }
@@ -862,6 +906,14 @@ function parseTrustedPort(value) {
   return Number.NaN;
 }
 
+function pathnameMatchesTrustedPrefix(pathname, prefix) {
+  if (prefix === "/") {
+    return true;
+  }
+  const normalizedPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
+  return pathname === prefix || pathname.startsWith(normalizedPrefix);
+}
+
 function toPathPrefixes(value, sourceId) {
   const prefixes = value === undefined ? ["/"] : value;
   if (!Array.isArray(prefixes) || prefixes.length === 0) {
@@ -953,7 +1005,11 @@ function validateTrustedPackageDownloadUrl(parsed, trustedSource, options = {}) 
       `package_url port ${packageUrlPort(parsed)} is not allowed by trusted package source ${trustedSource.id}`,
     );
   }
-  if (!trustedSource.pathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) {
+  if (
+    !trustedSource.pathPrefixes.some((prefix) =>
+      pathnameMatchesTrustedPrefix(parsed.pathname, prefix),
+    )
+  ) {
     throw new Error(
       `package_url path is not allowed by trusted package source ${trustedSource.id}`,
     );

@@ -11,6 +11,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { stripLeadingPackageManagerSeparator } from "../../../../scripts/lib/arg-utils.mjs";
+import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 
 type CollectorMode = "local" | "docker";
 type OtelLogsExporter = "otlp" | "stdout" | "both";
@@ -241,7 +242,7 @@ function parseArgs(argv: string[]): CliOptions {
     }
     const readValue = () => {
       const value = args[index + 1]?.trim();
-      if (!value) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a value`);
       }
       index += 1;
@@ -1338,9 +1339,13 @@ function terminateChildTree(
 ): void {
   if (platform === "win32") {
     if (typeof child.pid === "number") {
-      const result = runTaskkill("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-      });
+      const result = runTaskkill(
+        resolveWindowsTaskkillPath(),
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          stdio: "ignore",
+        },
+      );
       if (result.status === 0) {
         return;
       }

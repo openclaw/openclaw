@@ -54,6 +54,21 @@ if (!openAiCodexPackageJson) {
   throw new Error("missing @openai/codex dependency under managed npm root");
 }
 assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
+const openAiCodexPackage = readJson(openAiCodexPackageJson);
+const codexBinPath =
+  typeof openAiCodexPackage.bin === "string"
+    ? openAiCodexPackage.bin
+    : openAiCodexPackage.bin && typeof openAiCodexPackage.bin.codex === "string"
+      ? openAiCodexPackage.bin.codex
+      : undefined;
+if (!codexBinPath) {
+  throw new Error(`@openai/codex package has no codex bin: ${openAiCodexPackageJson}`);
+}
+const codexBin = path.resolve(path.dirname(openAiCodexPackageJson), codexBinPath);
+if (!fs.existsSync(codexBin)) {
+  throw new Error(`missing managed Codex binary: ${codexBin}`);
+}
+assertPathInside(npmRoot, codexBin, "managed Codex binary");
 
 const list = readJson("/tmp/openclaw-plugins-list.json");
 const plugin = (list.plugins || []).find((entry) => entry.id === "codex");

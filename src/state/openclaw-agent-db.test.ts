@@ -11,7 +11,6 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
@@ -26,8 +25,29 @@ import {
 
 type AgentDbTestDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 
+type RegisteredAgentDatabaseRow = {
+  agent_id: string;
+  path: string;
+  schema_version: number;
+  size_bytes: number | null;
+};
+
 function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-"));
+}
+
+function listRegisteredAgentDatabasesForTest(options: { env?: NodeJS.ProcessEnv } = {}) {
+  const rows = openOpenClawStateDatabase(options)
+    .db.prepare(
+      "SELECT agent_id, path, schema_version, size_bytes FROM agent_databases ORDER BY agent_id, path",
+    )
+    .all() as RegisteredAgentDatabaseRow[];
+  return rows.map((row) => ({
+    agentId: row.agent_id,
+    path: row.path,
+    schemaVersion: row.schema_version,
+    sizeBytes: row.size_bytes,
+  }));
 }
 
 afterEach(() => {
@@ -84,7 +104,7 @@ describe("openclaw agent database", () => {
       path.join(stateDir, "agents", "worker-1", "agent", "openclaw-agent.sqlite"),
     );
 
-    const registered = listOpenClawRegisteredAgentDatabases({
+    const registered = listRegisteredAgentDatabasesForTest({
       env: { OPENCLAW_STATE_DIR: stateDir },
     }).find((entry) => entry.agentId === "worker-1");
 
@@ -126,7 +146,7 @@ describe("openclaw agent database", () => {
     });
 
     expect(
-      listOpenClawRegisteredAgentDatabases({ env })
+      listRegisteredAgentDatabasesForTest({ env })
         .filter((entry) => entry.agentId === "worker-1")
         .map((entry) => entry.path),
     ).toEqual([defaultDatabase.path, relocated.path].toSorted());
@@ -187,10 +207,12 @@ describe("openclaw agent database", () => {
           import path from "node:path";
           import {
             closeOpenClawAgentDatabasesForTest,
-            listOpenClawRegisteredAgentDatabases,
             openOpenClawAgentDatabase,
           } from ${JSON.stringify(agentModuleUrl)};
-          import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(stateModuleUrl)};
+          import {
+            closeOpenClawStateDatabaseForTest,
+            openOpenClawStateDatabase,
+          } from ${JSON.stringify(stateModuleUrl)};
 
           const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-state-"));
           const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -219,8 +241,9 @@ describe("openclaw agent database", () => {
               sameHandle: first === second,
               firstFileExists: fs.existsSync(path.join(firstDir, "agent.sqlite")),
               secondFileExists: fs.existsSync(path.join(secondDir, "agent.sqlite")),
-              registeredPaths: listOpenClawRegisteredAgentDatabases({ env })
-                .filter((entry) => entry.agentId === "worker-1")
+              registeredPaths: openOpenClawStateDatabase({ env }).db
+                .prepare("SELECT path FROM agent_databases WHERE agent_id = ? ORDER BY path")
+                .all("worker-1")
                 .map((entry) => entry.path),
               expectedPaths: [first.path, second.path].toSorted(),
             }));

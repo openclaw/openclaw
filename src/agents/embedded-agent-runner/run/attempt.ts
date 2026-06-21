@@ -1296,6 +1296,7 @@ export async function runEmbeddedAttempt(
                 : undefined,
             sessionId: params.sessionId,
             runId: params.runId,
+            approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             oneShotCliRun: params.oneShotCliRun,
             toolSearchCatalogRef,
             agentDir,
@@ -4716,7 +4717,7 @@ export async function runEmbeddedAttempt(
                     messages,
                     contextTokenBudget,
                     promptToolResultMaxChars,
-                    promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+                    null,
                   );
                   return providerPromptHistoryTruncation.truncatedCount > 0
                     ? providerPromptHistoryTruncation.messages

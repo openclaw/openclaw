@@ -8,7 +8,12 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import { testing } from "./qa-otel-smoke-runtime.js";
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -128,6 +133,18 @@ describe("qa-otel-smoke receiver bounds", () => {
       providerMode: "mock-openai",
       scenarioId: "otel-stdout-log-smoke",
     });
+  });
+
+  it.each([
+    ["--collector", ["--collector", "--logs-exporter"]],
+    ["--logs-exporter", ["--logs-exporter", "--collector"]],
+    ["--output-dir", ["--output-dir", "--collector"]],
+    ["--provider-mode", ["--provider-mode", "--collector"]],
+    ["--scenario", ["--scenario", "--collector"]],
+    ["--model", ["--model", "--collector"]],
+    ["--alt-model", ["--alt-model", "--collector"]],
+  ])("rejects missing values for %s before shifting parser state", (flag, args) => {
+    expect(() => testing.parseArgs(args)).toThrow(`${flag} requires a value`);
   });
 
   it("selects the matching scenario for the requested log exporter", () => {
@@ -657,7 +674,7 @@ describe("qa-otel-smoke receiver bounds", () => {
       runTaskkill as never,
     );
 
-    expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "1234", "/T", "/F"], {
+    expect(runTaskkill).toHaveBeenCalledWith(expectedTaskkillPath(), ["/PID", "1234", "/T", "/F"], {
       stdio: "ignore",
     });
     expect(kill).not.toHaveBeenCalled();
