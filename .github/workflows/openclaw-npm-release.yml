@@ -26,13 +26,36 @@ on:
         type: string
       npm_dist_tag:
         description: npm dist-tag to publish to
+        required: false
+        type: string
+      policy_mode:
+        description: Release policy migration mode
         required: true
-        default: beta
+        default: legacy
         type: choice
         options:
-          - alpha
-          - beta
-          - latest
+          - legacy
+          - strict
+      release_selector:
+        description: Strict release selector (alpha, beta, daily, or stable); omit in legacy mode
+        required: false
+        type: string
+      publish_manifest_run_id:
+        description: Strict child producer run id; all four publish manifest fields are required together
+        required: false
+        type: string
+      publish_manifest_run_attempt:
+        description: Strict child producer run attempt
+        required: false
+        type: string
+      publish_manifest_artifact_name:
+        description: Strict child attempt-qualified publish manifest artifact name
+        required: false
+        type: string
+      publish_manifest_payload_sha256:
+        description: Strict child publish manifest payload SHA-256
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
@@ -49,8 +72,511 @@ jobs:
   # SECURITY NOTE: TOKEN-BASED npm dist-tag mutation moved to
   # openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml
   # so this source workflow can stay focused on OIDC publish only.
+  release_policy:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      publish_eligible: ${{ steps.policy.outputs.publish_eligible }}
+      release_policy: ${{ steps.policy.outputs.release_policy }}
+      release_policy_sha256: ${{ steps.policy.outputs.release_policy_sha256 }}
+      release_class: ${{ steps.policy.outputs.release_class }}
+      release_version: ${{ steps.policy.outputs.release_version }}
+      release_tag: ${{ steps.policy.outputs.release_tag }}
+      release_sha: ${{ steps.policy.outputs.release_sha }}
+      verifier_operation: ${{ steps.policy.outputs.verifier_operation }}
+    steps:
+      - name: Validate release policy and immutable publish evidence
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ inputs.tag }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only && 'true' || 'false' }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          POLICY_MODE: ${{ inputs.policy_mode }}
+          RELEASE_SELECTOR: ${{ inputs.release_selector }}
+          PUBLISH_MANIFEST_RUN_ID: ${{ inputs.publish_manifest_run_id }}
+          PUBLISH_MANIFEST_RUN_ATTEMPT: ${{ inputs.publish_manifest_run_attempt }}
+          PUBLISH_MANIFEST_ARTIFACT_NAME: ${{ inputs.publish_manifest_artifact_name }}
+          PUBLISH_MANIFEST_PAYLOAD_SHA256: ${{ inputs.publish_manifest_payload_sha256 }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          case "$POLICY_MODE" in
+            legacy|strict) ;;
+            *)
+              echo "policy_mode must be legacy or strict." >&2
+              exit 1
+              ;;
+          esac
+          npm_dist_tag="$(printf '%s' "$RELEASE_NPM_DIST_TAG" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          descriptor_values=(
+            "$PUBLISH_MANIFEST_RUN_ID"
+            "$PUBLISH_MANIFEST_RUN_ATTEMPT"
+            "$PUBLISH_MANIFEST_ARTIFACT_NAME"
+            "$PUBLISH_MANIFEST_PAYLOAD_SHA256"
+          )
+          descriptor_count=0
+          for value in "${descriptor_values[@]}"; do
+            if [[ -n "$value" ]]; then
+              descriptor_count=$((descriptor_count + 1))
+            fi
+          done
+          if [[ "$descriptor_count" != "0" && "$descriptor_count" != "4" ]]; then
+            echo "publish_manifest_run_id, publish_manifest_run_attempt, publish_manifest_artifact_name, and publish_manifest_payload_sha256 must be absent or supplied together." >&2
+            exit 1
+          fi
+          if [[ "$POLICY_MODE" == "legacy" ]]; then
+            if [[ -n "$RELEASE_SELECTOR" ]]; then
+              echo "release_selector must be omitted in legacy mode." >&2
+              exit 1
+            fi
+            if [[ "$descriptor_count" != "0" ]]; then
+              echo "Compatibility top-level dispatch requires all publish manifest descriptor inputs absent." >&2
+              exit 1
+            fi
+            case "$npm_dist_tag" in
+              alpha|beta|latest) ;;
+              *)
+                echo "Legacy mode requires npm_dist_tag alpha, beta, or latest." >&2
+                exit 1
+                ;;
+            esac
+          else
+            case "$RELEASE_SELECTOR" in
+              alpha|beta|daily|stable) ;;
+              *)
+                echo "Strict mode requires release_selector alpha, beta, daily, or stable." >&2
+                exit 1
+                ;;
+            esac
+            if [[ "$PREFLIGHT_ONLY" == "true" && "$descriptor_count" != "0" ]]; then
+              echo "Strict preflight cannot consume a publish manifest." >&2
+              exit 1
+            fi
+            if [[ "$PREFLIGHT_ONLY" != "true" && "$descriptor_count" != "4" ]]; then
+              echo "Strict child publish requires all four publish manifest descriptor inputs." >&2
+              exit 1
+            fi
+          fi
+
+          if [[ ! "$RELEASE_REF" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "$RELEASE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Invalid release ref format: $RELEASE_REF" >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_REF" =~ ^[0-9a-fA-F]{40}$ && "$PREFLIGHT_ONLY" != "true" ]]; then
+            echo "Full commit SHA input is only supported for validation-only preflight runs." >&2
+            exit 1
+          fi
+
+          canonical_url="https://github.com/openclaw/openclaw.git"
+          policy_root="$RUNNER_TEMP/openclaw-release-policy-main"
+          rm -rf "$policy_root"
+          git init --quiet "$policy_root"
+          git -C "$policy_root" remote add origin "$canonical_url"
+          git -C "$policy_root" fetch --quiet --no-tags --no-recurse-submodules origin \
+            +refs/heads/main:refs/remotes/origin/main
+          git -C "$policy_root" checkout --quiet --detach refs/remotes/origin/main
+          policy_sha="$(git -C "$policy_root" rev-parse HEAD^{commit})"
+
+          target_repo="$RUNNER_TEMP/openclaw-release-policy-target.git"
+          rm -rf "$target_repo"
+          git init --quiet --bare "$target_repo"
+          if [[ "$RELEASE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            verifier_operation="sha-preflight"
+            git -C "$target_repo" fetch --quiet --no-tags --no-recurse-submodules "$canonical_url" \
+              +refs/heads/main:refs/verify/target
+            target_sha="$(git -C "$target_repo" rev-parse refs/verify/target^{commit})"
+            if [[ "${RELEASE_REF,,}" != "$target_sha" ]]; then
+              echo "Validation-only SHA mode requires the current protected main tip." >&2
+              exit 1
+            fi
+            if [[ "$WORKFLOW_REF" != "refs/heads/main" ]]; then
+              echo "Validation-only SHA mode must run from refs/heads/main." >&2
+              exit 1
+            fi
+            release_version="$(git -C "$target_repo" show "$target_sha:package.json" | jq -er '.version')"
+            release_tag="v${release_version}"
+            target_ref=""
+            authorized_source_ref=""
+          else
+            verifier_operation="tag-preflight"
+            release_tag="$RELEASE_REF"
+            release_version="${RELEASE_REF#v}"
+            target_ref="refs/tags/${RELEASE_REF}"
+            authorized_source_ref="$WORKFLOW_REF"
+            git -C "$target_repo" fetch --quiet --no-tags --no-recurse-submodules "$canonical_url" \
+              "+${target_ref}:refs/verify/target" \
+              "+${authorized_source_ref}:refs/verify/source"
+            target_sha="$(git -C "$target_repo" rev-parse refs/verify/target^{commit})"
+          fi
+
+          # Call the shared closed strict ingress explicitly before any planner or artifact writer.
+          if [[ "$POLICY_MODE" == "strict" ]]; then
+            node --input-type=module - "$policy_root" "$release_version" "$RELEASE_SELECTOR" <<'NODE'
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [policyRoot, version, releaseSelector] = process.argv.slice(2);
+          const { validateStrictPublishPolicy } = await import(
+            pathToFileURL(path.join(policyRoot, "scripts/lib/release-version-policy.mjs")).href
+          );
+          validateStrictPublishPolicy({ version, releaseSelector });
+          NODE
+          fi
+
+          verifier_input="$RUNNER_TEMP/release-operation.json"
+          RELEASE_VERSION="$release_version" TARGET_SHA="$target_sha" TARGET_REF="$target_ref" AUTHORIZED_SOURCE_REF="$authorized_source_ref" VERIFIER_OPERATION="$verifier_operation" POLICY_SHA="$policy_sha" node <<'NODE' > "$verifier_input"
+          const input = {
+            schemaVersion: 1,
+            operation: process.env.VERIFIER_OPERATION,
+            releaseVersion: process.env.RELEASE_VERSION,
+            releaseSelector: process.env.POLICY_MODE === "legacy" ? null : process.env.RELEASE_SELECTOR,
+            policyMode: process.env.POLICY_MODE,
+            expectedPolicySourceSha: process.env.POLICY_SHA,
+            execution: {
+              event: "workflow_dispatch",
+              workflowPath: ".github/workflows/openclaw-npm-release.yml",
+              executionRef: process.env.WORKFLOW_REF,
+              runHeadSha: process.env.WORKFLOW_SHA,
+              runId: process.env.WORKFLOW_RUN_ID,
+              runAttempt: process.env.WORKFLOW_RUN_ATTEMPT,
+            },
+            target:
+              process.env.VERIFIER_OPERATION === "sha-preflight"
+                ? {
+                    targetRef: null,
+                    targetSha: process.env.TARGET_SHA,
+                    releaseTag: null,
+                    authorizedSourceRef: null,
+                  }
+                : {
+                    targetRef: process.env.TARGET_REF,
+                    targetSha: process.env.TARGET_SHA,
+                    releaseTag: process.env.RELEASE_REF,
+                    authorizedSourceRef: process.env.AUTHORIZED_SOURCE_REF,
+                  },
+          };
+          process.stdout.write(`${JSON.stringify(input)}\n`);
+          NODE
+
+          verifier_dir="$RUNNER_TEMP/openclaw-release-operation-verifier"
+          rm -rf "$verifier_dir"
+          mkdir -p "$verifier_dir"
+          verifier_result="$verifier_dir/release-operation-verifier-v1.json"
+          node "$policy_root/scripts/verify-release-operation.mjs" verify \
+            --contract-version 1 \
+            --policy-root "$policy_root" \
+            --input "$verifier_input" > "$verifier_result"
+
+          release_class="$(jq -er '.releaseClass' "$verifier_result")"
+          if [[ "$POLICY_MODE" == "legacy" && ( "$release_class" == "stable-base" || "$release_class" == "stable-patch" ) ]]; then
+            echo "Legacy publication rejects uncorrected final patch 33 and greater." >&2
+            exit 1
+          fi
+          if [[ "$POLICY_MODE" == "strict" ]]; then
+            case "$release_class" in
+              alpha) expected_dist_tag="alpha" ;;
+              beta) expected_dist_tag="beta" ;;
+              daily) expected_dist_tag="latest" ;;
+              stable-base|stable-patch) expected_dist_tag="" ;;
+              *)
+                echo "Strict publication received an unsupported release class." >&2
+                exit 1
+                ;;
+            esac
+            if [[ "$npm_dist_tag" != "$expected_dist_tag" ]]; then
+              echo "Strict npm_dist_tag does not match the existing downstream plan." >&2
+              exit 1
+            fi
+          fi
+
+          stable_policy=false
+          if [[ "$POLICY_MODE" == "strict" && ( "$release_class" == "stable-base" || "$release_class" == "stable-patch" ) ]]; then
+            stable_policy=true
+            if [[ "$PREFLIGHT_ONLY" != "true" ]]; then
+              echo "policy-only strict stable preflight requires preflight_only=true." >&2
+              exit 1
+            fi
+            if [[ -n "$PREFLIGHT_RUN_ID" || "$descriptor_count" != "0" ]]; then
+              echo "policy-only strict stable preflight cannot be promoted." >&2
+              exit 1
+            fi
+          fi
+
+          policy_path="$RUNNER_TEMP/release-policy.json"
+          POLICY_PATH="$policy_path" VERIFIER_RESULT="$verifier_result" STABLE_POLICY="$stable_policy" node --input-type=module - "$policy_root" <<'NODE'
+          import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [policyRoot] = process.argv.slice(2);
+          const evidence = await import(
+            pathToFileURL(path.join(policyRoot, "scripts/lib/release-policy-evidence.mjs")).href
+          );
+          const verification = JSON.parse(readFileSync(process.env.VERIFIER_RESULT, "utf8"));
+          const policy = evidence.validateReleasePolicy({
+            version: 1,
+            releaseVersion: verification.releaseVersion,
+            releaseClass: verification.releaseClass,
+            releaseSelector: verification.releaseSelector,
+            policyMode: verification.policyMode,
+            publishEligible: process.env.STABLE_POLICY !== "true",
+            authorizedSourceRef: verification.target.authorizedSourceRef,
+            policySource: verification.policySource,
+          });
+          const digest = evidence.releasePolicySha256(policy);
+          writeFileSync(process.env.POLICY_PATH, evidence.canonicalJsonWithNewline(policy));
+          appendFileSync(process.env.GITHUB_OUTPUT, `publish_eligible=${policy.publishEligible}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_policy=${evidence.canonicalJson(policy)}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_policy_sha256=${digest}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_class=${policy.releaseClass}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_version=${policy.releaseVersion}\n`);
+          NODE
+
+          if [[ "$stable_policy" == "true" ]]; then
+            policy_artifact="$RUNNER_TEMP/openclaw-npm-policy-only-preflight"
+            rm -rf "$policy_artifact"
+            mkdir -p "$policy_artifact"
+            printf '%s\n' "$release_tag" > "$policy_artifact/release-tag.txt"
+            printf '%s\n' "$target_sha" > "$policy_artifact/release-sha.txt"
+            POLICY_ARTIFACT="$policy_artifact" POLICY_PATH="$policy_path" RELEASE_TAG="$release_tag" RELEASE_SHA="$target_sha" node --input-type=module - "$policy_root" <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [policyRoot] = process.argv.slice(2);
+          const evidence = await import(
+            pathToFileURL(path.join(policyRoot, "scripts/lib/release-policy-evidence.mjs")).href
+          );
+          const releasePolicy = JSON.parse(readFileSync(process.env.POLICY_PATH, "utf8"));
+          const manifest = evidence.validatePreflightManifest({
+            version: 2,
+            releaseTag: process.env.RELEASE_TAG,
+            releaseSha: process.env.RELEASE_SHA,
+            npmDistTag: null,
+            packageName: "openclaw",
+            packageVersion: releasePolicy.releaseVersion,
+            tarballName: null,
+            tarballSha256: null,
+            dependencyEvidenceDir: null,
+            dependencyEvidenceManifest: null,
+            releasePolicy,
+            releasePolicySha256: evidence.releasePolicySha256(releasePolicy),
+          });
+          writeFileSync(
+            path.join(process.env.POLICY_ARTIFACT, "preflight-manifest.json"),
+            evidence.canonicalJsonWithNewline(manifest),
+          );
+          NODE
+          fi
+
+          if [[ "$POLICY_MODE" == "strict" && "$descriptor_count" == "4" ]]; then
+            if [[ ! "$PUBLISH_MANIFEST_RUN_ID" =~ ^[1-9][0-9]*$ || ! "$PUBLISH_MANIFEST_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+              echo "publish manifest run id and attempt must be positive decimal strings." >&2
+              exit 1
+            fi
+            expected_artifact="release-publish-manifest-${PUBLISH_MANIFEST_RUN_ID}-${PUBLISH_MANIFEST_RUN_ATTEMPT}"
+            if [[ "$PUBLISH_MANIFEST_ARTIFACT_NAME" != "$expected_artifact" ]]; then
+              echo "publish manifest artifact name is not attempt-qualified." >&2
+              exit 1
+            fi
+            if [[ ! "$PUBLISH_MANIFEST_PAYLOAD_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "publish manifest payload digest must be 64 lowercase hexadecimal characters." >&2
+              exit 1
+            fi
+
+            producer_json="$RUNNER_TEMP/publish-manifest-producer.json"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_MANIFEST_RUN_ID}" > "$producer_json"
+            jq -e \
+              --arg id "$PUBLISH_MANIFEST_RUN_ID" \
+              --arg attempt "$PUBLISH_MANIFEST_RUN_ATTEMPT" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              '.id | tostring == $id' "$producer_json" >/dev/null
+            jq -e \
+              --arg attempt "$PUBLISH_MANIFEST_RUN_ATTEMPT" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              '(.run_attempt | tostring) == $attempt and .repository.full_name == $repository and .event == "workflow_dispatch" and .path == ".github/workflows/openclaw-release-publish.yml" and (.status == "in_progress" or (.status == "completed" and .conclusion == "success"))' \
+              "$producer_json" >/dev/null
+            producer_head_sha="$(jq -er '.head_sha' "$producer_json")"
+
+            publish_dir="$RUNNER_TEMP/release-publish-manifest"
+            rm -rf "$publish_dir"
+            mkdir -p "$publish_dir"
+            gh run download "$PUBLISH_MANIFEST_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$PUBLISH_MANIFEST_ARTIFACT_NAME" \
+              --dir "$publish_dir"
+            mapfile -t publish_files < <(find "$publish_dir" -type f -print)
+            publish_manifest="$publish_dir/release-publish-manifest.json"
+            if [[ "${#publish_files[@]}" != "1" || "${publish_files[0]}" != "$publish_manifest" ]]; then
+              echo "Publish manifest artifact must contain exactly one release-publish-manifest.json and no extra payload." >&2
+              exit 1
+            fi
+            actual_publish_digest="$(sha256sum "$publish_manifest" | awk '{print $1}')"
+            if [[ "$actual_publish_digest" != "$PUBLISH_MANIFEST_PAYLOAD_SHA256" ]]; then
+              echo "publish manifest payload digest mismatch" >&2
+              exit 1
+            fi
+
+            manifest_preflight_run_id="$(jq -er '.preflight.runId' "$publish_manifest")"
+            manifest_preflight_run_attempt="$(jq -er '.preflight.runAttempt' "$publish_manifest")"
+            manifest_full_run_id="$(jq -er '.fullValidation.runId' "$publish_manifest")"
+            manifest_full_run_attempt="$(jq -er '.fullValidation.runAttempt' "$publish_manifest")"
+            if [[ "$PREFLIGHT_RUN_ID" != "$manifest_preflight_run_id" || "$FULL_RELEASE_VALIDATION_RUN_ID" != "$manifest_full_run_id" ]]; then
+              echo "publish manifest predecessor mismatch" >&2
+              exit 1
+            fi
+
+            authenticate_completed_run() {
+              local run_id="$1" run_attempt="$2" workflow_path="$3" output="$4"
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$output"
+              jq -e --arg id "$run_id" --arg attempt "$run_attempt" --arg path "$workflow_path" --arg repository "$GITHUB_REPOSITORY" \
+                '(.id | tostring) == $id and (.run_attempt | tostring) == $attempt and .repository.full_name == $repository and .event == "workflow_dispatch" and .path == $path and .status == "completed" and .conclusion == "success"' \
+                "$output" >/dev/null
+            }
+            authenticate_completed_run "$manifest_preflight_run_id" "$manifest_preflight_run_attempt" \
+              ".github/workflows/openclaw-npm-release.yml" "$RUNNER_TEMP/preflight-run.json"
+            authenticate_completed_run "$manifest_full_run_id" "$manifest_full_run_attempt" \
+              ".github/workflows/full-release-validation.yml" "$RUNNER_TEMP/full-validation-run.json"
+
+            preflight_dir="$RUNNER_TEMP/strict-preflight-predecessor"
+            full_validation_dir="$RUNNER_TEMP/strict-full-validation-predecessor"
+            rm -rf "$preflight_dir" "$full_validation_dir"
+            mkdir -p "$preflight_dir" "$full_validation_dir"
+            gh run download "$manifest_preflight_run_id" --repo "$GITHUB_REPOSITORY" \
+              --name "openclaw-npm-preflight-${release_tag}" --dir "$preflight_dir"
+            gh run download "$manifest_full_run_id" --repo "$GITHUB_REPOSITORY" \
+              --name "full-release-validation-${manifest_full_run_id}" --dir "$full_validation_dir"
+            mapfile -t preflight_manifests < <(find "$preflight_dir" -type f -name preflight-manifest.json -print)
+            mapfile -t full_manifests < <(find "$full_validation_dir" -type f -name full-release-validation-manifest.json -print)
+            if [[ "${#preflight_manifests[@]}" != "1" || "${#full_manifests[@]}" != "1" ]]; then
+              echo "publish manifest predecessors must each contain exactly one manifest." >&2
+              exit 1
+            fi
+            preflight_manifest="${preflight_manifests[0]}"
+            full_validation_manifest="${full_manifests[0]}"
+            if [[ "$(sha256sum "$preflight_manifest" | awk '{print $1}')" != "$(jq -er '.preflight.payloadSha256' "$publish_manifest")" || \
+                  "$(sha256sum "$full_validation_manifest" | awk '{print $1}')" != "$(jq -er '.fullValidation.payloadSha256' "$publish_manifest")" ]]; then
+              echo "publish manifest predecessor mismatch" >&2
+              exit 1
+            fi
+
+            git -C "$target_repo" show refs/verify/target:CHANGELOG.md > "$RUNNER_TEMP/target-CHANGELOG.md"
+            git -C "$target_repo" show refs/verify/source:CHANGELOG.md > "$RUNNER_TEMP/source-CHANGELOG.md"
+            POLICY_PATH="$policy_path" VERIFIER_RESULT="$verifier_result" PUBLISH_MANIFEST="$publish_manifest" PREFLIGHT_MANIFEST="$preflight_manifest" FULL_VALIDATION_MANIFEST="$full_validation_manifest" PRODUCER_HEAD_SHA="$producer_head_sha" TARGET_CHANGELOG="$RUNNER_TEMP/target-CHANGELOG.md" SOURCE_CHANGELOG="$RUNNER_TEMP/source-CHANGELOG.md" node --input-type=module - "$policy_root" <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [policyRoot] = process.argv.slice(2);
+          const evidence = await import(
+            pathToFileURL(path.join(policyRoot, "scripts/lib/release-policy-evidence.mjs")).href
+          );
+          const readJson = (name) => JSON.parse(readFileSync(process.env[name], "utf8"));
+          const same = (left, right) => evidence.canonicalJson(left) === evidence.canonicalJson(right);
+          const policy = evidence.validateReleasePolicy(readJson("POLICY_PATH"));
+          const verification = evidence.validateReleaseOperationResult(readJson("VERIFIER_RESULT"));
+          const manifest = evidence.validatePublishManifest(readJson("PUBLISH_MANIFEST"));
+          const preflight = evidence.validatePreflightManifest(readJson("PREFLIGHT_MANIFEST"));
+          const fullValidation = evidence.validateFullValidationManifest(
+            readJson("FULL_VALIDATION_MANIFEST"),
+          );
+          if (
+            !same(manifest.releasePolicy, policy) ||
+            manifest.releasePolicySha256 !== evidence.releasePolicySha256(policy)
+          ) {
+            throw new Error("publish manifest policy mismatch");
+          }
+          if (
+            preflight.version !== 2 ||
+            fullValidation.version !== 3 ||
+            !same(preflight.releasePolicy, policy) ||
+            !same(fullValidation.releasePolicy, policy) ||
+            preflight.releasePolicySha256 !== manifest.releasePolicySha256 ||
+            fullValidation.releasePolicySha256 !== manifest.releasePolicySha256
+          ) {
+            throw new Error("publish manifest predecessor mismatch");
+          }
+          if (
+            manifest.execution.runId !== process.env.PUBLISH_MANIFEST_RUN_ID ||
+            manifest.execution.runAttempt !== process.env.PUBLISH_MANIFEST_RUN_ATTEMPT ||
+            manifest.execution.runHeadSha !== process.env.PRODUCER_HEAD_SHA
+          ) {
+            throw new Error("publish manifest execution mismatch");
+          }
+          if (
+            manifest.target.targetRef !== verification.target.targetRef ||
+            manifest.target.targetSha !== verification.target.targetSha ||
+            manifest.target.releaseTag !== verification.target.releaseTag ||
+            manifest.target.authorizedSourceRef !== verification.target.authorizedSourceRef ||
+            manifest.target.authorizedSourceTipSha !== verification.target.authorizedSourceTipSha ||
+            manifest.target.targetReachableFromAuthorizedSource !== true
+          ) {
+            throw new Error("publish manifest target mismatch");
+          }
+          const extract = (contents, version) => {
+            const escaped = version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+            const heading = new RegExp(`^## ${escaped}\\n`, "mu").exec(contents);
+            if (!heading || heading.index === undefined) return null;
+            const section = contents.slice(heading.index);
+            const next = section.slice(heading[0].length).search(/^## /mu);
+            return (next === -1 ? section : section.slice(0, heading[0].length + next)).trimEnd();
+          };
+          const targetSection = extract(
+            readFileSync(process.env.TARGET_CHANGELOG, "utf8"),
+            policy.releaseVersion,
+          );
+          const sourceSection = extract(
+            readFileSync(process.env.SOURCE_CHANGELOG, "utf8"),
+            policy.releaseVersion,
+          );
+          const sectionDigest =
+            targetSection === null
+              ? null
+              : createHash("sha256").update(targetSection).digest("hex");
+          if (
+            targetSection === null ||
+            targetSection !== sourceSection ||
+            manifest.changelogEvidence.tag !== manifest.target.releaseTag ||
+            manifest.changelogEvidence.sourceRef !== manifest.target.authorizedSourceRef ||
+            manifest.changelogEvidence.sectionHeading !== `## ${policy.releaseVersion}` ||
+            manifest.changelogEvidence.sectionSha256 !== sectionDigest
+          ) {
+            throw new Error("publish manifest changelog mismatch");
+          }
+          NODE
+          fi
+
+          {
+            echo "release_tag=$release_tag"
+            echo "release_sha=$target_sha"
+            echo "release_version=$release_version"
+            echo "verifier_operation=$verifier_operation"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload release operation verifier evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-operation-verifier-v1-${{ steps.policy.outputs.verifier_operation }}-${{ steps.policy.outputs.release_version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-release-operation-verifier
+          if-no-files-found: error
+
+      - name: Upload policy-only stable preflight
+        if: ${{ steps.policy.outputs.publish_eligible == 'false' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-npm-preflight-${{ steps.policy.outputs.release_tag }}
+          path: ${{ runner.temp }}/openclaw-npm-policy-only-preflight
+          if-no-files-found: error
+
   preflight_openclaw_npm:
-    if: ${{ inputs.preflight_only }}
+    needs: [release_policy]
+    if: ${{ inputs.preflight_only && needs.release_policy.outputs.publish_eligible == 'true' }}
     # Preflight builds the full release package before publish; ubuntu-latest can OOM in tsdown.
     runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
@@ -219,6 +745,9 @@ jobs:
           RELEASE_REF: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           DEPENDENCY_EVIDENCE_DIR: ${{ steps.dependency_evidence.outputs.dir }}
+          POLICY_MODE: ${{ inputs.policy_mode }}
+          RELEASE_POLICY: ${{ needs.release_policy.outputs.release_policy }}
+          RELEASE_POLICY_SHA256: ${{ needs.release_policy.outputs.release_policy_sha256 }}
         run: |
           set -euo pipefail
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
@@ -316,11 +845,32 @@ jobs:
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
           printf '%s\n' "$RELEASE_NPM_DIST_TAG" > "$ARTIFACT_DIR/release-npm-dist-tag.txt"
-          ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" node <<'NODE'
-          const fs = require("node:fs");
-          const path = require("node:path");
-          const manifest = {
-            version: 1,
+          policy_root="$RUNNER_TEMP/openclaw-preflight-policy-main"
+          rm -rf "$policy_root"
+          git init --quiet "$policy_root"
+          git -C "$policy_root" remote add origin "https://github.com/openclaw/openclaw.git"
+          git -C "$policy_root" fetch --quiet --no-tags --no-recurse-submodules origin \
+            +refs/heads/main:refs/remotes/origin/main
+          expected_policy_sha="$(printf '%s' "$RELEASE_POLICY" | jq -er '.policySource.sha')"
+          if [[ "$(git -C "$policy_root" rev-parse refs/remotes/origin/main^{commit})" != "$expected_policy_sha" ]]; then
+            echo "Protected-main policy moved after initial preflight authorization; rerun preflight." >&2
+            exit 1
+          fi
+          git -C "$policy_root" checkout --quiet --detach "$expected_policy_sha"
+          ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" node --input-type=module - "$policy_root" <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [policyRoot] = process.argv.slice(2);
+          const {
+            canonicalJsonWithNewline,
+            validatePreflightManifest,
+          } = await import(
+            pathToFileURL(path.join(policyRoot, "scripts/lib/release-policy-evidence.mjs")).href
+          );
+          const policyMode = process.env.POLICY_MODE;
+          const manifest = validatePreflightManifest({
+            version: policyMode === "strict" ? 2 : 1,
             releaseTag: process.env.RELEASE_TAG,
             releaseSha: process.env.RELEASE_SHA,
             npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
@@ -330,10 +880,18 @@ jobs:
             tarballSha256: process.env.TARBALL_SHA256,
             dependencyEvidenceDir: "dependency-evidence",
             dependencyEvidenceManifest: "dependency-evidence/dependency-evidence-manifest.json",
-          };
+            ...(policyMode === "strict"
+              ? {
+                  releasePolicy: JSON.parse(process.env.RELEASE_POLICY),
+                  releasePolicySha256: process.env.RELEASE_POLICY_SHA256,
+                }
+              : {}),
+          });
           fs.writeFileSync(
             path.join(process.env.ARTIFACT_DIR, "preflight-manifest.json"),
-            `${JSON.stringify(manifest, null, 2)}\n`,
+            policyMode === "strict"
+              ? canonicalJsonWithNewline(manifest)
+              : `${JSON.stringify(manifest, null, 2)}\n`,
           );
           NODE
           echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
@@ -384,7 +942,8 @@ jobs:
           if-no-files-found: error
 
   validate_publish_request:
-    if: ${{ !inputs.preflight_only }}
+    needs: [release_policy]
+    if: ${{ !inputs.preflight_only && needs.release_policy.outputs.publish_eligible == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -463,8 +1022,8 @@ jobs:
   publish_openclaw_npm:
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
-    needs: [validate_publish_request]
-    if: ${{ !inputs.preflight_only }}
+    needs: [release_policy, validate_publish_request]
+    if: ${{ !inputs.preflight_only && needs.release_policy.outputs.publish_eligible == 'true' }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
