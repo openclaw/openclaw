@@ -24,6 +24,7 @@ export type RouteLoading<TRouteId extends string, TLoadContext, TModule, TData> 
     context: TLoadContext,
     hookOptions: RouteHookOptions,
     force: boolean,
+    onComponentLoaded?: (module: TModule) => void,
   ) => Promise<RouteLoadResult<TModule, TData>>;
   scheduleGc: (
     match: RouteMatch<TRouteId, TModule, TData>,
@@ -157,6 +158,7 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
     context: TLoadContext,
     hookOptions: RouteHookOptions,
     force: boolean,
+    onComponentLoaded?: (module: TModule) => void,
   ): Promise<RouteLoadResult<TModule, TData>> => {
     const existing = inFlight.get(match.id);
     if (existing && !force) {
@@ -175,6 +177,7 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
       const latest = matchStore.getMatch(current.id);
       if (latest?.fetchCount === fetchCount && !hookOptions.signal.aborted) {
         matchStore.updateMatch(current.id, (next) => ({ ...next, module }));
+        onComponentLoaded?.(module);
       }
       return module;
     });
