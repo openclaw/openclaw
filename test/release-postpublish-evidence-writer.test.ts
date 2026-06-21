@@ -172,6 +172,26 @@ describe("release postpublish evidence writer", () => {
     ).toThrow("publish descriptor payload digest mismatch");
   });
 
+  it("rejects a registry dist-tag that does not match compatibility policy", () => {
+    const source = createSource();
+    const values = fixtures(source.head, source.directory);
+    expect(() =>
+      buildReleasePostpublishEvidence({
+        registryResult: { ...values.registryResult, npmDistTag: "beta" },
+        releasePolicy: values.releasePolicy,
+        releasePolicySha256: releasePolicySha256(values.releasePolicy),
+        publishManifest: values.publishManifest,
+        publishDescriptor: values.publishDescriptor,
+        publishPayloadSha256: sha256Hex(values.publishBytes),
+        changelogEvidence: values.changelogEvidence,
+        sourceDir: source.directory,
+        sourceSha: source.head,
+        releasePublishRunId: "102",
+        releasePublishRunAttempt: "2",
+      }),
+    ).toThrow("registry result npmDistTag mismatch: expected latest, got beta");
+  });
+
   it("writes from outside the source checkout and fails closed when dirty", () => {
     const source = createSource();
     const values = fixtures(source.head, source.directory);

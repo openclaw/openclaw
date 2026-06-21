@@ -75,6 +75,18 @@ function readReleaseAssets(release) {
     : [];
 }
 
+function readSelectedAppcastRelease(appcast) {
+  const item = /<item\b[^>]*>([\s\S]*?)<\/item>/iu.exec(appcast)?.[1] ?? null;
+  if (item === null) {
+    return null;
+  }
+  const version =
+    /<sparkle:shortVersionString>\s*([^<]+?)\s*<\/sparkle:shortVersionString>/iu.exec(item)?.[1] ??
+    null;
+  const enclosure = /<enclosure\b[^>]*\burl=(['"])(.*?)\1/iu.exec(item)?.[2] ?? null;
+  return { version, enclosure };
+}
+
 function isCloseoutEvidenceAsset(assetName, tag) {
   const releaseVersion = tag.slice(1);
   return (
@@ -363,12 +375,6 @@ export function verifyStrictStableMainCloseout(params) {
   ) {
     errors.push("publish target ref and tag do not match the requested release tag.");
   }
-  if (
-    publishManifest.target.authorizedSourceRef !== policy.authorizedSourceRef ||
-    publishManifest.changelogEvidence.sourceRef !== policy.authorizedSourceRef
-  ) {
-    errors.push("publish target or changelog source ref does not match release policy.");
-  }
   if (policy.policySource.blobs.stableLinesSha256 !== stableReleaseLinesSha256(metadata)) {
     errors.push("stable lines bytes do not match the release policy digest.");
   }
@@ -457,10 +463,15 @@ export function verifyStrictStableMainCloseout(params) {
     errors.push(
       `GitHub release ${params.tag} is missing required macOS asset(s): ${missingMacAssets.join(", ")}.`,
     );
-  } else if (
-    !params.policyMainAppcast.includes(`/releases/download/${params.tag}/${expectedMacAssets[0]}`)
-  ) {
-    errors.push(`policy-main appcast.xml does not select ${params.tag}.`);
+  } else {
+    const selectedAppcastRelease = readSelectedAppcastRelease(params.policyMainAppcast);
+    const expectedEnclosure = `https://github.com/openclaw/openclaw/releases/download/${params.tag}/${expectedMacAssets[0]}`;
+    if (
+      selectedAppcastRelease?.version !== policy.releaseVersion ||
+      selectedAppcastRelease.enclosure !== expectedEnclosure
+    ) {
+      errors.push(`policy-main appcast.xml does not select ${params.tag} as its leading item.`);
+    }
   }
   verifyRollbackDrill(params, errors);
 

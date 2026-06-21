@@ -252,7 +252,6 @@ jobs:
       contents: read
     outputs:
       strict_release: ${{ steps.ingress.outputs.strict_release }}
-      release_version: ${{ steps.verify.outputs.release_version }}
       target_ref: ${{ steps.verify.outputs.target_ref }}
       release_policy: ${{ steps.verify.outputs.release_policy }}
       release_policy_sha256: ${{ steps.verify.outputs.release_policy_sha256 }}
@@ -1578,7 +1577,7 @@ jobs:
       - name: Request release evidence update
         env:
           RELEASES_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_DISPATCH_TOKEN }}
-          TARGET_REF: ${{ inputs.ref }}
+          TARGET_REF: ${{ needs.release_policy.outputs.strict_release == 'true' && needs.release_policy.outputs.target_ref || inputs.ref }}
           PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
           GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
           POLICY_MODE: ${{ inputs.policy_mode }}
@@ -1688,7 +1687,11 @@ jobs:
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
           mkdir -p "$manifest_dir"
-          jq -n \
+          jq_args=(-n)
+          if [[ "$STRICT_RELEASE" == "true" ]]; then
+            jq_args=(-cnS)
+          fi
+          jq "${jq_args[@]}" \
             --arg workflowName "Full Release Validation" \
             --arg runId "$GITHUB_RUN_ID" \
             --arg runAttempt "$GITHUB_RUN_ATTEMPT" \

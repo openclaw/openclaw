@@ -81,11 +81,6 @@ jobs:
       publish_eligible: ${{ steps.policy.outputs.publish_eligible }}
       release_policy: ${{ steps.policy.outputs.release_policy }}
       release_policy_sha256: ${{ steps.policy.outputs.release_policy_sha256 }}
-      release_class: ${{ steps.policy.outputs.release_class }}
-      release_version: ${{ steps.policy.outputs.release_version }}
-      release_tag: ${{ steps.policy.outputs.release_tag }}
-      release_sha: ${{ steps.policy.outputs.release_sha }}
-      verifier_operation: ${{ steps.policy.outputs.verifier_operation }}
     steps:
       - name: Validate release policy and immutable publish evidence
         id: policy
@@ -281,16 +276,20 @@ jobs:
             exit 1
           fi
           if [[ "$POLICY_MODE" == "strict" ]]; then
-            case "$release_class" in
-              alpha) expected_dist_tag="alpha" ;;
-              beta) expected_dist_tag="beta" ;;
-              daily) expected_dist_tag="latest" ;;
-              stable-base|stable-patch) expected_dist_tag="" ;;
-              *)
-                echo "Strict publication received an unsupported release class." >&2
-                exit 1
-                ;;
-            esac
+            if [[ "$release_class" == "stable-base" || "$release_class" == "stable-patch" ]]; then
+              expected_dist_tag=""
+            else
+              expected_dist_tag="$(node --input-type=module - "$policy_root" "$release_version" <<'NODE'
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [policyRoot, version] = process.argv.slice(2);
+          const { resolveNpmPublishPlan } = await import(
+            pathToFileURL(path.join(policyRoot, "scripts/lib/npm-publish-plan.mjs")).href
+          );
+          process.stdout.write(resolveNpmPublishPlan(version).publishTag);
+          NODE
+              )"
+            fi
             if [[ "$npm_dist_tag" != "$expected_dist_tag" ]]; then
               echo "Strict npm_dist_tag does not match the existing downstream plan." >&2
               exit 1
@@ -335,7 +334,6 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `publish_eligible=${policy.publishEligible}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT, `release_policy=${evidence.canonicalJson(policy)}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT, `release_policy_sha256=${digest}\n`);
-          appendFileSync(process.env.GITHUB_OUTPUT, `release_class=${policy.releaseClass}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT, `release_version=${policy.releaseVersion}\n`);
           NODE
 
@@ -460,6 +458,26 @@ jobs:
             fi
             preflight_manifest="${preflight_manifests[0]}"
             full_validation_manifest="${full_manifests[0]}"
+            mapfile -t full_validation_files < <(find "$full_validation_dir" -type f -print)
+            if [[ "${#full_validation_files[@]}" != "1" || "${full_validation_files[0]}" != "$full_validation_manifest" ]]; then
+              echo "Full Validation predecessor artifact must contain exactly its manifest." >&2
+              exit 1
+            fi
+            tarball_name="$(jq -er '.tarballName' "$preflight_manifest")"
+            dependency_dir="$(jq -er '.dependencyEvidenceDir' "$preflight_manifest")"
+            dependency_manifest="$(jq -er '.dependencyEvidenceManifest' "$preflight_manifest")"
+            if [[ "$dependency_dir" != "dependency-evidence" || "$dependency_manifest" != "dependency-evidence/dependency-evidence-manifest.json" ||
+              ! -f "$preflight_dir/$tarball_name" || ! -f "$preflight_dir/$dependency_manifest" ]]; then
+              echo "Strict preflight dependency-evidence closure is incomplete." >&2
+              exit 1
+            fi
+            mapfile -t preflight_root_files < <(find "$preflight_dir" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | sort)
+            mapfile -t expected_preflight_root_files < <(printf '%s\n' \
+              preflight-manifest.json release-npm-dist-tag.txt release-sha.txt release-tag.txt "$tarball_name" | sort)
+            if [[ "${preflight_root_files[*]}" != "${expected_preflight_root_files[*]}" ]]; then
+              echo "Strict preflight artifact root file set is not closed." >&2
+              exit 1
+            fi
             if [[ "$(sha256sum "$preflight_manifest" | awk '{print $1}')" != "$(jq -er '.preflight.payloadSha256' "$publish_manifest")" || \
                   "$(sha256sum "$full_validation_manifest" | awk '{print $1}')" != "$(jq -er '.fullValidation.payloadSha256' "$publish_manifest")" ]]; then
               echo "publish manifest predecessor mismatch" >&2
@@ -476,6 +494,9 @@ jobs:
           const [policyRoot] = process.argv.slice(2);
           const evidence = await import(
             pathToFileURL(path.join(policyRoot, "scripts/lib/release-policy-evidence.mjs")).href
+          );
+          const { extractStableChangelogSection } = await import(
+            pathToFileURL(path.join(policyRoot, "scripts/lib/stable-release-closeout.mjs")).href
           );
           const readJson = (name) => JSON.parse(readFileSync(process.env[name], "utf8"));
           const same = (left, right) => evidence.canonicalJson(left) === evidence.canonicalJson(right);
@@ -519,19 +540,11 @@ jobs:
           ) {
             throw new Error("publish manifest target mismatch");
           }
-          const extract = (contents, version) => {
-            const escaped = version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-            const heading = new RegExp(`^## ${escaped}\\n`, "mu").exec(contents);
-            if (!heading || heading.index === undefined) return null;
-            const section = contents.slice(heading.index);
-            const next = section.slice(heading[0].length).search(/^## /mu);
-            return (next === -1 ? section : section.slice(0, heading[0].length + next)).trimEnd();
-          };
-          const targetSection = extract(
+          const targetSection = extractStableChangelogSection(
             readFileSync(process.env.TARGET_CHANGELOG, "utf8"),
             policy.releaseVersion,
           );
-          const sourceSection = extract(
+          const sourceSection = extractStableChangelogSection(
             readFileSync(process.env.SOURCE_CHANGELOG, "utf8"),
             policy.releaseVersion,
           );
@@ -554,7 +567,6 @@ jobs:
 
           {
             echo "release_tag=$release_tag"
-            echo "release_sha=$target_sha"
             echo "release_version=$release_version"
             echo "verifier_operation=$verifier_operation"
           } >> "$GITHUB_OUTPUT"

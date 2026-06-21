@@ -106,6 +106,7 @@ describe("OpenClaw npm release policy workflow", () => {
 
     const gate = step("release_policy", "Validate release policy and immutable publish evidence");
     expect(gate.run).toContain("validateStrictPublishPolicy");
+    expect(gate.run).toContain("resolveNpmPublishPlan");
     expect(gate.run).toContain("verify-release-operation.mjs");
     expect(gate.run).toContain("sha-preflight");
     expect(gate.run).toContain("tag-preflight");
@@ -118,8 +119,14 @@ describe("OpenClaw npm release policy workflow", () => {
     expect(gate.run).toContain("publish manifest payload digest mismatch");
     expect(gate.run).toContain("publish manifest policy mismatch");
     expect(gate.run).toContain("publish manifest predecessor mismatch");
+    expect(gate.run).toContain(
+      "Full Validation predecessor artifact must contain exactly its manifest",
+    );
+    expect(gate.run).toContain("Strict preflight dependency-evidence closure is incomplete");
+    expect(gate.run).toContain("Strict preflight artifact root file set is not closed");
     expect(gate.run).toContain("publish manifest target mismatch");
     expect(gate.run).toContain("publish manifest changelog mismatch");
+    expect(gate.run).not.toContain('alpha) expected_dist_tag="alpha"');
   });
 
   it("emits the exact policy-only v2 bundle and preserves strict publishable v2", () => {

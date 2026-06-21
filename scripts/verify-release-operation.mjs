@@ -468,9 +468,6 @@ function showBlob(repository, sha, relativePath, optional) {
     "authenticated policy blob is unavailable",
     { allowFailure: optional },
   );
-  if (bytes === null && !optional) {
-    reject("policy-source-mismatch", "authenticated policy blob is unavailable");
-  }
   return bytes;
 }
 

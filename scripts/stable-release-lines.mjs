@@ -266,6 +266,32 @@ function writeAtomically(root, content) {
   }
 }
 
+function withWriteLock(root, callback) {
+  const parent = path.join(root, path.dirname(STABLE_LINES_PATH));
+  mkdirSync(parent, { recursive: true });
+  const lockPath = path.join(parent, ".stable-lines.lock");
+  let lockDescriptor;
+  try {
+    lockDescriptor = openSync(lockPath, "wx", 0o644);
+    writeSync(lockDescriptor, `${process.pid}\n`, null, "utf8");
+    fsyncSync(lockDescriptor);
+  } catch {
+    if (lockDescriptor !== undefined) {
+      closeSync(lockDescriptor);
+    }
+    throw new StableReleaseLinesError(
+      "transition-not-allowed",
+      "another stable-lines transition is already in progress",
+    );
+  }
+  try {
+    return callback();
+  } finally {
+    closeSync(lockDescriptor);
+    unlinkSync(lockPath);
+  }
+}
+
 function normalizeError(error) {
   if (error instanceof StableReleaseLinesError) {
     return error;
@@ -283,7 +309,29 @@ function emitError(error) {
   );
 }
 
+function rejectExistingPlannedLineBeforeParse(argv) {
+  if (argv[0] !== "plan") {
+    return;
+  }
+  try {
+    const source = discoverSource();
+    const { metadata } = readCommittedMetadata(source.root, true);
+    if (metadata?.lines.some((line) => line.status === "planned")) {
+      throw new StableReleaseLinesError(
+        "planned-line-exists",
+        "a planned stable line already exists",
+      );
+    }
+  } catch (error) {
+    if (error instanceof StableReleaseLinesError && error.code === "planned-line-exists") {
+      throw error;
+    }
+    // Full parsing and the normal source read retain authority for every other failure.
+  }
+}
+
 export function main(argv = process.argv.slice(2)) {
+  rejectExistingPlannedLineBeforeParse(argv);
   const args = parseArgs(argv);
   const source = discoverSource();
   const dailyMonth = readDailyMonth(source.root);
@@ -303,8 +351,10 @@ export function main(argv = process.argv.slice(2)) {
   });
   const output = serializeStableReleaseLines(candidate);
   if (args.write) {
-    verifyCleanTarget(source.root, raw);
-    writeAtomically(source.root, output);
+    withWriteLock(source.root, () => {
+      verifyCleanTarget(source.root, raw);
+      writeAtomically(source.root, output);
+    });
   }
   process.stdout.write(output);
 }

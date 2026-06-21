@@ -42,7 +42,6 @@ jobs:
       policy_main_sha: ${{ steps.inputs.outputs.policy_main_sha }}
       publish_artifact_name: ${{ steps.inputs.outputs.publish_artifact_name }}
       release_tag_sha: ${{ steps.inputs.outputs.release_tag_sha }}
-      stable_source_ref: ${{ steps.inputs.outputs.stable_source_ref }}
       stable_source_sha: ${{ steps.inputs.outputs.stable_source_sha }}
       strict_closeout: ${{ steps.inputs.outputs.strict_closeout }}
       repair_partial_closeout: ${{ steps.inputs.outputs.repair_partial_closeout }}
@@ -98,9 +97,30 @@ jobs:
           . "$RUNNER_TEMP/github-api-backoff.sh"
           if [[ "$EVENT_NAME" == "push" ]]; then
             main_ref="$TRIGGER_SHA"
-            tag="$(gh_with_retry release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
-              --json tagName,isPrerelease,publishedAt \
-              --jq '[.[] | select(.isPrerelease | not) | select(.tagName | test("^v[0-9]{4}\\.[0-9]+\\.[0-9]+(-[0-9]+)?$"))] | sort_by(.publishedAt) | last | .tagName // empty')"
+            mapfile -t candidate_tags < <(gh_with_retry release list --repo "$GITHUB_REPOSITORY" \
+              --exclude-drafts --limit 100 --json tagName,isPrerelease,publishedAt \
+              --jq '[.[] | select(.isPrerelease | not) | select(.tagName | test("^v[0-9]{4}\\.[0-9]+\\.[0-9]+(-[0-9]+)?$"))] | sort_by(.publishedAt) | reverse | .[].tagName')
+            tag=""
+            fallback_tag="${candidate_tags[0]:-}"
+            probe_dir="$RUNNER_TEMP/stable-closeout-release-probe"
+            for candidate_tag in "${candidate_tags[@]}"; do
+              candidate_version="${candidate_tag#v}"
+              candidate_asset="openclaw-${candidate_version}-postpublish-evidence.json"
+              candidate_checksum="${candidate_asset}.sha256"
+              rm -rf "$probe_dir"
+              mkdir -p "$probe_dir"
+              if gh_with_retry release download "$candidate_tag" --repo "$GITHUB_REPOSITORY" \
+                --pattern "$candidate_asset" --pattern "$candidate_checksum" \
+                --dir "$probe_dir" >/dev/null 2>&1 &&
+                (cd "$probe_dir" && sha256sum --strict --status -c "$candidate_checksum") &&
+                [[ "$(jq -r '.version // empty' "$probe_dir/$candidate_asset")" == "2" ]] &&
+                [[ "$(jq -r '.releasePolicy.releaseClass // empty' "$probe_dir/$candidate_asset")" =~ ^stable-(base|patch)$ ]]; then
+                tag="$candidate_tag"
+                break
+              fi
+            done
+            rm -rf "$probe_dir"
+            tag="${tag:-$fallback_tag}"
             if [[ -z "$tag" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
@@ -218,14 +238,7 @@ jobs:
             if [[ "$existing_closeout_schema_version" == "1" ]]; then
               repair_partial_closeout=true
             fi
-          elif [[ "$EVENT_NAME" == "push" ]]; then
-            main_version="$(jq -r '.version // empty' package.json)"
-            if [[ "$main_version" != "$release_package_version" &&
-              "$main_version" != "$fallback_package_version" ]]; then
-              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          else
+          elif [[ "$EVENT_NAME" != "push" ]]; then
             main_ref="main"
           fi
           evidence_dir="$RUNNER_TEMP/release-postpublish-evidence"
@@ -257,6 +270,14 @@ jobs:
             echo "Stable closeout skipped for release class $early_release_class." >&2
             echo "should_closeout=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          if [[ "$early_evidence_version" != "2" && "$EVENT_NAME" == "push" ]]; then
+            main_version="$(jq -r '.version // empty' package.json)"
+            if [[ "$main_version" != "$release_package_version" &&
+              "$main_version" != "$fallback_package_version" ]]; then
+              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
           evidence_release_tag="$(jq -r '.releaseTag // empty' "$evidence_path")"
           full_release_validation_run_id="$(jq -r '[.workflowRuns[]? | select(.label == "Full Release Validation") | .id] | if length == 1 then .[0] else empty end' "$evidence_path")"
@@ -360,7 +381,6 @@ jobs:
             echo "policy_main_sha=$policy_main_sha"
             echo "publish_artifact_name=$publish_artifact_name"
             echo "release_tag_sha=$release_tag_sha"
-            echo "stable_source_ref=$stable_source_ref"
             echo "stable_source_sha=$stable_source_sha"
             echo "strict_closeout=$strict_closeout"
             echo "repair_partial_closeout=$repair_partial_closeout"
@@ -475,6 +495,7 @@ jobs:
             sha256sum --strict --status -c "$evidence_checksum_asset"
           )
           postpublish_path="$CLOSEOUT_DIR/$evidence_asset"
+          postpublish_artifact_name="openclaw-release-postpublish-evidence-${RELEASE_TAG}"
           publish_run_attempt="$(jq -r '.publishManifest.runAttempt' "$postpublish_path")"
           publish_payload_sha256="$(jq -r '.publishManifest.payloadSha256' "$postpublish_path")"
           publish_dir="$CLOSEOUT_DIR/publish"
@@ -502,10 +523,48 @@ jobs:
             > "$CLOSEOUT_DIR/publish-descriptor.json"
           postpublish_digest="$(sha256sum "$postpublish_path" | awk '{print $1}')"
           postpublish_run_attempt="$(jq -r '.releasePublishRunAttempt' "$postpublish_path")"
+          if [[ ! "$postpublish_run_attempt" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Strict closeout postpublish evidence has an invalid producer attempt." >&2
+            exit 1
+          fi
+          producer_json="$CLOSEOUT_DIR/release-publish-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" > "$producer_json"
+          jq -e \
+            --arg run_id "$RELEASE_PUBLISH_RUN_ID" \
+            --arg run_attempt "$postpublish_run_attempt" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            '(.id | tostring) == $run_id and
+             (.run_attempt | tostring) == $run_attempt and
+             .repository.full_name == $repository and
+             .event == "workflow_dispatch" and
+             .path == ".github/workflows/openclaw-release-publish.yml" and
+             .status == "completed" and
+             .conclusion == "success"' "$producer_json" >/dev/null
+          artifacts_json="$CLOSEOUT_DIR/release-publish-artifacts.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}/artifacts?per_page=100" > "$artifacts_json"
+          artifact_count="$(jq --arg name "$postpublish_artifact_name" \
+            '[.artifacts[] | select(.name == $name and .expired == false)] | length' "$artifacts_json")"
+          if [[ "$artifact_count" != "1" ]]; then
+            echo "Strict closeout requires exactly one unexpired postpublish evidence artifact." >&2
+            exit 1
+          fi
+          postpublish_dir="$CLOSEOUT_DIR/postpublish"
+          mkdir -p "$postpublish_dir"
+          gh run download "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "$postpublish_artifact_name" --dir "$postpublish_dir"
+          mapfile -t postpublish_files < <(find "$postpublish_dir" -type f -print)
+          if [[ "${#postpublish_files[@]}" != "1" || "$(basename "${postpublish_files[0]}")" != "release-postpublish-evidence.json" ]]; then
+            echo "Strict closeout postpublish artifact must contain exactly one release-postpublish-evidence.json." >&2
+            exit 1
+          fi
+          if ! cmp --silent "$postpublish_path" "${postpublish_files[0]}"; then
+            echo "Strict closeout release asset differs from the authenticated postpublish artifact." >&2
+            exit 1
+          fi
           jq -cnS \
             --arg runId "$RELEASE_PUBLISH_RUN_ID" \
             --arg runAttempt "$postpublish_run_attempt" \
-            --arg artifactName "openclaw-release-postpublish-evidence-v${release_version}" \
+            --arg artifactName "$postpublish_artifact_name" \
             --arg payloadSha256 "$postpublish_digest" \
             '{runId:$runId,runAttempt:$runAttempt,artifactName:$artifactName,payloadSha256:$payloadSha256}' \
             > "$CLOSEOUT_DIR/postpublish-descriptor.json"
