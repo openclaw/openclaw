@@ -20,7 +20,7 @@ describe("formatCompactTokenCount", () => {
   });
 
   it("rolls values that round up to 1000.0k over into the M branch instead of showing 1000k", () => {
-    // Regression test: 999,500-999,999 round to "1000.0" at one-decimal
+    // Regression test: 999,950-999,999 round to "1000.0" at one-decimal
     // thousands precision. Before the fix, the >= 1_000_000 branch check
     // ran on the raw value (which is still < 1_000_000), so these fell
     // through to the k branch and displayed the nonsensical "1000k".

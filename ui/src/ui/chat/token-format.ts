@@ -4,7 +4,7 @@ export function formatCompactTokenCount(tokens: number): string {
     return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
   }
   if (tokens >= 1_000) {
-    // Values from 999,500-999,999 round to "1000.0" at one-decimal
+    // Values from 999,950-999,999 round to "1000.0" at one-decimal
     // thousands precision, which would display the nonsensical "1000k"
     // instead of rolling over to the M branch above. Re-check the
     // rounded result before formatting.
