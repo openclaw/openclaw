@@ -299,6 +299,20 @@ describe("config schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects stdio transport with whitespace-only command", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          bad: {
+            command: "   ",
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("merges plugin ui hints", () => {
     const res = buildConfigSchema(pluginUiHintInput);
 

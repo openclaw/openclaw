@@ -449,7 +449,10 @@ const McpServerSchema = z
   })
   .superRefine((data, ctx) => {
     // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
-    if (data.transport === "stdio" && !data.command) {
+    if (
+      data.transport === "stdio" &&
+      (typeof data.command !== "string" || data.command.trim().length === 0)
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: '"stdio" transport requires a non-empty command',
