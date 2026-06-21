@@ -98,7 +98,9 @@ describe("package-openclaw-for-docker", () => {
     for (const flag of ["--output-dir", "--output-name", "--source-dir"]) {
       expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "--skip-build"])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([`${flag}=`])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([`${flag}=-h`])).toThrow(`${flag} requires a value`);
     }
   });
 
@@ -253,14 +255,41 @@ describe("package-openclaw-for-docker", () => {
         }),
       ).rejects.toThrow("missing packed OpenClaw tarball");
 
-      fs.writeFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "");
       await expect(
         packOpenClawPackageForDocker("/repo", outputDir, {
           prepareChangelog: async () => {},
           restoreChangelog: async () => {},
-          runCaptureImpl: async () => "npm notice\n",
+          runCaptureImpl: async () => {
+            fs.writeFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "");
+            return "npm notice\n";
+          },
         }),
       ).resolves.toBe(path.join(outputDir, "openclaw-2026.6.17.tgz"));
+    } finally {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores stale package tarballs before fallback scanning npm output", async () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-pack-stale-"));
+    try {
+      fs.writeFileSync(path.join(outputDir, "openclaw-9999.1.1.tgz"), "stale");
+
+      await expect(
+        packOpenClawPackageForDocker("/repo", outputDir, {
+          prepareChangelog: async () => {},
+          restoreChangelog: async () => {},
+          runCaptureImpl: async () => {
+            fs.writeFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "current");
+            return "npm notice\n";
+          },
+        }),
+      ).resolves.toBe(path.join(outputDir, "openclaw-2026.6.17.tgz"));
+
+      expect(fs.existsSync(path.join(outputDir, "openclaw-9999.1.1.tgz"))).toBe(false);
+      expect(fs.readFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "utf8")).toBe(
+        "current",
+      );
     } finally {
       fs.rmSync(outputDir, { recursive: true, force: true });
     }

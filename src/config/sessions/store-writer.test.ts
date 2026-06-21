@@ -1,23 +1,11 @@
 // Session store writer tests cover serialized session writes and cleanup.
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test-utils/deferred.js";
 import {
   clearSessionStoreCacheForTest,
   getSessionStoreWriterQueueSizeForTest,
   withSessionStoreWriterForTest,
 } from "./store.js";
-
-const createDeferred = <T>() => {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-};
 
 describe("session store writer", () => {
   afterEach(() => {
@@ -26,8 +14,8 @@ describe("session store writer", () => {
 
   it("serializes runtime writes through one in-process writer", async () => {
     const storePath = "/tmp/openclaw-store.json";
-    const firstStarted = createDeferred<void>();
-    const releaseFirst = createDeferred<void>();
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
     const order: string[] = [];
 
     const first = withSessionStoreWriterForTest(storePath, async () => {

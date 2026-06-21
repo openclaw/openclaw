@@ -338,17 +338,22 @@ export function truncateOversizedToolResultsInMessages(
   messages: AgentMessage[],
   contextWindowTokens: number,
   maxCharsOverride?: number,
-  aggregateMaxCharsOverride?: number,
+  aggregateMaxCharsOverride?: number | null,
 ): { messages: AgentMessage[]; truncatedCount: number } {
   const maxChars = Math.max(
     1,
     maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
   );
-  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
-    contextWindowTokens,
-    maxChars,
-    aggregateMaxCharsOverride,
-  );
+  // Live prompt assembly disables aggregate rewriting so unchanged history stays byte-stable
+  // for provider prefix caches; recovery and persisted-session callers keep the aggregate guard.
+  const aggregateBudgetChars =
+    aggregateMaxCharsOverride === null
+      ? Number.POSITIVE_INFINITY
+      : calculateRecoveryAggregateToolResultChars(
+          contextWindowTokens,
+          maxChars,
+          aggregateMaxCharsOverride,
+        );
   const branch = messages.map((message, index) => ({
     id: `message-${index}`,
     type: "message",

@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
 import { readBoundedResponseText } from "../bounded-response-text.mjs";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
@@ -552,7 +553,9 @@ function trackGatewayChild(child) {
 function trackCommandChild(child) {
   activeCommandChildren.add(child);
   const untrack = () => {
-    activeCommandChildren.delete(child);
+    if (!processTreeIsAlive(child)) {
+      activeCommandChildren.delete(child);
+    }
   };
   child.once("error", untrack);
   child.once("close", untrack);
@@ -639,14 +642,39 @@ function processTreeIsAlive(child) {
   }
 }
 
-function signalChildProcessTree(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function defaultRunTaskkill(command, args, options) {
+  return childProcess.spawnSync(command, args, options);
+}
+
+export function signalChildProcessTree(
+  child,
+  signal,
+  { platform = process.platform, runTaskkill = defaultRunTaskkill } = {},
+) {
+  if (platform !== "win32" && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {
       // Non-detached callers may not own a process group keyed by child.pid; keep
       // the legacy direct-child kill path as the fallback.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
     }
   }
   try {
@@ -910,26 +938,52 @@ function parseJsonOutput(stdout) {
   if (!trimmed) {
     throw new Error("gateway call produced no JSON output");
   }
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const jsonStart = trimmed.indexOf("{");
-    if (jsonStart >= 0) {
-      try {
-        return JSON.parse(trimmed.slice(jsonStart));
-      } catch {
-        // Fall through to the line-oriented fallback below.
-      }
-    }
-    const jsonLine = trimmed
-      .split(/\r?\n/u)
-      .toReversed()
-      .find((line) => line.trim().startsWith("{"));
-    if (!jsonLine) {
-      throw new Error(`gateway call JSON output was not parseable:\n${trimmed}`);
-    }
-    return JSON.parse(jsonLine);
+  const parsed = parseJsonValue(trimmed);
+  if (parsed.ok) {
+    return parsed.value;
   }
+
+  let lastParsed;
+  const lines = trimmed.split(/\r?\n/u);
+  for (let start = lines.length - 1; start >= 0; start -= 1) {
+    if (!lines[start].trimStart().startsWith("{")) {
+      continue;
+    }
+    let candidate = "";
+    for (let end = start; end < lines.length; end += 1) {
+      candidate = candidate ? `${candidate}\n${lines[end]}` : lines[end];
+      const candidateParsed = parseJsonValue(candidate);
+      if (!candidateParsed.ok) {
+        continue;
+      }
+      lastParsed ??= candidateParsed.value;
+      if (isGatewayJsonOutput(candidateParsed.value)) {
+        return candidateParsed.value;
+      }
+      break;
+    }
+  }
+  if (lastParsed !== undefined) {
+    return lastParsed;
+  }
+  throw new Error(`gateway call JSON output was not parseable:\n${trimmed}`);
+}
+
+function parseJsonValue(text) {
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function isGatewayJsonOutput(raw) {
+  return (
+    raw?.ok === false ||
+    hasOwnPayloadField(raw, "result") ||
+    hasOwnPayloadField(raw, "payload") ||
+    hasOwnPayloadField(raw, "data")
+  );
 }
 
 function hasOwnPayloadField(raw, field) {

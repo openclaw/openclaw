@@ -26,6 +26,7 @@ describe("pnpm-audit-prod", () => {
     expect(() => parseArgs(["--min-severity", "--audit-level", "critical"])).toThrow(
       "--min-severity requires a value",
     );
+    expect(() => parseArgs(["--min-severity", "-h"])).toThrow("--min-severity requires a value");
     expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
   });
 

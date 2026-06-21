@@ -4,7 +4,7 @@ import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtim
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
-import type { QaProviderMode } from "./model-selection.js";
+import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
@@ -13,17 +13,6 @@ const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
-
-function splitModelRef(ref: string) {
-  const slash = ref.indexOf("/");
-  if (slash <= 0 || slash === ref.length - 1) {
-    return null;
-  }
-  return {
-    provider: ref.slice(0, slash),
-    model: ref.slice(slash + 1),
-  };
-}
 
 function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;

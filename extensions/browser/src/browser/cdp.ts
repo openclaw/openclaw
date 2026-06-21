@@ -299,25 +299,6 @@ async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promi
   await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
 }
 
-/** Runtime.evaluate remote-object subset used by CDP helpers. */
-export type CdpRemoteObject = {
-  type: string;
-  subtype?: string;
-  value?: unknown;
-  description?: string;
-  unserializableValue?: string;
-  preview?: unknown;
-};
-
-/** Exception details surfaced from CDP Runtime.evaluate. */
-export type CdpExceptionDetails = {
-  text?: string;
-  lineNumber?: number;
-  columnNumber?: number;
-  exception?: CdpRemoteObject;
-  stackTrace?: unknown;
-};
-
 /** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
   ref: string;

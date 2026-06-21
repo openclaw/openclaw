@@ -133,12 +133,10 @@ const mocks = vi.hoisted(() => ({
       embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2]),
     },
   })),
-  registerMemoryEmbeddingProvider: vi.fn(),
   listMemoryEmbeddingProviders: vi.fn(() => [
     { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
   ]),
   listEmbeddingProviders: vi.fn(() => []),
-  registerBuiltInMemoryEmbeddingProviders: vi.fn(),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
@@ -315,8 +313,6 @@ vi.mock("../media/media-services.js", async (importOriginal) => {
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
   listMemoryEmbeddingProviders:
     mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider:
-    mocks.registerMemoryEmbeddingProvider as unknown as typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider,
 }));
 
 vi.mock("../plugins/embedding-provider-runtime.js", () => ({
@@ -327,8 +323,6 @@ vi.mock("../plugins/embedding-provider-runtime.js", () => ({
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   createEmbeddingProvider:
     mocks.createEmbeddingProvider as unknown as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").createEmbeddingProvider,
-  registerBuiltInMemoryEmbeddingProviders:
-    mocks.registerBuiltInMemoryEmbeddingProviders as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").registerBuiltInMemoryEmbeddingProviders,
 }));
 
 vi.mock("../image-generation/runtime.js", () => ({
@@ -515,14 +509,12 @@ describe("capability cli", () => {
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
-    mocks.registerMemoryEmbeddingProvider.mockClear();
     mocks.listMemoryEmbeddingProviders
       .mockReset()
       .mockReturnValue([
         { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
       ]);
     mocks.listEmbeddingProviders.mockReset().mockReturnValue([]);
-    mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.getModelsCommandSecretTargetIds.mockClear();
@@ -629,13 +621,6 @@ describe("capability cli", () => {
   function firstCommandConfigResolutionCall() {
     const calls = mocks.resolveCommandConfigWithSecrets.mock.calls as unknown as Array<
       [Record<string, unknown>]
-    >;
-    return calls[0]?.[0];
-  }
-
-  function firstRegisteredEmbeddingBootstrapArg() {
-    const calls = mocks.registerBuiltInMemoryEmbeddingProviders.mock.calls as unknown as Array<
-      [{ registerMemoryEmbeddingProvider?: unknown }]
     >;
     return calls[0]?.[0];
   }
@@ -2811,16 +2796,20 @@ describe("capability cli", () => {
     expect(vi.mocked(mediaRuntime.describeVideoFile)).not.toHaveBeenCalled();
   });
 
-  it("bootstraps built-in embedding providers when the registry is empty", async () => {
+  it("lists generic embedding providers when the memory registry is empty", async () => {
     mocks.listMemoryEmbeddingProviders.mockReturnValueOnce([]);
+    mocks.listEmbeddingProviders.mockReturnValueOnce([
+      { id: "generic", defaultModel: "generic-embed", transport: "remote" },
+    ] as never);
 
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "embedding", "providers", "--json"],
     });
 
-    const bootstrapArg = firstRegisteredEmbeddingBootstrapArg();
-    expect(typeof bootstrapArg?.registerMemoryEmbeddingProvider).toBe("function");
+    expect(firstJsonOutput()).toMatchObject([
+      { id: "generic", defaultModel: "generic-embed", transport: "remote" },
+    ]);
   });
 
   it("marks env-backed audio providers as configured", async () => {

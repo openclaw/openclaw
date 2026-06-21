@@ -234,14 +234,6 @@ export class TokenManager {
     }
   }
 
-  /** Check whether background refresh is running. */
-  isBackgroundRefreshRunning(appId?: string): boolean {
-    if (appId) {
-      return this.refreshControllers.has(appId);
-    }
-    return this.refreshControllers.size > 0;
-  }
-
   // ---- Internal ----
 
   private async doFetchToken(appId: string, clientSecret: string): Promise<string> {

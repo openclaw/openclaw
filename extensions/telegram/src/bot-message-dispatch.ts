@@ -152,6 +152,7 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+const DRAFT_MIN_INITIAL_DELAY_MS = 5_000;
 
 type DraftPartialTextUpdate = {
   text: string;
@@ -317,6 +318,7 @@ function resolveTelegramMirroredTranscriptText(
 
 async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
+  dispatchStartedAt: number;
   route: TelegramMessageContext["route"];
   sessionKey: string;
   loadFreshSessionStore: FreshTelegramSessionStoreLoader;
@@ -343,6 +345,11 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     agentId: params.route.agentId,
     sessionsDir: path.dirname(storePath),
   });
+  // Only the current-turn tail may suppress this mirror; crossing a user line
+  // would drop legitimate repeated answers.
+  if (await isCurrentTurnTelegramMirrorDuplicate(sessionFile, text, params.dispatchStartedAt)) {
+    return;
+  }
   const message = {
     role: "assistant" as const,
     content: [{ type: "text" as const, text }],
@@ -394,6 +401,23 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     message: appendedMessage,
     messageId,
   });
+}
+
+async function isCurrentTurnTelegramMirrorDuplicate(
+  sessionFile: string,
+  text: string,
+  dispatchStartedAt: number,
+): Promise<boolean> {
+  const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+  return (
+    latest?.timestamp !== undefined &&
+    latest.timestamp >= dispatchStartedAt &&
+    normalizeTelegramMirrorText(latest.text) === normalizeTelegramMirrorText(text)
+  );
+}
+
+function normalizeTelegramMirrorText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
@@ -1005,6 +1029,7 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           richMessages: telegramCfg.richMessages,
           minInitialChars: draftMinInitialChars,
+          minInitialDelayMs: draftMinInitialChars > 0 ? DRAFT_MIN_INITIAL_DELAY_MS : undefined,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
             if (superseded.retain) {
@@ -1364,7 +1389,7 @@ export const dispatchTelegramMessage = async ({
       recomputeQueuedAnswerBlockRotations();
     }
   };
-  const updateDraftFromPartial = (lane: DraftLaneState, update: DraftPartialTextUpdate) => {
+  const updateDraftFromPartial = async (lane: DraftLaneState, update: DraftPartialTextUpdate) => {
     const laneStream = lane.stream;
     if (!laneStream || !update.text) {
       return;
@@ -1376,6 +1401,7 @@ export const dispatchTelegramMessage = async ({
     }
     if (lane === answerLane) {
       if (streamMode === "progress") {
+        await progressDraft.noteActivity();
         return;
       }
       resetAnswerToolProgressDraft();
@@ -1402,7 +1428,7 @@ export const dispatchTelegramMessage = async ({
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
       }
-      updateDraftFromPartial(lanes[segment.lane], segment.update);
+      await updateDraftFromPartial(lanes[segment.lane], segment.update);
     }
   };
   const flushDraftLane = async (lane: DraftLaneState) => {
@@ -1538,6 +1564,7 @@ export const dispatchTelegramMessage = async ({
       ? async (payload: TelegramTranscriptMirrorPayload) => {
           await mirrorTelegramAssistantReplyToTranscript({
             cfg,
+            dispatchStartedAt,
             route,
             sessionKey,
             loadFreshSessionStore,
@@ -2118,8 +2145,9 @@ export const dispatchTelegramMessage = async ({
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
                         if (verboseProgressActive()) {
-                          // Durable lane owns tool payloads: send standalone instead
-                          // of diverting into the draft, which is discarded at final.
+                          if (streamMode === "progress") {
+                            await rotateAnswerLaneAfterToolProgress();
+                          }
                           if (
                             await sendPayload(
                               applyTextToPayload(effectivePayload, segment.update.text),
@@ -2130,10 +2158,6 @@ export const dispatchTelegramMessage = async ({
                           continue;
                         }
                         if (streamMode === "progress" && answerLane.stream) {
-                          // Progress-mode streams render tool status in the
-                          // live draft. Do not also emit text-only tool output
-                          // as answer text, or simple commands duplicate and
-                          // restart the progress draft.
                           continue;
                         }
                         await prepareAnswerLaneForToolProgress();
@@ -2274,6 +2298,9 @@ export const dispatchTelegramMessage = async ({
                         await flushBufferedFinalAnswer();
                       }
                       return;
+                    }
+                    if (streamMode === "progress" && info.kind === "tool") {
+                      await rotateAnswerLaneAfterToolProgress();
                     }
                     const delivered = await sendPayload(effectivePayload, {
                       durable: info.kind === "final",

@@ -17,6 +17,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
+import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
 import {
@@ -30,9 +31,15 @@ import {
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
 import {
+  assertApprovalDecisionResult,
+  formatApprovalResultValue,
+  readAcceptedApprovalRequestId,
+} from "../shared/live-approval-result.js";
+import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   redactQaLiveLaneDetails,
 } from "../shared/live-artifacts.js";
+import { inferQaCredentialSource as inferWhatsAppCredentialSource } from "../shared/live-credential-source.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
@@ -63,6 +70,7 @@ type WhatsAppQaScenarioId =
   | "whatsapp-context-command"
   | "whatsapp-group-allowlist-block"
   | "whatsapp-group-audio-gating"
+  | "whatsapp-group-reply-to-message"
   | "whatsapp-help-command"
   | "whatsapp-inbound-image-caption"
   | "whatsapp-inbound-structured-messages"
@@ -416,6 +424,31 @@ const whatsappQaCredentialPayloadSchema = z.object({
   groupJid: z.string().trim().min(1).optional(),
 });
 
+function buildWhatsAppQuoteReplyRun(target: "dm" | "group"): WhatsAppQaMessageScenarioRun {
+  const token = `WHATSAPP_QA_REPLY_TO_${target.toUpperCase()}_${randomUUID().slice(0, 8).toUpperCase()}`;
+  const input =
+    target === "group"
+      ? `openclawqa reply with only this exact marker: ${token}`
+      : `Reply with only this exact marker: ${token}`;
+  return {
+    configMode: "allowlist",
+    expectReply: true,
+    input,
+    matchText: token,
+    target,
+    verify: (reply, context) => {
+      if (!context.sent.messageId) {
+        throw new Error("WhatsApp driver did not return a triggering message id.");
+      }
+      if (reply.quoted?.messageId !== context.sent.messageId) {
+        throw new Error(
+          `expected reply quote ${context.sent.messageId}, got ${reply.quoted?.messageId ?? "<missing>"}`,
+        );
+      }
+    },
+  };
+}
+
 const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-canary",
@@ -642,31 +675,24 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-reply-to-message",
+    standardId: "quote-reply",
     title: "WhatsApp DM reply-to mode quotes the triggering message",
     timeoutMs: 60_000,
     configOverrides: {
       replyToMode: "all",
     },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_REPLY_TO_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Reply with only this exact marker: ${token}`,
-        matchText: token,
-        target: "dm",
-        verify: (reply, context) => {
-          if (!context.sent.messageId) {
-            throw new Error("WhatsApp driver did not return a triggering message id.");
-          }
-          if (reply.quoted?.messageId !== context.sent.messageId) {
-            throw new Error(
-              `expected reply quote ${context.sent.messageId}, got ${reply.quoted?.messageId ?? "<missing>"}`,
-            );
-          }
-        },
-      };
+    buildRun: () => buildWhatsAppQuoteReplyRun("dm"),
+  },
+  {
+    id: "whatsapp-group-reply-to-message",
+    standardId: "quote-reply",
+    title: "WhatsApp group reply-to mode quotes the triggering message",
+    timeoutMs: 60_000,
+    configOverrides: {
+      replyToMode: "all",
     },
+    requiresGroupJid: true,
+    buildRun: () => buildWhatsAppQuoteReplyRun("group"),
   },
   {
     id: "whatsapp-reply-context-isolation",
@@ -1387,26 +1413,12 @@ export const WHATSAPP_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardSce
   scenarios: WHATSAPP_QA_SCENARIOS,
 });
 
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KEYS)[number]) {
   const value = env[key]?.trim();
   if (!value) {
     throw new Error(`Missing ${key}.`);
   }
   return value;
-}
-
-function inferWhatsAppCredentialSource(
-  value: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): "convex" | "env" {
-  const normalized =
-    value?.trim().toLowerCase() || env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim().toLowerCase();
-  return normalized === "convex" ? "convex" : "env";
 }
 
 function resolveWhatsAppMetadataRedaction(env: NodeJS.ProcessEnv = process.env) {
@@ -2139,39 +2151,6 @@ async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: string }
   throw new Error("unreachable WhatsApp QA driver retry loop exit");
 }
 
-function formatApprovalResultValue(value: unknown) {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value == null) {
-    return "<missing>";
-  }
-  return JSON.stringify(value) ?? "<unserializable>";
-}
-
-function readAcceptedApprovalRequest(result: unknown) {
-  const accepted =
-    typeof result === "object" && result !== null
-      ? (result as { id?: unknown; status?: unknown })
-      : null;
-  if (accepted?.status !== "accepted") {
-    throw new Error(
-      `approval request status was ${formatApprovalResultValue(
-        accepted?.status,
-      )} instead of accepted`,
-    );
-  }
-  return accepted;
-}
-
-function readAcceptedApprovalRequestId(result: unknown) {
-  const id = readAcceptedApprovalRequest(result).id;
-  if (typeof id !== "string" || id.trim().length === 0) {
-    throw new Error(`approval request id was ${formatApprovalResultValue(id)}`);
-  }
-  return id;
-}
-
 async function requestWhatsAppApproval(params: {
   approvalId: string;
   driverPhoneE164: string;
@@ -2263,21 +2242,6 @@ async function resolveApprovalDecision(params: {
       timeoutMs: WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
     },
   );
-}
-
-function assertApprovalDecisionResult(params: {
-  decision: WhatsAppQaApprovalDecision;
-  result: unknown;
-}) {
-  const resultDecision =
-    typeof params.result === "object" && params.result !== null
-      ? (params.result as { decision?: unknown }).decision
-      : undefined;
-  if (resultDecision !== params.decision) {
-    throw new Error(
-      `approval decision was ${formatApprovalResultValue(resultDecision)} instead of ${params.decision}`,
-    );
-  }
 }
 
 function matchesWhatsAppApprovalPendingText(params: {

@@ -83,6 +83,28 @@ function firstGuardedFetchCall(): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 function expectEmbeddingFetch(
   fetchMock: ReturnType<typeof mockEmbeddingFetch>,
   url: string,
@@ -315,6 +337,39 @@ describe("ollama embedding provider", () => {
       configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
       auditContext: "ollama-memory-embedding",
     });
+  });
+
+  it("bounds embed error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"ollama embed unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tracked.response),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    let error: unknown;
+    try {
+      await provider.embedQuery("hello");
+    } catch (err) {
+      error = err;
+    }
+
+    expect(String(error)).toContain("Ollama embed HTTP 503");
+    expect(String(error)).toContain("ollama embed unavailable");
+    expect(String(error)).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("reports malformed embed JSON with a provider-owned error", async () => {

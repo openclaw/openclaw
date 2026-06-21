@@ -8,6 +8,11 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  resolveWindowsPowerShellPath,
+  resolveWindowsSystem32Path,
+  resolveWindowsTaskkillPath,
+} from "../lib/windows-taskkill.mjs";
 
 const PLUGIN_SPEC =
   process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
@@ -31,6 +36,7 @@ const DEFAULT_MAX_COMMAND_RSS_MIB = 8192;
 const DEFAULT_OUTPUT_CAPTURE_CHARS = 1024 * 1024;
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
+const COMMAND_PARENT_SIGNAL_KILL_GRACE_MS = 2000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
@@ -56,6 +62,40 @@ const ERROR_LOG_ALLOW_PATTERNS = [
 ];
 
 let callGatewayModulePromise;
+const activeCommandChildren = new Set();
+const commandParentSignals =
+  process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+let commandShutdownPromise;
+let commandSignalHandlersInstalled = false;
+
+function installCommandSignalHandlers() {
+  if (commandSignalHandlersInstalled) {
+    return;
+  }
+  commandSignalHandlersInstalled = true;
+  for (const signal of commandParentSignals) {
+    process.on(signal, commandSignalHandlers.get(signal));
+  }
+}
+
+function removeCommandSignalHandlers() {
+  if (!commandSignalHandlersInstalled) {
+    return;
+  }
+  commandSignalHandlersInstalled = false;
+  for (const signal of commandParentSignals) {
+    process.off(signal, commandSignalHandlers.get(signal));
+  }
+}
+
+const commandSignalHandlers = new Map(
+  commandParentSignals.map((signal) => [
+    signal,
+    () => {
+      void shutdownActiveCommands(signal);
+    },
+  ]),
+);
 
 function usage() {
   return `Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs
@@ -83,6 +123,15 @@ Environment:
 
 export function shouldPrintHelp(argv) {
   return argv.some((arg) => arg === "--help" || arg === "-h");
+}
+
+export function validateCliArgs(argv) {
+  for (const arg of argv) {
+    if (arg === "--help" || arg === "-h") {
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
 }
 
 export function readPositiveInt(raw, fallback, label = "value") {
@@ -292,6 +341,11 @@ function formatCapturedOutput(label, buffer) {
 }
 
 export function runCommand(command, args, options = {}) {
+  if (commandShutdownPromise) {
+    return commandShutdownPromise.then(() => {
+      throw new Error(`${command} ${args.join(" ")} skipped during parent signal shutdown`);
+    });
+  }
   return new Promise((resolve, reject) => {
     const config = resolveKitchenSinkRpcConfig();
     const {
@@ -311,11 +365,14 @@ export function runCommand(command, args, options = {}) {
       ...spawnOptions,
       detached: spawnOptions.detached ?? process.platform !== "win32",
     });
+    activeCommandChildren.add(child);
+    installCommandSignalHandlers();
     const startedAt = Date.now();
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
     let forceKillTimer;
+    let forceKillAt;
     let sampleTimer;
     let resourceSampleInFlight = null;
     let capturedResourceSampleCount = 0;
@@ -369,6 +426,7 @@ export function runCommand(command, args, options = {}) {
     const timer = setTimeout(() => {
       timedOut = true;
       signalProcessGroup(child, "SIGTERM");
+      forceKillAt = Date.now() + timeoutKillGraceMs;
       forceKillTimer = setTimeout(() => signalProcessGroup(child, "SIGKILL"), timeoutKillGraceMs);
       forceKillTimer.unref();
     }, timeoutMs);
@@ -381,6 +439,8 @@ export function runCommand(command, args, options = {}) {
     child.on("error", (error) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
+      forceKillAt = undefined;
+      releaseCommandChild(child);
       void stopResourceSampling().finally(() =>
         reject(toLintErrorObject(error, "Command failed before exit")),
       );
@@ -389,6 +449,8 @@ export function runCommand(command, args, options = {}) {
       clearTimeout(timer);
       const finish = () => {
         clearTimeout(forceKillTimer);
+        forceKillAt = undefined;
+        releaseCommandChild(child);
         void stopResourceSampling().then((resourceSampleFailure) => {
           if (!timedOut && status === 0) {
             if (resourceSampleFailure) {
@@ -430,7 +492,10 @@ export function runCommand(command, args, options = {}) {
       };
 
       if (timedOut) {
-        void finishTimedOutCommandProcessTree(child, timeoutKillGraceMs).then(finish, finish);
+        void finishTimedOutCommandProcessTree(child, {
+          forceKillAt,
+          timeoutKillGraceMs,
+        }).then(finish, finish);
         return;
       }
 
@@ -439,12 +504,51 @@ export function runCommand(command, args, options = {}) {
   });
 }
 
-async function finishTimedOutCommandProcessTree(child, timeoutKillGraceMs) {
+async function finishTimedOutCommandProcessTree(child, { forceKillAt, timeoutKillGraceMs }) {
   if (!commandProcessTreeIsAlive(child)) {
     return;
   }
-  signalProcessGroup(child, "SIGKILL");
+  const graceRemainingMs =
+    forceKillAt === undefined ? timeoutKillGraceMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForCommandProcessTreeExit(child, graceRemainingMs);
+  }
+  if (commandProcessTreeIsAlive(child)) {
+    signalProcessGroup(child, "SIGKILL");
+  }
   await waitForCommandProcessTreeExit(child, timeoutKillGraceMs);
+}
+
+function releaseCommandChild(child) {
+  activeCommandChildren.delete(child);
+  if (activeCommandChildren.size === 0 && !commandShutdownPromise) {
+    removeCommandSignalHandlers();
+  }
+}
+
+async function shutdownActiveCommands(signal) {
+  if (commandShutdownPromise) {
+    for (const child of activeCommandChildren) {
+      signalProcessGroup(child, "SIGKILL");
+    }
+    return commandShutdownPromise;
+  }
+  const children = [...activeCommandChildren];
+  for (const child of children) {
+    signalProcessGroup(child, signal);
+  }
+  commandShutdownPromise = Promise.all(
+    children.map((child) =>
+      finishTimedOutCommandProcessTree(child, {
+        forceKillAt: Date.now() + COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+        timeoutKillGraceMs: COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+      }),
+    ),
+  ).finally(() => {
+    removeCommandSignalHandlers();
+    process.kill(process.pid, signal);
+  });
+  return commandShutdownPromise;
 }
 
 async function waitForCommandProcessTreeExit(child, timeoutMs) {
@@ -475,12 +579,42 @@ function commandProcessTreeIsAlive(child) {
   }
 }
 
-function signalProcessGroup(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function signalWindowsProcessTree(pid, signal, runTaskkill = childProcess.spawnSync) {
+  const taskkillPath = resolveWindowsTaskkillPath();
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = childProcess.spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+export function signalProcessGroup(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {}
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
   }
   try {
     child.kill(signal);
@@ -525,7 +659,7 @@ async function resolveOpenClawCommand(runner, args, env, options = {}) {
   };
 }
 
-function parseJsonOutput(stdout) {
+export function parseJsonOutput(stdout) {
   const trimmed = stdout.trim();
   if (!trimmed) {
     throw new Error("command produced no JSON output");
@@ -554,7 +688,10 @@ export function parseGatewayCliRequestFailure(error) {
   } catch {
     return null;
   }
-  const requestError = payload?.ok === false ? payload.error : null;
+  return payload?.ok === false ? createGatewayClientRequestError(payload.error) : null;
+}
+
+export function createGatewayClientRequestError(requestError) {
   if (
     requestError?.type !== "gateway_request_error" ||
     !isNonEmptyString(requestError.code) ||
@@ -655,6 +792,9 @@ function extractBalancedJsonObjects(text) {
     if (text[index] !== "{") {
       continue;
     }
+    if (!isJsonObjectRecordStart(text, index)) {
+      continue;
+    }
     const end = findBalancedJsonObjectEnd(text, index);
     if (end > index) {
       candidates.push(text.slice(index, end + 1));
@@ -662,6 +802,17 @@ function extractBalancedJsonObjects(text) {
     }
   }
   return candidates;
+}
+
+function isJsonObjectRecordStart(text, index) {
+  if (index === 0) {
+    return true;
+  }
+  let cursor = index - 1;
+  while (cursor >= 0 && (text[cursor] === " " || text[cursor] === "\t")) {
+    cursor -= 1;
+  }
+  return cursor < 0 || text[cursor] === "\n" || text[cursor] === "\r";
 }
 
 function findBalancedJsonObjectEnd(text, startIndex) {
@@ -703,6 +854,10 @@ function hasOwnPayloadField(raw, field) {
 
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
+    const requestError = createGatewayClientRequestError(raw.error);
+    if (requestError) {
+      throw requestError;
+    }
     throw new Error(`gateway RPC failed: ${boundedJsonPreview(raw.error ?? raw)}`);
   }
   if (
@@ -980,7 +1135,7 @@ export async function readBoundedResponseText(response, byteLimit, timeoutPromis
   const contentLength = response.headers?.get?.("content-length");
   if (contentLength && /^\d+$/u.test(contentLength)) {
     const parsedContentLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedContentLength) && parsedContentLength > resolvedByteLimit) {
+    if (!Number.isSafeInteger(parsedContentLength) || parsedContentLength > resolvedByteLimit) {
       await response.body?.cancel?.().catch(() => undefined);
       throw createFetchBodyTooLargeError(resolvedByteLimit);
     }
@@ -996,25 +1151,31 @@ export async function readBoundedResponseText(response, byteLimit, timeoutPromis
   }
   const chunks = [];
   let totalBytes = 0;
-  for (;;) {
-    const read = reader.read();
-    const { done, value } = await withOptionalTimeout(
-      read,
-      timeoutPromise?.catch((error) => {
-        cancelReaderSoon(reader);
-        throw error;
-      }),
-    );
-    if (done) {
-      break;
+  try {
+    for (;;) {
+      const read = reader.read();
+      const { done, value } = await withOptionalTimeout(
+        read,
+        timeoutPromise?.catch((error) => {
+          cancelReaderSoon(reader);
+          throw error;
+        }),
+      );
+      if (done) {
+        break;
+      }
+      const chunk = Buffer.from(value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > resolvedByteLimit) {
+        await reader.cancel().catch(() => undefined);
+        throw createFetchBodyTooLargeError(resolvedByteLimit);
+      }
+      chunks.push(chunk);
     }
-    const chunk = Buffer.from(value);
-    totalBytes += chunk.byteLength;
-    if (totalBytes > resolvedByteLimit) {
-      await reader.cancel().catch(() => undefined);
-      throw createFetchBodyTooLargeError(resolvedByteLimit);
-    }
-    chunks.push(chunk);
+  } finally {
+    try {
+      reader.releaseLock?.();
+    } catch {}
   }
   return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
@@ -1187,8 +1348,13 @@ function releaseUnsettledGatewayChild(child) {
   child.unref?.();
 }
 
-function signalGateway(child, signal, killProcess = defaultKillProcess) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function signalGateway(child, signal, killProcess = defaultKillProcess, options = {}) {
+  const {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = options;
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       killProcess(-child.pid, signal);
       return true;
@@ -1196,6 +1362,11 @@ function signalGateway(child, signal, killProcess = defaultKillProcess) {
       if (error?.code === "ESRCH") {
         return false;
       }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return true;
     }
   }
   try {
@@ -1873,12 +2044,14 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     if (hasMalformedProcessTreeRows(malformedRows, rootTreeRows)) {
       return null;
     }
+    const rootRow = rootTreeRows.find((row) => row.processId === safePid) ?? null;
     const descendants = rootTreeRows.filter((row) => row.processId !== safePid);
-    const commandMatches = descendants.filter((row) =>
+    const matchesCommandNeedles = (row) =>
       commandLineNeedles.every((needle) =>
         row.command.toLowerCase().includes(needle.toLowerCase()),
-      ),
-    );
+      );
+    const commandMatches = descendants.filter(matchesCommandNeedles);
+    const rootCommandMatches = rootRow && matchesCommandNeedles(rootRow) ? [rootRow] : [];
     const gatewayTitleMatches = descendants.filter((row) =>
       row.command.toLowerCase().includes("openclaw-gateway"),
     );
@@ -1887,7 +2060,9 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
         ? commandMatches
         : gatewayTitleMatches.length > 0
           ? gatewayTitleMatches
-          : descendants,
+          : descendants.length > 0
+            ? descendants
+            : rootCommandMatches,
     );
     if (!selected) {
       return null;
@@ -1982,9 +2157,14 @@ function collectPosixProcessTree(rows, rootPid) {
   const root = rows.find((row) => row.processId === rootPid);
   const collected = root ? [root] : [];
   const pending = [rootPid];
+  const seen = new Set(pending);
   while (pending.length > 0) {
     const nextPid = pending.shift();
     for (const child of byParent.get(nextPid) ?? []) {
+      if (seen.has(child.processId)) {
+        continue;
+      }
+      seen.add(child.processId);
       collected.push(child);
       pending.push(child.processId);
     }
@@ -2072,7 +2252,7 @@ async function sampleWindowsPidWithTasklist(pid, run) {
   }
   try {
     const { stdout } = await run(
-      "tasklist.exe",
+      resolveWindowsSystem32Path("tasklist.exe"),
       ["/FI", `PID eq ${safePid}`, "/FO", "CSV", "/NH"],
       { timeoutMs: 15000 },
     );
@@ -2109,7 +2289,9 @@ export async function sampleWindowsProcessByPort(port, options = {}) {
   }
   const run = options.runCommand ?? runCommand;
   try {
-    const { stdout } = await run("netstat.exe", ["-ano", "-p", "tcp"], { timeoutMs: 15000 });
+    const { stdout } = await run(resolveWindowsSystem32Path("netstat.exe"), ["-ano", "-p", "tcp"], {
+      timeoutMs: 15000,
+    });
     const pid = stdout
       .split(/\r?\n/u)
       .map((line) => line.trim())
@@ -2169,40 +2351,38 @@ async function sampleWindowsProcess(pid, run, commandLineNeedles = []) {
     "if ($null -ne $process.CPU) { $cpu = $process.CPU }",
     "[Console]::Out.Write(('{0} {1} {2} {3}' -f $process.WorkingSet64, $cpu, $process.Id, $totalWorkingSet))",
   ].join("; ");
-  for (const powershell of ["powershell.exe", "powershell"]) {
-    try {
-      const { stdout } = await run(
-        powershell,
-        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
-        { timeoutMs: 15000 },
-      );
-      const [workingSetBytesRaw, cpuSecondsRaw, processIdRaw, aggregateWorkingSetBytesRaw] = stdout
-        .trim()
-        .split(/\s+/u);
-      const workingSetBytes = parseStrictUnsignedInteger(workingSetBytesRaw);
-      const aggregateWorkingSetBytes = parseStrictUnsignedInteger(
-        aggregateWorkingSetBytesRaw ?? workingSetBytesRaw ?? "",
-      );
-      const cpuSeconds = parseStrictNonNegativeDecimal(cpuSecondsRaw);
-      const processId = parseStrictUnsignedInteger(processIdRaw);
-      if (workingSetBytes === null) {
-        return null;
-      }
-      return {
-        rssMiB: Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
-        aggregateRssMiB:
-          aggregateWorkingSetBytes !== null
-            ? Math.round((aggregateWorkingSetBytes / 1024 / 1024) * 10) / 10
-            : Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
-        cpuPercent: null,
-        cpuSeconds,
-        processId: processId ?? safePid,
-      };
-    } catch {
-      // Try the next Windows PowerShell command name.
+  const powershell = resolveWindowsPowerShellPath();
+  try {
+    const { stdout } = await run(
+      powershell,
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+      { timeoutMs: 15000 },
+    );
+    const [workingSetBytesRaw, cpuSecondsRaw, processIdRaw, aggregateWorkingSetBytesRaw] = stdout
+      .trim()
+      .split(/\s+/u);
+    const workingSetBytes = parseStrictUnsignedInteger(workingSetBytesRaw);
+    const aggregateWorkingSetBytes = parseStrictUnsignedInteger(
+      aggregateWorkingSetBytesRaw ?? workingSetBytesRaw ?? "",
+    );
+    const cpuSeconds = parseStrictNonNegativeDecimal(cpuSecondsRaw);
+    const processId = parseStrictUnsignedInteger(processIdRaw);
+    if (workingSetBytes === null) {
+      return null;
     }
+    return {
+      rssMiB: Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
+      aggregateRssMiB:
+        aggregateWorkingSetBytes !== null
+          ? Math.round((aggregateWorkingSetBytes / 1024 / 1024) * 10) / 10
+          : Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
+      cpuPercent: null,
+      cpuSeconds,
+      processId: processId ?? safePid,
+    };
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function assertProcessResourceCeiling(sample, { label, maxRssMiB, requireSample = true }) {
@@ -2587,9 +2767,16 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (shouldPrintHelp(process.argv.slice(2))) {
+  const argv = process.argv.slice(2);
+  if (shouldPrintHelp(argv)) {
     process.stdout.write(usage());
   } else {
+    try {
+      validateCliArgs(argv);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
     await main();
   }
 }
