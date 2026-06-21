@@ -427,6 +427,30 @@ describe("tavily tools", () => {
     expect(resolveTavilyExtractTimeoutSeconds()).toBe(DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS);
   });
 
+  it("falls back to process.env when the configured apiKey is an unresolved SecretRef", () => {
+    vi.stubEnv("TAVILY_API_KEY", "env-key");
+
+    const cfg = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "TAVILY_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveTavilyApiKey(cfg)).toBe("env-key");
+  });
+
   it("accepts positive numeric timeout overrides and floors them", () => {
     expect(resolveTavilySearchTimeoutSeconds(19.9)).toBe(19);
     expect(resolveTavilyExtractTimeoutSeconds(42.7)).toBe(42);

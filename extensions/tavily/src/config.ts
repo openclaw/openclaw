@@ -1,10 +1,7 @@
 // Tavily helper module supports config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-search";
-import {
-  normalizeResolvedSecretInputString,
-  normalizeSecretInput,
-} from "openclaw/plugin-sdk/secret-input";
+import { normalizeSecretInput, resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
@@ -35,12 +32,12 @@ export function resolveTavilySearchConfig(cfg?: OpenClawConfig): TavilySearchCon
 }
 
 function normalizeConfiguredSecret(value: unknown, path: string): string | undefined {
-  return normalizeSecretInput(
-    normalizeResolvedSecretInputString({
-      value,
-      path,
-    }),
-  );
+  const resolved = resolveSecretInputString({
+    value,
+    path,
+    mode: "configured_unavailable",
+  });
+  return resolved.status === "available" ? normalizeSecretInput(resolved.value) : undefined;
 }
 
 export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
