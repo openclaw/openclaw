@@ -1787,44 +1787,48 @@ describe("runCliAgent spawn path", () => {
     const backend = {
       liveSession: "claude-stdio" as const,
     };
-    const runs = Array.from({ length: 17 }, (_, index) =>
-      (() => {
-        const context = buildPreparedCliRunContext({
-          provider: "claude-cli",
-          model: "sonnet",
-          runId: `run-live-cap-${index}`,
-          prompt: `prompt ${index}`,
-          sessionId: `session-${index}`,
-          backend,
-        });
-        return runClaudeLiveSessionTurn({
-          context,
-          args: context.preparedBackend.backend.args ?? [],
-          env: {},
-          prompt: `prompt ${index}`,
-          useResume: false,
-          noOutputTimeoutMs: 1_000,
-          getProcessSupervisor: () => ({
-            spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
-              supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
-            cancel: vi.fn(),
-            cancelScope: vi.fn(),
-            getRecord: vi.fn(),
-          }),
-          onAssistantDelta: () => {},
-          cleanup: async () => {},
-        });
-      })(),
-    );
-    const rejectedRun = runs[16];
-    const rejectedRunExpectation = expect(rejectedRun).rejects.toThrow(
-      "Too many Claude CLI live sessions are active.",
-    );
+    const runs: Array<ReturnType<typeof runClaudeLiveSessionTurn>> = [];
+    let rejectedRunError: Promise<unknown> | undefined;
+    for (let index = 0; index < 17; index += 1) {
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: `run-live-cap-${index}`,
+        prompt: `prompt ${index}`,
+        sessionId: `session-${index}`,
+        backend,
+      });
+      const run = runClaudeLiveSessionTurn({
+        context,
+        args: context.preparedBackend.backend.args ?? [],
+        env: {},
+        prompt: `prompt ${index}`,
+        useResume: false,
+        noOutputTimeoutMs: 1_000,
+        getProcessSupervisor: () => ({
+          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+          cancel: vi.fn(),
+          cancelScope: vi.fn(),
+          reconcileOrphans: vi.fn(),
+          getRecord: vi.fn(),
+        }),
+        onAssistantDelta: () => {},
+        cleanup: async () => {},
+      });
+      if (index === 16) {
+        rejectedRunError = run.catch((error: unknown) => error);
+      } else {
+        runs.push(run);
+      }
+    }
 
     await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledTimes(16));
-    await rejectedRunExpectation;
     releaseSpawn?.();
-    await expect(Promise.all(runs.slice(0, 16))).resolves.toHaveLength(16);
+    const rejectedError = await rejectedRunError;
+    expect(rejectedError).toBeInstanceOf(Error);
+    expect((rejectedError as Error).message).toBe("Too many Claude CLI live sessions are active.");
+    await expect(Promise.all(runs)).resolves.toHaveLength(16);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(16);
   });
 
