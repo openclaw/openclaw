@@ -628,7 +628,7 @@ test("sessions.create can start the first agent turn from an initial task", asyn
 });
 
 test("sessions.create without key reuses existing active dashboard session", async () => {
-  const { storePath } = await createSessionStoreDir();
+  await createSessionStoreDir();
   const existingKey = "agent:ops:dashboard:existing-session";
   await writeSessionStore({
     agentId: "ops",
@@ -668,7 +668,7 @@ test("sessions.create without key creates new dashboard session when none exists
 });
 
 test("sessions.create without key creates new dashboard session when existing ones have endedAt", async () => {
-  const { storePath } = await createSessionStoreDir();
+  await createSessionStoreDir();
   await writeSessionStore({
     agentId: "ops",
     entries: {
@@ -692,7 +692,7 @@ test("sessions.create without key creates new dashboard session when existing on
 });
 
 test("sessions.create with label creates new dashboard session when active dashboard exists", async () => {
-  const { storePath } = await createSessionStoreDir();
+  await createSessionStoreDir();
   await writeSessionStore({
     agentId: "ops",
     entries: {
@@ -745,6 +745,39 @@ test("sessions.create with task creates new dashboard session when active dashbo
   expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
   expect(created.payload?.key).not.toBe("agent:ops:dashboard:existing");
   expect(created.payload?.runStarted).toBe(true);
+
+  ws.close();
+});
+
+test("sessions.create with parentSessionKey and emitCommandHooks creates new dashboard session when active dashboard exists", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    agentId: "ops",
+    entries: {
+      "agent:ops:dashboard:existing": sessionStoreEntry("sess-existing", {
+        updatedAt: 1000,
+        label: "Existing Dashboard",
+      }),
+      "agent:ops:main": sessionStoreEntry("sess-main", {
+        label: "Main Session",
+      }),
+    },
+  });
+  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  const { ws } = await openClient();
+
+  const created = await rpcReq<{
+    key?: string;
+    sessionId?: string;
+  }>(ws, "sessions.create", {
+    agentId: "ops",
+    parentSessionKey: "agent:ops:main",
+    emitCommandHooks: true,
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+  expect(created.payload?.key).not.toBe("agent:ops:dashboard:existing");
 
   ws.close();
 });

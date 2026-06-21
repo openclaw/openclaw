@@ -355,9 +355,13 @@ function findActiveDashboardSessionKey(
   const prefix = `agent:${agentId}:dashboard:`;
   let latest: { key: string; updatedAt: number } | undefined;
   for (const key of Object.keys(store)) {
-    if (!key.startsWith(prefix)) continue;
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
     const entry = store[key];
-    if (!entry || entry.endedAt) continue;
+    if (!entry || entry.endedAt) {
+      continue;
+    }
     const updatedAt = entry.updatedAt ?? 0;
     if (!latest || updatedAt > latest.updatedAt) {
       latest = { key, updatedAt };
@@ -1411,7 +1415,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         reason: "new",
       });
     }
-    const hasCreateIntent = Boolean(p.label ?? p.model ?? p.task ?? p.message);
+    const hasCreateIntent = Boolean(
+      p.label ?? p.model ?? p.task ?? p.message ?? p.parentSessionKey ?? p.emitCommandHooks,
+    );
     if (!requestedKey && !hasCreateIntent) {
       const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId });
       const existingKey = findActiveDashboardSessionKey(store, agentId);
