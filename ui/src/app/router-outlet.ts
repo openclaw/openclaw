@@ -26,10 +26,8 @@ type RouterOutletSelection = {
 };
 
 type RouterViewSelection = {
-  status: RouterState<string, unknown, unknown>["status"];
-  activeRouteId: string | undefined;
-  activeModule: unknown;
-  pendingRouteId: string | undefined;
+  routeId: string | undefined;
+  module: unknown;
 };
 
 function selectRouterOutletState(
@@ -54,22 +52,15 @@ function equalRouterOutletState(
 }
 
 function selectRouterViewState(state: RouterState<string, unknown, unknown>): RouterViewSelection {
-  const active = state.matches[0];
+  const target = state.pendingMatches[0] ?? state.matches[0];
   return {
-    status: state.status,
-    activeRouteId: active?.routeId,
-    activeModule: active?.module,
-    pendingRouteId: state.pendingMatches[0]?.routeId,
+    routeId: target?.routeId,
+    module: target?.module,
   };
 }
 
 function equalRouterViewState(previous: RouterViewSelection, next: RouterViewSelection): boolean {
-  return (
-    previous.status === next.status &&
-    previous.activeRouteId === next.activeRouteId &&
-    previous.activeModule === next.activeModule &&
-    previous.pendingRouteId === next.pendingRouteId
-  );
+  return previous.routeId === next.routeId && previous.module === next.module;
 }
 
 type RouterOutletRuntime = Router<string, unknown, unknown, unknown>;
