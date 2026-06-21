@@ -9,7 +9,7 @@ import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
-import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
+import { getWindowsCmdExePath, getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -414,7 +414,8 @@ function buildTaskScript({
 }
 
 function renderStartupLaunchCommand(scriptPath: string): string {
-  return `start "" /min cmd.exe /d /c ${quoteCmdScriptArg(scriptPath)}`;
+  const cmdExePath = quoteCmdScriptArg(getWindowsCmdExePath());
+  return `start "" /min ${cmdExePath} /d /c ${quoteCmdScriptArg(scriptPath)}`;
 }
 
 function buildStartupLauncherScript(params: { description?: string; scriptPath: string }): string {
@@ -497,7 +498,7 @@ async function launchFallbackTaskScript(env: GatewayServiceEnv): Promise<void> {
     return;
   }
 
-  const child = spawn("cmd.exe", ["/d", "/c", scriptPath], {
+  const child = spawn(getWindowsCmdExePath(), ["/d", "/c", scriptPath], {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
