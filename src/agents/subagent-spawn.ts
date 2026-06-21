@@ -1582,7 +1582,6 @@ export async function spawnSubagentDirect(
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
         model: resolvedModel || undefined,
-        allowModelOverride: true,
         timeout: runTimeoutSeconds,
         label: label || undefined,
         ...(bootstrapContextMode
