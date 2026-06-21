@@ -1,5 +1,6 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
@@ -258,5 +259,70 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("triggers fallback when the only visible payload is the generic external run failure text", () => {
+    // Some subprocess runners (e.g. claude-cli) deliver their error text as a
+    // regular text payload (isError: false). The classifier should treat this
+    // as invisible and allow fallback to the next provider in the chain.
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      result: {
+        payloads: [
+          {
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          },
+        ],
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toMatchObject({
+      code: "empty_result",
+      reason: "format",
+    });
+  });
+
+  it("does not trigger fallback when generic failure text is mixed with normal payloads", () => {
+    // If there is real visible text alongside the generic failure text, the
+    // run made progress and should not trigger model fallback.
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      result: {
+        payloads: [
+          { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+          { text: "Actual assistant response content" },
+        ],
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not suppress business-denial error payload classification when generic failure text is present", () => {
+    // The pre-check only strips the generic failure text from visible-content
+    // consideration; if a business-denial error payload also exists, it must
+    // still be classified by the existing error-payload path.
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openrouter",
+      model: "gpt-5.5",
+      result: {
+        payloads: [
+          { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+          { isError: true, text: "Key limit exceeded" },
+        ],
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toMatchObject({
+      code: "embedded_error_payload",
+      reason: "billing",
+    });
   });
 });
