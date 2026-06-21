@@ -1764,6 +1764,86 @@ describe("iMessage monitor last-route updates", () => {
     expect(bodies[1]).not.toContain("unrelated thought");
   });
 
+  it("does not merge unrelated buffered rows into an already-complete URL balloon message", async () => {
+    debouncerControl.holdEntries = true;
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        throw new Error(`unexpected imsg method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {
+        for (const row of [
+          {
+            id: 211,
+            guid: "LIVE-GUID-211",
+            text: "unrelated thought",
+            created_at: new Date(Date.now() - 2000).toISOString(),
+          },
+          {
+            id: 212,
+            guid: "LIVE-GUID-212",
+            text: "summarize https://example.com/article",
+            balloon_bundle_id: "com.apple.messages.URLBalloonProvider",
+            created_at: new Date(Date.now() - 1000).toISOString(),
+          },
+        ]) {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                ...row,
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                is_group: false,
+              },
+            },
+          });
+        }
+        await vi.waitFor(() => {
+          expect(debouncerControl.flush).toBeDefined();
+        });
+        await debouncerControl.flush?.();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            coalesceSameSenderDms: true,
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+            sendReadReceipts: false,
+          },
+        },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+    const bodies = dispatchInboundMessageMock.mock.calls.map((call) => call[0].ctx.Body ?? "");
+    expect(bodies[0]).toContain("unrelated thought");
+    expect(bodies[0]).not.toContain("summarize");
+    expect(bodies[1]).toContain("summarize");
+    expect(bodies[1]).toContain("https://example.com/article");
+    expect(bodies[1]).not.toContain("unrelated thought");
+  });
+
   it("respects explicit iMessage inbound debounce timing", async () => {
     const client = {
       request: vi.fn(async (method: string) => {

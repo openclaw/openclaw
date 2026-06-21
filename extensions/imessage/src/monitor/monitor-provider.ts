@@ -71,6 +71,7 @@ import {
   combineIMessagePayloads,
   hasIMessageBalloonMetadata,
   hasIMessageUrlBalloonBundleID,
+  isStandaloneIMessageUrlPreviewPayload,
   shouldCombineIMessagePayloadBucket,
 } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
@@ -690,19 +691,27 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         }
         return;
       }
-      // The bucket-level gate only says this window contains coalescible work.
-      // URL balloons merge with the immediately preceding row; unrelated rows in
-      // the same sender/window dispatch separately instead of joining the pair.
+      // The bucket-level gate only says this window contains URL-balloon work.
+      // Standalone URL preview rows merge with the immediately preceding row;
+      // already-complete URL messages flush any pending ordinary row first.
       if (messages.some(hasIMessageUrlBalloonBundleID)) {
         let pending: { message: IMessagePayload; replayKey: string | null } | null = null;
         for (const entry of entries) {
-          if (hasIMessageUrlBalloonBundleID(entry.message) && pending) {
+          if (isStandaloneIMessageUrlPreviewPayload(entry.message) && pending) {
             const unitEntries = [pending, entry];
             await dispatchUnit(
               unitEntries,
               combineIMessagePayloads(unitEntries.map((e) => e.message)),
             );
             pending = null;
+            continue;
+          }
+          if (hasIMessageUrlBalloonBundleID(entry.message)) {
+            if (pending) {
+              await dispatchUnit([pending], pending.message);
+              pending = null;
+            }
+            await dispatchUnit([entry], entry.message);
             continue;
           }
           if (pending) {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   combineIMessagePayloads,
   IMESSAGE_URL_BALLOON_BUNDLE_ID,
+  isStandaloneIMessageUrlPreviewPayload,
   MAX_COALESCED_ATTACHMENTS,
   MAX_COALESCED_ENTRIES,
   MAX_COALESCED_TEXT_CHARS,
@@ -159,6 +160,41 @@ describe("combineIMessagePayloads", () => {
 
   it("respects the documented entry cap value", () => {
     expect(MAX_COALESCED_ENTRIES).toBeGreaterThan(1);
+  });
+});
+
+describe("isStandaloneIMessageUrlPreviewPayload", () => {
+  it("matches URL balloon rows that only carry the preview URL", () => {
+    expect(
+      isStandaloneIMessageUrlPreviewPayload(
+        makePayload({
+          text: "https://example.com/article",
+          balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match already-complete URL balloon messages with text context", () => {
+    expect(
+      isStandaloneIMessageUrlPreviewPayload(
+        makePayload({
+          text: "summarize https://example.com/article",
+          balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match non-URL balloon payloads", () => {
+    expect(
+      isStandaloneIMessageUrlPreviewPayload(
+        makePayload({
+          text: "https://example.com/article",
+          balloon_bundle_id: "com.apple.messages.HandwritingProvider",
+        }),
+      ),
+    ).toBe(false);
   });
 });
 

@@ -22,6 +22,26 @@ export function hasIMessageUrlBalloonBundleID(payload: IMessagePayload): boolean
   return payload.balloon_bundle_id === IMESSAGE_URL_BALLOON_BUNDLE_ID;
 }
 
+function isSingleUrlToken(text: string): boolean {
+  if (/\s/.test(text)) {
+    return false;
+  }
+  try {
+    const url = new URL(text);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function isStandaloneIMessageUrlPreviewPayload(payload: IMessagePayload): boolean {
+  if (!hasIMessageUrlBalloonBundleID(payload)) {
+    return false;
+  }
+  const text = (payload.text ?? "").trim();
+  return text.length === 0 || isSingleUrlToken(text);
+}
+
 // imsg omits `balloon_bundle_id` for non-balloon rows, so a present value is
 // the session signal that this bridge build exposes structural balloon
 // metadata. Once latched, missing URL metadata is meaningful.
