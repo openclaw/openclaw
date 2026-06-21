@@ -20,6 +20,7 @@ async function simulateImport() {
 
 async function loadModule() {
   if (!loaderPromise) {
+    // oxlint-disable-next-line typescript/use-unknown-in-catch-callback-variable
     loaderPromise = simulateImport().catch((err) => {
       console.log(
         `  -> Caught: ${err instanceof Error ? err.message : String(err)}. Resetting promise cache for retry.`,
