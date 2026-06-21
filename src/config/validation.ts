@@ -1690,13 +1690,16 @@ function validateConfigObjectWithPluginsBase(
 
   // Channels["*"] is a narrow, reserved wildcard: it does NOT mean "a real
   // channel id" and is intentionally excluded from the normal per-plugin
-  // schema lookup below. Only the two cross-channel display fields that the
-  // runtime fallback (resolveAckReaction / resolveResponsePrefix) actually
-  // reads are accepted here. Any other key (e.g. dmPolicy, groupPolicy)
-  // is rejected explicitly so wildcard config can never silently bypass
-  // per-channel policy enforcement that sibling consumers (config-presence,
-  // route-targets) do not know how to apply to "*".
-  const WILDCARD_CHANNEL_ALLOWED_FIELDS = new Set(["ackReaction", "responsePrefix"]);
+  // schema lookup below. Only ackReaction is accepted here, since
+  // resolveAckReaction() in agents/identity.ts is the only runtime fallback
+  // that actually reads channels["*"] today. Any other key (e.g. dmPolicy,
+  // groupPolicy, responsePrefix) is rejected explicitly so wildcard config
+  // can never silently bypass per-channel policy enforcement that sibling
+  // consumers (config-presence, route-targets) do not know how to apply to
+  // "*", and so it can't validate a config shape the runtime ignores.
+  // responsePrefix can be added back here once resolveResponsePrefix() gets
+  // a matching wildcard lookup + tests.
+  const WILDCARD_CHANNEL_ALLOWED_FIELDS = new Set(["ackReaction"]);
 
   const allowedChannels = new Set<string>([
     "defaults",
@@ -1742,11 +1745,11 @@ function validateConfigObjectWithPluginsBase(
             if (!WILDCARD_CHANNEL_ALLOWED_FIELDS.has(fieldKey)) {
               issues.push({
                 path: `channels.*.${fieldKey}`,
-                message: `unsupported wildcard channel field: ${fieldKey} (only ackReaction and responsePrefix are supported under channels["*"])`,
+                message: `unsupported wildcard channel field: ${fieldKey} (only ackReaction is supported under channels["*"])`,
               });
               continue;
             }
-            const fieldValue = (wildcardValue as Record<string, unknown>)[fieldKey];
+            const fieldValue = wildcardValue[fieldKey];
             if (fieldValue !== undefined && typeof fieldValue !== "string") {
               issues.push({
                 path: `channels.*.${fieldKey}`,

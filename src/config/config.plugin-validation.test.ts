@@ -1222,7 +1222,7 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it('accepts channels["*"].responsePrefix alongside ackReaction', () => {
+  it('rejects channels["*"].responsePrefix until a matching runtime fallback exists', () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
       channels: {
@@ -1230,7 +1230,17 @@ describe("config plugin validation", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues.filter((issue) => issue.path === "channels.*.responsePrefix")).toEqual([
+      {
+        path: "channels.*.responsePrefix",
+        message:
+          'unsupported wildcard channel field: responsePrefix (only ackReaction is supported under channels["*"])',
+      },
+    ]);
   });
 
   it('rejects unsupported fields under channels["*"] such as dmPolicy', () => {
@@ -1249,7 +1259,7 @@ describe("config plugin validation", () => {
       {
         path: "channels.*.dmPolicy",
         message:
-          'unsupported wildcard channel field: dmPolicy (only ackReaction and responsePrefix are supported under channels["*"])',
+          'unsupported wildcard channel field: dmPolicy (only ackReaction is supported under channels["*"])',
       },
     ]);
   });
