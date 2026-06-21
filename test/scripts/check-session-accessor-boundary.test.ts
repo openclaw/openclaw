@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  allowedSessionStoreRuntimeFileBackedCompatExports,
+  collectSessionStoreRuntimeFileBackedCompatExports,
   findGatewaySessionCreateLifecycleViolations,
   findSessionAccessorBoundaryViolations,
   findSessionCompactManualTrimBoundaryViolations,
   findSessionAccessorWriteBoundaryViolations,
   findSessionLifecycleCleanupBoundaryViolations,
+  findSessionStoreRuntimeFileBackedCompatExportViolations,
   findTranscriptWriterBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
   migratedSessionLifecycleCleanupFiles,
@@ -40,10 +43,20 @@ describe("session accessor boundary guard", () => {
         "src/cron/isolated-agent/delivery-target.ts",
         "src/cron/service/timer.ts",
         "src/gateway/session-compaction-checkpoints.ts",
+        "src/gateway/session-history-state.ts",
         "src/gateway/session-utils.ts",
+        "src/gateway/managed-image-attachments.ts",
+        "src/gateway/server-methods/artifacts.ts",
+        "src/gateway/server-methods/chat.ts",
         "src/gateway/sessions-resolve.ts",
+        "src/gateway/server-methods/sessions-files.ts",
         "src/gateway/server-methods/sessions.ts",
+        "src/gateway/server-session-events.ts",
+        "src/gateway/session-reset-service.ts",
         "src/infra/outbound/message-action-tts.ts",
+        "src/agents/tools/embedded-gateway-stub.ts",
+        "src/agents/tools/sessions-list-tool.ts",
+        "src/status/status-message.ts",
         "src/tui/embedded-backend.ts",
       ]),
     );
@@ -121,6 +134,55 @@ describe("session accessor boundary guard", () => {
         "src/infra/heartbeat-runner.ts",
       ]),
     );
+  });
+
+  it("ratchets only explicit file-backed SDK session compatibility exports", () => {
+    expect(allowedSessionStoreRuntimeFileBackedCompatExports).toEqual(
+      new Set([
+        "loadSessionStore",
+        "readLatestAssistantTextFromSessionTranscript",
+        "resolveAndPersistSessionFile",
+        "resolveSessionFilePath",
+        "resolveSessionStoreEntry",
+        "saveSessionStore",
+        "updateSessionStore",
+      ]),
+    );
+  });
+
+  it("collects file-backed SDK session compatibility exports", () => {
+    expect(
+      collectSessionStoreRuntimeFileBackedCompatExports(`
+        export const loadSessionStore = loadSessionStoreImpl;
+        export { resolveSessionFilePath } from "../config/sessions/paths.js";
+        export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
+      `),
+    ).toEqual(
+      new Map([
+        ["loadSessionStore", { line: 2, sourceName: "loadSessionStore" }],
+        ["resolveSessionFilePath", { line: 3, sourceName: "resolveSessionFilePath" }],
+        ["saveSessionStore", { line: 4, sourceName: "saveSessionStore" }],
+        ["updateSessionStore", { line: 4, sourceName: "updateSessionStore" }],
+      ]),
+    );
+  });
+
+  it("flags unratcheted file-backed SDK session compatibility exports", () => {
+    expect(
+      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+        export { readSessionEntries } from "../config/sessions/store-load.js";
+        export { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'exports unratcheted file-backed SDK session helper "readSessionEntries"',
+      },
+      {
+        line: 3,
+        reason: 'exports unratcheted file-backed SDK session helper "resolveSessionFilePath"',
+      },
+    ]);
   });
 
   it("flags legacy reader imports", () => {

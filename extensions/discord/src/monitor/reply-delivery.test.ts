@@ -141,6 +141,21 @@ describe("deliverDiscordReply", () => {
     expect(sendOptions.rest).toBe(rest);
   });
 
+  it("formats reasoning replies as visible Discord payloads before shared outbound", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "Because it helps", isReasoning: true }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "block",
+    });
+
+    expect(firstDeliverParams().payloads).toEqual([{ text: "Thinking\n\n_Because it helps_" }]);
+  });
+
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
     sendDurableMessageBatchMock.mockResolvedValueOnce({ status: "sent", results: [] });
 

@@ -22,7 +22,7 @@ import {
   isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
-  resolveLocalAuthSpawnOptions,
+  resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
   resolveTuiFooterHostLabel,
   resolveTuiShutdownHardExitMs,
@@ -643,38 +643,50 @@ describe("resolveLocalAuthCliInvocation", () => {
   });
 });
 
-describe("resolveLocalAuthSpawnOptions", () => {
-  it("enables shell mode for Windows cmd shims", () => {
+describe("resolveLocalAuthSpawnInvocation", () => {
+  it("wraps Windows cmd shims through cmd.exe", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toEqual({ shell: true });
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd login"],
+      options: { windowsHide: true, windowsVerbatimArguments: true },
+    });
   });
 
-  it("enables shell mode for Windows bat shims", () => {
+  it("wraps spaced Windows bat shim paths with outer command-line quoting", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
-        command: "C:\\tools\\codex.bat",
+      resolveLocalAuthSpawnInvocation({
+        command: "C:\\Program Files\\Codex\\codex.bat",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toEqual({ shell: true });
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", '""C:\\Program Files\\Codex\\codex.bat" login"'],
+      options: { windowsHide: true, windowsVerbatimArguments: true },
+    });
   });
 
   it("keeps direct execution for non-wrapper commands", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "/usr/local/bin/codex",
+        args: ["login"],
         platform: "linux",
       }),
-    ).toStrictEqual({});
+    ).toStrictEqual({ command: "/usr/local/bin/codex", args: ["login"], options: {} });
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "C:\\tools\\codex.exe",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toStrictEqual({});
+    ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
   });
 });
 

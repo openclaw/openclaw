@@ -674,8 +674,9 @@ describe("EmbeddedTuiBackend", () => {
     expect(readSessionMessagesAsyncMock).toHaveBeenCalledWith(
       {
         agentId: "main",
-        sessionFile: undefined,
+        sessionEntry: { sessionId: "sess-main" },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: "/tmp/openclaw-sessions.json",
       },
       {

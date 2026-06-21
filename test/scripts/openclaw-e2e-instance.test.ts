@@ -849,6 +849,12 @@ exit 1
     }
   });
 
+  it("cancels HTTP readiness probe response bodies", () => {
+    const helper = fs.readFileSync(helperPath, "utf8");
+
+    expect(helper).toContain("await response?.body?.cancel?.().catch(() => undefined);");
+  });
+
   it("does not repeatedly grep the full gateway log while waiting for readiness", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-readyz-incremental-"));
     try {

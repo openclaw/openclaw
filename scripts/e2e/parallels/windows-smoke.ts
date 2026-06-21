@@ -439,11 +439,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
 
   private log = (text: string): void => this.phases.append(text);
 
-  private guestExec = (
-    args: string[],
-    options: { check?: boolean; timeoutMs?: number } = {},
-  ): string => this.guest.exec(args, options);
-
   private guestPowerShell(
     script: string,
     options: { check?: boolean; timeoutMs?: number } = {},
@@ -547,7 +542,7 @@ ${cleanScript}`,
     const versionArg = this.installVersion ? ` -Tag ${psSingleQuote(this.installVersion)}` : "";
     this.guestPowerShell(
       `$ErrorActionPreference = 'Stop'
-$script = Invoke-RestMethod -Uri ${psSingleQuote(this.options.installUrl)}
+$script = Invoke-RestMethod -Uri ${psSingleQuote(this.options.installUrl)} -TimeoutSec 120
 & ([scriptblock]::Create($script))${versionArg} -NoOnboard
 if ($LASTEXITCODE -ne 0) { throw "installer failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version
@@ -564,7 +559,7 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LAST
     this.guestPowerShell(
       `$ErrorActionPreference = 'Stop'
 $tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
-curl.exe -fsSL ${psSingleQuote(tgzUrl)} -o $tgz
+curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(tgzUrl)} -o $tgz
 npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
 if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version

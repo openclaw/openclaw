@@ -25,6 +25,28 @@ describe("resolveNpmRunner", () => {
     });
   });
 
+  it("uses the active node executable when its basename is not node", () => {
+    const execPath = "/Users/test/.toolchains/node-24/bin/node24";
+    const expectedNpmCliPath = path.posix.resolve(
+      path.posix.dirname(execPath),
+      "../lib/node_modules/npm/bin/npm-cli.js",
+    );
+
+    const runner = resolveNpmRunner({
+      execPath,
+      env: {},
+      existsSync: (candidate) => candidate === expectedNpmCliPath,
+      npmArgs: ["pack", "openclaw@beta"],
+      platform: "darwin",
+    });
+
+    expect(runner).toEqual({
+      command: execPath,
+      args: [expectedNpmCliPath, "pack", "openclaw@beta"],
+      shell: false,
+    });
+  });
+
   it("anchors Windows npm staging to the adjacent npm-cli.js without a shell", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const expectedNpmCliPath = path.win32.resolve(

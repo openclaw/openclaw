@@ -1,13 +1,16 @@
 // Test Install Sh Docker tests cover test install sh docker script behavior.
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { runInNewContext } from "node:vm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const INSTALL_E2E_DOCKER_PATH = "scripts/test-install-sh-e2e-docker.sh";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
+const HOST_TIMEOUT_PATH = "scripts/lib/host-timeout.sh";
 const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
 const PODMAN_RUN_PATH = "scripts/run-openclaw-podman.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
@@ -17,6 +20,11 @@ const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertion
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
+const tempDirs = createTempDirTracker();
+
+afterEach(() => {
+  tempDirs.cleanup();
+});
 
 class ScriptExit extends Error {
   constructor(readonly status: number) {
@@ -93,6 +101,30 @@ function runDefaultSmokePlatform(env: Record<string, string>, hostArch: string):
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);
   return result.stdout;
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function extractReadPackTarballFilename(): string {
@@ -292,14 +324,14 @@ describe("test-install-sh-docker", () => {
 
   it("bounds Docker setup image pulls", () => {
     const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+    const timeoutHelper = readFileSync(HOST_TIMEOUT_PATH, "utf8");
 
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/host-timeout.sh"');
     expect(script).toContain('DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"');
     expect(script).toContain("run_docker_pull()");
-    expect(script).toContain("timeout --kill-after=1s 1s true");
-    expect(script).toContain(
-      'timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"',
-    );
-    expect(script).toContain('timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
+    expect(script).toContain('openclaw_host_timeout_cmd "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
+    expect(timeoutHelper).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+    expect(timeoutHelper).toContain('"$timeout_bin" --kill-after=30s "$timeout_value" "$@"');
     expect(script).toContain('run_docker_pull "$IMAGE_NAME"');
     expect(script).not.toContain('docker pull "$IMAGE_NAME"');
   });
@@ -307,13 +339,12 @@ describe("test-install-sh-docker", () => {
   it("bounds Podman setup image pulls", () => {
     const script = readFileSync(PODMAN_SETUP_PATH, "utf8");
 
+    expect(script).toContain('source "$REPO_PATH/scripts/lib/host-timeout.sh"');
     expect(script).toContain('PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"');
     expect(script).toContain("run_podman_pull()");
-    expect(script).toContain("timeout --kill-after=1s 1s true");
     expect(script).toContain(
-      'timeout --kill-after=30s "$PODMAN_PULL_TIMEOUT" podman pull "$image"',
+      'openclaw_host_timeout_cmd "$PODMAN_PULL_TIMEOUT" podman pull "$image"',
     );
-    expect(script).toContain('timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"');
     expect(script).toContain('run_podman_pull "$OPENCLAW_IMAGE"');
     expect(script).not.toContain('podman pull "$OPENCLAW_IMAGE"');
   });
@@ -325,9 +356,7 @@ describe("test-install-sh-docker", () => {
       'PODMAN_BUILD_TIMEOUT="${OPENCLAW_PODMAN_SETUP_BUILD_TIMEOUT:-1800s}"',
     );
     expect(script).toContain("run_podman_build()");
-    expect(script).toContain("timeout --kill-after=1s 1s true");
-    expect(script).toContain('timeout --kill-after=30s "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
-    expect(script).toContain('timeout "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+    expect(script).toContain('openclaw_host_timeout_cmd "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
     expect(script).toContain('run_podman_build -t "$OPENCLAW_IMAGE"');
     expect(script).not.toContain('podman build -t "$OPENCLAW_IMAGE"');
   });
@@ -337,10 +366,9 @@ describe("test-install-sh-docker", () => {
 
     expect(script).toContain('PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"');
     expect(script).toContain("OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT");
+    expect(script).toContain('source "$SCRIPT_DIR/lib/host-timeout.sh"');
     expect(script).toContain("run_podman_detached()");
-    expect(script).toContain("timeout --kill-after=1s 1s true");
-    expect(script).toContain('timeout --kill-after=30s "$PODMAN_RUN_TIMEOUT" podman run "$@"');
-    expect(script).toContain('timeout "$PODMAN_RUN_TIMEOUT" podman run "$@"');
+    expect(script).toContain('openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"');
     expect(script).toContain('podman run --pull="$PODMAN_PULL" --rm -it \\');
     expect(script).toContain('run_podman_detached --pull="$PODMAN_PULL" -d --replace \\');
     expect(script).not.toContain('podman run --pull="$PODMAN_PULL" -d --replace \\');
@@ -756,6 +784,126 @@ describe("bun global install smoke", () => {
       expect(result.stderr, filename).toContain("npm pack reported unsafe tarball filename");
     }
   });
+
+  it.runIf(process.platform !== "win32" && existsSync("/usr/bin/time"))(
+    "preserves Bun global timeout kill grace after the leader exits",
+    () => {
+      const tempDir = tempDirs.make("openclaw-bun-global-timeout-grace-");
+      const readyPath = path.join(tempDir, "ready");
+      const drainedPath = path.join(tempDir, "drained");
+      const childScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {",
+        "  setTimeout(() => {",
+        "    fs.writeFileSync(process.argv[2], 'drained');",
+        "    process.exit(0);",
+        "  }, 50);",
+        "});",
+        "fs.writeFileSync(process.argv[1], 'ready');",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          BUN_GLOBAL_ASSERTIONS_PATH,
+          "run-with-timeout",
+          "500",
+          "/usr/bin/time",
+          process.execPath,
+          "-e",
+          childScript,
+          readyPath,
+          drainedPath,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "1000",
+          },
+          timeout: 5_000,
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("command timed out after 500ms: /usr/bin/time");
+      expect(readFileSync(readyPath, "utf8")).toBe("ready");
+      expect(readFileSync(drainedPath, "utf8")).toBe("drained");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "cleans Bun global smoke descendants on parent signal",
+    async () => {
+      const tempDir = tempDirs.make("openclaw-bun-global-parent-signal-");
+      const readyPath = path.join(tempDir, "ready");
+      const descendantPidPath = path.join(tempDir, "descendant.pid");
+      let descendantPid = 0;
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const childProcess = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `childProcess.spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const runner = spawn(
+        process.execPath,
+        [
+          BUN_GLOBAL_ASSERTIONS_PATH,
+          "run-with-timeout",
+          "60000",
+          process.execPath,
+          "-e",
+          parentScript,
+        ],
+        {
+          env: {
+            ...process.env,
+            OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "100",
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      const runnerExit = new Promise<{ status: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => {
+          runner.once("exit", (status, signal) => resolve({ status, signal }));
+        },
+      );
+
+      try {
+        await waitForCondition(
+          () => existsSync(readyPath) && existsSync(descendantPidPath),
+          "Bun global smoke descendant readiness",
+        );
+        descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
+        await waitForCondition(
+          () => !isProcessAlive(descendantPid),
+          "Bun global smoke descendant cleanup",
+        );
+      } finally {
+        if (runner.pid && isProcessAlive(runner.pid)) {
+          process.kill(runner.pid, "SIGKILL");
+        }
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
 
   it("gates workflow Bun install smoke to scheduled and release-check runs", () => {
     const workflow = readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8");

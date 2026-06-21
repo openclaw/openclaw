@@ -139,11 +139,16 @@ function toolCallResponse(messageOverrides: Record<string, unknown> = {}) {
 describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
   let bodyReadTimeoutProbe: {
     elapsedMs: number;
+    responseClosed: boolean;
     result: ClientResult;
   };
 
   beforeAll(async () => {
+    let responseClosed = false;
     const server = createServer((_request, response) => {
+      response.on("close", () => {
+        responseClosed = true;
+      });
       response.writeHead(200, { "content-type": "application/json" });
       response.write('{"choices":');
     });
@@ -153,6 +158,7 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
       bodyReadTimeoutProbe = {
         result: await runClient(port, {}, 4_000),
         elapsedMs: Date.now() - startedAt,
+        responseClosed,
       };
     } finally {
       server.close();
@@ -356,8 +362,9 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
   it("keeps the request timeout active while reading the response body", async () => {
     expect(bodyReadTimeoutProbe.result.error).toBeUndefined();
     expect(bodyReadTimeoutProbe.result.status).not.toBe(0);
-    expect(bodyReadTimeoutProbe.result.stderr).toMatch(/aborted|AbortError/iu);
+    expect(bodyReadTimeoutProbe.result.stderr).toMatch(/timed out|aborted|AbortError/iu);
     expect(bodyReadTimeoutProbe.elapsedMs).toBeLessThan(3_500);
+    expect(bodyReadTimeoutProbe.responseClosed).toBe(true);
   });
 
   it("caps chat completion response bodies before JSON parsing", async () => {
@@ -392,6 +399,29 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("chat completions response body exceeded 64 bytes");
+      expect(Date.now() - startedAt).toBeLessThan(3_500);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("rejects unsafe declared chat completion body lengths before waiting on the stream", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-length": "9007199254740993",
+        "content-type": "application/json",
+      });
+      response.flushHeaders();
+    });
+    const port = await listen(server);
+    try {
+      const startedAt = Date.now();
+      const result = await runClient(port, { OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: "64" });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("chat completions response body exceeded 64 bytes");
+      expect(result.stderr).not.toContain("timed out");
       expect(Date.now() - startedAt).toBeLessThan(3_500);
     } finally {
       server.close();

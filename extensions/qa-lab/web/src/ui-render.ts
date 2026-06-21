@@ -531,9 +531,32 @@ function renderCaptureHeaders(raw: string | undefined, mode: UiState["captureHea
   );
 }
 
+const NON_SECRET_CAPTURE_TOKEN_FIELDS = new Set([
+  "completiontokens",
+  "inputtokens",
+  "maxcompletiontokens",
+  "maxtokens",
+  "outputtokens",
+  "prompttokens",
+  "reasoningtokens",
+  "totaltokens",
+]);
+
 function isSensitiveCaptureField(label: string): boolean {
-  return /authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|x[-_]?api[-_]?key|token|secret|password|session/i.test(
-    label,
+  const normalized = label.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const tokenMarker =
+    !NON_SECRET_CAPTURE_TOKEN_FIELDS.has(normalized) &&
+    normalized !== "tokenizer" &&
+    normalized.includes("token");
+  return (
+    normalized.includes("authorization") ||
+    normalized.includes("cookie") ||
+    normalized.includes("apikey") ||
+    normalized.includes("accesskey") ||
+    normalized.includes("secret") ||
+    normalized.includes("password") ||
+    normalized.includes("session") ||
+    tokenMarker
   );
 }
 
@@ -558,6 +581,9 @@ function redactCaptureValue(value: unknown, label?: string): unknown {
   if (typeof value === "string") {
     return redactCaptureScalar(value, label);
   }
+  if (label && isSensitiveCaptureField(label)) {
+    return "[redacted]";
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => redactCaptureValue(entry, label));
   }
@@ -569,6 +595,115 @@ function redactCaptureValue(value: unknown, label?: string): unknown {
     out[key] = redactCaptureValue(entry, key);
   }
   return out;
+}
+
+function readCaptureQuotedSpan(
+  value: string,
+  start: number,
+): { closed: boolean; end: number; raw: string; text: string } {
+  const quote = value[start];
+  let text = "";
+  let index = start + 1;
+  while (index < value.length) {
+    const char = value[index];
+    if (char === "\\") {
+      text += value.slice(index, Math.min(index + 2, value.length));
+      index += 2;
+      continue;
+    }
+    if (char === quote) {
+      return {
+        closed: true,
+        end: index + 1,
+        raw: value.slice(start, index + 1),
+        text,
+      };
+    }
+    text += char;
+    index += 1;
+  }
+  return {
+    closed: false,
+    end: value.length,
+    raw: value.slice(start),
+    text,
+  };
+}
+
+function skipCaptureInlineWhitespace(value: string, start: number): number {
+  let index = start;
+  while (/\s/.test(value[index] ?? "")) {
+    index += 1;
+  }
+  return index;
+}
+
+function consumeCaptureJsonishValue(value: string, start: number): number {
+  const opener = value[start];
+  if (opener === '"' || opener === "'") {
+    return readCaptureQuotedSpan(value, start).end;
+  }
+  if (opener === "{" || opener === "[") {
+    const stack = [opener === "{" ? "}" : "]"];
+    let index = start + 1;
+    while (index < value.length && stack.length > 0) {
+      const char = value[index];
+      if (char === '"' || char === "'") {
+        index = readCaptureQuotedSpan(value, index).end;
+        continue;
+      }
+      if (char === "{" || char === "[") {
+        stack.push(char === "{" ? "}" : "]");
+      } else if (char === stack.at(-1)) {
+        stack.pop();
+      }
+      index += 1;
+    }
+    return index;
+  }
+  let index = start;
+  while (index < value.length && !/[,\n\r}\]]/.test(value[index] ?? "")) {
+    index += 1;
+  }
+  return index;
+}
+
+function redactCaptureJsonishSecretFields(value: string): string {
+  let redacted = "";
+  let index = 0;
+  while (index < value.length) {
+    const char = value[index];
+    if (char !== '"' && char !== "'") {
+      redacted += char;
+      index += 1;
+      continue;
+    }
+    const key = readCaptureQuotedSpan(value, index);
+    const colonIndex = skipCaptureInlineWhitespace(value, key.end);
+    if (!key.closed || value[colonIndex] !== ":" || !isSensitiveCaptureField(key.text)) {
+      redacted += key.raw;
+      index = key.end;
+      continue;
+    }
+    const valueStart = skipCaptureInlineWhitespace(value, colonIndex + 1);
+    const valueEnd = consumeCaptureJsonishValue(value, valueStart);
+    const valueQuote =
+      value[valueStart] === "'" || value[valueStart] === '"' ? value[valueStart] : '"';
+    redacted += `${key.raw}${value.slice(key.end, valueStart)}${valueQuote}[redacted]${valueQuote}`;
+    index = valueEnd;
+  }
+  return redacted;
+}
+
+function redactCaptureInlineSecretPairs(value: string): string {
+  return redactCaptureJsonishSecretFields(value).replace(
+    /\b([A-Za-z][A-Za-z0-9_-]{0,64})=([^&\s"',}\]]+)/gu,
+    (match: string, key: string) => (isSensitiveCaptureField(key) ? `${key}=[redacted]` : match),
+  );
+}
+
+function redactCapturePayloadPreview(payload: string): string {
+  return redactCaptureScalar(redactCaptureInlineSecretPairs(payload));
 }
 
 function formatCaptureFieldValue(value: unknown, label?: string): string {
@@ -596,7 +731,7 @@ function renderCaptureFormPayload(payload: string): string {
   }));
   return rows.length > 0
     ? renderCaptureKeyValueGrid(rows)
-    : `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(payload))}</pre>`;
+    : `<pre class="report-pre capture-pre">${esc(redactCapturePayloadPreview(payload))}</pre>`;
 }
 
 function renderCaptureSsePayload(
@@ -621,7 +756,10 @@ function renderCaptureSsePayload(
           const label =
             separatorIndex >= 0 ? line.slice(0, separatorIndex).trim() || "field" : "line";
           const value = separatorIndex >= 0 ? line.slice(separatorIndex + 1).trim() : line;
-          return { label, value: redactCaptureScalar(value, label) };
+          return {
+            label,
+            value: redactCaptureScalar(redactCaptureInlineSecretPairs(value), label),
+          };
         });
       const eventName = rows.find((row) => row.label === "event")?.value || "message";
       const dataText = rows
@@ -658,7 +796,7 @@ function renderCaptureSsePayload(
   });
   if (frames.length === 0) {
     return {
-      body: `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(payload))}</pre>`,
+      body: `<pre class="report-pre capture-pre">${esc(redactCapturePayloadPreview(payload))}</pre>`,
       eventCount: 0,
       visibleCount: 0,
     };
@@ -753,7 +891,7 @@ function renderCapturePayload(
     }
   }
   return {
-    body: `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(payload))}</pre>`,
+    body: `<pre class="report-pre capture-pre">${esc(redactCapturePayloadPreview(payload))}</pre>`,
     mode: "text",
     byteLength,
     looksStructured: false,
@@ -796,7 +934,7 @@ pnpm openclaw gateway --port 18789 --bind loopback`;
   const qaStart = "pnpm qa:lab:ui --port 43124 --control-ui-url http://127.0.0.1:18789/";
   const caInstall = "pnpm proxy:install-ca";
   const caTrust =
-    "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /Users/thoffman/.openclaw/debug-proxy/certs/root-ca.pem";
+    'sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$HOME/.openclaw/debug-proxy/certs/root-ca.pem"';
   return `<div class="capture-startup-state">
     <div class="capture-startup-title">Proxy capture is not running yet.</div>
     <div class="text-dimmed text-sm capture-startup-copy">
@@ -2647,7 +2785,9 @@ function renderCaptureView(state: UiState): string {
       ].filter((row) => row.value.trim().length > 0)
     : [];
   const rawPayloadBody = selectedEvent?.dataText?.length
-    ? `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(selectedEvent.dataText))}</pre>`
+    ? `<pre class="report-pre capture-pre">${esc(
+        redactCapturePayloadPreview(selectedEvent.dataText),
+      )}</pre>`
     : '<div class="empty-state">No inline payload preview for this event.</div>';
   const availableDetailViews: Array<{
     value: UiState["captureDetailView"];
@@ -3678,7 +3818,11 @@ function renderCaptureView(state: UiState): string {
                                       selectedLaneEvent.errorText
                                         ? `<div class="capture-timeline-quick-preview-error">${esc(selectedLaneEvent.errorText)}</div>`
                                         : selectedLaneEvent.payloadPreview
-                                          ? `<div class="capture-timeline-quick-preview-snippet">${esc(selectedLaneEvent.payloadPreview)}</div>`
+                                          ? `<div class="capture-timeline-quick-preview-snippet">${esc(
+                                              redactCapturePayloadPreview(
+                                                selectedLaneEvent.payloadPreview,
+                                              ),
+                                            )}</div>`
                                           : ""
                                     }
                                   </div>`
@@ -3868,7 +4012,11 @@ function renderCaptureView(state: UiState): string {
                                             ${paired ? '<div class="capture-pair-badge">paired counterpart</div>' : ""}
                                             ${
                                               event.payloadPreview
-                                                ? `<div class="capture-event-card-preview">${esc(event.payloadPreview)}</div>`
+                                                ? `<div class="capture-event-card-preview">${esc(
+                                                    redactCapturePayloadPreview(
+                                                      event.payloadPreview,
+                                                    ),
+                                                  )}</div>`
                                                 : ""
                                             }
                                           </div>
@@ -3917,7 +4065,9 @@ function renderCaptureView(state: UiState): string {
                                     }
                                     ${
                                       event.payloadPreview
-                                        ? `<div class="capture-event-card-preview">${esc(event.payloadPreview)}</div>`
+                                        ? `<div class="capture-event-card-preview">${esc(
+                                            redactCapturePayloadPreview(event.payloadPreview),
+                                          )}</div>`
                                         : ""
                                     }
                                     ${event.errorText ? `<div class="capture-error" style="margin-top:8px">${esc(event.errorText)}</div>` : ""}

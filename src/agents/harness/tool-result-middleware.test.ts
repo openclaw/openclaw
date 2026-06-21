@@ -550,6 +550,70 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
   });
 
+  it("snapshots confirmed delivery before oversized details are collapsed", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => {
+        throw new Error("post-processing failed");
+      },
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: { action: "send", target: "C123" },
+      result: {
+        content: [{ type: "text", text: "raw result must stay private" }],
+        details: {
+          ok: true,
+          result: { messageId: "1700000000.000100", channelId: "C123" },
+          raw: "x".repeat(200_000),
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
+      details: {
+        ok: true,
+        deliveryStatus: "sent",
+        middlewareWarning: "post-processing failed",
+      },
+    });
+  });
+
+  it("preserves confirmed delivery when middleware returns an explicit failure", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({
+        result: {
+          content: [{ type: "text", text: "post-processing failed" }],
+          details: { status: "error", middlewareError: true },
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: { action: "send", target: "C123" },
+      result: {
+        content: [{ type: "text", text: "raw result must stay private" }],
+        details: {
+          ok: true,
+          result: { messageId: "1700000000.000100", channelId: "C123" },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
+      details: {
+        ok: true,
+        deliveryStatus: "sent",
+        middlewareWarning: "post-processing failed",
+      },
+    });
+  });
+
   it("accepts well-formed middleware results", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       (eventValue, ctx) => ({

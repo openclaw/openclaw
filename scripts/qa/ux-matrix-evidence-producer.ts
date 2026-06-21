@@ -38,6 +38,27 @@ export type ProducerOptions = {
   skipVisualProof: boolean;
 };
 
+function usage() {
+  return `Usage: node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base <dir> [options]
+
+Produces a QA Lab UX Matrix evidence bundle.
+
+Options:
+  --artifact-base <dir>  Evidence artifact directory
+  --repo-root <dir>      Repository root
+  --skip-visual-proof    Use fixture visual evidence instead of Playwright screenshots
+  -h, --help             Show this help
+`;
+}
+
+function readOptionValue(argv: readonly string[], index: number, arg: string) {
+  const value = argv[index + 1] ?? "";
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${arg} requires a value`);
+  }
+  return value;
+}
+
 function parseOptions(argv: readonly string[]): ProducerOptions {
   let artifactBase = "";
   let repoRoot = process.cwd();
@@ -45,12 +66,12 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--artifact-base") {
-      artifactBase = argv[index + 1] ?? "";
+      artifactBase = readOptionValue(argv, index, arg);
       index += 1;
       continue;
     }
     if (arg === "--repo-root") {
-      repoRoot = argv[index + 1] ?? "";
+      repoRoot = readOptionValue(argv, index, arg);
       index += 1;
       continue;
     }
@@ -89,6 +110,33 @@ function cellDir(artifactBase: string, cell: Pick<MatrixCell, "stage" | "surface
 
 function relativeToArtifactBase(artifactBase: string, filePath: string) {
   return path.relative(artifactBase, filePath).split(path.sep).join("/");
+}
+
+function sanitizeArtifactText(
+  value: string,
+  params: {
+    artifactBase?: string;
+    repoRoot: string;
+  },
+) {
+  const roots = [
+    { from: path.resolve(params.repoRoot), to: "<repo-root>" },
+    { from: pathToFileURL(path.resolve(params.repoRoot)).href, to: "file://<repo-root>" },
+    ...(params.artifactBase
+      ? [
+          { from: path.resolve(params.artifactBase), to: "<artifact-base>" },
+          {
+            from: pathToFileURL(path.resolve(params.artifactBase)).href,
+            to: "file://<artifact-base>",
+          },
+        ]
+      : []),
+    { from: os.homedir(), to: "<home>" },
+    { from: pathToFileURL(os.homedir()).href, to: "file://<home>" },
+  ].filter((entry) => entry.from && entry.from !== path.parse(entry.from).root);
+  return roots
+    .toSorted((a, b) => b.from.length - a.from.length)
+    .reduce((text, entry) => text.replaceAll(entry.from, entry.to), value);
 }
 
 function buildExecution(params: {
@@ -174,6 +222,7 @@ function buildEvidenceSummary(params: {
 
 async function runCommandForCell(params: {
   args: string[];
+  artifactBase: string;
   command: string;
   cwd: string;
   logPath: string;
@@ -188,13 +237,22 @@ async function runCommandForCell(params: {
       env: process.env,
       maxBuffer: 1024 * 1024,
     });
-    await writeText(params.logPath, `$ ${commandLine}\n${stdout}${stderr}`);
+    await writeText(
+      params.logPath,
+      sanitizeArtifactText(`$ ${commandLine}\n${stdout}${stderr}`, {
+        artifactBase: params.artifactBase,
+        repoRoot: params.cwd,
+      }),
+    );
     return {
       status: "pass" as const,
       wallMs: Date.now() - startedAt,
     };
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const details = sanitizeArtifactText(error instanceof Error ? error.message : String(error), {
+      artifactBase: params.artifactBase,
+      repoRoot: params.cwd,
+    });
     await writeText(params.logPath, `$ ${commandLine}\nblocked: ${details}\n`);
     return {
       failureReason: details,
@@ -221,6 +279,7 @@ async function captureControlUiScreenshot(params: {
   artifactBase: string;
   htmlPath: string;
   logPath: string;
+  repoRoot: string;
   screenshotPath: string;
 }) {
   const startedAt = Date.now();
@@ -243,7 +302,10 @@ async function captureControlUiScreenshot(params: {
       wallMs: Date.now() - startedAt,
     };
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const details = sanitizeArtifactText(error instanceof Error ? error.message : String(error), {
+      artifactBase: params.artifactBase,
+      repoRoot: params.repoRoot,
+    });
     await writeText(params.logPath, `blocked: ${details}\n`);
     return {
       failureReason: details,
@@ -342,8 +404,10 @@ async function writeProducerArtifactFixtureHtml(params: {
 }
 
 async function captureProducerArtifactFixtureProof(params: {
+  artifactBase: string;
   htmlPath: string;
   logPath: string;
+  repoRoot: string;
   screenshotPath: string;
   skipVisualProof: boolean;
   videoPath: string;
@@ -402,7 +466,10 @@ async function captureProducerArtifactFixtureProof(params: {
       wallMs: Date.now() - startedAt,
     };
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const details = sanitizeArtifactText(error instanceof Error ? error.message : String(error), {
+      artifactBase: params.artifactBase,
+      repoRoot: params.repoRoot,
+    });
     await writeText(params.logPath, `blocked: ${details}\n`);
     return {
       failureReason: details,
@@ -473,8 +540,9 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     "logs.txt",
   );
   const cliResult = await runCommandForCell({
-    command: process.execPath,
     args: ["openclaw.mjs", "--help"],
+    artifactBase: options.artifactBase,
+    command: process.execPath,
     cwd: options.repoRoot,
     logPath: cliLogPath,
     timeoutMs: 30_000,
@@ -494,6 +562,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     artifactBase: options.artifactBase,
     htmlPath: matrixHtmlPath,
     logPath: path.join(screenshotCellDir, "logs.txt"),
+    repoRoot: options.repoRoot,
     screenshotPath: matrixScreenshotPath,
   });
 
@@ -554,8 +623,10 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
   });
 
   const fixtureProofResult = await captureProducerArtifactFixtureProof({
+    artifactBase: options.artifactBase,
     htmlPath: fixtureHtmlPath,
     logPath: path.join(fixtureProofDir, "logs.txt"),
+    repoRoot: options.repoRoot,
     screenshotPath: path.join(fixtureProofDir, "producer-artifact-fixture.png"),
     skipVisualProof: options.skipVisualProof,
     videoPath: path.join(fixtureProofDir, "producer-artifact-fixture.webm"),
@@ -625,13 +696,21 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  runUxMatrixEvidenceProducer(parseOptions(process.argv.slice(2)))
-    .then((result) => {
-      console.log(`UX Matrix evidence: ${path.join(result.artifactBase, QA_EVIDENCE_FILENAME)}`);
-      console.log(`UX Matrix entries: ${result.evidence.entries.length}`);
+  (async () => {
+    const cliArgs = process.argv.slice(2);
+    if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+      console.log(usage());
+      return;
+    }
+    const result = await runUxMatrixEvidenceProducer(parseOptions(cliArgs));
+    console.log(`UX Matrix evidence: ${path.join(result.artifactBase, QA_EVIDENCE_FILENAME)}`);
+    console.log(`UX Matrix entries: ${result.evidence.entries.length}`);
+  })()
+    .then(() => {
+      process.exitCode = 0;
     })
     .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.stack || error.message : String(error));
+      console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     });
 }

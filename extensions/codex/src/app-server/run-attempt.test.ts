@@ -2119,6 +2119,7 @@ describe("runCodexAppServerAttempt", () => {
       prependSystemContext: "pre system",
       appendSystemContext: "post system",
       prependContext: "queued context",
+      appendContext: "tail context",
     }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
@@ -2158,7 +2159,7 @@ describe("runCodexAppServerAttempt", () => {
       | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
       | undefined;
     expect(turnStartParams?.input).toEqual([
-      { type: "text", text: "queued context\n\nhello", text_elements: [] },
+      { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
     ]);
   });
 
