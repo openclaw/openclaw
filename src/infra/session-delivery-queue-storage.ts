@@ -62,6 +62,14 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
+  // Durable recovery marker, persisted on the shared delivery-queue SQLite
+  // `recovery_state` column. Set to `send_attempt_started` while a delivery is
+  // mid-flight (the drain has begun deliver but not yet acked); a recovered entry
+  // carrying it is refused a blind replay (see session-delivery-queue-recovery.ts).
+  // Unlike the outbound queue we keep a single state: the drain refuses on this
+  // marker alone, so a post-deliver `unknown_after_send` upgrade would change no
+  // decision (the in-process `delivered` flag already covers a post-return failure).
+  recoveryState?: "send_attempt_started";
 };
 
 function buildEntryId(idempotencyKey?: string): string {
@@ -148,4 +156,29 @@ export async function loadPendingSessionDeliveries(
 /** Move an exhausted session delivery out of the pending queue. */
 export async function moveSessionDeliveryToFailed(id: string, stateDir?: string): Promise<void> {
   moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
+}
+
+// Persist the send-attempt marker before the drain invokes the deliver seam, so a
+// crash anywhere between here and the ack leaves durable evidence that the delivery
+// may already have run. Mirrors the outbound queue's send_attempt_started.
+export async function markSessionDeliveryPlatformSendAttemptStarted(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
+  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => ({
+    ...(entry as QueuedSessionDelivery),
+    recoveryState: "send_attempt_started",
+  }));
+}
+
+// Clear the recovery marker. Used only on a proven pre-send failure (deliver threw
+// before anything reached the platform), so the entry stays replayable.
+export async function clearSessionDeliveryRecoveryState(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
+  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => ({
+    ...(entry as QueuedSessionDelivery),
+    recoveryState: undefined,
+  }));
 }

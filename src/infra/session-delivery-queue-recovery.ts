@@ -7,9 +7,11 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import {
   ackSessionDelivery,
+  clearSessionDeliveryRecoveryState,
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
+  markSessionDeliveryPlatformSendAttemptStarted,
   moveSessionDeliveryToFailed,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
@@ -23,7 +25,21 @@ type SessionDeliveryRecoverySummary = {
   deferredBackoff: number;
 };
 
-type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
+// Hooks let the deliver seam signal the send boundary to recovery: it calls
+// onSendAttemptStart once the turn is actually about to run (past any pre-send/busy
+// gate), and onSendDeferred if that attempt was deferred without running (e.g. the
+// session was busy). Recovery uses these to mark/clear the durable recovery_state
+// and to decide, on a thrown deliver, whether the turn may have run (refuse) or was
+// a pre-send no-op (safe to retry).
+export interface SessionDeliveryDeliverHooks {
+  onSendAttemptStart: () => Promise<void>;
+  onSendDeferred: () => Promise<void>;
+}
+
+type DeliverSessionDeliveryFn = (
+  entry: QueuedSessionDelivery,
+  hooks?: SessionDeliveryDeliverHooks,
+) => Promise<void>;
 
 export interface SessionDeliveryRecoveryLogger {
   info(msg: string): void;
@@ -111,6 +127,21 @@ export function isSessionDeliveryEligibleForRetry(
   return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
 }
 
+async function moveSessionDeliveryToFailedSafe(
+  id: string,
+  stateDir: string | undefined,
+): Promise<"moved-to-failed" | "already-gone"> {
+  try {
+    await moveSessionDeliveryToFailed(id, stateDir);
+    return "moved-to-failed";
+  } catch (err) {
+    if (getErrnoCode(err) === "ENOENT") {
+      return "already-gone";
+    }
+    throw err;
+  }
+}
+
 async function drainQueuedEntry(opts: {
   entry: QueuedSessionDelivery;
   deliver: DeliverSessionDeliveryFn;
@@ -119,8 +150,40 @@ async function drainQueuedEntry(opts: {
   onFailed?: (entry: QueuedSessionDelivery, errMsg: string) => void;
 }): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
+
+  // An entry recovered while still carrying the send marker was interrupted (crash)
+  // after the turn began running but before it acked. The deliver seam persists the
+  // marker only once the turn is actually about to run (past the busy/pre-send gate),
+  // so its presence on a recovered entry means a non-idempotent turn may have run and
+  // its reply may already have been sent. Without an adapter reconciliation capability
+  // we cannot confirm, so we refuse a blind replay and fail-safe to failed/, matching
+  // the outbound queue's no-reconcile contract. (Tradeoff: a crash in the narrow window
+  // after the turn starts but before ack moves the entry to failed/ rather than
+  // replaying it — fail-safe over at-least-once for that window.)
+  if (entry.recoveryState === "send_attempt_started") {
+    const errMsg =
+      "session delivery was interrupted after the turn began (send_attempt_started); refusing blind replay without adapter reconciliation";
+    opts.onFailed?.(entry, errMsg);
+    return moveSessionDeliveryToFailedSafe(entry.id, opts.stateDir);
+  }
+
+  // sendAttempted flips true only when the deliver seam reports the turn is actually
+  // running (onSendAttemptStart), and back to false if that attempt was deferred
+  // without running (onSendDeferred, e.g. the session was busy). It mirrors the durable
+  // marker in-process and decides a thrown deliver: turn-may-have-run (refuse) vs a
+  // pre-send / busy-deferred / no-op deliver (safe to retry).
+  let sendAttempted = false;
   try {
-    await opts.deliver(entry);
+    await opts.deliver(entry, {
+      onSendAttemptStart: async () => {
+        sendAttempted = true;
+        await markSessionDeliveryPlatformSendAttemptStarted(entry.id, opts.stateDir);
+      },
+      onSendDeferred: async () => {
+        sendAttempted = false;
+        await clearSessionDeliveryRecoveryState(entry.id, opts.stateDir);
+      },
+    });
     await ackSessionDelivery(entry.id, opts.stateDir);
     opts.onRecovered?.(entry);
     return "recovered";
@@ -128,6 +191,16 @@ async function drainQueuedEntry(opts: {
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
     try {
+      if (sendAttempted) {
+        // The turn began running (and may have done non-idempotent work / sent its
+        // reply) before this throw — refuse a blind replay and fail-safe to failed/.
+        // The durable marker also persisted, so a crash here is refused on the next
+        // recovery by the guard above.
+        return await moveSessionDeliveryToFailedSafe(entry.id, opts.stateDir);
+      }
+      // The turn never started (pre-send / busy-deferred / no-op deliver path): no
+      // marker was persisted and nothing ran, so the entry stays retryable
+      // (at-least-once preserved for genuine pre-send failures).
       await failSessionDelivery(entry.id, errMsg, opts.stateDir);
       return "failed";
     } catch (failErr) {

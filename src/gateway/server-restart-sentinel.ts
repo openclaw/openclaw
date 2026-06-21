@@ -241,6 +241,13 @@ function resolveQueuedSessionDeliveryContext(entry: QueuedSessionDelivery):
 async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
+  // Recovery hooks: signal when the agent-turn re-run is actually about to run so the
+  // recovery layer can persist its send marker (and clear it if the attempt is merely
+  // deferred because the session is busy). Only the agentTurn dispatch path reports
+  // these; the no-op early-return paths (systemEvent / changed-session / no-route) do
+  // not run the turn and stay retryable.
+  onSendAttemptStart?: () => Promise<void>;
+  onSendDeferred?: () => Promise<void>;
 }) {
   const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
@@ -313,6 +320,10 @@ async function deliverQueuedSessionDelivery(params: {
       forceChatType: true,
     },
   );
+  // The agent turn is about to run (it may do non-idempotent work and send its reply
+  // via the message tool). Signal recovery to persist the send marker now; if the run
+  // turns out to be busy-deferred, the dispatchError branch below clears it again.
+  await params.onSendAttemptStart?.();
   await dispatchAssembledChannelTurn({
     cfg,
     channel: route.channel,
@@ -353,6 +364,15 @@ async function deliverQueuedSessionDelivery(params: {
     },
   });
   if (dispatchError) {
+    // A busy continuation merely defers — the turn produced a busy-retry response, not
+    // durable work — so clear the send marker and let recovery retry instead of
+    // fail-safing it to failed/. Any other thrown error means the turn may have run.
+    if (
+      dispatchError instanceof Error &&
+      dispatchError.message === RESTART_CONTINUATION_BUSY_RETRY_ERROR
+    ) {
+      await params.onSendDeferred?.();
+    }
     throw toLintErrorObject(dispatchError, "Non-Error thrown");
   }
 }
@@ -408,7 +428,13 @@ async function drainRestartContinuationQueue(params: {
       drainKey: `restart-continuation:${params.entryId}`,
       logLabel: "restart continuation",
       log: params.log,
-      deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
+      deliver: (entry, hooks) =>
+      deliverQueuedSessionDelivery({
+        deps: params.deps,
+        entry,
+        onSendAttemptStart: hooks?.onSendAttemptStart,
+        onSendDeferred: hooks?.onSendDeferred,
+      }),
       selectEntry: (entry) => ({
         match: entry.id === params.entryId,
         bypassBackoff: true,
@@ -435,7 +461,13 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
   maxEnqueuedAt?: number;
 }) {
   await recoverPendingSessionDeliveries({
-    deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
+    deliver: (entry, hooks) =>
+      deliverQueuedSessionDelivery({
+        deps: params.deps,
+        entry,
+        onSendAttemptStart: hooks?.onSendAttemptStart,
+        onSendDeferred: hooks?.onSendDeferred,
+      }),
     log: params.log ?? log,
     maxEnqueuedAt: params.maxEnqueuedAt,
   });
