@@ -71,7 +71,6 @@ vi.mock("../channels/registry.js", () => ({
   CHAT_CHANNEL_ORDER: [],
   CHANNEL_IDS: [],
   listChatChannels: () => [],
-  listChatChannelAliases: () => [],
   getChatChannelMeta: () => null,
   normalizeChatChannelId: () => null,
   normalizeChannelId: () => null,

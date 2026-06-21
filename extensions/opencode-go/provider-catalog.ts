@@ -15,7 +15,11 @@ const PROVIDER_ID = "opencode-go";
 
 const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
-const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set(["kimi-k2.5", "kimi-k2.6"]);
+const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2.7-code",
+]);
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
@@ -24,7 +28,7 @@ type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
   api: NonNullable<ModelDefinitionConfig["api"]>;
   baseUrl: string;
-  input: Array<"text" | "image">;
+  input: Array<"text" | "image" | "video">;
 };
 
 const OPENCODE_GO_MODELS = (
@@ -108,6 +112,23 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 32_768,
     },
     {
+      id: "glm-5.2",
+      name: "GLM-5.2",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 1.4,
+        output: 4.4,
+        cacheRead: 0.26,
+        cacheWrite: 0,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+    },
+    {
       id: "hy3-preview",
       name: "HY3 Preview",
       api: "openai-completions",
@@ -157,6 +178,23 @@ const OPENCODE_GO_MODELS = (
       },
       contextWindow: 262_144,
       maxTokens: 65_536,
+    },
+    {
+      id: "kimi-k2.7-code",
+      name: "Kimi K2.7 Code",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text", "image", "video"],
+      cost: {
+        input: 0.95,
+        output: 4,
+        cacheRead: 0.19,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 262_144,
     },
     {
       id: "mimo-v2-omni",

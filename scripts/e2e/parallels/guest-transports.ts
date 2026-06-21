@@ -94,12 +94,19 @@ export async function runWindowsBackgroundPowerShell(
   const safeLabel = options.label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
   const nonce = `${safeLabel}-${randomUUID()}`;
   const fileBase = `openclaw-parallels-${nonce}`;
+  const logLengthPrefix = `__OPENCLAW_LOG_LENGTH__:${nonce}:`;
+  const logOffsetPrefix = `__OPENCLAW_LOG_OFFSET__:${nonce}:`;
+  const backgroundExitPrefix = `__OPENCLAW_BACKGROUND_EXIT__:${nonce}:`;
+  const backgroundDoneMarker = `__OPENCLAW_BACKGROUND_DONE__:${nonce}`;
   const pathsScript = `$base = Join-Path $env:TEMP ${psSingleQuote(fileBase)}
 $scriptPath = "$base.ps1"
 $logPath = "$base.log"
 $donePath = "$base.done"
 $exitPath = "$base.exit"
-$pidPath = "$base.pid"`;
+$pidPath = "$base.pid"
+function Write-OpenClawUtf8File([string]$Path, [string]$Value) {
+  [System.IO.File]::WriteAllText($Path, $Value, [System.Text.UTF8Encoding]::new($false))
+}`;
   const payload = `$ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 ${pathsScript}
@@ -120,12 +127,12 @@ try {
   & {
 ${options.script}
   } *>&1 | Add-OpenClawBackgroundLog
-  Set-Content -Path $exitPath -Value '0' -Encoding UTF8
+  Write-OpenClawUtf8File $exitPath '0'
 } catch {
   $_ | Add-OpenClawBackgroundLog
-  Set-Content -Path $exitPath -Value '1' -Encoding UTF8
+  Write-OpenClawUtf8File $exitPath '1'
 } finally {
-  Set-Content -Path $donePath -Value 'done' -Encoding UTF8
+  Write-OpenClawUtf8File $donePath 'done'
 }`;
   const writeScript = runCommand(
     "prlctl",
@@ -172,7 +179,7 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
           "-EncodedCommand",
           encodePowerShell(`${pathsScript}
 $process = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -PassThru
-Set-Content -Path $pidPath -Value $process.Id -Encoding UTF8
+Write-OpenClawUtf8File $pidPath ([string]$process.Id)
 'started'`),
         ],
         { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
@@ -184,10 +191,11 @@ Set-Content -Path $pidPath -Value $process.Id -Encoding UTF8
       }
       lastLaunchStatus = launch.status;
       if (launch.status === 0 || launch.status === 124) {
-        const materialized = waitForWindowsBackgroundMaterialized({
+        const materialized = await waitForWindowsBackgroundMaterialized({
           append,
           deadline,
           pathsScript,
+          pollIntervalMs,
           runCommand,
           vmName: options.vmName,
         });
@@ -234,7 +242,7 @@ if (Test-Path $logPath) {
   $stream = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
   try {
     $length = $stream.Length
-    "__OPENCLAW_LOG_LENGTH__:$length"
+    ${psSingleQuote(logLengthPrefix)} + $length
     if ($length -gt $offset) {
       [void]$stream.Seek($offset, [System.IO.SeekOrigin]::Begin)
       $count = [int][Math]::Min($length - $offset, ${logChunkBytes})
@@ -242,7 +250,7 @@ if (Test-Path $logPath) {
       $read = $stream.Read($buffer, 0, $count)
       if ($read -gt 0) {
         $nextOffset = $offset + $read
-        "__OPENCLAW_LOG_OFFSET__:$nextOffset"
+        ${psSingleQuote(logOffsetPrefix)} + $nextOffset
         [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
       }
     }
@@ -252,8 +260,8 @@ if (Test-Path $logPath) {
 }
 if (Test-Path $donePath) {
   $backgroundExit = if (Test-Path $exitPath) { (Get-Content -Path $exitPath -Raw).Trim() } else { '0' }
-  "__OPENCLAW_BACKGROUND_EXIT__:$backgroundExit"
-  '__OPENCLAW_BACKGROUND_DONE__'
+  ${psSingleQuote(backgroundExitPrefix)} + $backgroundExit
+  ${psSingleQuote(backgroundDoneMarker)}
   if ($backgroundExit -ne '0') { exit 23 }
   exit 0
 }`),
@@ -261,21 +269,20 @@ if (Test-Path $donePath) {
         { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
       );
       appendOutput(append, poll);
-      const offsetMatch = poll.stdout.match(/__OPENCLAW_LOG_OFFSET__:(\d+)/);
-      if (offsetMatch) {
-        lastLogOffset = Number(offsetMatch[1]);
+      const offsetRaw = findControlValue(poll.stdout, logOffsetPrefix);
+      if (offsetRaw) {
+        lastLogOffset = Number(offsetRaw);
       }
-      const lengthMatch = poll.stdout.match(/__OPENCLAW_LOG_LENGTH__:(\d+)/);
-      const logLength = lengthMatch ? Number(lengthMatch[1]) : lastLogOffset;
-      if (poll.stdout.includes("__OPENCLAW_BACKGROUND_DONE__")) {
+      const lengthRaw = findControlValue(poll.stdout, logLengthPrefix);
+      const logLength = lengthRaw ? Number(lengthRaw) : lastLogOffset;
+      if (hasControlLine(poll.stdout, backgroundDoneMarker)) {
         doneSeen = true;
         completedLogDrainDeadline ||= Date.now() + completedLogDrainGraceMs;
         if (lastLogOffset < logLength) {
           await sleep(Math.min(pollIntervalMs, 100));
           continue;
         }
-        const exitMatch = poll.stdout.match(/__OPENCLAW_BACKGROUND_EXIT__:(\S+)/);
-        const backgroundExit = exitMatch?.[1] ?? "0";
+        const backgroundExit = findControlValue(poll.stdout, backgroundExitPrefix) ?? "0";
         if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
           throw new Error(`${options.label} failed`);
         }
@@ -294,13 +301,23 @@ if (Test-Path $donePath) {
   }
 }
 
-function waitForWindowsBackgroundMaterialized(params: {
+function findControlValue(output: string, prefix: string): string | undefined {
+  const line = output.split(/\r?\n/u).find((entry) => entry.startsWith(prefix));
+  return line?.slice(prefix.length).trim();
+}
+
+function hasControlLine(output: string, marker: string): boolean {
+  return output.split(/\r?\n/u).some((entry) => entry.trimEnd() === marker);
+}
+
+async function waitForWindowsBackgroundMaterialized(params: {
   append?: (chunk: string | Uint8Array) => void;
   deadline: number;
   pathsScript: string;
+  pollIntervalMs: number;
   runCommand: typeof run;
   vmName: string;
-}): boolean {
+}): Promise<boolean> {
   const materializeDeadline = Math.min(Date.now() + 45_000, params.deadline);
   while (Date.now() < materializeDeadline) {
     const result = params.runCommand(
@@ -325,6 +342,7 @@ if ((Test-Path $logPath) -or (Test-Path $donePath)) {
     if (result.stdout.includes("materialized")) {
       return true;
     }
+    await sleep(Math.min(params.pollIntervalMs, Math.max(1, materializeDeadline - Date.now())));
   }
   return false;
 }

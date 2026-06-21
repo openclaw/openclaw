@@ -30,7 +30,7 @@ export async function postJson<T>(params: {
     },
     onResponse: async (res) => {
       if (!res.ok) {
-        const text = await readResponseTextSnippet(res);
+        const text = await readResponseTextSnippet(res, { signal: params.signal });
         const err = new Error(`${params.errorPrefix}: ${res.status} ${text}`) as Error & {
           status?: number;
         };
@@ -42,6 +42,7 @@ export async function postJson<T>(params: {
       const payload = await readResponseJsonWithLimit(res, {
         errorPrefix: params.errorPrefix,
         maxBytes: params.maxResponseBytes,
+        signal: params.signal,
       });
       return await params.parse(payload);
     },

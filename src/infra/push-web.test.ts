@@ -10,7 +10,6 @@ import {
   listWebPushSubscriptions,
   registerWebPushSubscription,
   resolveVapidKeys,
-  sendWebPushNotification,
 } from "./push-web.js";
 
 // Stub resolveStateDir so tests use a temp directory.
@@ -161,25 +160,6 @@ describe("subscription CRUD", () => {
 
 describe("sending", () => {
   const keys = { p256dh: "p256dh-key", auth: "auth-key" };
-
-  it("configures VAPID details for direct sends", async () => {
-    const sub = await registerWebPushSubscription({
-      endpoint: "https://push.example.com/direct",
-      keys,
-      baseDir: tmpDir,
-    });
-
-    const result = await sendWebPushNotification(sub, { title: "Direct" });
-
-    expect(result.ok).toBe(true);
-    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledWith(
-      "https://openclaw.ai",
-      "test-public-key-base64url",
-      "test-private-key-base64url",
-    );
-    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(1);
-  });
 
   it("configures VAPID details once before broadcasting to subscribers", async () => {
     await registerWebPushSubscription({

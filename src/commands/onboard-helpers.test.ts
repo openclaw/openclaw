@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   formatControlUiSshHint,
@@ -99,12 +100,6 @@ describe("handleReset", () => {
       `openclaw-workspace-attestation:v1\n${new Date().toISOString()}\n`,
     );
 
-    vi.stubEnv("HOME", homeDir);
-    vi.stubEnv("OPENCLAW_HOME", homeDir);
-    vi.stubEnv("OPENCLAW_PROFILE", "work");
-    vi.stubEnv("OPENCLAW_STATE_DIR", profileStateDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", profileConfigPath);
-
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
     const expectedTrashedPaths = [
       profileConfigPath,
@@ -116,7 +111,16 @@ describe("handleReset", () => {
     const expectedDefaultCredentialsDir = expectedTrashSourcePath(defaultCredentialsDir);
 
     try {
-      await handleReset("full", workspaceDir, runtime);
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_HOME: homeDir,
+          OPENCLAW_PROFILE: "work",
+          OPENCLAW_STATE_DIR: profileStateDir,
+          OPENCLAW_CONFIG_PATH: profileConfigPath,
+        },
+        async () => await handleReset("full", workspaceDir, runtime),
+      );
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -141,17 +145,20 @@ describe("handleReset", () => {
     fs.writeFileSync(profileConfigPath, "{}\n");
     fs.writeFileSync(workspaceAttestationPath, "external data\n");
 
-    vi.stubEnv("HOME", homeDir);
-    vi.stubEnv("OPENCLAW_HOME", homeDir);
-    vi.stubEnv("OPENCLAW_PROFILE", "work");
-    vi.stubEnv("OPENCLAW_STATE_DIR", profileStateDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", profileConfigPath);
-
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
     const unownedAttestationTrashPath = expectedTrashSourcePath(workspaceAttestationPath);
 
     try {
-      await handleReset("full", workspaceDir, runtime);
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_HOME: homeDir,
+          OPENCLAW_PROFILE: "work",
+          OPENCLAW_STATE_DIR: profileStateDir,
+          OPENCLAW_CONFIG_PATH: profileConfigPath,
+        },
+        async () => await handleReset("full", workspaceDir, runtime),
+      );
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -178,17 +185,22 @@ describe("handleReset", () => {
       fs.writeFileSync(workspaceAttestationPath, "external data\n", { mode: 0o000 });
       fs.chmodSync(workspaceAttestationPath, 0o000);
 
-      vi.stubEnv("HOME", homeDir);
-      vi.stubEnv("OPENCLAW_HOME", homeDir);
-      vi.stubEnv("OPENCLAW_PROFILE", "work");
-      vi.stubEnv("OPENCLAW_STATE_DIR", profileStateDir);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", profileConfigPath);
-
       const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
       const unreadableAttestationTrashPath = expectedTrashSourcePath(workspaceAttestationPath);
 
       try {
-        await expect(handleReset("full", workspaceDir, runtime)).resolves.toBeUndefined();
+        await withEnvAsync(
+          {
+            HOME: homeDir,
+            OPENCLAW_HOME: homeDir,
+            OPENCLAW_PROFILE: "work",
+            OPENCLAW_STATE_DIR: profileStateDir,
+            OPENCLAW_CONFIG_PATH: profileConfigPath,
+          },
+          async () => {
+            await expect(handleReset("full", workspaceDir, runtime)).resolves.toBeUndefined();
+          },
+        );
       } finally {
         fs.chmodSync(workspaceAttestationPath, 0o600);
         fs.rmSync(homeDir, { recursive: true, force: true });

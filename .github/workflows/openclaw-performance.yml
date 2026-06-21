@@ -66,6 +66,7 @@ env:
   OCM_LINUX_X64_SHA256: b849b8de5d77e97e0df9319703254ae95e29d7f26a7552ea79bf173ff110ea0a
   KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.5
+  KOVA_SCENARIO_TIMEOUT_MS: "300000"
 
 jobs:
   kova:
@@ -291,6 +292,7 @@ jobs:
             --auth "$AUTH_MODE"
             --parallel 1
             --repeat "$repeat"
+            --timeout-ms "$KOVA_SCENARIO_TIMEOUT_MS"
             --report-dir "$REPORT_DIR"
             --execute
             --json
@@ -361,6 +363,7 @@ jobs:
           - Kova repository: ${KOVA_REPOSITORY}
           - Kova ref: ${KOVA_REF}
           - Kova profile: ${PROFILE}
+          - Kova scenario timeout: ${KOVA_SCENARIO_TIMEOUT_MS}ms
           - Lane auth: ${AUTH_MODE}
           - Lane model: ${PERFORMANCE_MODEL_ID}
           - Lane repeat: ${repeat}

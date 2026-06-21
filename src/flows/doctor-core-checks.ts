@@ -967,6 +967,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
 
 let registered = false;
 
+/** @deprecated Core doctor flows use ordered doctor contributions; keep this only for SDK compatibility. */
 export function registerCoreHealthChecks(): void {
   if (registered) {
     return;

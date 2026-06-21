@@ -33,6 +33,7 @@ import {
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
@@ -287,9 +288,9 @@ async function closeCliMemoryManagers(): Promise<void> {
 
 async function disposeCliAgentHarnesses(): Promise<void> {
   try {
-    const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } =
+    const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
       await import("../agents/harness/registry.js");
-    if (listAgentHarnessIds().length === 0) {
+    if (listRegisteredAgentHarnesses().length === 0) {
       return;
     }
     await disposeRegisteredAgentHarnesses();
@@ -600,14 +601,25 @@ async function resolveUnownedCliPrimaryMessage(params: {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
     await loadManifestCommandAliasesRuntimeModule();
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
-  return (
-    resolveMissingPluginCommandMessageFromPolicy(params.primary, params.config, {
+  const pluginPolicyMessage = resolveMissingPluginCommandMessageFromPolicy(
+    params.primary,
+    params.config,
+    {
       resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
       resolveToolOwner: resolveManifestToolOwner,
       resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
-    }) ??
-    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`
+    },
   );
+  if (pluginPolicyMessage) {
+    return pluginPolicyMessage;
+  }
+  const suggestion = formatCliCommandSuggestions(params.primary);
+  return [
+    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`,
+    suggestion,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(

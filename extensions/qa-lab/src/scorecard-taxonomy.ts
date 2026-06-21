@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
@@ -191,31 +192,8 @@ type MaturityCoverageRef = {
   surfaceId: string;
 };
 
-function walkUpDirectories(start: string): string[] {
-  const roots: string[] = [];
-  let current = path.resolve(start);
-  while (true) {
-    roots.push(current);
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return roots;
-    }
-    current = parent;
-  }
-}
-
-function resolveRepoPath(relativePath: string, kind: "file" | "directory" = "file") {
-  for (const dir of walkUpDirectories(import.meta.dirname)) {
-    const candidate = path.join(dir, relativePath);
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    const stat = fs.statSync(candidate);
-    if ((kind === "file" && stat.isFile()) || (kind === "directory" && stat.isDirectory())) {
-      return candidate;
-    }
-  }
-  return null;
+function resolveRepoPath(relativePath: string, kind: QaRepoPathKind = "file") {
+  return resolveQaRepoPath(import.meta.dirname, relativePath, kind);
 }
 
 function repoRootFromPath(filePath: string) {

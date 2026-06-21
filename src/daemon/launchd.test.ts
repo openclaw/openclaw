@@ -1,6 +1,7 @@
 // Launchd tests cover macOS service plist generation and command handling.
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
@@ -93,9 +94,9 @@ async function withProcessEnv<T>(
     previous.set(key, process.env[key]);
     const value = overrides[key];
     if (value === undefined) {
-      delete process.env[key];
+      deleteTestEnvValue(key);
     } else {
-      process.env[key] = value;
+      setTestEnvValue(key, value);
     }
   }
   try {
@@ -103,9 +104,9 @@ async function withProcessEnv<T>(
   } finally {
     for (const [key, value] of previous) {
       if (value === undefined) {
-        delete process.env[key];
+        deleteTestEnvValue(key);
       } else {
-        process.env[key] = value;
+        setTestEnvValue(key, value);
       }
     }
   }

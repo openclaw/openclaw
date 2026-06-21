@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
+source "$ROOT_DIR/scripts/lib/host-timeout.sh"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
@@ -52,15 +53,7 @@ run_docker_build() {
 
 run_docker_pull() {
   local image="$1"
-  if command -v timeout >/dev/null 2>&1; then
-    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
-      timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"
-    else
-      timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"
-    fi
-    return
-  fi
-  docker pull "$image"
+  openclaw_host_timeout_cmd "$DOCKER_PULL_TIMEOUT" docker pull "$image"
 }
 
 require_local_docker_image() {

@@ -805,8 +805,9 @@ async function recoverStore(params: {
       messages = await readSessionMessagesAsync(
         {
           agentId: resolveAgentIdFromSessionKey(sessionKey),
-          sessionFile: entry.sessionFile,
+          sessionEntry: entry,
           sessionId: entry.sessionId,
+          sessionKey,
           storePath: params.storePath,
         },
         {

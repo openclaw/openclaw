@@ -55,6 +55,7 @@ async function withClickClackFixtureResponse(url, init, consume, options = {}) {
   const controller = new AbortController();
   const timeoutError = new Error(`${url} timed out after ${timeoutMs}ms`);
   let timer;
+  let response;
   const timeoutPromise = new Promise((_resolve, reject) => {
     timer = setTimeout(() => {
       controller.abort(timeoutError);
@@ -62,7 +63,7 @@ async function withClickClackFixtureResponse(url, init, consume, options = {}) {
     }, timeoutMs);
   });
   try {
-    const response = await Promise.race([
+    response = await Promise.race([
       fetch(url, {
         ...init,
         signal: controller.signal,
@@ -72,6 +73,7 @@ async function withClickClackFixtureResponse(url, init, consume, options = {}) {
     return await consume(response, { timeoutPromise });
   } finally {
     clearTimeout(timer);
+    await response?.body?.cancel?.().catch(() => undefined);
   }
 }
 

@@ -7,7 +7,6 @@ import {
   type AriaSnapshotNode,
   captureScreenshot,
   createTargetViaCdp,
-  evaluateJavaScript,
   formatAriaSnapshot,
   normalizeCdpWsUrl,
   type RawAXNode,
@@ -326,47 +325,6 @@ describe("cdp internal", () => {
       await expect(
         createTargetViaCdp({ cdpUrl: server.wsUrl, url: "https://example.com" }),
       ).rejects.toThrow(/Target\.createTarget returned no targetId/);
-    });
-  });
-
-  describe("evaluateJavaScript", () => {
-    it("throws when Runtime.evaluate returns no result", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        }
-      });
-      wss = server.wss;
-      await expect(evaluateJavaScript({ wsUrl: server.wsUrl, expression: "1" })).rejects.toThrow(
-        /Runtime\.evaluate returned no result/,
-      );
-    });
-
-    it("surfaces CDP exceptionDetails alongside result", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: {
-                result: { type: "undefined" },
-                exceptionDetails: { text: "ReferenceError", lineNumber: 1 },
-              },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const res = await evaluateJavaScript({ wsUrl: server.wsUrl, expression: "boom" });
-      expect(res.exceptionDetails?.text).toBe("ReferenceError");
     });
   });
 
@@ -937,27 +895,6 @@ describe("cdp internal", () => {
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
       expect(snap.nodes).toStrictEqual([]);
-    });
-
-    it("swallows a failing Runtime.enable in evaluateJavaScript", async () => {
-      // Exercises the `.catch(() => {})` arrow on `Runtime.enable`.
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, error: { message: "denied" } }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { type: "number", value: 1 } },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const res = await evaluateJavaScript({ wsUrl: server.wsUrl, expression: "1" });
-      expect(res.result.value).toBe(1);
     });
 
     it("swallows a failing Emulation.clearDeviceMetricsOverride in the screenshot finally", async () => {

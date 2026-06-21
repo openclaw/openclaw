@@ -713,7 +713,7 @@ export function renderTelegramHtmlText(
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
-    return escapeUnsupportedTelegramHtml(text);
+    return escapeUnsupportedTelegramHtmlWithTableFallback(text);
   }
   // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
@@ -725,6 +725,44 @@ export function sanitizeTelegramRichHtml(html: string): string {
       escapeUnsupportedTelegramHtml(html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
     ),
   );
+}
+
+function escapeUnsupportedTelegramHtmlWithTableFallback(html: string): string {
+  return escapeUnsupportedTelegramHtml(
+    normalizeTelegramLegacyHtmlTables(html),
+    TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
+  );
+}
+
+function isInsideTelegramHtmlCodeContext(html: string, offset: number): boolean {
+  let codeDepth = 0;
+  let preDepth = 0;
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null && match.index < offset) {
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    if (tagName !== "code" && tagName !== "pre") {
+      continue;
+    }
+    const isClosing = match[1] === "</";
+    if (tagName === "code") {
+      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+    } else {
+      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    }
+  }
+  return codeDepth > 0 || preDepth > 0;
+}
+
+function normalizeTelegramLegacyHtmlTables(html: string): string {
+  TELEGRAM_RICH_HTML_TABLE_PATTERN.lastIndex = 0;
+  return html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml, offset: number) => {
+    if (isInsideTelegramHtmlCodeContext(html, offset)) {
+      return tableHtml;
+    }
+    const rows = parseTelegramRichHtmlTableRows(tableHtml);
+    return rows.length ? renderTelegramRichHtmlRawTableFallback(tableHtml, rows) : tableHtml;
+  });
 }
 
 export function limitTelegramRichHtmlNesting(html: string, maxDepth: number): string {

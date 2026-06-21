@@ -57,8 +57,17 @@ const metadataFor = (entry, baseUrl) => ({
   ),
 });
 
+function decodePackagePath(pathname) {
+  try {
+    return decodeURIComponent(pathname.slice(1));
+  } catch {
+    return undefined;
+  }
+}
+
 function findPackageForPath(pathname) {
-  return packages.get(decodeURIComponent(pathname.slice(1)));
+  const packageName = decodePackagePath(pathname);
+  return packageName === undefined ? undefined : packages.get(packageName);
 }
 
 function findTarballForPath(pathname) {

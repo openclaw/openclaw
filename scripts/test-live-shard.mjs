@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
+  forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
@@ -661,18 +662,25 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   let forwardedSignal = null;
   const teardown = installVitestProcessGroupCleanup({
     child,
+    forceSignal: "SIGKILL",
+    forceSignalDelayMs: 100,
     onSignal: (signal) => {
       forwardedSignal ??= signal;
     },
   });
   child.on("exit", (code, signal) => {
     teardown();
-    if (signal) {
-      process.kill(process.pid, signal);
+    if (forwardedSignal) {
+      forwardSignalToVitestProcessGroup({
+        child,
+        kill: process.kill.bind(process),
+        signal: "SIGKILL",
+      });
+      process.kill(process.pid, forwardedSignal);
       return;
     }
-    if (forwardedSignal) {
-      process.kill(process.pid, forwardedSignal);
+    if (signal) {
+      process.kill(process.pid, signal);
       return;
     }
     if ((code ?? 1) === 0) {

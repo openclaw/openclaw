@@ -12,18 +12,6 @@ import { writePersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
-  resolveProviderEnvApiKeyCandidates: () => ({
-    mistral: ["MISTRAL_API_KEY"],
-  }),
-  resolveProviderEnvAuthEvidence: () => ({
-    "workspace-cloud": [
-      {
-        type: "local-file-with-env",
-        credentialMarker: "workspace-cloud-local-credentials",
-        source: "workspace cloud credentials",
-      },
-    ],
-  }),
   resolveProviderEnvAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {
