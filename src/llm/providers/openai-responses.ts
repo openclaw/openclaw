@@ -1,6 +1,7 @@
 // OpenAI Responses provider adapts OpenAI response streams to the agent runtime.
 import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type {
   CacheRetention,
@@ -13,6 +14,7 @@ import type {
   Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
@@ -44,6 +46,7 @@ function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention 
 function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCompat> {
   return {
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
+    systemPromptPlacement: model.compat?.systemPromptPlacement ?? "input",
     supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
   };
 }
@@ -53,6 +56,13 @@ function getPromptCacheRetention(
   cacheRetention: CacheRetention,
 ): "24h" | undefined {
   return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;
+}
+
+function buildInstructions(context: Context): string | undefined {
+  if (!context.systemPrompt) {
+    return undefined;
+  }
+  return sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
 function formatOpenAIResponsesError(error: unknown): string {
@@ -193,12 +203,14 @@ function buildParams(
   context: Context,
   options?: OpenAIResponsesOptions,
 ) {
-  const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
-    replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
-  });
-
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const compat = getCompat(model);
+  const useInstructions = compat.systemPromptPlacement === "instructions";
+  const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: !useInstructions,
+    replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
+  });
+  const instructions = useInstructions ? buildInstructions(context) : undefined;
   const params: ResponseCreateParamsStreaming = {
     model: model.id,
     input: messages,
@@ -209,6 +221,7 @@ function buildParams(
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
     prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
     store: false,
+    ...(instructions !== undefined ? { instructions } : {}),
   };
 
   if (options?.maxTokens) {
@@ -261,3 +274,7 @@ function applyServiceTierPricing(
   usage.cost.total =
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
+
+export const testing = {
+  buildParams,
+};

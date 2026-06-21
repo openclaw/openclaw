@@ -457,6 +457,8 @@ export interface OpenAICompletionsCompat {
 export interface OpenAIResponsesCompat {
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
+  /** Where to place `context.systemPrompt` for Responses requests. Default: "input". */
+  systemPromptPlacement?: "input" | "instructions";
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
 }

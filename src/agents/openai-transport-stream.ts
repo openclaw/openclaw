@@ -116,6 +116,8 @@ const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai"]);
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
+type OpenAIResponsesSystemPromptPlacement = "input" | "instructions";
+
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 type OpenAIResponsesReasoningReplayMetadata = {
   v: 1;
@@ -2194,6 +2196,22 @@ function resolveOpenAICodexResponsesInstructions(
     : undefined;
 }
 
+function resolveOpenAIResponsesSystemPromptPlacement(
+  model: OpenAIModeModel,
+): OpenAIResponsesSystemPromptPlacement {
+  return model.compat?.systemPromptPlacement === "instructions" ? "instructions" : "input";
+}
+
+function resolveOpenAIResponsesInstructions(model: Model, context: Context): string | undefined {
+  if (isOpenAICodexResponsesModel(model)) {
+    return resolveOpenAICodexResponsesInstructions(model, context);
+  }
+  if (resolveOpenAIResponsesSystemPromptPlacement(model as OpenAIModeModel) !== "instructions") {
+    return undefined;
+  }
+  return buildOpenAICodexResponsesInstructions(context);
+}
+
 function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Context): void {
   if (messages.length > 0 || !context.systemPrompt) {
     return;
@@ -2246,12 +2264,15 @@ export function buildOpenAIResponsesParams(
     payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
   const replayResponsesItemIds =
     !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
+  const systemPromptPlacement = resolveOpenAIResponsesSystemPromptPlacement(
+    model as OpenAIModeModel,
+  );
   const messages = convertResponsesMessages(
     model,
     context,
     new Set(["openai", "opencode", "azure-openai-responses", "github-copilot"]),
     {
-      includeSystemPrompt: !isCodexResponses,
+      includeSystemPrompt: !isCodexResponses && systemPromptPlacement === "input",
       supportsDeveloperRole,
       replayReasoningItems: true,
       replayResponsesItemIds,
@@ -2264,15 +2285,14 @@ export function buildOpenAIResponsesParams(
   }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
+  const instructions = resolveOpenAIResponsesInstructions(model, context);
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    ...(isCodexResponses
-      ? { instructions: resolveOpenAICodexResponsesInstructions(model, context) }
-      : {}),
+    ...(instructions !== undefined ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;

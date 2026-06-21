@@ -3011,6 +3011,42 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("supports top-level instructions for Responses-compatible providers that reject system input messages", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "newapi-local",
+        baseUrl: "http://localhost:18300/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+        compat: { systemPromptPlacement: "instructions" },
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }>;
+      instructions?: string;
+    };
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ]);
+  });
+
   it("omits Responses reasoning params when model compat disables reasoning effort", () => {
     const params = buildOpenAIResponsesParams(
       {

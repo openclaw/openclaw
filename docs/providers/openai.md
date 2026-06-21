@@ -1070,9 +1070,31 @@ the Server-side compaction accordion below.
     - Strip Completions `store` from non-native `openai-completions` payloads
     - Accept advanced `params.extra_body`/`params.extraBody` pass-through JSON for OpenAI-compatible Completions proxies
     - Accept `params.chat_template_kwargs` for OpenAI-compatible Completions proxies such as vLLM
+    - Accept `compat.systemPromptPlacement: "instructions"` for Responses proxies that reject `system` or `developer` items in `input`
     - Do not force strict tool schemas or native-only headers
 
     Azure OpenAI uses native transport and compat behavior but does not receive the hidden attribution headers.
+
+    ```json5
+    {
+      models: {
+        providers: {
+          "responses-proxy": {
+            api: "openai-responses",
+            baseUrl: "http://localhost:18300/v1",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                reasoning: true,
+                compat: { systemPromptPlacement: "instructions" },
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
 
   </Accordion>
 </AccordionGroup>
