@@ -550,28 +550,28 @@ describe("loadCliSessionReseedMessages", () => {
 
     try {
       await withCliSessionState(stateDir, async () => {
-        // FIX #85177: Auth changes should carry history forward so the
-        // assistant does not lose conversation continuity. The raw transcript
-        // is now allowed to reseed across auth-profile and auth-epoch boundaries.
-        const authProfileMessages = await loadCliSessionReseedMessages({
-          sessionId: "session-auth-boundary",
-          sessionFile,
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          allowRawTranscriptReseed: true,
-          rawTranscriptReseedReason: "auth-profile",
-        });
-        expect(authProfileMessages.length).toBeGreaterThan(0);
-        expect(authProfileMessages[0]).toBeTruthy();
-        const authEpochMessages = await loadCliSessionReseedMessages({
-          sessionId: "session-auth-boundary",
-          sessionFile,
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          allowRawTranscriptReseed: true,
-          rawTranscriptReseedReason: "auth-epoch",
-        });
-        expect(authEpochMessages.length).toBeGreaterThan(0);
+        // Auth changes are a hard boundary: old raw messages may belong to a
+        // different credential context and must not reseed a fresh CLI session.
+        await expect(
+          loadCliSessionReseedMessages({
+            sessionId: "session-auth-boundary",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            allowRawTranscriptReseed: true,
+            rawTranscriptReseedReason: "auth-profile",
+          }),
+        ).resolves.toStrictEqual([]);
+        await expect(
+          loadCliSessionReseedMessages({
+            sessionId: "session-auth-boundary",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            allowRawTranscriptReseed: true,
+            rawTranscriptReseedReason: "auth-epoch",
+          }),
+        ).resolves.toStrictEqual([]);
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });

@@ -61,13 +61,6 @@ type RawTranscriptReseedReason =
   | "session-expired";
 
 const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
-  // FIX #85177: auth-profile and auth-epoch were missing from the allowed set.
-  // When the auth profile or epoch changes (e.g. billing lockout), resolveCliSessionReuse
-  // sets invalidatedReason to these values. Without them in the allowed set,
-  // loadRawTail() returns [] and the fresh session starts with zero prior context,
-  // causing the assistant to lose all conversation history.
-  "auth-profile",
-  "auth-epoch",
   "missing-transcript",
   "orphaned-tool-use",
   "system-prompt",
