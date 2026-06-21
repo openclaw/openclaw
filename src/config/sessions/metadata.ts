@@ -15,6 +15,10 @@ import {
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
+function isSystemEventProvider(provider?: string): boolean {
+  return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
+}
+
 // Origin updates merge sparse channel metadata without deleting previously known fields.
 const mergeOrigin = (
   existing: SessionOrigin | undefined,
@@ -32,7 +36,8 @@ const mergeOrigin = (
   const nextIsDeliverableChannel =
     nextProvider != null &&
     nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(nextProvider);
+    !isInternalNonDeliveryChannel(nextProvider) &&
+    !isSystemEventProvider(nextProvider);
   const channelChanged =
     existing != null &&
     nextIsDeliverableChannel &&
@@ -85,9 +90,7 @@ export function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },
 ): SessionOrigin | undefined {
-  const isSystemEventProvider =
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
-  if (opts?.skipSystemEventOrigin && isSystemEventProvider) {
+  if (opts?.skipSystemEventOrigin && isSystemEventProvider(ctx.Provider)) {
     return undefined;
   }
   const label = normalizeOptionalString(resolveConversationLabel(ctx));
