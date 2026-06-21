@@ -177,3 +177,33 @@ describe("server error status classification", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
   });
 });
+
+describe("upstream provider transient errors (#95519)", () => {
+  it("treats the upstream_error type token as a server error", () => {
+    expect(isServerErrorMessage("upstream_error")).toBe(true);
+  });
+
+  it("treats an 'Upstream request failed' message as a server error", () => {
+    expect(isServerErrorMessage("Upstream request failed")).toBe(true);
+  });
+
+  it("classifies the raw upstream_error payload as a fallbackable reason", () => {
+    // Provider returned {type:"upstream_error", message:"Upstream request failed"}.
+    // It must NOT stay unclassified, otherwise the turn ends without trying the
+    // configured fallback models. server_error reasons map to the transient
+    // failover path so the next candidate is attempted.
+    const raw =
+      '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}';
+    expect(classifyFailoverReason(raw)).not.toBeNull();
+  });
+
+  it("classifies a bare 'Upstream request failed' message as fallbackable", () => {
+    expect(classifyFailoverReason("Upstream request failed")).not.toBeNull();
+  });
+
+  it("does not classify the generic 'LLM request failed' assistant text as fallbackable", () => {
+    // This is OpenClaw's own GENERIC_ASSISTANT_ERROR_TEXT, not a provider signal.
+    // Treating it as fallbackable would risk a fallback loop on internal failures.
+    expect(classifyFailoverReason("LLM request failed")).toBeNull();
+  });
+});
