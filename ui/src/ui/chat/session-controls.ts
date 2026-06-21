@@ -1778,7 +1778,12 @@ function resolveSessionScopedOptionLabel(
 
   const label = normalizeOptionalString(row.label) ?? "";
   const displayName = normalizeOptionalString(row.displayName) ?? "";
-  if ((label && label !== key) || (displayName && displayName !== key)) {
+  const derivedTitle = normalizeOptionalString(row.derivedTitle) ?? "";
+  if (
+    (label && label !== key) ||
+    (displayName && displayName !== key) ||
+    (derivedTitle && derivedTitle !== key)
+  ) {
     return resolveSessionDisplayName(key, row);
   }
 

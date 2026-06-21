@@ -2971,6 +2971,39 @@ describe("chat session controls", () => {
     expect(onSwitchSession).toHaveBeenCalledWith(state, targetSessionKey);
   });
 
+  it("renders derived-title-only rows as friendly picker option labels", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows([
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        derivedTitle: "Main generated title",
+        updatedAt: 2,
+      },
+      {
+        key: "agent:main:derived-only",
+        kind: "direct",
+        derivedTitle: "Planning thread",
+        updatedAt: 1,
+      },
+    ]);
+    const container = document.createElement("div");
+
+    render(renderChatSessionSelect(state), container);
+
+    const labels = [...container.querySelectorAll(".chat-session-picker__option-label")].map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toContain("Planning thread");
+    expect(labels).not.toContain("derived-only");
+  });
+
   it("clears applied chat session picker search when the input is cleared", async () => {
     const { state } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;
@@ -3296,6 +3329,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3304,6 +3338,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3375,6 +3410,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3383,6 +3419,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
