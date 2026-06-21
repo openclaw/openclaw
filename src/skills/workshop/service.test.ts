@@ -328,6 +328,62 @@ describe("skill workshop proposals", () => {
     );
   });
 
+  it("rejects update-proposal H1 drafts for existing valid skills without H1 headings", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "h1-less-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "h1-less-skill",
+      description: "No markdown heading",
+      body: "Use this skill when the workflow has frontmatter and prose only.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "h1-less-skill",
+      content: [
+        "# Update Proposal: h1-less skill hardening",
+        "",
+        "Keep the original prose but add one extra instruction.",
+        "",
+      ].join("\n"),
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("delta/proposal note, not a complete replacement SKILL.md");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "frontmatter and prose only",
+    );
+  });
+
+  it("rejects skill-update-proposal H1 drafts for existing valid skills without H1 headings", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "skill-update-proposal-h1-less");
+    await writeSkill({
+      dir: skillDir,
+      name: "skill-update-proposal-h1-less",
+      description: "No markdown heading",
+      body: "Use this skill when the workflow has frontmatter and prose only.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "skill-update-proposal-h1-less",
+      content: [
+        "# Skill Update Proposal: h1-less skill hardening",
+        "",
+        "Keep the original prose but add one extra instruction.",
+        "",
+      ].join("\n"),
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("delta/proposal note, not a complete replacement SKILL.md");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "frontmatter and prose only",
+    );
+  });
+
   it("allows complete updates for existing valid skills without H1 headings", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "h1-less-skill");
@@ -340,8 +396,7 @@ describe("skill workshop proposals", () => {
     const proposal = await proposeUpdateSkill({
       workspaceDir,
       skillName: "h1-less-skill",
-      content:
-        "Use this updated skill when the workflow remains frontmatter and prose only.\n",
+      content: "Use this updated skill when the workflow remains frontmatter and prose only.\n",
     });
 
     await expect(
@@ -349,6 +404,32 @@ describe("skill workshop proposals", () => {
     ).resolves.toMatchObject({ record: { id: proposal.record.id } });
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
       "updated skill",
+    );
+  });
+
+  it("allows complete updates that intentionally remove an H1 heading", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "headed-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "headed-skill",
+      description: "Has a decorative heading",
+      body: "# Headed Skill\n\nLegacy body.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "headed-skill",
+      content: "Use this updated skill when identity is carried by frontmatter-only prose.\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "frontmatter-only prose",
+    );
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.not.toContain(
+      "# Headed Skill",
     );
   });
 

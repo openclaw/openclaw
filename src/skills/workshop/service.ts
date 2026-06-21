@@ -674,13 +674,6 @@ function assertCompleteSkillUpdateDraft(params: {
       "Skill update proposal content must include a complete replacement SKILL.md body.",
     );
   }
-  if (previousH1 && !proposedH1) {
-    throw new Error(
-      "Skill update proposal content must include a complete replacement SKILL.md body " +
-        "with the existing skill heading.",
-    );
-  }
-  const comparableProposedH1 = proposedH1;
   const proposedBodyLower = proposedBody.toLowerCase();
   const proposalLikeMarkers = [
     "# update proposal",
@@ -701,15 +694,21 @@ function assertCompleteSkillUpdateDraft(params: {
         "updated skill body before applying.",
     );
   }
+  if (!previousH1 && proposedH1 && isUpdateProposalHeading(proposedH1)) {
+    throw new Error(
+      "Skill update proposal content appears to be a delta/proposal note, " +
+        "not a complete replacement SKILL.md. Revise the proposal with the full " +
+        "updated skill body before applying.",
+    );
+  }
   if (
     previousH1 &&
-    comparableProposedH1 &&
-    normalizeHeadingForComparison(previousH1) !==
-      normalizeHeadingForComparison(comparableProposedH1)
+    proposedH1 &&
+    normalizeHeadingForComparison(previousH1) !== normalizeHeadingForComparison(proposedH1)
   ) {
     throw new Error(
       "Skill update proposal content appears to replace the existing skill identity " +
-        `(${previousH1}) with ${comparableProposedH1}. Revise the proposal with a complete ` +
+        `(${previousH1}) with ${proposedH1}. Revise the proposal with a complete ` +
         "replacement SKILL.md that preserves the existing skill heading, or create a new skill.",
     );
   }
@@ -754,6 +753,16 @@ function normalizeHeadingForComparison(heading: string): string {
     .replace(/[`*_~]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function isUpdateProposalHeading(heading: string): boolean {
+  const normalized = normalizeHeadingForComparison(heading);
+  return (
+    normalized === "update-proposal" ||
+    normalized.startsWith("update-proposal-") ||
+    normalized === "skill-update-proposal" ||
+    normalized.startsWith("skill-update-proposal-")
+  );
 }
 
 function scanProposalBundle(
