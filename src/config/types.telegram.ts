@@ -183,6 +183,11 @@ export type TelegramAccountConfig = {
   mediaGroupFlushMs?: number;
   /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */
   pollingStallThresholdMs?: number;
+  /**
+   * Use the isolated polling ingress path. Default: true.
+   * Set to false to fall back to the legacy polling loop.
+   */
+  isolatedIngress?: boolean;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;
   /** Network transport overrides for Telegram. */

@@ -491,6 +491,43 @@ describe("mergeTelegramAccountConfig", () => {
     const merged = mergeTelegramAccountConfig(cfg, "alerts");
     expect(merged.allowFrom).toEqual(["456"]);
   });
+
+  it("inherits channel-level isolatedIngress for named accounts", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          isolatedIngress: false,
+          accounts: {
+            bot1: {
+              botToken: "bot-1-token",
+            },
+          },
+        },
+      },
+    };
+
+    const merged = mergeTelegramAccountConfig(cfg, "bot1");
+    expect(merged.isolatedIngress).toBe(false);
+  });
+
+  it("respects account-level isolatedIngress override", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          isolatedIngress: false,
+          accounts: {
+            bot1: {
+              botToken: "bot-1-token",
+              isolatedIngress: true,
+            },
+          },
+        },
+      },
+    };
+
+    const merged = mergeTelegramAccountConfig(cfg, "bot1");
+    expect(merged.isolatedIngress).toBe(true);
+  });
 });
 
 describe("resolveTelegramPollActionGateState", () => {
