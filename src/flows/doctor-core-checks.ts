@@ -740,6 +740,7 @@ const sessionLocksCheck: HealthCheck = {
   kind: "core",
   description: "Stale session lock files are represented as structured findings.",
   source: "doctor",
+  defaultEnabled: false,
   async detect(ctx) {
     return (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
       sessionLockToHealthFinding,
