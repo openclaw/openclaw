@@ -1629,6 +1629,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       },
       source: record.source,
       rootDir: record.rootDir,
+      origin: record.origin,
     });
   };
 

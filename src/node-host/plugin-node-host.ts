@@ -66,12 +66,13 @@ export async function runRegisteredNodeHostStartupHooks(params: {
     try {
       // The node->gateway emitter is privileged (it originates node-attributed
       // turns), so only the bundled node-anchored browser bridge receives it on
-      // its startup ctx, gated on the registry plugin IDENTITY (manifest id
-      // "browser") rather than a self-declared cap; every other plugin hook gets
-      // just nodeId. Built as a non-literal so the emitter stays off the public
-      // {nodeId?} type.
+      // its startup ctx, gated on BOTH the registry plugin's trusted BUNDLED
+      // ORIGIN and its manifest id "browser" -- a self-declared cap, or a
+      // config-loaded plugin that shadows the id, is origin !== "bundled" and so
+      // cannot receive it; every other plugin hook gets just nodeId. Built as a
+      // non-literal so the emitter stays off the public {nodeId?} type.
       const startCtx =
-        entry.pluginId === "browser"
+        entry.origin === "bundled" && entry.pluginId === "browser"
           ? { emitNodeGatewayEvent, nodeId: params.nodeId }
           : { nodeId: params.nodeId };
       await start(startCtx);

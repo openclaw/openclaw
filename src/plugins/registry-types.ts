@@ -267,6 +267,8 @@ export type PluginNodeHostCommandRegistration = {
   command: import("./types.js").OpenClawPluginNodeHostCommand;
   source: string;
   rootDir?: string;
+  /** Plugin trust origin (e.g. "bundled"); gates the privileged node->gateway emitter to the bundled bridge. */
+  origin?: PluginOrigin;
 };
 
 export type PluginNodeInvokePolicyRegistration = {
