@@ -23,6 +23,7 @@ import {
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
   stopLaunchAgent,
+  uninstallLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -53,6 +54,7 @@ const state = vi.hoisted(() => ({
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
   fileWrites: [] as Array<{ path: string; data: string }>,
+  externalVolume: false,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdRestartHandoff: vi.fn<
@@ -280,6 +282,11 @@ vi.mock("node:fs/promises", async () => {
     }),
     stat: vi.fn(async (p: string) => {
       const key = p;
+      // Simulate external volume: "/" is dev 1, everything else is dev 99.
+      // isExternalVolumePath compares root dev against target dev.
+      if (state.externalVolume) {
+        return { mode: 0o755, dev: key === "/" ? 1 : 99 };
+      }
       if (state.dirs.has(key)) {
         return { mode: state.dirModes.get(key) ?? 0o777 };
       }
@@ -311,6 +318,14 @@ vi.mock("node:fs/promises", async () => {
     unlink: vi.fn(async (p: string) => {
       state.files.delete(p);
     }),
+    rename: vi.fn(async (from: string, to: string) => {
+      const data = state.files.get(from);
+      state.files.delete(from);
+      if (data !== undefined) {
+        state.files.set(to, data);
+        state.fileWrites.push({ path: to, data });
+      }
+    }),
     writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
       const key = p;
       state.files.set(key, data);
@@ -320,6 +335,15 @@ vi.mock("node:fs/promises", async () => {
     }),
   };
   return { ...wrapped, default: wrapped };
+});
+
+// Mock node:fs statSync so isExternalVolumePathSync sees an external device
+// for `/` vs HOME when state.externalVolume is set; otherwise pass through.
+vi.mock("node:fs", () => {
+  const actual = require("node:fs");
+  const statSync = (p: string) =>
+    state.externalVolume ? { dev: p === "/" ? 1 : 99, mode: 0o755 } : actual.statSync(p);
+  return { ...actual, statSync, default: { ...actual, statSync } };
 });
 
 beforeEach(() => {
@@ -350,6 +374,7 @@ beforeEach(() => {
   state.files.clear();
   state.fileModes.clear();
   state.fileWrites.length = 0;
+  state.externalVolume = false;
   cleanStaleGatewayProcessesSync.mockReset();
   cleanStaleGatewayProcessesSync.mockReturnValue([]);
   inspectPortUsage.mockReset();
@@ -1900,5 +1925,84 @@ describe("resolveLaunchAgentPlistPath", () => {
         OPENCLAW_LAUNCHD_LABEL: "../evil/label",
       }),
     ).toThrow("Invalid launchd label");
+  });
+});
+
+describe("external APFS volume fallback", () => {
+  it("canonical plist path resolves to boot volume when HOME is on external volume", async () => {
+    state.externalVolume = true;
+    // HOME points to an external APFS volume; USER is still "test".
+    const env = { ...createDefaultLaunchdEnv(), HOME: "/Volumes/Data/Users/test", USER: "test" };
+    const stdout = new PassThrough();
+    await installLaunchAgent({
+      env,
+      stdout,
+      programArguments: defaultProgramArguments,
+    });
+    const bootPlist = "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+    const externalPlist = "/Volumes/Data/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+    // The plist must be written only to the boot volume (the external volume is
+    // exactly where launchd refuses to bootstrap from with error 5).
+    expect(state.fileWrites.some((w) => w.path === bootPlist)).toBe(true);
+    expect(state.fileWrites.some((w) => w.path === externalPlist)).toBe(false);
+    // Bootstrap must target the boot-volume path.
+    const bootstrapCall = state.launchctlCalls.find(
+      (c) => c[0] === "bootstrap" && c[2] === bootPlist,
+    );
+    expect(bootstrapCall).toBeDefined();
+  });
+  it("resolves to /Users/<login-user> when HOME is the external volume root (#60398)", async () => {
+    state.externalVolume = true;
+    // The reported shape: $HOME is the external volume root itself, so its last
+    // path segment is the volume name, not the user. The account must come from
+    // USER, not basename(HOME).
+    const env = { ...createDefaultLaunchdEnv(), HOME: "/Volumes/MainDataDrive", USER: "test" };
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+    const bootPlist = "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+    expect(state.fileWrites.some((w) => w.path === bootPlist)).toBe(true);
+    // It must NOT derive the account from the volume name.
+    expect(state.fileWrites.some((w) => w.path.startsWith("/Users/MainDataDrive/"))).toBe(false);
+    expect(
+      state.launchctlCalls.find((c) => c[0] === "bootstrap" && c[2] === bootPlist),
+    ).toBeDefined();
+  });
+  it("uninstall trashes the plist on the boot volume, not across the external volume", async () => {
+    state.externalVolume = true;
+    const env = { ...createDefaultLaunchdEnv(), HOME: "/Volumes/Data/Users/test", USER: "test" };
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+    const out = new PassThrough();
+    let text = "";
+    out.on("data", (chunk) => {
+      text += String(chunk);
+    });
+    await uninstallLaunchAgent({ env, stdout: out });
+    // Trash target stays on the boot volume so the rename is same-volume; a
+    // cross-volume move to /Volumes/.../.Trash would EXDEV-fail and leak the plist.
+    expect(text).toContain("/Users/test/.Trash/ai.openclaw.gateway.plist");
+    expect(text).not.toContain("/Volumes/");
+    expect(state.files.has("/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist")).toBe(
+      false,
+    );
+  });
+  it("canonical plist path stays under HOME when on the root volume", async () => {
+    // externalVolume is false by default; all statSync calls return the same dev.
+    const env = { ...createDefaultLaunchdEnv(), USER: "test" };
+    const stdout = new PassThrough();
+    await installLaunchAgent({
+      env,
+      stdout,
+      programArguments: defaultProgramArguments,
+    });
+    // The home-dir plist at /Users/test/... — same device as root.
+    const homePlist = "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+    expect(state.fileWrites.filter((w) => w.path === homePlist)).toHaveLength(1);
   });
 });

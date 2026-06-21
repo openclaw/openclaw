@@ -25,7 +25,7 @@ import {
 } from "./launchd-plist.js";
 import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveGatewayStateDir, resolveLaunchAgentHomeDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -123,7 +123,10 @@ function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = toPosixPath(resolveHomeDir(env));
+  // resolveLaunchAgentHomeDir redirects to the boot volume when $HOME is on an
+  // external APFS volume, so install, repair, restart, uninstall, and doctor
+  // all resolve to one canonical path launchd can actually bootstrap.
+  const home = toPosixPath(resolveLaunchAgentHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
@@ -661,7 +664,9 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = toPosixPath(resolveHomeDir(env));
+  // Trash the plist on the volume it actually lives on (the boot volume when
+  // $HOME is external); a cross-volume rename would EXDEV-fail and leak it.
+  const home = toPosixPath(resolveLaunchAgentHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {
@@ -886,7 +891,7 @@ async function writeLaunchAgentPlist({
   }
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveLaunchAgentHomeDir(env));
   const libraryDir = path.posix.join(home, "Library");
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);
@@ -898,7 +903,6 @@ async function writeLaunchAgentPlist({
     programArguments,
     environment,
   });
-
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const plist = buildLaunchAgentPlist({
     label,
@@ -933,7 +937,6 @@ export async function stageLaunchAgent({
 async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: string }) {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: params.env });
-
   await execLaunchctl(["bootout", domain, params.plistPath]);
   await execLaunchctl(["unload", params.plistPath]);
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.

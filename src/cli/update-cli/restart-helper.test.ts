@@ -17,6 +17,26 @@ vi.mock("node:child_process", async () => {
   );
 });
 
+// When set, statSync reports this path on a different device than "/", so the
+// boot-volume-aware home resolver treats it as an external APFS HOME.
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((p: string) => {
+    if (fsState.externalHome) {
+      if (p === "/") {
+        return { dev: 1 };
+      }
+      if (p === fsState.externalHome) {
+        return { dev: 99 };
+      }
+    }
+    return actual.statSync(p);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
+
 describe("restart-helper", () => {
   const originalPlatform = process.platform;
   const originalGetUid = process.getuid;
@@ -129,6 +149,7 @@ exit 0
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform });
     process.getuid = originalGetUid;
+    fsState.externalHome = undefined;
   });
 
   describe("prepareRestartScript", () => {
@@ -265,6 +286,27 @@ exit 1
       expect(content).toContain("Bootstrap loads RunAtLoad agents");
       expect(content).toContain('rm -f "$0"');
       expect(content).toContain('rmdir "$script_dir" 2>/dev/null || true');
+      await cleanupScript(scriptPath);
+    });
+
+    it("bootstraps the boot-volume plist when HOME is on an external volume", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+      fsState.externalHome = "/Volumes/Data/Users/test";
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: "/Volumes/Data/Users/test",
+        USER: "test",
+      });
+      // launchd cannot bootstrap from the external volume; the generated script
+      // must target the boot-volume plist, not the external HOME one.
+      expect(content).toContain(
+        "launchctl bootstrap 'gui/501' '/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist'",
+      );
+      expect(content).not.toContain(
+        "/Volumes/Data/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+      );
       await cleanupScript(scriptPath);
     });
 

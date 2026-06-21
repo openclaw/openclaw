@@ -7,8 +7,10 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
-export { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
+import { resolveLaunchAgentHomeDir } from "./paths.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
+
+export { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
 
@@ -84,7 +86,11 @@ function resolveLaunchdRestartTarget(
 ): LaunchdRestartTarget {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(env);
-  const home = normalizeOptionalString(env.HOME) || os.homedir();
+  // Boot-volume-aware: launchd cannot bootstrap a plist from an external APFS
+  // $HOME (error 5), so the detached restart must target the same canonical
+  // path install uses, not the raw HOME-derived one.
+  const homeBase = normalizeOptionalString(env.HOME) || os.homedir();
+  const home = resolveLaunchAgentHomeDir({ ...env, HOME: homeBase });
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   return {
     domain,

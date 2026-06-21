@@ -9,6 +9,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import { resolveLaunchAgentHomeDir } from "../daemon/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { replaceFileAtomicSync } from "./replace-file.js";
@@ -728,8 +729,12 @@ export function triggerOpenClawRestart(): RestartAttempt {
 
   // kickstart fails when the service was previously booted out (deregistered from launchd).
   // Fall back to bootstrap, which loads RunAtLoad agents without a follow-up kickstart.
-  // Use env HOME to match how launchd.ts resolves the plist install path.
-  const home = process.env.HOME?.trim() || os.homedir();
+  // Resolve through the same boot-volume-aware home as install, or an external
+  // APFS $HOME makes this bootstrap re-hit `Bootstrap failed: 5`.
+  const home = resolveLaunchAgentHomeDir({
+    ...process.env,
+    HOME: process.env.HOME?.trim() || os.homedir(),
+  });
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   const bootstrapArgs = ["bootstrap", domain, plistPath];
   tried.push(`launchctl ${bootstrapArgs.join(" ")}`);

@@ -24,6 +24,26 @@ vi.mock("node:child_process", async () => {
   );
 });
 
+// When set, statSync reports this path on a different device than "/", so the
+// boot-volume-aware home resolver treats it as an external APFS HOME.
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((p: string) => {
+    if (fsState.externalHome) {
+      if (p === "/") {
+        return { dev: 1 };
+      }
+      if (p === fsState.externalHome) {
+        return { dev: 99 };
+      }
+    }
+    return actual.statSync(p);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
+
 vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
 }));
@@ -46,6 +66,7 @@ beforeEach(() => {
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();
+  fsState.externalHome = undefined;
 
   currentTimeMs = 0;
   resolveLsofCommandSyncMock.mockReturnValue("/usr/sbin/lsof");
@@ -229,6 +250,42 @@ describe("triggerOpenClawRestart", () => {
             `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
           ],
         });
+      },
+    );
+  });
+
+  it("bootstraps the boot-volume plist when HOME is on an external volume", () => {
+    setPlatform("darwin");
+    fsState.externalHome = "/Volumes/Data/Users/test";
+    withEnv(
+      {
+        VITEST: undefined,
+        NODE_ENV: undefined,
+        HOME: "/Volumes/Data/Users/test",
+        USER: "test",
+        OPENCLAW_PROFILE: "default",
+      },
+      () => {
+        const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+        spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+          if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
+            return { error: undefined, status: 113, stderr: "service not loaded" };
+          }
+          if (command === "launchctl" && args[0] === "bootstrap") {
+            return { error: undefined, status: 0, stderr: "" };
+          }
+          return { error: undefined, status: 1, stdout: "" };
+        });
+
+        const result = triggerOpenClawRestart();
+
+        // Fallback bootstrap must target the boot volume; the external plist
+        // path would re-hit launchd error 5.
+        const tried = result.tried ?? [];
+        expect(tried).toContain(
+          `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
+        );
+        expect(tried.join("\n")).not.toContain("/Volumes/");
       },
     );
   });

@@ -18,6 +18,23 @@ const { spawnMock } = vi.hoisted(() => ({
     unref: vi.fn(),
   })),
 }));
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((p: string) => {
+    if (fsState.externalHome) {
+      if (p === "/") {
+        return { dev: 1 };
+      }
+      if (p === fsState.externalHome) {
+        return { dev: 99 };
+      }
+    }
+    return actual.statSync(p);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessModule } =
@@ -31,6 +48,7 @@ const tempDirs = new Set<string>();
 
 afterEach(async () => {
   spawnMock.mockClear();
+  fsState.externalHome = undefined;
   await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
   tempDirs.clear();
 });
@@ -475,6 +493,40 @@ describe("managed service update handoff", () => {
       };
       expect(helperParams.serviceRecovery).toEqual(testCase.expected);
     }
+  });
+
+  it("uses the boot-volume LaunchAgent plist for launchd handoff recovery when HOME is external", async () => {
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    fsState.externalHome = "/Volumes/Data/Users/external";
+
+    const result = await startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      timeoutMs: 1_800_000,
+      restartDelayMs: 500,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      supervisor: "launchd",
+      env: {
+        HOME: fsState.externalHome,
+        USER: "testuser",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      },
+      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+    });
+
+    expect(result.status).toBe("started");
+    const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
+    tempDirs.add(path.dirname(args[0] ?? ""));
+    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as {
+      serviceRecovery?: { kind?: string; plistPath?: string };
+    };
+    expect(helperParams.serviceRecovery).toMatchObject({
+      kind: "launchd",
+      plistPath: "/Users/testuser/Library/LaunchAgents/ai.openclaw.gateway.plist",
+    });
+    expect(helperParams.serviceRecovery?.plistPath).not.toContain("/Volumes/Data");
   });
 
   it("does not overwrite a restart sentinel owned by another startup task", async () => {

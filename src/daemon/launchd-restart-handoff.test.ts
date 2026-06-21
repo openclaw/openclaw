@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const unrefMock = vi.hoisted(() => vi.fn());
+// When set, statSync reports this path on a different device than "/", so the
+// boot-volume-aware resolver treats it as an external APFS HOME.
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -10,6 +13,22 @@ vi.mock("node:child_process", async () => {
     ...actual,
     spawn: (...args: unknown[]) => spawnMock(...args),
   };
+});
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((p: string) => {
+    if (fsState.externalHome) {
+      if (p === "/") {
+        return { dev: 1 };
+      }
+      if (p === fsState.externalHome) {
+        return { dev: 99 };
+      }
+    }
+    return actual.statSync(p);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
 });
 
 import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
@@ -36,6 +55,7 @@ function requireSpawnCall(callIndex = 0): SpawnCall {
 afterEach(() => {
   spawnMock.mockReset();
   unrefMock.mockReset();
+  fsState.externalHome = undefined;
   spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 });
 
@@ -155,5 +175,22 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       });
     }).toThrow("Invalid launchd label: ../evil/label");
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps from the boot-volume plist path when HOME is on an external volume", () => {
+    fsState.externalHome = "/Volumes/Data/Users/test";
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: { HOME: "/Volumes/Data/Users/test", USER: "test", OPENCLAW_PROFILE: "default" },
+      mode: "reload",
+      waitForPid: 1,
+    });
+
+    const [, args] = requireSpawnCall();
+    // args[5] is the plist path baked into the detached `launchctl bootstrap`.
+    // It must stay on the boot volume, or the restart re-hits error 5.
+    expect(args[5]).toBe("/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist");
+    expect(args[5]).not.toContain("/Volumes/");
   });
 });

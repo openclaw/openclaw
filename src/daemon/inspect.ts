@@ -9,7 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
-import { resolveHomeDir } from "./paths.js";
+import { resolveHomeDir, resolveLaunchAgentHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 
@@ -453,7 +453,9 @@ export async function findExtraGatewayServices(
 
   if (process.platform === "darwin") {
     try {
-      const home = resolveHomeDir(env);
+      // Boot-volume-aware: an external-$HOME install lives under /Users/<user>,
+      // not the external volume, so scan where the plist was actually written.
+      const home = resolveLaunchAgentHomeDir(env);
       const userDir = path.join(home, "Library", "LaunchAgents");
       for (const svc of await scanLaunchdDir({
         dir: userDir,

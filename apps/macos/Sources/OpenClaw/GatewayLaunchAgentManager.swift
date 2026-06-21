@@ -3,6 +3,7 @@ import Foundation
 enum GatewayLaunchAgentManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
     private static let disableLaunchAgentMarker = ".openclaw/disable-launchagent"
+    private nonisolated(unsafe) static var externalHomeVolumeMemo: (path: String, external: Bool)?
 
     private static var disableLaunchAgentMarkerURL: URL {
         #if DEBUG
@@ -15,8 +16,74 @@ enum GatewayLaunchAgentManager {
     }
 
     private static var plistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
+        self.launchAgentPlistURL()
+    }
+
+    static func launchAgentPlistURL(
+        homeURL: URL = FileManager().homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeIsExternalVolume: Bool? = nil) -> URL
+    {
+        self.launchAgentHomeURL(
+            homeURL: homeURL,
+            environment: environment,
+            homeIsExternalVolume: homeIsExternalVolume)
             .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
+    }
+
+    private static func launchAgentHomeURL(
+        homeURL: URL,
+        environment: [String: String],
+        homeIsExternalVolume: Bool?) -> URL
+    {
+        let external = homeIsExternalVolume ?? self.isExternalVolumeHome(homeURL)
+        guard external, let user = self.loginUsername(environment: environment) else {
+            return homeURL
+        }
+        return URL(fileURLWithPath: "/Users", isDirectory: true)
+            .appendingPathComponent(user, isDirectory: true)
+    }
+
+    private static func loginUsername(environment: [String: String]) -> String? {
+        if let user = environment["USER"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !user.isEmpty
+        {
+            return user
+        }
+        if let logname = environment["LOGNAME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !logname.isEmpty
+        {
+            return logname
+        }
+        let fallback = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        return fallback.isEmpty ? nil : fallback
+    }
+
+    private static func isExternalVolumeHome(_ homeURL: URL) -> Bool {
+        let path = homeURL.path
+        if let memo = self.externalHomeVolumeMemo, memo.path == path {
+            return memo.external
+        }
+
+        let external = self.fileSystemNumber(forPath: "/")
+            .flatMap { rootDevice in
+                self.fileSystemNumber(forPath: path).map { homeDevice in
+                    rootDevice != homeDevice
+                }
+            } ?? false
+        self.externalHomeVolumeMemo = (path, external)
+        return external
+    }
+
+    private static func fileSystemNumber(forPath path: String) -> NSNumber? {
+        guard
+            let value = try? FileManager.default.attributesOfFileSystem(forPath: path)[
+                .systemNumber,
+            ] as? NSNumber
+        else {
+            return nil
+        }
+        return value
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {

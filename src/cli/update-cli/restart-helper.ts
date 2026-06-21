@@ -11,6 +11,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
+import { resolveLaunchAgentHomeDir } from "../../daemon/paths.js";
 import {
   renderPosixRestartLogSetup,
   resolveGatewayRestartLogPath,
@@ -122,9 +123,13 @@ exit "$status"
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
-      // Resolve HOME at generation time via env/process.env to match launchd.ts,
-      // and shell-escape the label in the plist filename to prevent injection.
-      const home = normalizeOptionalString(env.HOME) || process.env.HOME || os.homedir();
+      // Resolve HOME at generation time through the same boot-volume-aware home
+      // as install (an external APFS $HOME would otherwise make the generated
+      // bootstrap re-hit error 5), and shell-escape the label to prevent injection.
+      const home = resolveLaunchAgentHomeDir({
+        ...env,
+        HOME: normalizeOptionalString(env.HOME) || process.env.HOME || os.homedir(),
+      });
       const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
       const escapedPlistPath = shellEscape(plistPath);
       const logSetup = renderPosixRestartLogSetup({ ...process.env, ...env });
