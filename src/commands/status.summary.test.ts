@@ -3,6 +3,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
+type TranscriptUsageSnapshotForStatusTest = {
+  costUsd?: number;
+};
+
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
@@ -13,7 +17,9 @@ const statusSummaryMocks = vi.hoisted(() => ({
       entry: Record<string, unknown>;
     }>
   >(() => []),
-  readLatestSessionUsageFromTranscriptAsync: vi.fn(async () => undefined),
+  readLatestSessionUsageFromTranscriptAsync: vi.fn<
+    () => Promise<TranscriptUsageSnapshotForStatusTest | undefined>
+  >(async () => undefined),
   configureTaskRegistryMaintenance: vi.fn(),
   taskRegistrySummary: {
     total: 0,
