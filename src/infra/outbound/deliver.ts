@@ -1326,9 +1326,9 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   };
   const queuePolicy = params.queuePolicy ?? "best_effort";
   let platformResultsReturned = false;
+  let platformSendStarted = false;
 
   try {
-    let platformSendStarted = false;
     const results = await deliverOutboundPayloadsCore({
       ...wrappedParams,
       ...(queueId
@@ -1390,11 +1390,38 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (isDeliveryAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else if (!platformResultsReturned) {
-        await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
-          log.warn(
-            `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
-          );
-        });
+        // If the platform send already started and the error carries partial
+        // send evidence (OutboundDeliveryError with sentBeforeError), the
+        // message may already have reached the channel. Calling failDelivery
+        // here leaves the entry in `send_attempt_started`, which reconnect
+        // drain later replays as "not yet sent" — producing duplicate
+        // messages when the adapter's unknown-send reconciliation misreports
+        // `not_sent`. Advance to `unknown_after_send` instead so drain routes
+        // the entry through reconcileUnknownQueuedDelivery (query the adapter
+        // for actual send state) rather than blind replay.
+        const sendEvidence =
+          platformSendStarted && err instanceof OutboundDeliveryError && err.sentBeforeError;
+        if (sendEvidence) {
+          await markQueuedPlatformOutcomeUnknown({
+            queueId,
+            queuePolicy,
+          }).catch((markErr: unknown) => {
+            log.warn(
+              `failed to mark queued delivery ${queueId} as platform-outcome-unknown after mid-send error; falling back to fail: ${formatErrorMessage(markErr)}`,
+            );
+            return failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+              log.warn(
+                `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+              );
+            });
+          });
+        } else {
+          await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+            log.warn(
+              `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+            );
+          });
+        }
       }
     }
     throw err;
