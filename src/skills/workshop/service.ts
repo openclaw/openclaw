@@ -669,6 +669,12 @@ function assertCompleteSkillUpdateDraft(params: {
   const proposedBody = stripSkillFrontmatter(params.proposedContent);
   const previousH1 = firstMarkdownHeading(previousBody, 1);
   const proposedH1 = firstMarkdownHeading(proposedBody, 1);
+  if (!proposedBody.trim() || !proposedH1) {
+    throw new Error(
+      "Skill update proposal content must include a complete replacement SKILL.md body " +
+        "with the existing skill heading.",
+    );
+  }
   const proposedBodyLower = proposedBody.toLowerCase();
   const proposalLikeMarkers = [
     "# update proposal",
@@ -679,7 +685,10 @@ function assertCompleteSkillUpdateDraft(params: {
     "add the following subsection",
     "add this subsection",
   ];
-  if (proposalLikeMarkers.some((marker) => proposedBodyLower.includes(marker))) {
+  const proposalMarkerHits = proposalLikeMarkers.filter((marker) =>
+    proposedBodyLower.includes(marker),
+  ).length;
+  if (proposalMarkerHits >= 2) {
     throw new Error(
       "Skill update proposal content appears to be a delta/proposal note, " +
         "not a complete replacement SKILL.md. Revise the proposal with the full " +
@@ -688,7 +697,6 @@ function assertCompleteSkillUpdateDraft(params: {
   }
   if (
     previousH1 &&
-    proposedH1 &&
     normalizeHeadingForComparison(previousH1) !== normalizeHeadingForComparison(proposedH1)
   ) {
     throw new Error(
@@ -696,28 +704,6 @@ function assertCompleteSkillUpdateDraft(params: {
         `(${previousH1}) with ${proposedH1}. Revise the proposal with a complete ` +
         "replacement SKILL.md that preserves the existing skill heading, or create a new skill.",
     );
-  }
-
-  const previousH2Headings = markdownHeadings(previousBody, 2).map(
-    normalizeHeadingForComparison,
-  );
-  const proposedH2Headings = new Set(
-    markdownHeadings(proposedBody, 2).map(normalizeHeadingForComparison),
-  );
-  if (previousH2Headings.length >= 4) {
-    const retained = previousH2Headings.filter((heading) => proposedH2Headings.has(heading)).length;
-    const proposedBytes = Buffer.byteLength(proposedBody, "utf8");
-    const previousBytes = Buffer.byteLength(previousBody, "utf8");
-    if (
-      retained < Math.ceil(previousH2Headings.length / 2) &&
-      proposedBytes < previousBytes * 0.75
-    ) {
-      throw new Error(
-        "Skill update proposal content drops most existing sections and is much " +
-          "shorter than the current skill. Revise the proposal with the full " +
-          "updated SKILL.md before applying destructive reductions.",
-      );
-    }
   }
 }
 

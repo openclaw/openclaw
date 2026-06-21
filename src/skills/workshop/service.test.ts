@@ -233,7 +233,7 @@ describe("skill workshop proposals", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("pending");
   });
 
-  it("rejects update proposals that drop most existing sections", async () => {
+  it("applies complete update proposals that intentionally rewrite section structure", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "sectioned-skill");
     const originalBody = [
@@ -261,14 +261,70 @@ describe("skill workshop proposals", () => {
     const proposal = await proposeUpdateSkill({
       workspaceDir,
       skillName: "sectioned-skill",
-      content: "# Sectioned Skill\n\n## One\nKeep this and add one sentence.\n",
+      content: [
+        "# Sectioned Skill",
+        "",
+        "## Proposed skill changes",
+        "This is a complete replacement section, not a delta note.",
+        "It intentionally consolidates the old section structure.",
+        "",
+      ].join("\n"),
     });
 
     await expect(
       applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
-    ).rejects.toThrow("drops most existing sections");
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "This is a complete replacement section",
+    );
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.not.toContain(
       "## Four",
+    );
+  });
+
+  it("rejects update proposals with no replacement skill body", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "empty-body-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "empty-body-skill",
+      description: "Has body",
+      body: "# Empty Body Skill\n\nKeep me.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "empty-body-skill",
+      content: "---\nname: empty-body-skill\n---\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("complete replacement SKILL.md body");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Keep me.",
+    );
+  });
+
+  it("allows update proposals whose preserved heading adds emoji decoration", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "emoji-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "emoji-skill",
+      description: "Has emoji heading",
+      body: "# Emoji Skill\n\nOriginal body.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "emoji-skill",
+      content: "# 🚀 Emoji Skill\n\nUpdated body.\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Updated body.",
     );
   });
 
