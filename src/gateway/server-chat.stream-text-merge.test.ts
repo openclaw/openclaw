@@ -60,6 +60,16 @@ describe("server chat stream text merge", () => {
     ).toBe("Before tool call\nAfter tool call");
   });
 
+  it("replaces superseded assistant item text when the replacement delta is empty", () => {
+    expect(
+      resolveMergedAssistantText({
+        previousText: "coordination draft",
+        nextText: "final answer",
+        nextDelta: "",
+      }),
+    ).toBe("final answer");
+  });
+
   it("caps merged live text while preserving the newest assistant output", () => {
     const result = resolveMergedAssistantText({
       previousText: "a".repeat(MAX_LIVE_CHAT_BUFFER_CHARS - 2),

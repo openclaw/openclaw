@@ -305,7 +305,10 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "hel", delta: "hel" },
+      { text: "hello", delta: "lo" },
+    ]);
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
@@ -340,6 +343,60 @@ describe("CodexAppServerEventProjector", () => {
     expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
       { text: "hel", delta: "hel" },
       { text: "hello", delta: "lo" },
+    ]);
+  });
+
+  it("streams unphased assistant deltas into partial replies and assistant events", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    await projector.handleNotification(agentMessageDelta("hel", "msg-final"));
+    await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
+
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "hel", delta: "hel" },
+      { text: "hello", delta: "lo" },
+    ]);
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "assistant")
+        .map((event) => event.data),
+    ).toEqual([
+      { text: "hel", delta: "hel" },
+      { text: "hello", delta: "lo" },
+    ]);
+  });
+
+  it("uses replacement partials when unphased assistant items switch", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    await projector.handleNotification(agentMessageDelta("coordination draft", "msg-draft"));
+    await projector.handleNotification(agentMessageDelta("final answer", "msg-final"));
+
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "coordination draft", delta: "coordination draft" },
+      { text: "final answer", delta: "", replace: true },
+    ]);
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "assistant")
+        .map((event) => event.data),
+    ).toEqual([
+      { text: "coordination draft", delta: "coordination draft" },
+      { text: "final answer", delta: "", replace: true },
     ]);
   });
 
@@ -1041,7 +1098,17 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      {
+        text: "checking thread context; then post a tight progress reply here.",
+        delta: "checking thread context; then post a tight progress reply here.",
+      },
+      {
+        text: "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+        delta: "",
+        replace: true,
+      },
+    ]);
     expect(result.assistantTexts).toEqual([
       "release fixes first. please drop affected PRs, failing checks, and blockers here.",
     ]);
