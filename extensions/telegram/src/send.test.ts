@@ -1063,7 +1063,7 @@ describe("sendMessageTelegram", () => {
   it("preserves line breaks between formatted inline rich HTML nodes", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
 
-    await sendMessageTelegram("123", "<b>one</b>\n<a href=\"https://example.com\">two</a>", {
+    await sendMessageTelegram("123", '<b>one</b>\n<a href="https://example.com">two</a>', {
       cfg: { channels: { telegram: { richMessages: true } } },
       token: "tok",
       textMode: "html",
@@ -1144,7 +1144,7 @@ line`;
 
     await sendMessageTelegram("123", html, {
       cfg: { channels: { telegram: { richMessages: true } } },
-      [REDACTED:secret_assignment],
+      token: "tok",
       textMode: "html",
     });
 
