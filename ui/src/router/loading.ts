@@ -4,6 +4,8 @@ import type {
   PageDefinition,
   RouteHookOptions,
   RouteMatch,
+  RouteNotFound,
+  RouteRedirect,
   RouteStaleReloadMode,
 } from "./types.ts";
 
@@ -48,6 +50,15 @@ type RouteLoadingOptions = {
   preloadGcTime: number;
   gcTime: number;
 };
+
+function isRouteControl(value: unknown): value is RouteNotFound | RouteRedirect {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    ((value as RouteNotFound | RouteRedirect).type === "notFound" ||
+      (value as RouteNotFound | RouteRedirect).type === "redirect")
+  );
+}
 
 export function createRouteLoading<TRouteId extends string, TLoadContext, TModule, TData>(
   options: RouteLoadingOptions,
@@ -149,7 +160,12 @@ export function createRouteLoading<TRouteId extends string, TLoadContext, TModul
         ...hookOptions,
         deps: current.deps,
       }) as MaybePromise<TData>,
-    ).then((data) => ({ data, updatedAt: now() }));
+    ).then((data) => {
+      if (isRouteControl(data)) {
+        throw data;
+      }
+      return { data, updatedAt: now() };
+    });
   };
 
   const loadRoute = async (

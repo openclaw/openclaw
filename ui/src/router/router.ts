@@ -44,7 +44,7 @@ function cancelRun(run: NavigationRun | null): void {
 function canCacheMatch<TRouteId extends string, TModule, TData>(
   match: RouteMatch<TRouteId, TModule, TData>,
 ): boolean {
-  return match.status !== "error" && match.status !== "notFound" && match.status !== "redirected";
+  return match.status === "success";
 }
 
 function isRouteNotFound(error: unknown): error is RouteNotFound {
@@ -128,7 +128,7 @@ export function createRouter<
       !sameMatch && cached?.status === "success" && cached.module !== undefined && !cached.invalid;
     const cachedFresh = cachedReady && loading.isFresh(cached, route, "navigation");
     const backgroundReload =
-      sameMatch && revalidating
+      sameMatch && revalidating && previous?.status === "success" && previous.module !== undefined
         ? true
         : Boolean(cachedReady && !cachedFresh && loading.shouldReloadInBackground(route));
 
