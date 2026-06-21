@@ -1028,17 +1028,42 @@ async function waitForProcessTreeExit(child, timeoutMs) {
   return !processTreeIsAlive(child);
 }
 
-function terminateProcessTree(child, signal) {
-  if (process.platform === "win32") {
-    try {
-      childProcess.spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-        stdio: "ignore",
-      });
-      return;
-    } catch {
-      child.kill(signal);
+function signalWindowsProcessTree(pid, signal, runTaskkill = childProcess.spawnSync) {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  try {
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    return !result?.error && result?.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = childProcess.spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+function terminateProcessTree(child, signal, options = {}) {
+  const {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = options;
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
       return;
     }
+    child.kill(signal);
+    return;
+  }
+  if (!useProcessGroup) {
+    child.kill(signal);
+    return;
   }
   try {
     process.kill(-child.pid, signal);
@@ -1897,12 +1922,22 @@ async function waitForPtyProcessTreeExit(child, timeoutMs) {
   return !ptyProcessTreeIsAlive(child);
 }
 
-function signalPtyProcessTree(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function signalPtyProcessTree(child, signal, options = {}) {
+  const {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = options;
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {}
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
   }
   child.kill(signal);
 }
@@ -2124,8 +2159,10 @@ export {
   runPtySecretsConfigurePreset,
   runWithProof,
   runCommand,
+  signalPtyProcessTree,
   skipProof,
   startGateway,
+  terminateProcessTree,
   waitForManagedGatewayStatus,
   writeProofPlugin,
 };

@@ -1,7 +1,12 @@
 #!/usr/bin/env -S node --import tsx
 // Telegram User Crabbox Proof script supports OpenClaw repository automation.
 
-import { type ChildProcess, spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
+import {
+  type ChildProcess,
+  spawn,
+  spawnSync,
+  type SpawnOptionsWithoutStdio,
+} from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -587,12 +592,36 @@ function timedOutError(message: string) {
 const activeCommandChildren = new Set<ChildProcess>();
 let commandCleanupHandlersInstalled = false;
 
-function signalCommandTree(child: ChildProcess, signal: NodeJS.Signals) {
-  if (child.pid && process.platform !== "win32") {
+type CommandTreeTarget = Pick<ChildProcess, "kill" | "pid">;
+
+export function signalCommandTree(
+  child: CommandTreeTarget,
+  signal: NodeJS.Signals,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  }: {
+    platform?: NodeJS.Platform;
+    runTaskkill?: typeof spawnSync;
+    useProcessGroup?: boolean;
+  } = {},
+) {
+  if (child.pid && useProcessGroup) {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {}
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    if (!result.error && result.status === 0) {
+      return;
+    }
   }
   child.kill(signal);
 }

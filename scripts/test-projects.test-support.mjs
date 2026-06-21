@@ -410,6 +410,23 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
 ]);
+const PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS = [
+  "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
+  "src/plugins/contracts/plugin-sdk-index.test.ts",
+  "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+  "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+  "src/plugins/contracts/extension-package-project-boundaries.test.ts",
+  "test/scripts/plugin-sdk-surface-report.test.ts",
+  "test/scripts/build-all.test.ts",
+  "test/release-check.test.ts",
+  "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+  "test/scripts/ts-topology.test.ts",
+  TOOLING_VITEST_CONFIG,
+];
+const OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS = [
+  "src/plugins/official-external-plugin-catalog.test.ts",
+  "test/release-check.test.ts",
+];
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
@@ -433,6 +450,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ".github/workflows/openclaw-release-checks.yml",
     ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
+  ["scripts/clawtributors-map.json", ["test/scripts/update-clawtributors.test.ts"]],
+  ["scripts/tsconfig.json", ["test/scripts/oxlint-config.test.ts"]],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/build-stamp.mjs", ["src/infra/build-stamp.test.ts"]],
   ["scripts/crabbox-wrapper.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
@@ -451,6 +470,21 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/check-dependency-pins.mjs", ["test/scripts/check-dependency-pins.test.ts"]],
   ["scripts/check-deadcode-unused-files.mjs", ["test/scripts/check-deadcode-unused-files.test.ts"]],
   ["scripts/check-dynamic-import-warts.mjs", ["test/scripts/check-dynamic-import-warts.test.ts"]],
+  [
+    "scripts/lib/config-boundary-guard.mjs",
+    [
+      "src/plugins/contracts/config-boundary-guard.test.ts",
+      "src/plugins/contracts/deprecated-internal-config-api.test.ts",
+    ],
+  ],
+  [
+    "scripts/lib/deprecated-config-api-guard.mjs",
+    ["src/plugins/contracts/deprecated-internal-config-api.test.ts"],
+  ],
+  [
+    "scripts/lib/extension-package-boundary.ts",
+    ["src/plugins/contracts/extension-package-project-boundaries.test.ts"],
+  ],
   ["scripts/check-extension-plugin-sdk-boundary.mjs", ["test/extension-import-boundaries.test.ts"]],
   ["scripts/check-no-conflict-markers.mjs", ["test/scripts/check-no-conflict-markers.test.ts"]],
   [
@@ -462,6 +496,18 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/extension-import-boundaries.test.ts"],
   ],
   ["scripts/check-src-extension-import-boundary.mjs", ["test/extension-import-boundaries.test.ts"]],
+  [
+    "scripts/lib/guard-inventory-utils.mjs",
+    [
+      "test/extension-import-boundaries.test.ts",
+      "test/plugin-extension-import-boundary.test.ts",
+      "test/architecture-smells.test.ts",
+      "test/web-provider-boundary.test.ts",
+      "test/test-helper-extension-import-boundary.test.ts",
+      "test/scripts/extension-import-boundary-checker.test.ts",
+      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+    ],
+  ],
   [
     "scripts/check-test-helper-extension-import-boundary.mjs",
     ["test/test-helper-extension-import-boundary.test.ts"],
@@ -739,12 +785,50 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/lib/bundled-plugin-source-utils.mjs",
     ["test/scripts/bundled-plugin-source-utils.test.ts"],
   ],
+  [
+    "scripts/lib/bundled-runtime-sidecar-paths.json",
+    [
+      "src/plugins/bundled-plugin-metadata.test.ts",
+      "src/infra/update-global.test.ts",
+      "src/infra/update-runner.test.ts",
+      "test/openclaw-npm-postpublish-verify.test.ts",
+    ],
+  ],
   ["scripts/lib/changed-extensions.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/dev-tooling-safety.ts", ["test/scripts/dev-tooling-safety.test.ts"]],
+  [
+    "scripts/lib/dependency-ownership.json",
+    ["test/scripts/dependency-ownership-surface-report.test.ts"],
+  ],
   [
     "scripts/lib/deprecated-plugin-sdk-usage.mjs",
     ["test/scripts/check-deprecated-api-usage.test.ts"],
   ],
+  [
+    "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+    PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS,
+  ],
+  [
+    "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
+    [
+      "test/scripts/check-deprecated-api-usage.test.ts",
+      "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+      "test/scripts/plugin-sdk-surface-report.test.ts",
+      "test/scripts/build-all.test.ts",
+    ],
+  ],
+  ["scripts/lib/plugin-sdk-entrypoints.json", PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS],
+  ["scripts/lib/plugin-sdk-entries.mjs", PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS],
+  [
+    "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
+    PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS,
+  ],
+  [
+    "scripts/lib/official-external-channel-catalog.json",
+    [...OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS, "test/official-channel-catalog.test.ts"],
+  ],
+  ["scripts/lib/official-external-plugin-catalog.json", OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS],
+  ["scripts/lib/official-external-provider-catalog.json", OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS],
   ["scripts/lib/direct-run.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/docker/cleanup-smoke/run.sh", ["test/scripts/docker-build-helper.test.ts"]],
   [
@@ -755,6 +839,14 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/docker/install-sh-smoke/run.sh", ["test/scripts/test-install-sh-docker.test.ts"]],
   ["scripts/lib/docker-e2e-container.sh", ["test/scripts/docker-build-helper.test.ts"]],
   ["scripts/lib/docker-e2e-package.sh", ["test/scripts/docker-build-helper.test.ts"]],
+  [
+    "scripts/lib/docker-e2e-plan.mjs",
+    [
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/docker-all-scheduler.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+    ],
+  ],
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   [
     "scripts/lib/ios-version.ts",
@@ -794,6 +886,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
+  [
+    "scripts/lib/workspace-bootstrap-smoke.mjs",
+    ["test/release-check.test.ts", "test/openclaw-npm-release-check.test.ts"],
+  ],
   [
     "scripts/lib/package-dist-imports.mjs",
     [
@@ -864,7 +960,17 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/lib/stable-release-closeout.mjs", ["test/stable-release-closeout.test.ts"]],
   ["scripts/lib/source-file-scan-cache.mjs", ["test/scripts/source-file-scan-cache.test.ts"]],
+  [
+    "scripts/lib/extension-source-classifier.mjs",
+    [
+      "test/scripts/extension-source-classifier.test.ts",
+      "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
+    ],
+  ],
   ["scripts/lib/test-group-report.mjs", ["test/scripts/test-group-report.test.ts"]],
+  ["scripts/lib/ts-topology/analyze.ts", ["test/scripts/ts-topology.test.ts"]],
+  ["scripts/lib/ts-topology/reports.ts", ["test/scripts/ts-topology.test.ts"]],
+  ["scripts/lib/ts-topology/scope.ts", ["test/scripts/ts-topology.test.ts"]],
   ["scripts/lib/ts-guard-utils.mjs", ["test/scripts/ts-guard-utils.test.ts"]],
   [
     "scripts/lib/tsgo-sparse-guard.mjs",
@@ -2557,6 +2663,34 @@ function isToolingScriptPath(changedPath) {
   return TOOLING_SCRIPT_PATH_PATTERN.test(changedPath);
 }
 
+function resolveUpgradeSurvivorConfigRecipeTargets(changedPath) {
+  if (!/^scripts\/e2e\/lib\/upgrade-survivor\/config-recipe\/[^/]+\.json$/u.test(changedPath)) {
+    return null;
+  }
+  return ["test/scripts/upgrade-survivor-config-recipe.test.ts"];
+}
+
+function resolveDocsI18nBehaviorTargets(changedPath) {
+  if (!/^scripts\/docs-i18n\/testdata\/behavior\/[^/]+\/[^/]+$/u.test(changedPath)) {
+    return null;
+  }
+  return ["test/scripts/docs-i18n-behavior.test.ts"];
+}
+
+function resolveDocsI18nGoTargets(changedPath) {
+  if (!/^scripts\/docs-i18n\/(?:go\.(?:mod|sum)|[^/]+\.go)$/u.test(changedPath)) {
+    return null;
+  }
+  return ["test/scripts/docs-i18n.test.ts"];
+}
+
+function resolveK8sManifestTargets(changedPath) {
+  if (!/^scripts\/k8s\/manifests\/[^/]+\.yaml$/u.test(changedPath)) {
+    return null;
+  }
+  return ["test/scripts/k8s-manifests.test.ts"];
+}
+
 function resolveParallelsToolingTestTargets(changedPath) {
   if (
     !/^scripts\/e2e\/parallels\/[^/]+\.ts$/u.test(changedPath) &&
@@ -2585,6 +2719,10 @@ function resolveToolingTestTargets(changedPath, cwd = process.cwd()) {
   const explicitTargets =
     TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ??
     TOOLING_TEST_TARGETS.get(changedPath) ??
+    resolveUpgradeSurvivorConfigRecipeTargets(changedPath) ??
+    resolveDocsI18nBehaviorTargets(changedPath) ??
+    resolveDocsI18nGoTargets(changedPath) ??
+    resolveK8sManifestTargets(changedPath) ??
     resolveParallelsToolingTestTargets(changedPath);
   const conventionalTargets = resolveConventionalToolingTestTargets(changedPath, cwd);
   if (explicitTargets && conventionalTargets) {

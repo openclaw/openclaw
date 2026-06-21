@@ -5,7 +5,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
   assertExpectedSha256ForTest,
@@ -20,6 +20,7 @@ import {
   readPackageBuildSourceSha,
   resolveNpmPackageCandidatePackRunner,
   runCommandForTest,
+  signalChildProcessTree,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
 
@@ -212,6 +213,31 @@ describe("resolve-openclaw-package-candidate", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("signals Windows package runner process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    signalChildProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("keeps npm pack filenames inside the package candidate output directory", async () => {
@@ -688,26 +714,30 @@ describe("resolve-openclaw-package-candidate", () => {
     const requestHeaders: Array<Record<string, string> | undefined> = [];
 
     try {
-      await downloadUrl("https://packages.internal:8443/artifactory/openclaw/openclaw.tgz", target, {
-        fetchImpl: async (_url: URL, init?: RequestInit) => {
-          requestHeaders.push(init?.headers as Record<string, string> | undefined);
-          if (requestHeaders.length === 1) {
-            return new Response(null, {
-              headers: {
-                location: "https://mirror.internal:8443/artifactory/openclaw/openclaw.tgz",
-              },
-              status: 302,
+      await downloadUrl(
+        "https://packages.internal:8443/artifactory/openclaw/openclaw.tgz",
+        target,
+        {
+          fetchImpl: async (_url: URL, init?: RequestInit) => {
+            requestHeaders.push(init?.headers as Record<string, string> | undefined);
+            if (requestHeaders.length === 1) {
+              return new Response(null, {
+                headers: {
+                  location: "https://mirror.internal:8443/artifactory/openclaw/openclaw.tgz",
+                },
+                status: 302,
+              });
+            }
+            return new Response(new Uint8Array([4, 5, 6]), {
+              headers: { "content-length": "3" },
+              status: 200,
             });
-          }
-          return new Response(new Uint8Array([4, 5, 6]), {
-            headers: { "content-length": "3" },
-            status: 200,
-          });
+          },
+          lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+          maxBytes: 3,
+          trustedSource,
         },
-        lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
-        maxBytes: 3,
-        trustedSource,
-      });
+      );
     } finally {
       if (previousToken === undefined) {
         delete process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN;

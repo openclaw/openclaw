@@ -18,6 +18,7 @@ import {
   renderRemoteSetup,
   renderSelectDesktopChat,
   runCommand,
+  signalCommandTree,
   stageFullSessionArtifacts,
   startLocalSut,
   waitForLog,
@@ -217,7 +218,10 @@ describe("telegram user Crabbox proof log polling", () => {
     fs.mkdirSync(publishDir);
     fs.writeFileSync(path.join(publishDir, "stale.txt"), "stale");
     fs.mkdirSync(path.join(outputDir, "publish-gif-only"));
-    fs.writeFileSync(path.join(outputDir, "session.json"), '{"sshKey":"/private/tmp/openclaw/key"}');
+    fs.writeFileSync(
+      path.join(outputDir, "session.json"),
+      '{"sshKey":"/private/tmp/openclaw/key"}',
+    );
     fs.writeFileSync(path.join(outputDir, "lease.json"), '{"token":"secret"}');
     fs.writeFileSync(path.join(outputDir, "status.json"), '{"ok":true}');
     fs.writeFileSync(path.join(outputDir, "probe.json"), '{"ok":true}');
@@ -347,6 +351,31 @@ setInterval(() => {}, 1000);
         process.kill(grandchildPid, "SIGKILL");
       }
     }
+  });
+
+  it("signals Windows proof command process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalCommandTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    signalCommandTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   posixIt("lets timed-out command descendants exit during kill grace", async () => {

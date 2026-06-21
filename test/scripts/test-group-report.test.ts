@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -19,6 +19,7 @@ import {
   resolveReportRunSpecs,
   resolveRunPlanConcurrency,
   resolveRunPlans,
+  signalTestGroupReportChild,
   spawnText,
 } from "../../scripts/test-group-report.mjs";
 import { withEnv } from "../../src/test-utils/env.js";
@@ -610,6 +611,31 @@ describe("scripts/test-group-report arg parsing", () => {
 });
 
 describe("scripts/test-group-report child process guard", () => {
+  it("signals Windows child process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalTestGroupReportChild(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    signalTestGroupReportChild(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("times out a child that ignores SIGTERM", async () => {
     if (process.platform === "win32") {
       return;

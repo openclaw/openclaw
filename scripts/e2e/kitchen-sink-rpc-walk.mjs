@@ -574,12 +574,34 @@ function commandProcessTreeIsAlive(child) {
   }
 }
 
-function signalProcessGroup(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function signalWindowsProcessTree(pid, signal, runTaskkill = childProcess.spawnSync) {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+export function signalProcessGroup(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {}
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTree(child.pid, signal, runTaskkill)) {
+      return;
+    }
   }
   try {
     child.kill(signal);
@@ -1313,8 +1335,13 @@ function releaseUnsettledGatewayChild(child) {
   child.unref?.();
 }
 
-function signalGateway(child, signal, killProcess = defaultKillProcess) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function signalGateway(child, signal, killProcess = defaultKillProcess, options = {}) {
+  const {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = options;
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       killProcess(-child.pid, signal);
       return true;
@@ -1322,6 +1349,11 @@ function signalGateway(child, signal, killProcess = defaultKillProcess) {
       if (error?.code === "ESRCH") {
         return false;
       }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTree(child.pid, signal, runTaskkill)) {
+      return true;
     }
   }
   try {

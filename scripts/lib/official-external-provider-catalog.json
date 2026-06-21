@@ -1060,9 +1060,10 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/stepfun-provider",
           "npmSpec": "@openclaw/stepfun-provider",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.6.8"
+          "minHostVersion": ">=2026.6.9"
         }
       }
     }

@@ -298,7 +298,11 @@ describe("scripts/test-projects changed-target routing", () => {
     });
     expect(resolveChangedTestTargetPlan(["scripts/lib/docker-e2e-plan.mjs"])).toEqual({
       mode: "targets",
-      targets: ["test/scripts/docker-e2e-plan.test.ts"],
+      targets: [
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/docker-all-scheduler.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+      ],
     });
     expect(resolveChangedTestTargetPlan(["scripts/github/real-behavior-proof-check.mjs"])).toEqual({
       mode: "targets",
@@ -425,6 +429,10 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "scripts/e2e/lib/upgrade-survivor/run.sh",
         ["test/scripts/upgrade-survivor-assertions.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins-configured-installs.json",
+        ["test/scripts/upgrade-survivor-config-recipe.test.ts"],
       ],
       ["scripts/e2e/lib/run-with-pty.mjs", ["test/scripts/e2e-run-with-pty.test.ts"]],
     ]);
@@ -1057,6 +1065,45 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps scripts tsconfig edits on oxlint config tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/tsconfig.json"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/oxlint-config.test.ts"],
+    });
+  });
+
+  it("keeps docs i18n behavior fixture edits on behavior baseline tests", () => {
+    for (const fixturePath of [
+      "scripts/docs-i18n/testdata/behavior/fenced-singleton-retry/case.json",
+      "scripts/docs-i18n/testdata/behavior/fenced-singleton-retry/source.txt",
+    ]) {
+      expect(resolveChangedTestTargetPlan([fixturePath]), fixturePath).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/docs-i18n-behavior.test.ts"],
+      });
+    }
+  });
+
+  it("keeps docs i18n Go module edits on Go module tests", () => {
+    for (const modulePath of [
+      "scripts/docs-i18n/main.go",
+      "scripts/docs-i18n/main_test.go",
+      "scripts/docs-i18n/go.mod",
+    ]) {
+      expect(resolveChangedTestTargetPlan([modulePath]), modulePath).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/docs-i18n.test.ts"],
+      });
+    }
+  });
+
+  it("keeps k8s manifest edits on manifest tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/k8s/manifests/configmap.yaml"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/k8s-manifests.test.ts"],
+    });
+  });
+
   it("keeps Crabbox runner script edits on their regression tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/crabbox-wrapper.mjs"])).toEqual({
       mode: "targets",
@@ -1206,6 +1253,11 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: ["test/scripts/dependency-ownership-surface-report.test.ts"],
     });
 
+    expect(resolveChangedTestTargetPlan(["scripts/clawtributors-map.json"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/update-clawtributors.test.ts"],
+    });
+
     expect(resolveChangedTestTargetPlan(["scripts/docs-link-audit.mjs"])).toEqual({
       mode: "targets",
       targets: ["src/scripts/docs-link-audit.test.ts"],
@@ -1337,6 +1389,99 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/deprecated-plugin-sdk-usage.mjs",
         ["test/scripts/check-deprecated-api-usage.test.ts"],
       ],
+      [
+        "scripts/lib/dependency-ownership.json",
+        ["test/scripts/dependency-ownership-surface-report.test.ts"],
+      ],
+      [
+        "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+        [
+          "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
+          "src/plugins/contracts/plugin-sdk-index.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+          "src/plugins/contracts/extension-package-project-boundaries.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+          "test/release-check.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/ts-topology.test.ts",
+          "test/vitest/vitest.tooling.config.ts",
+        ],
+      ],
+      [
+        "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
+        [
+          "test/scripts/check-deprecated-api-usage.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/plugin-sdk-entrypoints.json",
+        [
+          "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
+          "src/plugins/contracts/plugin-sdk-index.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+          "src/plugins/contracts/extension-package-project-boundaries.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+          "test/release-check.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/ts-topology.test.ts",
+          "test/vitest/vitest.tooling.config.ts",
+        ],
+      ],
+      [
+        "scripts/lib/plugin-sdk-entries.mjs",
+        [
+          "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
+          "src/plugins/contracts/plugin-sdk-index.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+          "src/plugins/contracts/extension-package-project-boundaries.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+          "test/release-check.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/ts-topology.test.ts",
+          "test/vitest/vitest.tooling.config.ts",
+        ],
+      ],
+      [
+        "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
+        [
+          "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
+          "src/plugins/contracts/plugin-sdk-index.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+          "src/plugins/contracts/extension-package-project-boundaries.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+          "test/release-check.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/ts-topology.test.ts",
+          "test/vitest/vitest.tooling.config.ts",
+        ],
+      ],
+      [
+        "scripts/lib/official-external-channel-catalog.json",
+        [
+          "src/plugins/official-external-plugin-catalog.test.ts",
+          "test/release-check.test.ts",
+          "test/official-channel-catalog.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/official-external-plugin-catalog.json",
+        ["src/plugins/official-external-plugin-catalog.test.ts", "test/release-check.test.ts"],
+      ],
+      [
+        "scripts/lib/official-external-provider-catalog.json",
+        ["src/plugins/official-external-plugin-catalog.test.ts", "test/release-check.test.ts"],
+      ],
       ["scripts/lib/direct-run.mjs", ["test/scripts/changed-lanes.test.ts"]],
       ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
       [
@@ -1405,6 +1550,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/npm-pack-budget.mjs",
         ["test/release-check.test.ts", "test/scripts/test-install-sh-docker.test.ts"],
       ],
+      [
+        "scripts/lib/workspace-bootstrap-smoke.mjs",
+        ["test/release-check.test.ts", "test/openclaw-npm-release-check.test.ts"],
+      ],
       ["scripts/lib/openclaw-release-clawhub-plan.ts", ["test/plugin-clawhub-release.test.ts"]],
       [
         "scripts/lib/plugin-clawhub-release.ts",
@@ -1428,6 +1577,16 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       ["scripts/lib/test-group-report.mjs", ["test/scripts/test-group-report.test.ts"]],
       ["scripts/lib/stable-release-closeout.mjs", ["test/stable-release-closeout.test.ts"]],
+      [
+        "scripts/lib/extension-source-classifier.mjs",
+        [
+          "test/scripts/extension-source-classifier.test.ts",
+          "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
+        ],
+      ],
+      ["scripts/lib/ts-topology/analyze.ts", ["test/scripts/ts-topology.test.ts"]],
+      ["scripts/lib/ts-topology/reports.ts", ["test/scripts/ts-topology.test.ts"]],
+      ["scripts/lib/ts-topology/scope.ts", ["test/scripts/ts-topology.test.ts"]],
       ["scripts/lib/ts-guard-utils.mjs", ["test/scripts/ts-guard-utils.test.ts"]],
       [
         "scripts/lib/tsgo-sparse-guard.mjs",
@@ -1438,6 +1597,15 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "scripts/lib/bundled-plugin-source-utils.mjs",
         ["test/scripts/bundled-plugin-source-utils.test.ts"],
+      ],
+      [
+        "scripts/lib/bundled-runtime-sidecar-paths.json",
+        [
+          "src/plugins/bundled-plugin-metadata.test.ts",
+          "src/infra/update-global.test.ts",
+          "src/infra/update-runner.test.ts",
+          "test/openclaw-npm-postpublish-verify.test.ts",
+        ],
       ],
       [
         "scripts/lib/bundled-plugin-build-entries.mjs",
@@ -1470,8 +1638,35 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/plugin-extension-import-boundary.test.ts"],
       ],
       [
+        "scripts/lib/config-boundary-guard.mjs",
+        [
+          "src/plugins/contracts/config-boundary-guard.test.ts",
+          "src/plugins/contracts/deprecated-internal-config-api.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/deprecated-config-api-guard.mjs",
+        ["src/plugins/contracts/deprecated-internal-config-api.test.ts"],
+      ],
+      [
+        "scripts/lib/extension-package-boundary.ts",
+        ["src/plugins/contracts/extension-package-project-boundaries.test.ts"],
+      ],
+      [
         "scripts/check-src-extension-import-boundary.mjs",
         ["test/extension-import-boundaries.test.ts"],
+      ],
+      [
+        "scripts/lib/guard-inventory-utils.mjs",
+        [
+          "test/extension-import-boundaries.test.ts",
+          "test/plugin-extension-import-boundary.test.ts",
+          "test/architecture-smells.test.ts",
+          "test/web-provider-boundary.test.ts",
+          "test/test-helper-extension-import-boundary.test.ts",
+          "test/scripts/extension-import-boundary-checker.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+        ],
       ],
       [
         "scripts/check-test-helper-extension-import-boundary.mjs",

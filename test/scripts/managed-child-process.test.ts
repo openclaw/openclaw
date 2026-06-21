@@ -4,11 +4,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createManagedCommandSpawnSpec,
   runManagedCommand,
   signalExitCode,
+  terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -108,6 +109,31 @@ describe("managed-child-process", () => {
         shell: true,
       }),
     ).toThrow("unsafe Windows cmd.exe argument detected");
+  });
+
+  it("signals Windows managed process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    terminateManagedChild(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    terminateManagedChild(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("shares process signal listeners across parallel managed commands", async () => {

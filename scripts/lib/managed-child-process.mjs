@@ -1,5 +1,5 @@
 // Runs child commands with process-group signal forwarding and Windows shell normalization.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import { buildCmdExeCommandLine } from "../windows-cmd-helpers.mjs";
 
@@ -22,14 +22,19 @@ export function signalExitCode(signal) {
 /**
  * @param {import("node:child_process").ChildProcess} child
  * @param {NodeJS.Signals} [signal]
+ * @param {{ platform?: NodeJS.Platform; runTaskkill?: typeof spawnSync }} [options]
  */
-function terminateManagedChild(child, signal = "SIGTERM") {
+export function terminateManagedChild(
+  child,
+  signal = "SIGTERM",
+  { platform = process.platform, runTaskkill = spawnSync } = {},
+) {
   if (!child.pid) {
     return;
   }
 
   try {
-    if (process.platform !== "win32") {
+    if (platform !== "win32") {
       process.kill(-child.pid, signal);
       return;
     }
@@ -42,6 +47,17 @@ function terminateManagedChild(child, signal = "SIGTERM") {
       }
     }
     return;
+  }
+
+  if (platform === "win32") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
   }
 
   child.kill(signal);

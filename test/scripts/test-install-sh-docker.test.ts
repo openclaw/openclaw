@@ -1,7 +1,8 @@
 // Test Install Sh Docker tests cover test install sh docker script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -101,6 +102,36 @@ function runDefaultSmokePlatform(env: Record<string, string>, hostArch: string):
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);
   return result.stdout;
+}
+
+function extractInstallE2eAgentJsonParser(): string {
+  const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+  const match = script.match(
+    /node - <<'NODE' "\$out_json"\n([\s\S]*?)\nNODE\n\}\n\nRUN_AGENT_TURN_BG_PID/u,
+  );
+  if (!match) {
+    throw new Error("install E2E agent JSON parser was not found");
+  }
+  return match[1];
+}
+
+function normalizeInstallE2eAgentOutput(output: string) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-install-e2e-agent-output-"));
+  const outputPath = join(root, "agent.json");
+  writeFileSync(outputPath, output, "utf8");
+  try {
+    const result = spawnSync(process.execPath, ["-", outputPath], {
+      encoding: "utf8",
+      input: extractInstallE2eAgentJsonParser(),
+    });
+    return {
+      output: readFileSync(outputPath, "utf8"),
+      status: result.status,
+      stderr: result.stderr,
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 async function waitForCondition(
@@ -329,7 +360,9 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/host-timeout.sh"');
     expect(script).toContain('DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"');
     expect(script).toContain("run_docker_pull()");
-    expect(script).toContain('openclaw_host_timeout_cmd "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
+    expect(script).toContain(
+      'openclaw_host_timeout_cmd "$DOCKER_PULL_TIMEOUT" docker pull "$image"',
+    );
     expect(timeoutHelper).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
     expect(timeoutHelper).toContain('"$timeout_bin" --kill-after=30s "$timeout_value" "$@"');
     expect(script).toContain('run_docker_pull "$IMAGE_NAME"');
@@ -585,6 +618,22 @@ describe("install-sh E2E runner", () => {
     );
     expect(script).toContain('timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s"');
     expect(script).toContain('\\"timeoutSeconds\\":${OPENAI_PROVIDER_TIMEOUT_SECONDS}');
+  });
+
+  it("normalizes agent JSON when structured lifecycle diagnostics follow the result", () => {
+    const payload = {
+      result: {
+        payloads: [{ text: "LEFT=RED RIGHT=GREEN" }],
+      },
+      replayInvalid: true,
+    };
+    const result = normalizeInstallE2eAgentOutput(
+      `${JSON.stringify(payload, null, 2)}\n[agent] ${JSON.stringify({ stopReason: "stop" })}\n`,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.output)).toEqual(payload);
   });
 
   it.each([

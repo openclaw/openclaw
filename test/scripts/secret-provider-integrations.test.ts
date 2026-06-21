@@ -571,6 +571,89 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+  it("signals Windows command process trees with graceful taskkill first", async () => {
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=windows-command-${Date.now()}`
+    );
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    proof.terminateProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    proof.terminateProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows command trees when graceful taskkill fails", async () => {
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=windows-command-fallback-${Date.now()}`
+    );
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    proof.terminateProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("signals Windows PTY process trees with taskkill", async () => {
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=windows-pty-${Date.now()}`
+    );
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    proof.signalPtyProcessTree(child, "SIGHUP", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    proof.signalPtyProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")("kills timed-out command process groups", async () => {
     const root = makeTempDir();
     const markerPath = path.join(root, "command-descendant-marker.txt");

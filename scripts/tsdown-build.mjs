@@ -593,6 +593,47 @@ export function resolveTsdownBuildInvocation(params = {}) {
   };
 }
 
+function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+export function signalTsdownBuildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group may already be gone; fall back to the direct child handle.
+    }
+  }
+  if (platform === "win32" && child.pid) {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
+  }
+  child.kill(signal);
+}
+
 export async function runTsdownBuildInvocation(invocation, params = {}) {
   const stdout = params.stdout ?? process.stdout;
   const stderr = params.stderr ?? process.stderr;
@@ -610,7 +651,9 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   let lastOutputAt = Date.now();
   let forceKillAt = null;
 
-  const useProcessGroup = process.platform !== "win32";
+  const platform = params.platform ?? process.platform;
+  const runTaskkill = params.runTaskkill ?? spawnSync;
+  const useProcessGroup = platform !== "win32";
   const child = spawn(invocation.command, invocation.args, {
     ...invocation.options,
     detached: useProcessGroup,
@@ -622,15 +665,11 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   }
 
   function signalChild(signal) {
-    if (useProcessGroup && child.pid) {
-      try {
-        process.kill(-child.pid, signal);
-        return;
-      } catch {
-        // The group may already be gone; fall back to the direct child handle.
-      }
-    }
-    child.kill(signal);
+    signalTsdownBuildProcessTree(child, signal, {
+      platform,
+      runTaskkill,
+      useProcessGroup,
+    });
   }
 
   const parentSignalHandlers = [];

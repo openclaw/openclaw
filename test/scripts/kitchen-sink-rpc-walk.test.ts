@@ -52,6 +52,8 @@ import {
   sampleProcess,
   sampleWindowsProcessByPort,
   shouldPrintHelp,
+  signalGateway,
+  signalProcessGroup,
   stopGateway,
   summarizeProcessSamples,
   tailFile,
@@ -278,6 +280,37 @@ describe("kitchen-sink RPC gateway teardown", () => {
     ).resolves.toBeUndefined();
 
     expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  it("signals Windows gateway process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const killProcess = vi.fn();
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    expect(
+      signalGateway(child, "SIGTERM", killProcess, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    expect(
+      signalGateway(child, "SIGKILL", killProcess, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   posixIt("does not trust an exited wrapper while the gateway process group is alive", async () => {
@@ -628,6 +661,31 @@ setInterval(() => {}, 1000);
       }
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("signals Windows command process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalProcessGroup(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    signalProcessGroup(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   posixIt("rejects timed commands that exit cleanly after SIGTERM", async () => {
