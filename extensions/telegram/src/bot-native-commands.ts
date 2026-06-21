@@ -1163,6 +1163,7 @@ export const registerTelegramNativeCommands = ({
                 : undefined,
           });
           const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+          let allChoicesFitCallbackData = true;
           for (let i = 0; i < menu.choices.length; i += 2) {
             const slice = menu.choices.slice(i, i + 2);
             const row = slice.flatMap((choice) => {
@@ -1173,6 +1174,7 @@ export const registerTelegramNativeCommands = ({
                 buildCommandTextFromArgs(commandDefinition, args),
               );
               if (!callbackData) {
+                allChoicesFitCallbackData = false;
                 return [];
               }
               return {
@@ -1184,7 +1186,7 @@ export const registerTelegramNativeCommands = ({
               rows.push(row);
             }
           }
-          if (rows.length > 0) {
+          if (rows.length > 0 && allChoicesFitCallbackData) {
             const replyMarkup = buildInlineKeyboard(rows);
             await withTelegramApiErrorLogging({
               operation: "sendMessage",

@@ -24,6 +24,7 @@ import { resolveDiscordChannelContext } from "./agent-components-helpers.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
+import * as nativeCommandRouteModule from "./native-command-route.js";
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
@@ -78,6 +79,7 @@ function createModelPickerContext(): ModelPickerContext {
         dm: {
           enabled: true,
           policy: "open",
+          allowFrom: ["*"],
         },
       },
     },
@@ -314,6 +316,35 @@ function createBoundThreadBindingManager(params: {
           }
         : baseManager.getByThreadId(threadId),
   };
+}
+
+function installFixedMainRoute() {
+  return vi
+    .spyOn(nativeCommandRouteModule, "resolveDiscordNativeInteractionRouteState")
+    .mockResolvedValue({
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+        lastRoutePolicy: "session",
+        matchedBy: "default",
+      },
+      effectiveRoute: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+        lastRoutePolicy: "session",
+        matchedBy: "default",
+      },
+      boundSessionKey: undefined,
+      configuredRoute: null,
+      configuredBinding: null,
+      bindingReadiness: null,
+    });
 }
 
 describe("Discord model picker interactions", () => {
@@ -898,57 +929,50 @@ describe("Discord model picker interactions", () => {
 
   it("persists suffixed LM Studio model overrides when dispatch leaves the routed session stale", async () => {
     const context = createModelPickerContext();
-    context.threadBindings = createBoundThreadBindingManager({
-      accountId: "default",
-      threadId: "thread-bound",
-      targetSessionKey: "agent:worker:subagent:bound",
-      agentId: "worker",
-    });
+    const fixedMainRoute = installFixedMainRoute();
     const pickerData = createModelsProviderData({
       anthropic: ["claude-sonnet-4-5"],
       lmstudio: ["unsloth/gemma-4-26b-a4b-it@iq4_xs"],
     });
     const modelCommand = createModelCommandDefinition();
-    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "main" });
     await upsertSessionEntry({
       storePath,
-      sessionKey: "agent:worker:subagent:bound",
+      sessionKey: "agent:main:main",
       entry: {
         updatedAt: Date.now(),
-        sessionId: "bound-session",
+        sessionId: "main-session",
       },
     });
 
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
+    try {
+      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+      mockModelCommandPipeline(modelCommand);
 
-    const dispatchSpy = createDispatchSpy();
-    const button = createModelPickerFallbackButton(context, dispatchSpy);
-    const submitInteraction = createInteraction({ userId: "owner" });
-    submitInteraction.channel = {
-      type: ChannelType.PublicThread,
-      id: "thread-bound",
-    };
+      const dispatchSpy = createDispatchSpy();
+      const button = createModelPickerFallbackButton(context, dispatchSpy);
+      const submitInteraction = createInteraction({ userId: "owner" });
 
-    await button.run(submitInteraction as unknown as PickerButtonInteraction, {
-      ...createModelsViewSubmitData(),
-      p: "lmstudio",
-      mi: "1",
-    });
+      await button.run(submitInteraction as unknown as PickerButtonInteraction, {
+        ...createModelsViewSubmitData(),
+        p: "lmstudio",
+        mi: "1",
+      });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBe("lmstudio");
-    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBe(
-      "unsloth/gemma-4-26b-a4b-it@iq4_xs",
-    );
-    expect(store["agent:worker:subagent:bound"]?.liveModelSwitchPending).toBe(true);
-    expectDispatchedModelSelection({
-      dispatchSpy,
-      model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",
-    });
-    expect(
-      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
-    ).toContain("✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.");
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store["agent:main:main"]?.providerOverride).toBe("lmstudio");
+      expect(store["agent:main:main"]?.modelOverride).toBe("unsloth/gemma-4-26b-a4b-it@iq4_xs");
+      expect(store["agent:main:main"]?.liveModelSwitchPending).toBe(true);
+      expectDispatchedModelSelection({
+        dispatchSpy,
+        model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",
+      });
+      expect(
+        JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+      ).toContain("✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.");
+    } finally {
+      fixedMainRoute.mockRestore();
+    }
   });
 
   it("does not write a fallback override when hidden /model dispatch is rejected", async () => {

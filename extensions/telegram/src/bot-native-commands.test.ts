@@ -412,27 +412,26 @@ describe("registerTelegramNativeCommands", () => {
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
   });
 
-  it("skips /model native menu callbacks that exceed Telegram callback_data limits", async () => {
+  it("keeps bare /model reachable when configured model callbacks exceed Telegram limits", async () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
     const longModel = "nousresearch/hermes-3-llama-3.1-405b:extended";
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(
-        {
-          models: {
-            providers: {
-              openrouter: {
-                models: [
-                  { id: "short-model", name: "Short Model" },
-                  { id: longModel, name: "Hermes 405B Extended" },
-                ],
-              },
+    const params = createNativeCommandTestParams(
+      {
+        models: {
+          providers: {
+            openrouter: {
+              models: [
+                { id: "short-model", name: "Short Model" },
+                { id: longModel, name: "Hermes 405B Extended" },
+              ],
             },
           },
-        } as never,
-        { bot, allowFrom: [200] },
-      ),
-    });
+        },
+      } as never,
+      { bot, allowFrom: [200] },
+    );
+
+    registerTelegramNativeCommands(params);
 
     const handler = commandHandlers.get("model");
     if (!handler) {
@@ -440,14 +439,13 @@ describe("registerTelegramNativeCommands", () => {
     }
     await handler(createPrivateCommandContext());
 
-    const replyMarkup = (firstCall(sendMessage)[2] as { reply_markup?: unknown } | undefined)
-      ?.reply_markup as TelegramInlineKeyboardReplyMarkup | undefined;
-    const callbackData = collectCallbackData(replyMarkup);
+    const dispatch = params.telegramDeps?.dispatchReplyWithBufferedBlockDispatcher as
+      | { mock: { calls: Array<Array<{ ctx?: Record<string, unknown> }>> } }
+      | undefined;
+    const dispatchCtx = dispatch?.mock.calls.at(0)?.[0]?.ctx;
 
-    expect(callbackData).toHaveLength(1);
-    expect(callbackData[0]).toContain("short-model");
-    expect(callbackData.every((data) => Buffer.byteLength(data, "utf8") <= 64)).toBe(true);
-    expect(JSON.stringify(replyMarkup)).not.toContain(longModel);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(dispatchCtx?.CommandBody).toBe("/model");
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {

@@ -473,6 +473,24 @@ async function dispatchDiscordCommandInteraction(params: {
 
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
+  const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
+    command,
+    commandArgs,
+  });
+  if (pickerCommandContext) {
+    await replyWithDiscordModelPickerProviders({
+      interaction,
+      cfg,
+      command: pickerCommandContext,
+      userId: user.id,
+      accountId,
+      threadBindings,
+      preferFollowUp,
+      safeInteractionCall: safeDiscordInteractionCall,
+    });
+    return { accepted: true };
+  }
+
   const menuNeedsModelContext =
     !(commandArgs?.raw && !commandArgs.values) &&
     command.args?.some(
@@ -499,11 +517,7 @@ async function dispatchDiscordCommandInteraction(params: {
     model: menuModelContext?.model,
     ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
   });
-  const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
-    command,
-    commandArgs,
-  });
-  if (menu && pickerCommandContext !== "model") {
+  if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({
       command,
       menu,
