@@ -9,6 +9,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { resolveCompactionTimeoutMs } from "../../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -978,7 +979,16 @@ export async function runPreflightCompactionIfNeeded(params: {
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
-      abortSignal: params.replyOperation.abortSignal,
+      // Preflight compaction is bounded by the configured compaction timeout
+      // (default 180s) instead of the reply operation's upstream abort signal
+      // (~60s gateway timeout), so that slow compaction on large sessions can
+      // complete (issue #95553). The reply operation signal is still composed
+      // via AbortSignal.any so that explicit user abort/gateway restart still
+      // cancel compaction — only the ~60s upstream timing path is overridden.
+      abortSignal: AbortSignal.any([
+        params.replyOperation.abortSignal,
+        AbortSignal.timeout(resolveCompactionTimeoutMs(params.cfg)),
+      ]),
     });
 
     if (!result?.ok) {
