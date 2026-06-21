@@ -202,7 +202,15 @@ export function resolveCliSessionReuse(params: {
     binding?.authEpochVersion === params.authEpochVersion &&
     storedAuthEpoch !== currentAuthEpoch
   ) {
-    return { invalidatedReason: "auth-epoch" };
+    // The auth epoch changed — the local credential or profile credential was
+    // refreshed (token rotation, re-auth).  When the auth profile is the same
+    // the identity is provably unchanged, so keep the sessionId so compaction
+    // summaries and session transcript remain accessible.  The raw reseed
+    // check in loadCliSessionReseedMessages still blocks raw tail for
+    // auth-epoch reasons; the caller (prepare.ts) skips reseed entirely when
+    // a sessionId is present, so the existing session file carries history
+    // forward without injecting raw messages across the auth boundary.
+    return { sessionId, invalidatedReason: "auth-epoch" };
   }
   const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
   if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {

@@ -154,7 +154,7 @@ describe("cli-session helpers", () => {
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ invalidatedReason: "auth-epoch" });
+    ).toEqual({ sessionId: "cli-session-1", invalidatedReason: "auth-epoch" });
     expect(
       resolveCliSessionReuse({
         binding,
