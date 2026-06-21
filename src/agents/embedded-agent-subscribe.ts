@@ -1415,6 +1415,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
     hasToolMediaBlockReply: () => state.hasToolMediaBlockReply,
     getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
+    getToolExecutionSinceLastBlockReply: () => state.toolExecutionSinceLastBlockReply,
     getSuccessfulCronAdds: () => state.successfulCronAdds,
     getReplayState: () => ({ ...state.replayState }),
     // Returns true if any messaging tool successfully sent a message.

@@ -193,6 +193,7 @@ export type EmbeddedRunAttemptResult = {
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
+  hasVisibleBlockReplyAfterLastToolExecution?: boolean;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;

@@ -121,6 +121,7 @@ function createSubscriptionMock(): SubscriptionMock {
     getPendingToolMediaReply: () => null,
     hasToolMediaBlockReply: () => false,
     getVisibleBlockReplyCount: () => 0,
+    getToolExecutionSinceLastBlockReply: () => false,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
       replayInvalid: false,

@@ -79,6 +79,7 @@ const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
   `\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
   "u",
 );
+const MARKER_STYLE_FAILURE_PATTERN = /\b[A-Z0-9]+(?:_[A-Z0-9]+)*_FAIL(?:\b|_)/u;
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
 
@@ -88,6 +89,9 @@ function isRecoverableToolError(error: string | undefined): boolean {
 }
 
 function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
+  if (MARKER_STYLE_FAILURE_PATTERN.test(text)) {
+    return true;
+  }
   const normalizedText = normalizeTextForComparison(text);
   if (!normalizedText) {
     return false;
@@ -229,6 +233,7 @@ export function buildEmbeddedRunPayloads(params: {
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
+  hasVisibleBlockReplyAfterLastToolExecution?: boolean;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   isHeartbeatTrigger?: boolean;
@@ -504,7 +509,8 @@ export function buildEmbeddedRunPayloads(params: {
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
 
-  let hasUserFacingAssistantReply = hasSourceReplyPayload;
+  let hasUserFacingAssistantReply =
+    hasSourceReplyPayload || params.hasVisibleBlockReplyAfterLastToolExecution === true;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {
