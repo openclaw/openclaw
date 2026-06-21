@@ -207,7 +207,9 @@ async function ensureLoadedForRead(state: CronServiceState) {
   }
   // Use the maintenance-only version so that read-only operations never
   // advance a past-due nextRunAtMs without executing the job (#16156).
-  const changed = recomputeNextRunsForMaintenance(state);
+  const changed = recomputeNextRunsForMaintenance(state, {
+    repairFutureCronNextRunAtMs: false,
+  });
   if (changed) {
     await persist(state);
   }
