@@ -24,28 +24,60 @@ export type AgentTtsConfig = {
   enabled: boolean | null;
   provider: string | null;
   apiKey: string | null;
+  apiKeyIsSecretRef: boolean;
   speakerVoiceId: string | null;
   model: string | null;
 };
 
-/** Resolve TTS config for a specific agent from the config form. */
+/** Check if a value looks like a structured SecretRef object. */
+function isSecretRefObject(value: unknown): value is { source: string; id: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.source === "string" && typeof candidate.id === "string";
+}
+
+/** Resolve TTS config for a specific agent from the config form.
+ *
+ * Runtime TTS resolution starts from `messages.tts` as the base layer and
+ * deep-merges per-agent overrides on top (see `resolveEffectiveTtsConfig` in
+ * `src/tts/tts-config.ts`). This resolver mirrors that contract so the UI
+ * reflects the effective runtime state rather than only the agent-scoped block.
+ */
 function resolveAgentTts(
   configForm: Record<string, unknown> | null,
   agentId: string,
 ): AgentTtsConfig {
   const config = resolveAgentConfig(configForm, agentId);
+  const baseTts = (configForm?.messages as Record<string, unknown> | undefined)?.tts as
+    | Record<string, unknown>
+    | undefined;
   const entryTts = config.entry?.tts as Record<string, unknown> | undefined;
   const defaultsTts = config.defaults?.tts as Record<string, unknown> | undefined;
-  const tts = entryTts ?? defaultsTts ?? {};
-  const provider = (tts.provider as string) ?? null;
-  const providers = (tts.providers as Record<string, Record<string, unknown>> | undefined) ?? {};
+
+  // Layer: base (messages.tts) → defaults → entry (agent-specific)
+  const mergedTts: Record<string, unknown> = { ...(baseTts ?? {}) };
+  for (const layer of [defaultsTts, entryTts]) {
+    if (!layer) continue;
+    for (const [key, value] of Object.entries(layer)) {
+      if (value === undefined) continue;
+      mergedTts[key] = value;
+    }
+  }
+
+  const provider = (mergedTts.provider as string) ?? null;
+  const providers =
+    (mergedTts.providers as Record<string, Record<string, unknown>> | undefined) ?? {};
   const elevenlabs = providers.elevenlabs ?? {};
+  const rawApiKey = elevenlabs.apiKey;
   return {
-    enabled: (tts.enabled as boolean) ?? null,
+    enabled: (mergedTts.enabled as boolean) ?? null,
     provider,
-    apiKey: (elevenlabs.apiKey as string) ?? null,
+    apiKey: typeof rawApiKey === "string" ? rawApiKey : null,
+    apiKeyIsSecretRef: isSecretRefObject(rawApiKey),
     speakerVoiceId: (elevenlabs.speakerVoiceId as string) ?? null,
-    model: (elevenlabs.model as string) ?? null,
+    model: (elevenlabs.modelId as string) ?? (elevenlabs.model as string) ?? null,
   };
 }
 
@@ -136,6 +168,7 @@ export function renderAgentOverview(params: {
   const ttsEnabled = ttsConfig.enabled ?? false;
   const ttsProvider = ttsConfig.provider ?? "";
   const ttsApiKey = ttsConfig.apiKey ?? "";
+  const ttsApiKeyIsSecretRef = ttsConfig.apiKeyIsSecretRef;
   const ttsVoiceId = ttsConfig.speakerVoiceId ?? "";
   const ttsModel = ttsConfig.model ?? "eleven_multilingual_v2";
 
@@ -336,14 +369,29 @@ export function renderAgentOverview(params: {
             <div class="agent-model-fields" style="margin-top: 12px;">
               <label class="field">
                 <span>${t("agents.voice.apiKey")}</span>
-                <input
-                  type="password"
-                  .value=${ttsApiKey}
-                  ?disabled=${disabled}
-                  placeholder="${t("agents.voice.apiKeyPlaceholder")}"
-                  @change=${(e: Event) =>
-                    onTtsApiKeyChange(agent.id, (e.target as HTMLInputElement).value)}
-                />
+                ${ttsApiKeyIsSecretRef
+                  ? html`
+                      <input
+                        type="text"
+                        value="•••••••• (SecretRef)"
+                        disabled
+                        title=${t("agents.voice.apiKeySecretRefReadOnly")}
+                      />
+                      <small
+                        style="display: block; margin-top: 4px; color: var(--text-muted, #888); font-size: 0.8em;"
+                        >${t("agents.voice.apiKeySecretRefHint")}</small
+                      >
+                    `
+                  : html`
+                      <input
+                        type="password"
+                        .value=${ttsApiKey}
+                        ?disabled=${disabled}
+                        placeholder="${t("agents.voice.apiKeyPlaceholder")}"
+                        @change=${(e: Event) =>
+                          onTtsApiKeyChange(agent.id, (e.target as HTMLInputElement).value)}
+                      />
+                    `}
               </label>
               <label class="field">
                 <span>${t("agents.voice.voiceId")}</span>

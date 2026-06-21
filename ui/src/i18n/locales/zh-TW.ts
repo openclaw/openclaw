@@ -274,6 +274,8 @@ export const zh_TW: TranslationMap = {
       },
       apiKey: "ElevenLabs API Key",
       apiKeyPlaceholder: "Paste ElevenLabs API key",
+      apiKeySecretRefReadOnly: "API key is managed via SecretRef and cannot be edited here",
+      apiKeySecretRefHint: "Edit the config file directly to change this credential.",
       voiceId: "Voice ID",
       voiceIdPlaceholder: "e.g. EXAVITQu4vr4xnSDxMaL",
       model: "Model",

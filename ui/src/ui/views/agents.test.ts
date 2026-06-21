@@ -375,7 +375,7 @@ describe("renderAgents", () => {
                 elevenlabs: {
                   apiKey: "test-key",
                   speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
-                  model: "eleven_multilingual_v2",
+                  modelId: "eleven_multilingual_v2",
                 },
               },
             },
@@ -430,6 +430,61 @@ describe("renderAgents", () => {
     );
     expect(ttsModelSelect).toBeTruthy();
     expect(ttsModelSelect?.value).toBe("eleven_multilingual_v2");
+  });
+
+  it("renders SecretRef API key as read-only when apiKey is a SecretRef object", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "beta",
+            tts: {
+              enabled: true,
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  apiKey: { source: "env", provider: "vault", id: "ELEVEN_API_KEY" },
+                  speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
+                  modelId: "eleven_multilingual_v2",
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+
+    // No editable password input - key is a SecretRef
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeNull();
+
+    // A disabled text input showing the SecretRef placeholder should exist
+    const allTextInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="text"]'),
+    );
+    const secretRefInput = allTextInputs.find(
+      (el) => el.disabled && el.value.includes("SecretRef"),
+    );
+    expect(secretRefInput).toBeTruthy();
   });
 
   it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {

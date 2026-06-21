@@ -3560,7 +3560,7 @@ export function renderApp(state: AppViewState) {
                   }
                   updateConfigFormValue(
                     state,
-                    ["agents", "list", index, "tts", "providers", "elevenlabs", "model"],
+                    ["agents", "list", index, "tts", "providers", "elevenlabs", "modelId"],
                     model,
                   );
                 },
