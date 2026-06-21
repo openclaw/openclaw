@@ -1,6 +1,12 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const currentRoute = vi.hoisted(() => ({ id: "overview" }));
+
+vi.mock("../app-routes.ts", () => ({
+  getVisibleRouteId: () => currentRoute.id,
+}));
+
 const { NODES_ACTIVE_POLL_INTERVAL_MS, startNodesPolling, stopNodesPolling } =
   await import("./app-polling.ts");
 
@@ -14,7 +20,6 @@ function createHost(request = vi.fn(async () => ({ nodes: [] }))) {
     nodesPollInterval: null,
     logsPollInterval: null,
     debugPollInterval: null,
-    routeId: "overview",
   };
 }
 
@@ -44,7 +49,7 @@ describe("startNodesPolling", () => {
     vi.advanceTimersByTime(NODES_ACTIVE_POLL_INTERVAL_MS);
     expect(request).not.toHaveBeenCalled();
 
-    host.routeId = "nodes";
+    currentRoute.id = "nodes";
     vi.advanceTimersByTime(NODES_ACTIVE_POLL_INTERVAL_MS);
     expect(request).toHaveBeenCalledWith("node.list", {});
 

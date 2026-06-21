@@ -110,9 +110,7 @@ async function sendSkillWorkshopRevisionRequest(
   if (!sessionKey) {
     throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
   }
-  if (state.routeId !== "chat") {
-    state.setRoute("chat");
-  }
+  state.setRoute("chat");
   if (state.sessionKey === sessionKey) {
     await loadChatHistory(state);
   } else {

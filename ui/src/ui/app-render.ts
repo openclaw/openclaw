@@ -2,7 +2,13 @@
 import { html, nothing } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { SIDEBAR_SECTIONS, subtitleForRoute, titleForRoute } from "../app-navigation.ts";
-import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
+import {
+  appRouter,
+  pathForRoute,
+  routeLoadContext,
+  type AppRouteModule,
+  type RouteId,
+} from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
 import {
   renderRouterOutlet,
@@ -289,7 +295,10 @@ export function renderApp(state: AppViewState) {
   return routerOutlet(appRouter, state, (selection) => renderConnectedApp(state, selection));
 }
 
-function renderConnectedApp(state: AppViewState, routeView: RouterOutletSelection) {
+function renderConnectedApp(
+  state: AppViewState,
+  routeView: RouterOutletSelection<RouteId, AppRouteModule, unknown>,
+) {
   const updatableState = state as AppViewState & { requestUpdate?: () => void };
   const requestHostUpdate =
     typeof updatableState.requestUpdate === "function"

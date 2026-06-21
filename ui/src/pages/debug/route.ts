@@ -41,6 +41,7 @@ export const page = definePage({
             onRefresh: () => void loadDebug(state),
             onCall: () => void callDebugMethod(state),
           }),
+          "debug",
         )}
       `,
       header: true,

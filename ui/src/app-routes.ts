@@ -19,6 +19,7 @@ import { page as workboardPage } from "./pages/workboard/route.ts";
 // Application route catalog consumed by the generic router.
 import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "./router/index.ts";
 import type { PageDefinition } from "./router/index.ts";
+import type { RouteLocation, RouterHistory } from "./router/index.ts";
 import type { AppViewState } from "./ui/app-view-state.ts";
 
 export type RouteLoadContext = {
@@ -34,7 +35,7 @@ export function routeLoadContext(host: SettingsHost): RouteLoadContext {
   return { host, app: host as SettingsAppHost };
 }
 
-type AppRouteModule = {
+export type AppRouteModule = {
   render: (context: RouteRenderContext, data: unknown) => unknown;
   shell?: "chat" | "page";
   header?: boolean;
@@ -92,19 +93,34 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   );
 }
 
+export function getVisibleRouteId(): RouteId | null {
+  const state = appRouter.getState();
+  return state.pendingMatches[0]?.routeId ?? state.matches[0]?.routeId ?? null;
+}
+
 export function startAppRouter(
-  history: Parameters<typeof appRouter.start>[0],
+  history: RouterHistory,
   basePath: string,
   context: RouteLoadContext,
 ): Promise<void> {
-  const location = history.location();
-  if (routeIdFromPath(location.pathname, basePath) === null) {
-    history.replace({
+  const resolveLocation = (location: RouteLocation): RouteLocation => {
+    if (routeIdFromPath(location.pathname, basePath) !== null) {
+      return location;
+    }
+    const fallback = {
       ...location,
       pathname: appRouter.pathForRoute("chat", basePath),
-    });
-  }
-  return appRouter.start(history, basePath, context);
+    };
+    history.replace(fallback);
+    return fallback;
+  };
+  const appHistory: RouterHistory = {
+    location: () => resolveLocation(history.location()),
+    push: history.push,
+    replace: history.replace,
+    listen: (listener) => history.listen((location) => listener(resolveLocation(location))),
+  };
+  return appRouter.start(appHistory, basePath, context);
 }
 
 export function inferBasePathFromPathname(pathname: string): string {

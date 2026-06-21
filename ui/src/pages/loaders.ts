@@ -106,7 +106,7 @@ export async function loadOverview(
   host.controlUiOverviewRefreshSeq = overviewSeq;
   const isCurrentOverviewRefresh = () =>
     host.controlUiOverviewRefreshSeq === overviewSeq &&
-    (routeOptions ? routeOptions.shouldRun() : host.routeId === "overview");
+    (routeOptions ? routeOptions.shouldRun() : true);
 
   await Promise.allSettled([
     loadChannels(app, false),
@@ -151,10 +151,8 @@ export async function loadCron(host: SettingsHost, routeOptions?: RouteHookOptio
   const cronSeq = (host.controlUiCronRefreshSeq ?? 0) + 1;
   host.controlUiCronRefreshSeq = cronSeq;
   const isCurrentCronRefresh = () =>
-    host.controlUiCronRefreshSeq === cronSeq &&
-    !routeOptions?.signal.aborted &&
-    (routeOptions ? true : host.routeId === "cron");
-  const useTableFilters = routeOptions ? !routeOptions.signal.aborted : host.routeId === "cron";
+    host.controlUiCronRefreshSeq === cronSeq && !routeOptions?.signal.aborted;
+  const useTableFilters = routeOptions ? !routeOptions.signal.aborted : true;
   const runsStartedAtMs = controlUiNowMs();
   const runsRefresh = loadCronRuns(app, activeCronJobId)
     .catch(() => "error" as const)

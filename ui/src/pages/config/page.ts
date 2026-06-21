@@ -677,6 +677,7 @@ function renderConfigPage({ state, pageId }: ConfigRenderContext) {
         </section>
         ${body}
       `,
+      pageId,
     )}
   `;
 }

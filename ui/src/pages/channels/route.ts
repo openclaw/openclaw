@@ -52,6 +52,7 @@ export const page = definePage({
             onNostrProfileImport: () => void state.handleNostrProfileImport(),
             onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
           }),
+          "channels",
         ),
     })),
 });

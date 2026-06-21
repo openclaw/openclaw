@@ -63,7 +63,6 @@ export type AppViewState = {
   password: string;
   loginShowGatewayToken: boolean;
   loginShowGatewayPassword: boolean;
-  routeId: RouteId;
   onboarding: boolean;
   basePath: string;
   connected: boolean;

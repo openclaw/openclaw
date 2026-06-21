@@ -26,7 +26,6 @@ function createState(overrides: Partial<AppViewState> = {}) {
     chatStream: null,
     onboarding: false,
     basePath: "",
-    routeId: "chat",
     sessionKey: "main",
     sessionsHideCron: true,
     sessionsResult: {
@@ -93,7 +92,7 @@ function requireElement<T extends Element>(element: T | null | undefined, label:
 
 describe("chat header controls (browser)", () => {
   it("keeps the sidebar settings entry active for nested settings tabs", async () => {
-    const state = createState({ routeId: "appearance" });
+    const state = createState();
     const container = document.createElement("div");
     render(renderRouteNavItem(state, "config", { activeRouteId: "appearance" }), container);
     await Promise.resolve();

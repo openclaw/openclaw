@@ -1,24 +1,15 @@
-import type { RouteId } from "../app-routes.ts";
+import { getVisibleRouteId, type RouteId } from "../app-routes.ts";
 // Control UI module implements control ui performance behavior.
 import type { EventLogEntry } from "./app-events.ts";
 import type { GatewayConnectTiming, GatewayRequestTiming } from "./gateway.ts";
 
 type ControlUiPerformanceHost = {
-  routeId: RouteId;
   isConnected?: boolean;
   eventLog?: unknown[];
   eventLogBuffer?: unknown[];
   requestUpdate?: () => void;
   updateComplete?: Promise<unknown>;
   controlUiRefreshSeq?: number;
-  controlUiRoutePaintSeq?: number;
-};
-
-type ControlUiRouteTiming = {
-  seq: number;
-  previousRouteId: RouteId;
-  routeId: RouteId;
-  startedAtMs: number;
 };
 
 export type ControlUiRefreshRun = {
@@ -35,8 +26,6 @@ const VERY_SLOW_RENDER_MS = 50;
 const RESPONSIVENESS_ENTRY_MS = 50;
 const RESPONSIVENESS_EVENT_LOG_LIMIT = 50;
 const RENDER_EVENT_LOG_LIMIT = 50;
-const pendingRouteTimings = new WeakMap<object, ControlUiRouteTiming>();
-
 type ControlUiResponsivenessObserver = {
   disconnect: () => void;
 };
@@ -128,7 +117,7 @@ export function recordControlUiPerformanceEvent(
           )
         : host.eventLogBuffer;
     host.eventLogBuffer = [entry, ...existingBuffer].slice(0, EVENT_LOG_LIMIT);
-    if (host.routeId === "debug" || host.routeId === "overview") {
+    if (getVisibleRouteId() === "debug" || getVisibleRouteId() === "overview") {
       host.eventLog = host.eventLogBuffer;
     }
   }
@@ -156,53 +145,6 @@ function keepLatestBufferedEventsForType(
     keptForType += 1;
     return keptForType <= maxExistingForType;
   });
-}
-
-export function beginControlUiRouteTiming(
-  host: ControlUiPerformanceHost,
-  previousRouteId: RouteId,
-  routeId: RouteId,
-) {
-  const seq = (host.controlUiRoutePaintSeq ?? 0) + 1;
-  host.controlUiRoutePaintSeq = seq;
-  pendingRouteTimings.set(host, {
-    seq,
-    previousRouteId,
-    routeId,
-    startedAtMs: controlUiNowMs(),
-  });
-  host.requestUpdate?.();
-}
-
-export function completeControlUiRouteTiming(host: ControlUiPerformanceHost, routeId: RouteId) {
-  const timing = pendingRouteTimings.get(host);
-  if (!timing || timing.routeId !== routeId) {
-    return;
-  }
-  pendingRouteTimings.delete(host);
-  const record = () => {
-    if (
-      host.isConnected === false ||
-      host.controlUiRoutePaintSeq !== timing.seq ||
-      host.routeId !== routeId
-    ) {
-      return;
-    }
-    recordControlUiPerformanceEvent(host, "control-ui.routeId.visible", {
-      previousRouteId: timing.previousRouteId,
-      routeId,
-      durationMs: roundedControlUiDurationMs(controlUiNowMs() - timing.startedAtMs),
-    });
-  };
-
-  void Promise.resolve(host.updateComplete)
-    .catch(() => undefined)
-    .then(() => runAfterPaint(record));
-}
-
-export function cancelControlUiRouteTiming(host: ControlUiPerformanceHost) {
-  pendingRouteTimings.delete(host);
-  host.controlUiRoutePaintSeq = (host.controlUiRoutePaintSeq ?? 0) + 1;
 }
 
 export function scheduleControlUiAfterPaint(
@@ -234,7 +176,7 @@ export function isCurrentControlUiRefresh(
   host: ControlUiPerformanceHost,
   run: ControlUiRefreshRun,
 ): boolean {
-  return host.controlUiRefreshSeq === run.seq && host.routeId === run.routeId;
+  return host.controlUiRefreshSeq === run.seq && getVisibleRouteId() === run.routeId;
 }
 
 export function finishControlUiRefresh(
@@ -392,7 +334,7 @@ function recordResponsivenessEntry(
     host,
     `control-ui.${entryType}`,
     {
-      routeId: host.routeId,
+      routeId: getVisibleRouteId(),
       name: entry.name,
       startTimeMs: roundedControlUiDurationMs(entry.startTime),
       durationMs,

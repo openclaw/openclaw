@@ -2,7 +2,7 @@ import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
 // Control UI module implements app behavior.
 import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
-import { appRouter, routeLoadContext, type RouteId } from "../app-routes.ts";
+import { appRouter, getVisibleRouteId, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import { loadCron as loadCronPage, loadOverview as loadOverviewPage } from "../pages/loaders.ts";
@@ -737,11 +737,6 @@ export class OpenClawApp extends LitElement {
   @state() logsMaxBytes = 250_000;
   @state() logsAtBottom = true;
 
-  get routeId(): RouteId {
-    const routeState = appRouter.getState();
-    return routeState.matches[0]?.routeId ?? routeState.pendingMatches[0]?.routeId ?? "chat";
-  }
-
   client: GatewayBrowserClient | null = null;
   chatScrollFrame: number | null = null;
   chatScrollTimeout: number | null = null;
@@ -926,11 +921,11 @@ export class OpenClawApp extends LitElement {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
     refreshActiveFloatingTooltip(this);
     // Some render callbacks assign the active route while preparing nested panel state.
-    if (this.routeId !== "chat" && this.chatMobileControlsOpen) {
+    if (getVisibleRouteId() !== "chat" && this.chatMobileControlsOpen) {
       this.setChatMobileControlsOpen(false);
     }
     if (
-      this.routeId === "skill-workshop" &&
+      getVisibleRouteId() === "skill-workshop" &&
       (changed.has("sessionKey") || changed.has("assistantAgentId"))
     ) {
       void loadSkillWorkshopProposals(this, { force: true });

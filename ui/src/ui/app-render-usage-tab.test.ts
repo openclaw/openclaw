@@ -14,7 +14,6 @@ function createUsageView(): UsageViewModule {
 
 function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   return {
-    routeId: "usage",
     usageLoading: false,
     usageError: null,
     usageResult: null,

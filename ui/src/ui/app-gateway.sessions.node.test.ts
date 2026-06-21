@@ -10,9 +10,11 @@ const handleChatEventMock = vi.fn((_state?: any) => "idle");
 const handleSessionOperationEventMock = vi.fn();
 const recordFirstAssistantChatTimingMock = vi.fn();
 const switchChatSessionMock = vi.fn();
+const currentRoute = vi.hoisted(() => ({ id: "overview" }));
 
 vi.mock("../app-routes.ts", () => ({
   appRouter: { revalidate: vi.fn() },
+  getVisibleRouteId: () => currentRoute.id,
   routeLoadContext: (host: unknown) => host,
 }));
 
@@ -148,7 +150,6 @@ function createHost() {
     lastErrorCode: null,
     eventLogBuffer: [],
     eventLog: [],
-    routeId: "overview",
     presenceEntries: [],
     presenceError: null,
     presenceStatus: null,
@@ -521,7 +522,7 @@ describe("handleGatewayEvent sessions.changed", () => {
       payload: { sessionKey: "agent:main:main", reason: "cleanup" },
       seq: 1,
     });
-    host.routeId = "chat";
+    currentRoute.id = "chat";
     vi.advanceTimersByTime(5_000);
 
     expect(loadSessionsMock).not.toHaveBeenCalled();

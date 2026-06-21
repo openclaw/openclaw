@@ -44,6 +44,7 @@ export const page = definePage({
               onExport: (lines, label) => state.exportLogs(lines, label),
               onScroll: (event) => state.handleLogsScroll(event),
             }),
+            "logs",
           )}
         </section>
       `,

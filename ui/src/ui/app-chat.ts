@@ -1,4 +1,4 @@
-import { normalizeBasePath, type RouteId } from "../app-routes.ts";
+import { normalizeBasePath } from "../app-routes.ts";
 // Control UI module implements app chat behavior.
 import { isNonTerminalAgentRunStatus } from "../../../src/shared/agent-run-status.js";
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
@@ -106,7 +106,6 @@ export type ChatHost = ChatInputHistoryState & {
   chatSending: boolean;
   lastError?: string | null;
   chatError?: string | null;
-  routeId: RouteId;
   basePath: string;
   settings?: { gatewayUrl?: string | null; token?: string | null };
   password?: string | null;

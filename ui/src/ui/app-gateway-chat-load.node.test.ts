@@ -5,6 +5,7 @@ import { connectGateway } from "./app-gateway.ts";
 import type { GatewayConnectTiming, GatewayHelloOk } from "./gateway.ts";
 
 const appRouterRevalidateMock = vi.hoisted(() => vi.fn(async (_host?: unknown) => undefined));
+const currentRoute = vi.hoisted(() => ({ id: "chat" as RouteId }));
 const refreshChatMock = vi.hoisted(() =>
   vi.fn(async (_host?: unknown, _opts?: unknown) => undefined),
 );
@@ -42,6 +43,7 @@ function createDeferred() {
 
 vi.mock("../app-routes.ts", () => ({
   appRouter: { revalidate: appRouterRevalidateMock },
+  getVisibleRouteId: () => currentRoute.id,
   routeLoadContext: (host: unknown) => host,
 }));
 
@@ -197,6 +199,7 @@ afterAll(() => {
 });
 
 function createHost(routeId: RouteId) {
+  currentRoute.id = routeId;
   return {
     settings: {
       gatewayUrl: "ws://127.0.0.1:18789",

@@ -17,6 +17,8 @@ const {
 }));
 
 vi.mock("../app-routes.ts", () => ({
+  getVisibleRouteId: vi.fn(() => "chat"),
+  startAppRouter: appRouterStartMock,
   appRouter: {
     subscribe: vi.fn(() => vi.fn()),
     subscribeSelector: vi.fn(() => vi.fn()),
@@ -85,7 +87,6 @@ function createHost() {
     client: null,
     connectGeneration: 0,
     connected: false,
-    routeId: "chat",
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAgentId: null,
@@ -223,12 +224,10 @@ describe("handleConnected", () => {
     expect(appRouterStartMock).toHaveBeenCalledWith(expect.anything(), chatHost.basePath, chatHost);
 
     const nodesHost = createHost();
-    nodesHost.routeId = "nodes";
     handleConnected(nodesHost as never);
     expect(appRouterStartMock).toHaveBeenCalledTimes(2);
 
     const logsHost = createHost();
-    logsHost.routeId = "logs";
     handleConnected(logsHost as never);
     expect(appRouterStartMock).toHaveBeenCalledTimes(3);
   });

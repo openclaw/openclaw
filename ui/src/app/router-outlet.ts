@@ -18,15 +18,19 @@ export type RouterOutletOptions<
   retryContext?: TLoadContext;
 };
 
-export type RouterOutletSelection = {
-  status: RouterState<string, unknown, unknown>["status"];
-  active: RouteMatch<string, unknown, unknown> | undefined;
-  pending: RouteMatch<string, unknown, unknown> | undefined;
+export type RouterOutletSelection<
+  TRouteId extends string = string,
+  TModule = unknown,
+  TData = unknown,
+> = {
+  status: RouterState<TRouteId, TModule, TData>["status"];
+  active: RouteMatch<TRouteId, TModule, TData> | undefined;
+  pending: RouteMatch<TRouteId, TModule, TData> | undefined;
 };
 
-function selectRouterOutletState(
-  state: RouterState<string, unknown, unknown>,
-): RouterOutletSelection {
+function selectRouterOutletState<TRouteId extends string, TModule, TData>(
+  state: RouterState<TRouteId, TModule, TData>,
+): RouterOutletSelection<TRouteId, TModule, TData> {
   return {
     status: state.status,
     active: state.matches[0],
@@ -106,7 +110,7 @@ export function renderRouterOutlet<
 >(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   context: TContext,
-  selection: RouterOutletSelection,
+  selection: RouterOutletSelection<TRouteId, TModule, TData>,
   options: RouterOutletOptions<TRouteId, TLoadContext, TData> = {},
 ): unknown {
   const renderedMatch = selection.pending ?? selection.active;
@@ -123,26 +127,38 @@ export function renderRouterOutlet<
   const routeId = renderedMatch.routeId;
   if (!renderedMatch?.module) {
     return renderedMatch.error
-      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
+      ? renderError<TRouteId, TLoadContext, TModule, TData>(
+          router,
+          options.retryContext,
+          renderedMatch.error,
+          routeId,
+        )
       : renderPending();
   }
-  if (!isRenderableModule<TContext, TData>(renderedMatch.module)) {
+  const routeModule = renderedMatch.module;
+  if (!isRenderableModule<TContext, TData>(routeModule)) {
     return renderedMatch.error
-      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
+      ? renderError<TRouteId, TLoadContext, TModule, TData>(
+          router,
+          options.retryContext,
+          renderedMatch.error,
+          routeId,
+        )
       : null;
   }
-  const renderPage = () => renderedMatch.module.render(context, renderedMatch.data);
+  const renderPage = () => routeModule.render(context, renderedMatch.data);
   const renderedPage = () => {
     const renderContext = context as RouterRenderContext;
-    return measureControlUiRender(
-      renderContext.state,
-      routeId as AppViewState["routeId"],
-      { routeId },
-      renderPage,
-    );
+    return measureControlUiRender(renderContext.state, routeId, { routeId }, renderPage);
   };
   return renderedMatch.error
-    ? renderError(router, options.retryContext, renderedMatch.error, routeId, renderedPage)
+    ? renderError<TRouteId, TLoadContext, TModule, TData>(
+        router,
+        options.retryContext,
+        renderedMatch.error,
+        routeId,
+        renderedPage,
+      )
     : renderedPage();
 }
 
@@ -195,10 +211,15 @@ class RouterOutletDirective extends AsyncDirective {
 
 const routerOutletDirective = directive(RouterOutletDirective);
 
-export function routerOutlet<TContext>(
-  router: Router<string, unknown, unknown, unknown>,
+export function routerOutlet<TRouteId extends string, TLoadContext, TModule, TData, TContext>(
+  router: Router<TRouteId, TLoadContext, TModule, TData>,
   context: TContext,
-  render: (selection: RouterOutletSelection, context: TContext) => unknown,
+  render: (
+    selection: RouterOutletSelection<TRouteId, TModule, TData>,
+    context: TContext,
+  ) => unknown,
 ): unknown {
-  return routerOutletDirective(router, context, render);
+  return routerOutletDirective(router, context, (selection, value) =>
+    render(selection as RouterOutletSelection<TRouteId, TModule, TData>, value as TContext),
+  );
 }

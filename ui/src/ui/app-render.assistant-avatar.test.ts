@@ -78,7 +78,6 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     password: "",
     loginShowGatewayToken: false,
     loginShowGatewayPassword: false,
-    routeId: "config",
     onboarding: false,
     basePath: "",
     connected: true,
@@ -336,10 +335,7 @@ describe("renderApp assistant avatar routing", () => {
   it("applies the configured chat message width as a shell CSS variable", () => {
     const container = document.createElement("div");
 
-    render(
-      renderApp(createState({ routeId: "chat", chatMessageMaxWidth: "min(1280px, 82%)" })),
-      container,
-    );
+    render(renderApp(createState({ chatMessageMaxWidth: "min(1280px, 82%)" })), container);
 
     const shell = container.querySelector<HTMLElement>(".shell");
     expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
@@ -348,7 +344,7 @@ describe("renderApp assistant avatar routing", () => {
   it("marks the logs route so the page can hand scroll ownership to the log stream", () => {
     const container = document.createElement("div");
 
-    render(renderApp(createState({ routeId: "logs" })), container);
+    render(renderApp(createState()), container);
 
     const content = container.querySelector<HTMLElement>(".content--logs");
     expect(content?.classList.contains("content--logs")).toBe(true);
@@ -385,7 +381,6 @@ describe("renderApp assistant avatar routing", () => {
     render(
       renderApp(
         createState({
-          routeId: "sessions",
           lastError: "transient tool failure",
           chatError: "transient tool failure",
         }),
@@ -402,7 +397,6 @@ describe("renderApp assistant avatar routing", () => {
     render(
       renderApp(
         createState({
-          routeId: "nodes",
           lastError: "node list failed",
           chatError: "previous chat failure",
         }),
@@ -424,7 +418,6 @@ describe("renderApp assistant avatar routing", () => {
       valid: true,
     }));
     const state = createState({
-      routeId: "workboard",
       client: { request } as unknown as AppViewState["client"],
       configLoading: false,
       configSnapshot: null,
@@ -452,7 +445,6 @@ describe("renderApp assistant avatar routing", () => {
     render(
       renderApp(
         createState({
-          routeId: "chat",
           lastError: "transient tool failure",
           chatError: "transient tool failure",
         }),
@@ -470,7 +462,6 @@ describe("renderApp assistant avatar routing", () => {
     render(
       renderApp(
         createState({
-          routeId: "chat",
           lastError: "gateway disconnected",
           chatError: "previous chat failure",
         }),
@@ -483,7 +474,7 @@ describe("renderApp assistant avatar routing", () => {
 
   it("does not rebuild chat composer controls for draft-only rerenders", () => {
     const container = document.createElement("div");
-    const state = createState({ routeId: "chat", chatMessage: "" });
+    const state = createState({ chatMessage: "" });
 
     render(renderApp(state), container);
     state.chatMessage = "h";
@@ -501,7 +492,7 @@ describe("renderApp assistant avatar routing", () => {
 
   it("rebuilds chat composer controls after locale changes", async () => {
     const container = document.createElement("div");
-    const state = createState({ routeId: "chat", chatMessage: "" });
+    const state = createState({ chatMessage: "" });
 
     render(renderApp(state), container);
     await i18n.setLocale("zh-CN");
@@ -592,7 +583,6 @@ describe("renderApp assistant avatar routing", () => {
     render(
       renderApp(
         createState({
-          routeId: "chat",
           sessionKey: "agent:work:main",
           assistantAgentId: "work",
           agentsList: {
@@ -646,7 +636,6 @@ describe("renderApp assistant avatar routing", () => {
     render(
       renderApp(
         createState({
-          routeId: "chat",
           sessionKey: "main",
           assistantAgentId: "work",
           agentsList: {
@@ -699,7 +688,6 @@ describe("renderApp assistant avatar routing", () => {
     render(
       renderApp(
         createState({
-          routeId: "chat",
           sessionKey: "global",
           assistantAgentId: null,
           agentsList: null,
@@ -748,7 +736,6 @@ describe("renderApp assistant avatar routing", () => {
     render(
       renderApp(
         createState({
-          routeId: "chat",
           sessionKey: "unknown",
           assistantAgentId: "work",
           agentsList: {

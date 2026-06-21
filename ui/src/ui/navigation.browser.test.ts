@@ -1,6 +1,6 @@
 // Control UI tests cover navigation behavior.
 import { describe, expect, it, vi } from "vitest";
-import { appRouter } from "../app-routes.ts";
+import { appRouter, getVisibleRouteId } from "../app-routes.ts";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
@@ -10,7 +10,7 @@ function mountApp(pathname: string) {
 }
 
 async function waitForRoute(routeId: string) {
-  await vi.waitFor(() => expect(appRouter.getState().matches[0]?.routeId).toBe(routeId), {
+  await vi.waitFor(() => expect(getVisibleRouteId()).toBe(routeId), {
     timeout: 6000,
   });
 }
@@ -96,7 +96,7 @@ describe("control UI routing", () => {
     breadcrumb.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 
-    expect(app.routeId).toBe("overview");
+    expect(getVisibleRouteId()).toBe("overview");
     expect(window.location.pathname).toBe("/overview");
   });
 
@@ -173,7 +173,7 @@ describe("control UI routing", () => {
     app.requestUpdate();
     await app.updateComplete;
 
-    expect(app.routeId).toBe("dreams");
+    expect(getVisibleRouteId()).toBe("dreams");
     expectElement(app, ".dreams__tab", HTMLElement);
     expectElement(app, ".dreams__lobster", HTMLElement);
   });
@@ -453,7 +453,7 @@ describe("control UI routing", () => {
 
     await waitForRoute("config");
     await app.updateComplete;
-    expect(app.routeId).toBe("config");
+    expect(getVisibleRouteId()).toBe("config");
     expect([...shell.classList]).toEqual(["shell"]);
 
     app.applySettings({ ...app.settings, navCollapsed: true });
@@ -553,7 +553,7 @@ describe("control UI routing", () => {
     await waitForRoute("chat");
     await app.updateComplete;
 
-    expect(app.routeId).toBe("chat");
+    expect(getVisibleRouteId()).toBe("chat");
     expect(app.sessionKey).toBe("agent:main:first");
     expect(window.location.pathname).toBe("/chat");
     expect(window.location.search).toBe("?session=agent%3Amain%3Afirst");
@@ -639,7 +639,7 @@ describe("control UI routing", () => {
     await vi.waitFor(() => {
       expect(app.sessionKey).toBe("agent:main:fresh");
     });
-    expect(app.routeId).toBe("chat");
+    expect(getVisibleRouteId()).toBe("chat");
     expect(window.location.pathname).toBe("/chat");
     expect(app.client?.["request"]).toHaveBeenCalledWith("sessions.create", {
       agentId: "main",
@@ -728,7 +728,7 @@ describe("control UI routing", () => {
     );
 
     await app.updateComplete;
-    expect(app.routeId).toBe("chat");
+    expect(getVisibleRouteId()).toBe("chat");
     expect(app.sessionKey).toBe("agent:main:subagent:task-123");
     expect(window.location.pathname).toBe("/chat");
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
@@ -743,7 +743,7 @@ describe("control UI routing", () => {
     app.setRoute("channels");
 
     await app.updateComplete;
-    expect(app.routeId).toBe("channels");
+    expect(getVisibleRouteId()).toBe("channels");
     expect([...shell.classList]).toEqual(["shell"]);
     expect(topbar.hasAttribute("inert")).toBe(false);
     expect(topbar.hasAttribute("aria-hidden")).toBe(false);
@@ -759,7 +759,7 @@ describe("control UI routing", () => {
     chatRow.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
-    expect(app.routeId).toBe("chat");
+    expect(getVisibleRouteId()).toBe("chat");
     expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
     expect(topbar.hasAttribute("inert")).toBe(false);
     expect(topbar.hasAttribute("aria-hidden")).toBe(false);

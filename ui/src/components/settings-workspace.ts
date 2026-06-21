@@ -5,19 +5,19 @@ import {
   SETTINGS_NAVIGATION_ROUTES,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute } from "../app-routes.ts";
+import { pathForRoute, type RouteId } from "../app-routes.ts";
 import { t } from "../i18n/index.ts";
 import type { AppViewState } from "../ui/app-view-state.ts";
 import { icons } from "../ui/icons.ts";
 
-function renderSettingsSectionNav(state: AppViewState) {
-  if (!isSettingsNavigationRoute(state.routeId)) {
+function renderSettingsSectionNav(state: AppViewState, currentRouteId: RouteId) {
+  if (!isSettingsNavigationRoute(currentRouteId)) {
     return nothing;
   }
   return html`
     <nav class="settings-section-nav" aria-label=${t("common.settingsSections")}>
       ${SETTINGS_NAVIGATION_ROUTES.map((routeId) => {
-        const active = state.routeId === routeId;
+        const active = currentRouteId === routeId;
         const href = pathForRoute(routeId, state.basePath);
         return html`
           <a
@@ -50,10 +50,10 @@ function renderSettingsSectionNav(state: AppViewState) {
   `;
 }
 
-export function renderSettingsWorkspace(state: AppViewState, body: unknown) {
+export function renderSettingsWorkspace(state: AppViewState, body: unknown, routeId: RouteId) {
   return html`
     <section class="settings-workspace">
-      ${renderSettingsSectionNav(state)}
+      ${renderSettingsSectionNav(state, routeId)}
       <div class="settings-workspace__body">${body}</div>
     </section>
   `;
