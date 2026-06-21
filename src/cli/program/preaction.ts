@@ -1,5 +1,6 @@
 // Global Commander pre-action hook: startup presentation, config guard, logging, and plugin preflight.
 import type { Command } from "commander";
+import type { ConfigFileSnapshot } from "../../config/types.js";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -96,6 +97,17 @@ function isGuidedConfigCommandPath(commandPath: string[]): boolean {
   );
 }
 
+function isGatewayRunAction(actionCommand: Command): boolean {
+  if (actionCommand.name() === "gateway") {
+    return actionCommand.parent?.parent === null;
+  }
+  return (
+    actionCommand.name() === "run" &&
+    actionCommand.parent?.name() === "gateway" &&
+    actionCommand.parent.parent?.parent === null
+  );
+}
+
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
@@ -130,12 +142,39 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     ) {
       return;
     }
+    let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
+    if (isGatewayRunAction(actionCommand)) {
+      const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
+        await import("../gateway-cli/pre-bootstrap.js");
+      const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
+      const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
+      const opts = {
+        force: resolvedOptions.force === true,
+        reset: resolvedOptions.reset === true,
+      };
+      const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
+      if (!shouldBootstrap) {
+        return;
+      }
+      beforeStateMigrations = (snapshot) =>
+        recheckGatewayRunBootstrap({
+          opts,
+          runtime: defaultRuntime,
+          ...(snapshot ? { snapshot } : {}),
+        });
+    }
     await ensureCliExecutionBootstrap({
       runtime: defaultRuntime,
       commandPath,
       startupPolicy,
       allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
+      ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
     });
+    if (beforeStateMigrations) {
+      const { reloadTrustedGatewayRunEnvironment } =
+        await import("../gateway-cli/pre-bootstrap.js");
+      await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
+    }
   });
 }

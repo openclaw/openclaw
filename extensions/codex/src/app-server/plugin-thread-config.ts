@@ -13,6 +13,7 @@ import {
 } from "./app-inventory-cache.js";
 import {
   resolveCodexPluginsPolicy,
+  type CodexPluginDestructiveApprovalMode,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
@@ -36,6 +37,7 @@ export type PluginAppPolicyContextEntry = {
   marketplaceName: ResolvedCodexPluginPolicy["marketplaceName"];
   pluginName: string;
   allowDestructiveActions: boolean;
+  destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
   mcpServerNames: string[];
 };
 
@@ -75,7 +77,7 @@ export type BuildCodexPluginThreadConfigParams = {
   nowMs?: number;
 };
 
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 1;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 2;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 1;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -127,6 +129,7 @@ export async function buildCodexPluginThreadConfig(
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "initial_missing",
+      targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -152,6 +155,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      targetAppIds: record.ownedAppIds,
     });
     activationResults.push(activation);
     if (!activation.ok) {
@@ -166,6 +170,7 @@ export async function buildCodexPluginThreadConfig(
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "post_install",
+      targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -184,6 +189,7 @@ export async function buildCodexPluginThreadConfig(
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "not_ready_plugin_apps",
+      targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -246,6 +252,7 @@ export async function buildCodexPluginThreadConfig(
         marketplaceName: record.policy.marketplaceName,
         pluginName: record.policy.pluginName,
         allowDestructiveActions: record.policy.allowDestructiveActions,
+        destructiveApprovalMode: record.policy.destructiveApprovalMode,
         mcpServerNames: [...(record.detail?.mcpServers ?? [])].toSorted(),
       };
     }
@@ -355,6 +362,9 @@ function shouldWaitForInitialAppInventory(
   policy: ResolvedCodexPluginsPolicy,
   inventory: CodexPluginInventory,
 ): boolean {
+  if (inventory.records.some((record) => record.activationRequired)) {
+    return false;
+  }
   return Boolean(
     params.appCacheKey &&
     policy.pluginPolicies.some((plugin) => plugin.enabled) &&
@@ -365,7 +375,7 @@ function shouldWaitForInitialAppInventory(
 async function refreshAppInventoryNow(
   params: BuildCodexPluginThreadConfigParams,
   appCache: CodexAppInventoryCache,
-  options: { forceRefetch?: boolean; reason?: string } = {},
+  options: { forceRefetch?: boolean; reason?: string; targetAppIds?: readonly string[] } = {},
 ): Promise<CodexAppInventorySnapshot | undefined> {
   const appCacheKey = params.appCacheKey;
   if (!appCacheKey) {
@@ -379,6 +389,7 @@ async function refreshAppInventoryNow(
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
+      targetAppIds: options.targetAppIds,
     });
     return snapshot;
   } catch (error) {
@@ -390,6 +401,12 @@ async function refreshAppInventoryNow(
     // Keep building from the diagnostic inventory state; app exposure remains scoped below.
     return undefined;
   }
+}
+
+function collectInventoryOwnedAppIds(inventory: CodexPluginInventory): string[] {
+  return Array.from(
+    new Set(inventory.records.flatMap((record) => record.ownedAppIds).filter(Boolean)),
+  ).toSorted();
 }
 
 function resolveThreadConfigAppsForRecord(params: {
@@ -425,12 +442,14 @@ function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
   return {
     enabled: policy.enabled,
     allowDestructiveActions: policy.allowDestructiveActions,
+    destructiveApprovalMode: policy.destructiveApprovalMode,
     plugins: policy.pluginPolicies.map((plugin) => ({
       configKey: plugin.configKey,
       marketplaceName: plugin.marketplaceName,
       pluginName: plugin.pluginName,
       enabled: plugin.enabled,
       allowDestructiveActions: plugin.allowDestructiveActions,
+      destructiveApprovalMode: plugin.destructiveApprovalMode,
     })),
   };
 }

@@ -186,6 +186,7 @@ into Windows.
 Inside WSL:
 
 ```bash
+sudo apt-get install -y dbus-x11
 sudo loginctl enable-linger "$(whoami)"
 openclaw gateway install
 ```
@@ -193,7 +194,7 @@ openclaw gateway install
 In PowerShell as Administrator:
 
 ```powershell
-schtasks /create /tn "WSL Boot" /tr "wsl.exe -d Ubuntu --exec /bin/true" /sc onstart /ru SYSTEM
+schtasks /create /tn "WSL Boot" /tr "wsl.exe -d Ubuntu --exec dbus-launch true" /sc onstart /ru "$env:USERNAME"
 ```
 
 Replace `Ubuntu` with your distro name from:
@@ -201,6 +202,11 @@ Replace `Ubuntu` with your distro name from:
 ```powershell
 wsl --list --verbose
 ```
+
+> **Note:** Two changes from older recipes:
+>
+> - **`dbus-launch true` instead of `/bin/true`** — On WSL ≥ 2.6.1.0 a regression ([microsoft/WSL #13416](https://github.com/microsoft/WSL/issues/13416)) causes the distro to idle-terminate 15–20 seconds after the last client exits, even with linger enabled. `dbus-launch true` keeps a child-of-init process alive as a workaround ([community discussion, microsoft/WSL #9245](https://github.com/microsoft/WSL/discussions/9245)).
+> - **`/ru "$env:USERNAME"` instead of `/ru SYSTEM`** — Per-user WSL distros (the default setup) are not visible to the SYSTEM account; the task appears to run but the distro is never started. Running as your own account avoids this. Windows will prompt for your password when the task is created.
 
 After reboot, verify from WSL:
 

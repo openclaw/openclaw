@@ -6,6 +6,7 @@ import type {
   ReplyDispatcher,
 } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
@@ -476,6 +477,7 @@ export type PluginHookReplyDispatchEvent = {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string | number;
+  originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
   sendPolicy: "allow" | "deny";
   isTailDispatch?: boolean;

@@ -11,6 +11,7 @@ import {
   makeTempDir,
   parseBoolEnv,
   parseMode,
+  parseTcpPort,
   parseProvider,
   readPositiveIntEnv,
   modelProviderConfigBatchJson,
@@ -201,7 +202,7 @@ export function parseArgs(argv: string[]): LinuxOptions {
         i++;
         break;
       case "--host-port":
-        options.hostPort = Number(ensureValue(args, i, arg));
+        options.hostPort = parseTcpPort(ensureValue(args, i, arg), arg);
         options.hostPortExplicit = true;
         i++;
         break;

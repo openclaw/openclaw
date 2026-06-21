@@ -16,6 +16,7 @@ import type {
   ReplyDispatchKind,
   ReplyDispatchRuntimeInfo,
   ReplyDispatcher,
+  ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
@@ -75,6 +76,18 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   return min + generateSecureInt(max - min + 1);
 }
 
+function getHumanDelayMax(config: HumanDelayConfig | undefined): number {
+  const mode = config?.mode ?? "off";
+  if (mode === "off") {
+    return 0;
+  }
+  const min =
+    mode === "custom" ? (config?.minMs ?? DEFAULT_HUMAN_DELAY_MIN_MS) : DEFAULT_HUMAN_DELAY_MIN_MS;
+  const max =
+    mode === "custom" ? (config?.maxMs ?? DEFAULT_HUMAN_DELAY_MAX_MS) : DEFAULT_HUMAN_DELAY_MAX_MS;
+  return max <= min ? min : max;
+}
+
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   silentReplyContext?: {
@@ -99,6 +112,13 @@ export type ReplyDispatcherOptions = {
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
   onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
+  /** Observe each queued payload settling, including cancellation and delivery failure. */
+  onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
+  /** Resolve an owner activity policy for holding queued follow-ups behind delivery. */
+  resolveFollowupAdmissionBarrierTimeoutPolicy?: (context: {
+    queuedCounts: Readonly<Record<ReplyDispatchKind, number>>;
+    humanDelayBudgetMs: number;
+  }) => ReplyFollowupAdmissionBarrierTimeoutPolicy | undefined;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -252,6 +272,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         void options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
       })
       .finally(() => {
+        const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
+        try {
+          options.onDeliverySettled?.(dispatchInfo);
+        } catch (err: unknown) {
+          void options.onError?.(err, dispatchInfo);
+        }
         pending -= 1;
         // Clear reservation if:
         // 1. pending is now 1 (just the reservation left)
@@ -309,6 +335,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     getCancelledCounts: () => ({ ...cancelledCounts }),
     getFailedCounts: () => ({ ...failedCounts }),
     markComplete,
+    resolveFollowupAdmissionBarrierTimeoutPolicy:
+      options.resolveFollowupAdmissionBarrierTimeoutPolicy
+        ? () =>
+            options.resolveFollowupAdmissionBarrierTimeoutPolicy?.({
+              queuedCounts: { ...queuedCounts },
+              humanDelayBudgetMs:
+                Math.max(0, queuedCounts.block - 1) * getHumanDelayMax(options.humanDelay),
+            })
+        : undefined,
   };
 }
 

@@ -73,6 +73,7 @@ describe("isDeliveredMessagingToolResult", () => {
         result: [{ type: "text", text: JSON.stringify({ result: { messageId: "msg-1" } }) }],
       }),
     ).toBe(true);
+    expect(isDeliveredMessagingToolResult({ result: { content: [{ text: "sent" }] } })).toBe(true);
     expect(isDeliveredMessagingToolResult({ result: { status: "sent" } })).toBe(true);
   });
 
@@ -107,6 +108,7 @@ describe("isDeliveredMessagingToolResult", () => {
       { ok: true, removed: 0 },
       { ok: true, removed: [] },
       { ok: true, changed: false },
+      { content: [{ text: "sent" }], details: { sent: false } },
     ]) {
       expect(
         isDeliveredMessagingToolResult({

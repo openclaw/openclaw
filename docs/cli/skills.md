@@ -107,6 +107,10 @@ Notes:
   in the shared managed skills directory when combined with `--global`.
 - `verify <slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by
   default. There is no `--json` flag because JSON is already the default.
+- When ClawHub returns server-resolved source provenance, verify JSON also
+  includes a commit-pinned `openclaw.verifiedSourceUrl`. Unavailable or
+  self-declared source URLs stay only in the raw provenance envelope and are not
+  promoted.
 - `verify` uses `.clawhub/origin.json` for installed ClawHub skills, so it
   verifies the installed version against the registry it came from. `--version`
   and `--tag` override the version selector but keep that installed registry

@@ -25,7 +25,6 @@ export type ReleaseVerifyBetaArgs = {
   skipGitHubRelease: boolean;
   skipClawHub: boolean;
   rerunFailedClawHub: boolean;
-  allowVerifiedClawHubRunFailure: boolean;
   workflowRuns: {
     fullReleaseValidation?: string;
     openclawNpm?: string;
@@ -41,6 +40,11 @@ export type NpmViewFields = {
   distTagVersion?: string;
   integrity?: string;
   tarball?: string;
+};
+
+type FetchWithRetryResult = {
+  response: Response;
+  signal: AbortSignal;
 };
 
 type WorkflowRunSummary = {
@@ -179,7 +183,6 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     skipGitHubRelease: false,
     skipClawHub: false,
     rerunFailedClawHub: false,
-    allowVerifiedClawHubRunFailure: false,
     workflowRuns: {},
   };
 
@@ -252,9 +255,6 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       case "--rerun-failed-clawhub":
         parsed.rerunFailedClawHub = true;
         break;
-      case "--allow-verified-clawhub-run-failure":
-        parsed.allowVerifiedClawHubRunFailure = true;
-        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -267,17 +267,19 @@ async function fetchWithRetry(
   url: string,
   options: RequestInit,
   attempts: number,
-): Promise<Response> {
+): Promise<FetchWithRetryResult> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
+      const signal = AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS);
       const response = await fetch(url, {
         ...options,
-        signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
+        signal,
       });
       if (response.status !== 429 && response.status < 500) {
-        return response;
+        return { response, signal };
       }
+      await cancelResponseBody(response);
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
       lastError = error;
@@ -292,25 +294,38 @@ async function fetchWithRetry(
   throw new Error(`${url} did not return a stable response: ${message}`);
 }
 
+async function cancelResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 async function fetchJsonWithRetry(url: string): Promise<unknown> {
-  const response = await fetchWithRetry(url, { headers: { accept: "application/json" } }, 5);
+  const { response, signal } = await fetchWithRetry(
+    url,
+    { headers: { accept: "application/json" } },
+    5,
+  );
   if (!response.ok) {
     throw new Error(`${url} returned HTTP ${response.status}.`);
   }
-  return await readBoundedJsonResponse(response, url);
+  return await readBoundedJsonResponse(response, url, undefined, { signal });
 }
 
 export async function readBoundedJsonResponse(
   response: Response,
   label: string,
   maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+  options: { signal?: AbortSignal } = {},
 ): Promise<unknown> {
-  return parseJson(await readBoundedResponseText(response, label, maxBytes), label);
+  return parseJson(await readBoundedResponseText(response, label, maxBytes, options), label);
 }
 
-async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
-  const response = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
-  return response.status;
+export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
+  const { response } = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
+  try {
+    return response.status;
+  } finally {
+    await cancelResponseBody(response);
+  }
 }
 
 async function verifyNpmPackage(
@@ -427,7 +442,6 @@ function verifyWorkflowRun(params: {
   expectedHeadBranch?: string;
   allowedHeadBranches?: string[];
   rerunFailed: boolean;
-  allowFailure?: boolean;
 }): WorkflowRunSummary {
   const raw = runCommand("gh", [
     "run",
@@ -480,13 +494,6 @@ function verifyWorkflowRun(params: {
   }
   if (status !== "completed" || conclusion !== "success" || failedJobs.length > 0) {
     const failedNames = failedJobs.map((job) => readString(job.name) ?? "<unnamed>").join(", ");
-    if (params.allowFailure && status === "completed" && failedJobs.length > 0) {
-      return {
-        id: params.id,
-        label: `${params.label} verified with failed workflow`,
-        url: readString(run.url),
-      };
-    }
     throw new Error(
       `${params.label}: run ${params.id} is ${status ?? "<missing>"}/${conclusion ?? "<missing>"}${failedNames ? `; failed jobs: ${failedNames}` : ""}.`,
     );
@@ -645,7 +652,6 @@ export async function verifyBetaRelease(
         expectedWorkflowName: "Plugin ClawHub Release",
         expectedHeadBranch: clawHubWorkflowRef,
         rerunFailed: args.rerunFailedClawHub,
-        allowFailure: args.allowVerifiedClawHubRunFailure,
       }),
     );
   }
@@ -681,7 +687,7 @@ export async function verifyBetaRelease(
         label: "NPM Telegram Beta E2E",
         repo: args.repo,
         expectedWorkflowName: "NPM Telegram Beta E2E",
-        expectedHeadBranch: args.workflowRef,
+        allowedHeadBranches: ["main", args.workflowRef],
         rerunFailed: false,
       }),
     );
@@ -706,6 +712,8 @@ export async function verifyBetaRelease(
           pluginSelection: args.pluginSelection,
           openclawNpmIntegrity: openclawNpm.integrity,
           openclawNpmTarball: openclawNpm.tarball,
+          npmRegistrySignaturesVerified: args.skipPostpublish ? null : true,
+          npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
           githubReleaseUrl: releaseUrl ?? null,
           pluginNpmPackageCount: npmPlugins.length,
           clawHubPackageCount: clawHubPlugins.length,

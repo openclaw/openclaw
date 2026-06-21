@@ -11,6 +11,7 @@ import {
   sessionStoreEntry,
   getMainPreviewEntry,
   directSessionReq,
+  createLinearSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -124,9 +125,10 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await fs.writeFile(
     transcriptPath,
-    `${Array.from({ length: 8 })
-      .map((_, idx) => JSON.stringify({ role: "assistant", content: `line ${idx}` }))
-      .join("\n")}\n`,
+    createLinearSessionTranscript(
+      sessionId,
+      Array.from({ length: 8 }, (_, index) => `line ${index}`),
+    ),
     "utf-8",
   );
 
@@ -216,6 +218,19 @@ test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns
 
   expect(resolved.ok).toBe(true);
   expect(resolved.payload?.key).toBe("agent:main:subagent:target");
+});
+
+test("sessions.resolve can probe a missing selector without returning an RPC error", async () => {
+  await createSessionStoreDir();
+  const { ws } = await openClient();
+
+  const resolved = await rpcReq<{ ok: false }>(ws, "sessions.resolve", {
+    key: "agent:main:missing",
+    allowMissing: true,
+  });
+
+  expect(resolved.ok).toBe(true);
+  expect(resolved.payload).toEqual({ ok: false });
 });
 
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {

@@ -28,7 +28,6 @@ import {
   listPluginInstallWholeRecordPaths,
   resolveConfigReloadMetadata,
   resolveGatewayReloadSettings,
-  shouldInvalidateSkillsSnapshotForPaths,
   startGatewayConfigReloader,
 } from "./config-reload.js";
 
@@ -161,7 +160,7 @@ describe("buildGatewayReloadPlan", () => {
       resolveAccount: () => ({}),
     },
     reload: {
-      configPrefixes: ["web", "channels.whatsapp.accounts"],
+      configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
       noopPrefixes: ["channels.whatsapp"],
     },
   };
@@ -233,6 +232,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
     expect(plan.hotReasons).toEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("restarts the WhatsApp channel when selfChatMode changes (configPrefix wins over broad noop prefix)", () => {
+    const plan = buildGatewayReloadPlan(["channels.whatsapp.selfChatMode"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+    expect(plan.hotReasons).toContain("channels.whatsapp.selfChatMode");
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
@@ -574,9 +581,11 @@ describe("resolveGatewayReloadSettings", () => {
 type WatcherHandler = () => void;
 type WatcherEvent = "add" | "change" | "unlink" | "error";
 
-function createWatcherMock() {
+function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
   return {
+    effectiveUsePolling,
+    options: { usePolling: false },
     on(event: WatcherEvent, handler: WatcherHandler) {
       const existing = handlers.get(event) ?? [];
       existing.push(handler);
@@ -1602,9 +1611,15 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
 
   function startReloaderWithWatchers(watchers: ReturnType<typeof createWatcherMock>[]) {
     const watchSpy = vi.spyOn(chokidar, "watch");
-    for (const watcher of watchers) {
-      watchSpy.mockReturnValueOnce(watcher as unknown as never);
-    }
+    let watcherIndex = 0;
+    watchSpy.mockImplementation((_path, options) => {
+      const watcher = watchers[watcherIndex++];
+      if (!watcher) {
+        throw new Error("missing watcher mock");
+      }
+      watcher.options.usePolling = watcher.effectiveUsePolling ?? Boolean(options?.usePolling);
+      return watcher as unknown as never;
+    });
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const reloader = startGatewayConfigReloader({
       initialConfig: { gateway: { reload: { debounceMs: 0 } } },
@@ -1770,6 +1785,45 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     }
   });
 
+  it("uses chokidar's effective polling mode when the platform forces it on", async () => {
+    const originalVitest = process.env.VITEST;
+    const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
+    delete process.env.VITEST;
+    delete process.env.CHOKIDAR_USEPOLLING;
+    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    try {
+      const watchers = Array.from({ length: 4 }, () => createWatcherMock(true));
+      const started = startReloaderWithWatchers(watchers);
+      const { log } = started;
+      reloader = started.reloader;
+      const backoffs = [500, 2000, 5000] as const;
+
+      for (let index = 0; index < watchers.length - 1; index += 1) {
+        watchers[index]?.emit("error");
+        await vi.advanceTimersByTimeAsync(backoffs[index] ?? 0);
+      }
+      watchers.at(-1)?.emit("error");
+
+      expect(reloader.hotReloadStatus()).toBe("disabled");
+      expect(log.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("degrading to polling mode"),
+      );
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining("in polling mode"));
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+      if (originalChokidarPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = originalChokidarPolling;
+      }
+      await reloader?.stop();
+    }
+  });
+
   it("does not report polling fallback when chokidar polling is forced off", async () => {
     const originalVitest = process.env.VITEST;
     const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
@@ -1818,43 +1872,6 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       }
       await reloader?.stop();
     }
-  });
-});
-
-describe("shouldInvalidateSkillsSnapshotForPaths", () => {
-  it.each([
-    "skills",
-    "skills.allowBundled",
-    "skills.entries",
-    "skills.entries.himalaya",
-    "skills.entries.himalaya.enabled",
-    "skills.profile",
-  ])("returns true for skills path %s", (path) => {
-    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(true);
-  });
-
-  it.each([
-    "tools.profile",
-    "agents.defaults.model",
-    "gateway.port",
-    "skillset.allowBundled",
-    "channels.telegram.enabled",
-  ])("returns false for unrelated path %s", (path) => {
-    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(false);
-  });
-
-  it("returns true when any path in the list matches", () => {
-    expect(
-      shouldInvalidateSkillsSnapshotForPaths([
-        "gateway.port",
-        "skills.allowBundled",
-        "channels.telegram.enabled",
-      ]),
-    ).toBe(true);
-  });
-
-  it("returns false for empty input", () => {
-    expect(shouldInvalidateSkillsSnapshotForPaths([])).toBe(false);
   });
 });
 

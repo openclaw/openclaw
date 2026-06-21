@@ -14,6 +14,7 @@ import {
   resolveDirectNodeVitestArgs,
   resolveExplicitTestFileNoPassArgs,
   resolveImplicitVitestArgs,
+  resolveLinkedSourceBundledPluginsEnv,
   resolveMissingVitestDependencyMessage,
   resolveMissingExplicitTestFiles,
   resolveRunVitestSpawnEnv,
@@ -29,6 +30,34 @@ import {
 } from "../../scripts/run-vitest.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
+
+function createRunVitestFs(params: { nodeModulesSymlink: boolean; bundledPlugin: boolean }) {
+  return {
+    existsSync: (filePath: string) => {
+      const normalized = filePath.replaceAll("\\", "/");
+      return (
+        normalized === "/repo/extensions" ||
+        (params.bundledPlugin &&
+          (normalized === "/repo/extensions/codex/package.json" ||
+            normalized === "/repo/extensions/codex/openclaw.plugin.json"))
+      );
+    },
+    lstatSync: (filePath: string) => {
+      if (filePath.replaceAll("\\", "/") !== "/repo/node_modules") {
+        throw new Error(`unexpected lstat path: ${filePath}`);
+      }
+      return {
+        isSymbolicLink: () => params.nodeModulesSymlink,
+      };
+    },
+    readdirSync: (filePath: string) => {
+      if (filePath.replaceAll("\\", "/") !== "/repo/extensions") {
+        throw new Error(`unexpected readdir path: ${filePath}`);
+      }
+      return params.bundledPlugin ? [{ name: "codex", isDirectory: () => true }] : [];
+    },
+  };
+}
 
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
@@ -264,6 +293,19 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
+  it("delegates bare explicit directories and globs to the project router", () => {
+    expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
+    expect(
+      resolveTestProjectsDelegationArgs(["run", "test/scripts", "--reporter=verbose"]),
+    ).toEqual(["test/scripts", "--reporter=verbose"]);
+    expect(resolveTestProjectsDelegationArgs(["test/scripts/*.test.ts"])).toEqual([
+      "test/scripts/*.test.ts",
+    ]);
+    expect(resolveTestProjectsDelegationArgs(["src/agents/**/*.ts"])).toBeNull();
+    expect(resolveTestProjectsDelegationArgs(["src/**/*.test.ts"])).toBeNull();
+    expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
+  });
+
   it("delegates mixed filters when an explicit file target is present", () => {
     expect(
       resolveTestProjectsDelegationArgs(["src/agents", "test/scripts/run-vitest.test.ts"]),
@@ -426,6 +468,12 @@ describe("scripts/run-vitest", () => {
     expect(
       resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" }),
     ).toBeNull();
+    expect(
+      resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "1e3" }),
+    ).toBeNull();
+    expect(
+      resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500ms" }),
+    ).toBeNull();
   });
 
   it("defaults direct non-watch runs to the stall watchdog", () => {
@@ -565,6 +613,45 @@ describe("scripts/run-vitest", () => {
     ).toEqual({
       PATH: "/usr/bin",
     });
+  });
+
+  it("points symlinked source worktree Vitest runs at local bundled plugins", () => {
+    expect(
+      resolveLinkedSourceBundledPluginsEnv(
+        { PATH: "/usr/bin", PWD: "/repo" },
+        {
+          baseDir: "/repo",
+          fsImpl: createRunVitestFs({ nodeModulesSymlink: true, bundledPlugin: true }),
+        },
+      ),
+    ).toEqual({
+      OPENCLAW_BUNDLED_PLUGINS_DIR: nodePath.join("/repo", "extensions"),
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    });
+  });
+
+  it("keeps explicit bundled plugin env ahead of symlinked worktree defaults", () => {
+    expect(
+      resolveLinkedSourceBundledPluginsEnv(
+        { OPENCLAW_BUNDLED_PLUGINS_DIR: "/custom/extensions", PATH: "/usr/bin", PWD: "/repo" },
+        {
+          baseDir: "/repo",
+          fsImpl: createRunVitestFs({ nodeModulesSymlink: true, bundledPlugin: true }),
+        },
+      ),
+    ).toEqual({});
+  });
+
+  it("does not add bundled plugin env for normal dependency installs", () => {
+    expect(
+      resolveLinkedSourceBundledPluginsEnv(
+        { PATH: "/usr/bin", PWD: "/repo" },
+        {
+          baseDir: "/repo",
+          fsImpl: createRunVitestFs({ nodeModulesSymlink: false, bundledPlugin: true }),
+        },
+      ),
+    ).toEqual({});
   });
 
   it("does not default explicit watch runs to the stall watchdog", () => {
@@ -761,6 +848,25 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("does not truncate malformed native worker budgets", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+          OPENCLAW_VITEST_MAX_WORKERS: "8x",
+          PATH: "/usr/bin",
+        },
+        "darwin",
+      ).env,
+    ).toEqual({
+      OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "8x",
+      PATH: "/usr/bin",
+      RAYON_NUM_THREADS: "1",
+      TOKIO_WORKER_THREADS: "1",
+    });
+  });
+
   it("suppresses rolldown plugin timing noise while keeping other stderr intact", () => {
     expect(
       shouldSuppressVitestStderrLine(
@@ -814,6 +920,36 @@ describe("scripts/run-vitest", () => {
       );
 
       teardown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps force-kill scheduled when output arrives after the idle timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const stdout = new EventEmitter();
+      const timeoutSpy = vi.fn();
+      const forceKillSpy = vi.fn();
+
+      installVitestNoOutputWatchdog({
+        streams: [stdout],
+        timeoutMs: 1000,
+        forceKillAfterMs: 5000,
+        onTimeout: timeoutSpy,
+        onForceKill: forceKillSpy,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      vi.advanceTimersByTime(1000);
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+
+      stdout.emit("data", "too late");
+      vi.advanceTimersByTime(5000);
+
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(forceKillSpy).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

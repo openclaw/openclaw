@@ -820,6 +820,7 @@ type MessageToolOptions = {
   resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
   runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
+  currentMessagingTarget?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
   agentThreadId?: string | number;
@@ -918,6 +919,7 @@ function inferDeliveryFromSessionKey(
 function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
   accountId?: string;
   currentChannelId?: string;
+  currentMessagingTarget?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
 } {
@@ -932,12 +934,17 @@ function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
     Boolean(sessionDelivery?.to);
 
   if (!preferSessionDeliveryContext) {
-    return { currentChannelProvider, currentChannelId };
+    return {
+      currentChannelProvider,
+      currentChannelId,
+      currentMessagingTarget: options?.currentMessagingTarget,
+    };
   }
   return {
     accountId: sessionDelivery?.accountId,
     currentChannelProvider: sessionDeliveryChannel,
     currentChannelId: sessionDelivery?.to,
+    currentMessagingTarget: sessionDelivery?.to,
     currentThreadTs: sessionDelivery?.threadId,
   };
 }
@@ -1349,6 +1356,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const toolContext =
         effectiveCurrentChannel.currentChannelId ||
         effectiveCurrentChannel.currentChannelProvider ||
+        effectiveCurrentChannel.currentMessagingTarget ||
         currentThreadTs ||
         hasCurrentMessageId ||
         replyToMode ||
@@ -1356,6 +1364,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.sameChannelThreadRequired
           ? {
               currentChannelId: effectiveCurrentChannel.currentChannelId,
+              currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
               currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
               currentThreadTs,
               currentMessageId: options?.currentMessageId,
@@ -1397,6 +1406,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           action,
           params: actionParams,
           defaultAccountId: accountId ?? undefined,
+          requesterAccountId: agentAccountId,
           requesterSenderId: options?.requesterSenderId,
           senderIsOwner: options?.senderIsOwner,
           gateway,

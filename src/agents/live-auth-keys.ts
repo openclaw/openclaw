@@ -178,11 +178,6 @@ export function collectAnthropicApiKeys(options: CollectProviderApiKeysOptions =
   return collectProviderApiKeys("anthropic", { ...options, env });
 }
 
-/** Collect Gemini API keys for live cache/model tests. */
-export function collectGeminiApiKeys(): string[] {
-  return collectProviderApiKeys("google");
-}
-
 /** Return whether a provider error message indicates API-key rate limiting. */
 export function isApiKeyRateLimitError(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
@@ -205,11 +200,6 @@ export function isApiKeyRateLimitError(message: string): boolean {
     return true;
   }
   return false;
-}
-
-/** Return whether an Anthropic error message indicates rate limiting. */
-export function isAnthropicRateLimitError(message: string): boolean {
-  return isApiKeyRateLimitError(message);
 }
 
 /** Return whether an Anthropic error message indicates billing exhaustion. */

@@ -27,6 +27,7 @@ const DEFAULT_TIMEOUT_KILL_GRACE_MS = 10_000;
 const DEFAULT_SPAWN_LOG_MAX_BYTES = 1024 * 1024 * 256;
 const DEFAULT_SPAWN_OUTPUT_MAX_BYTES = 1024 * 1024 * 64;
 const DEFAULT_SPAWN_OUTPUT_TAIL_BYTES = 1024 * 256;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
 
 function usage() {
   return [
@@ -262,6 +263,8 @@ export function spawnText(command, args, options) {
     let timedOut = false;
     let settled = false;
     let killTimer = null;
+    let killGraceDeadline = null;
+    let killGraceMessage = null;
     let childClosedResult = null;
     let waitingForKillGrace = false;
     const signalChild = (signal) => {
@@ -311,15 +314,54 @@ export function spawnText(command, args, options) {
         return Boolean(error && error.code === "EPERM");
       }
     };
+    const waitForProcessGroupExit = async (timeoutMsToWait) => {
+      const deadlineAt = Date.now() + timeoutMsToWait;
+      while (Date.now() < deadlineAt) {
+        if (!processGroupIsAlive()) {
+          return true;
+        }
+        await new Promise((resolvePoll) => {
+          setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+        });
+      }
+      return !processGroupIsAlive();
+    };
+    const finishAfterProcessGroupCleanup = async (result) => {
+      const graceRemainingMs =
+        killGraceDeadline === null ? killGraceMs : Math.max(0, killGraceDeadline - Date.now());
+      if (graceRemainingMs > 0) {
+        await waitForProcessGroupExit(graceRemainingMs);
+      }
+      if (settled) {
+        return;
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+      waitingForKillGrace = false;
+      killGraceDeadline = null;
+      if (processGroupIsAlive()) {
+        appendDiagnostic(killGraceMessage ?? "");
+        signalChild("SIGKILL");
+      }
+      killGraceMessage = null;
+      childClosedResult = null;
+      finish(result);
+    };
     const scheduleKill = (message) => {
       if (waitingForKillGrace) {
         return;
       }
       waitingForKillGrace = true;
+      killGraceDeadline = Date.now() + killGraceMs;
+      killGraceMessage = message;
       killTimer = setTimeout(() => {
         waitingForKillGrace = false;
         killTimer = null;
-        appendDiagnostic(message);
+        killGraceDeadline = null;
+        appendDiagnostic(killGraceMessage ?? message);
+        killGraceMessage = null;
         signalChild("SIGKILL");
         if (childClosedResult) {
           finish(childClosedResult);
@@ -453,7 +495,9 @@ export function spawnText(command, args, options) {
         timedOut,
       };
       if (waitingForKillGrace && processGroupIsAlive()) {
+        killTimer?.ref?.();
         childClosedResult = result;
+        void finishAfterProcessGroupCleanup(result);
         return;
       }
       finish(result);

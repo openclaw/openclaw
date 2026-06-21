@@ -1,11 +1,17 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  fetchStatusWithRetry,
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
   readBoundedJsonResponse,
   runNpmViewWithRetry,
 } from "../../scripts/lib/release-beta-verifier.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe("parseReleaseVerifyBetaArgs", () => {
   it("defaults beta verification to the matching tag and repo", () => {
@@ -23,7 +29,6 @@ describe("parseReleaseVerifyBetaArgs", () => {
       skipGitHubRelease: false,
       skipClawHub: false,
       rerunFailedClawHub: false,
-      allowVerifiedClawHubRunFailure: false,
       workflowRuns: {},
     });
   });
@@ -57,7 +62,6 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "--skip-github-release",
         "--skip-clawhub",
         "--rerun-failed-clawhub",
-        "--allow-verified-clawhub-run-failure",
       ]),
     ).toEqual({
       version: "2026.5.10-beta.3",
@@ -73,7 +77,6 @@ describe("parseReleaseVerifyBetaArgs", () => {
       skipGitHubRelease: true,
       skipClawHub: true,
       rerunFailedClawHub: true,
-      allowVerifiedClawHubRunFailure: true,
       workflowRuns: {
         fullReleaseValidation: "10",
         openclawNpm: "11",
@@ -155,6 +158,46 @@ describe("runNpmViewWithRetry", () => {
   });
 });
 
+describe("fetchStatusWithRetry", () => {
+  it("cancels retryable and returned GET response bodies", async () => {
+    vi.useFakeTimers();
+    const canceled: string[] = [];
+    const responses = [
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            canceled.push("retry");
+          },
+        }),
+        { status: 500 },
+      ),
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            canceled.push("final");
+          },
+        }),
+        { status: 200 },
+      ),
+    ];
+    const fetchImpl = vi.fn(async () => {
+      const response = responses.shift();
+      if (!response) {
+        throw new Error("unexpected fetch call");
+      }
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const status = fetchStatusWithRetry("https://clawhub.test/api/v1/package", "GET");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(status).resolves.toBe(200);
+    expect(canceled).toEqual(["retry", "final"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("readBoundedJsonResponse", () => {
   it("parses JSON bodies within the release verifier limit", async () => {
     await expect(
@@ -176,5 +219,32 @@ describe("readBoundedJsonResponse", () => {
     await expect(
       readBoundedJsonResponse(new Response('{"padding":"too-large"}'), "ClawHub package", 8),
     ).rejects.toThrow("ClawHub package response body exceeded 8 bytes.");
+  });
+
+  it("keeps ClawHub request timeouts active while reading JSON bodies", async () => {
+    let canceled = false;
+    const abortController = new AbortController();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"partial":'));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+    );
+
+    const json = readBoundedJsonResponse(response, "ClawHub package", 64, {
+      signal: abortController.signal,
+    });
+
+    await new Promise((resolveDelay) => {
+      setTimeout(resolveDelay, 0);
+    });
+    abortController.abort(new Error("ClawHub body timed out"));
+
+    await expect(json).rejects.toThrow("ClawHub body timed out");
+    expect(canceled).toBe(true);
   });
 });

@@ -1,19 +1,19 @@
 {
   "name": "@openclaw/zalouser",
-  "version": "2026.6.8",
+  "version": "2026.6.9",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/zalouser",
-      "version": "2026.6.8",
+      "version": "2026.6.9",
       "dependencies": {
         "typebox": "1.1.39",
         "zca-js": "2.1.2",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.8"
+        "openclaw": ">=2026.6.9"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -348,9 +348,9 @@
       "license": "MIT"
     },
     "node_modules/semver": {
-      "version": "7.8.2",
-      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.2.tgz",
-      "integrity": "sha512-c8jsqUZm3omBOI66G90z1Dyw5z622G8oLG+omfsHBJf3CWQTlOcwOjvOG6wtiNfW6anKm/eA39LMwMtMez2TiQ==",
+      "version": "7.8.4",
+      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.4.tgz",
+      "integrity": "sha512-rUCObTnP32Q08R2uuIrt7r9PlEonuTmtuXYcW6s5kjdlj3xbnwe+21yXptAUYcMAABLkYYTtnmzb3w3EDZfueA==",
       "license": "ISC",
       "bin": {
         "semver": "bin/semver.js"

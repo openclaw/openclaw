@@ -50,6 +50,7 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
 
 type McpRequestContext = {
   sessionKey: string;
+  sessionId: string | undefined;
   messageProvider: string | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
@@ -365,6 +366,7 @@ export function resolveMcpRequestContext(
 ): McpRequestContext {
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
+    sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),

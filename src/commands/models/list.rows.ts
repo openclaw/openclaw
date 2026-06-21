@@ -126,6 +126,7 @@ function shouldSuppressListModel(params: {
     return shouldSuppressBuiltInModelFromManifest({
       provider: params.model.provider,
       id: params.model.id,
+      baseUrl: params.model.baseUrl,
       config: params.context.cfg,
     });
   }

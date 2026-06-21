@@ -15,6 +15,13 @@ export type QaSelfCheckResult = {
   scenarioResult: QaScenarioResult;
 };
 
+export function isQaSelfCheckSuccessful(result: QaSelfCheckResult): boolean {
+  return (
+    result.scenarioResult.status === "pass" &&
+    result.checks.every((check) => check.status === "pass")
+  );
+}
+
 export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
   if (params?.outputPath) {
     return params.outputPath;

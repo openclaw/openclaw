@@ -20,6 +20,7 @@ import {
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -63,7 +64,7 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
   if (!text) {
     return { text, strippedTrailingSilentToken: false };
   }
-  if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+  if (isSuppressedControlReplyText(text)) {
     return { text: undefined, strippedTrailingSilentToken: false };
   }
 
@@ -81,7 +82,7 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
     next = stripped;
   }
 
-  if (!next.trim() || isSilentReplyText(next, SILENT_REPLY_TOKEN)) {
+  if (!next.trim() || isSuppressedControlReplyText(next)) {
     return { text: undefined, strippedTrailingSilentToken };
   }
   return { text: next, strippedTrailingSilentToken };
@@ -1218,6 +1219,12 @@ export async function dispatchCronDelivery(
 
   if (params.deliveryRequested && !params.skipHeartbeatDelivery && !sourceDeliverySatisfied) {
     if (!params.resolvedDelivery.ok) {
+      // The target could not be resolved (e.g. a keyless implicit cron whose
+      // inherited shared-bucket target was refused). We never send here, so a
+      // deleteAfterRun cron must still retire its session/transcript before
+      // returning — otherwise the one-shot session leaks. Safe no-op for
+      // non-deleteAfterRun / non-cron sessions (see cleanupDirectCronSession).
+      await cleanupDirectCronSessionIfNeeded();
       if (!params.deliveryBestEffort) {
         return {
           result: failDeliveryTarget(params.resolvedDelivery.error.message),

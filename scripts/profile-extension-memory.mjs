@@ -3,7 +3,7 @@
 // Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
 // report suitable for extension memory budget review.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -434,6 +434,7 @@ async function main() {
       results,
     };
 
+    mkdirSync(path.dirname(jsonPath), { recursive: true });
     writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
     console.log(`[extension-memory] report: ${jsonPath}`);

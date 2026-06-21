@@ -104,10 +104,6 @@ export async function claimRecentInboundMessageDelivery(
   return claim.kind;
 }
 
-export async function claimRecentInboundMessage(key: string): Promise<boolean> {
-  return (await claimRecentInboundMessageDelivery(key)) === "claimed";
-}
-
 export async function commitRecentInboundMessage(key: string): Promise<void> {
   await claimableInboundMessages.commit(key);
 }

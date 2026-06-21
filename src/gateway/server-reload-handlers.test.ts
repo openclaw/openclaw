@@ -5,8 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+} from "../plugins/runtime.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -141,7 +146,13 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 
-function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
+function createReloadHandlersForTest(
+  logReload = { info: vi.fn(), warn: vi.fn() },
+  channels?: {
+    start: (channel: ChannelKind) => Promise<void>;
+    stop: (channel: ChannelKind) => Promise<void>;
+  },
+) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const heartbeatRunner = {
     stop: vi.fn(),
@@ -158,8 +169,8 @@ function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() 
       channelHealthMonitor: null,
     }),
     setState: vi.fn(),
-    startChannel: vi.fn(async () => {}),
-    stopChannel: vi.fn(async () => {}),
+    startChannel: channels?.start ?? vi.fn(async () => {}),
+    stopChannel: channels?.stop ?? vi.fn(async () => {}),
     stopPostReadySidecars: vi.fn(),
     reloadPlugins: vi.fn(
       async (): Promise<GatewayPluginReloadResult> => ({
@@ -888,6 +899,42 @@ describe("gateway channel hot reload handlers", () => {
       }
     }
   }
+
+  it("restarts WhatsApp when the planner receives a selfChatMode change", async () => {
+    const whatsappPlugin = {
+      ...createChannelTestPluginBase({ id: "whatsapp" }),
+      reload: {
+        configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
+        noopPrefixes: ["channels.whatsapp"],
+      },
+    };
+    const registry = createTestRegistry([
+      { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+    ]);
+    const events: string[] = [];
+    const channels = {
+      stop: vi.fn(async (channel: ChannelKind) => {
+        events.push(`stop:${channel}`);
+      }),
+      start: vi.fn(async (channel: ChannelKind) => {
+        events.push(`start:${channel}`);
+      }),
+    };
+
+    pinActivePluginChannelRegistry(registry);
+    try {
+      const plan = buildGatewayReloadPlan(["channels.whatsapp.selfChatMode"]);
+      const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
+
+      expect(plan.restartGateway).toBe(false);
+      expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+      await withChannelReloadsEnabled(() => applyHotReload(plan, {}));
+
+      expect(events).toEqual(["stop:whatsapp", "start:whatsapp"]);
+    } finally {
+      releasePinnedPluginChannelRegistry(registry);
+    }
+  });
 
   it("continues restarting later channels after a hot-reload stop failure", async () => {
     const events: string[] = [];

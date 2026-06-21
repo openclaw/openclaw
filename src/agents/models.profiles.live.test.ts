@@ -27,7 +27,6 @@ import {
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isPrioritizedHighSignalLiveModelRef,
-  isPrioritizedSmallLiveModelRef,
   isSmallLiveModelRef,
   listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
@@ -1854,12 +1853,6 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useSmall) {
-          if (
-            useSmallPriorityOnly &&
-            !isPrioritizedSmallLiveModelRef({ provider: model.provider, id: model.id })
-          ) {
-            continue;
-          }
           if (!isSmallLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }

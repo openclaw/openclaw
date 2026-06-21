@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/qwen-provider",
+  "version": "2026.6.9",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/qwen-provider",
+      "version": "2026.6.9"
+    }
+  }
+}

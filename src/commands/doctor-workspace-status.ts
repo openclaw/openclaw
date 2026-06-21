@@ -13,7 +13,7 @@ import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
-export type NoteWorkspaceStatusOptions = {
+type NoteWorkspaceStatusOptions = {
   pluginVersionDrift?: PluginVersionDriftReport;
 };
 
@@ -91,15 +91,24 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
   }
 
   const skillsReport = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
+  const platformIncompatibleCount = skillsReport.skills.filter(
+    (s) => s.platformIncompatible && !s.disabled && !s.blockedByAllowlist,
+  ).length;
   note(
     [
       `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
       `Missing requirements: ${
-        skillsReport.skills.filter((s) => !s.eligible && !s.disabled && !s.blockedByAllowlist)
-          .length
+        skillsReport.skills.filter(
+          (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && !s.platformIncompatible,
+        ).length
       }`,
+      platformIncompatibleCount > 0
+        ? `Incompatible (platform mismatch, auto-skipped): ${platformIncompatibleCount}`
+        : null,
       `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length}`,
-    ].join("\n"),
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n"),
     "Skills status",
   );
 

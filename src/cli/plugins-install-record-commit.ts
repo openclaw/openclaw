@@ -7,8 +7,6 @@ import {
   type ConfigMutationCommit,
   type ConfigReplaceResult,
   type ConfigMutationResult,
-  type ConfigMutationContext,
-  type ConfigTransformResult,
   type TransformConfigFileWithRetryParams,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
@@ -252,21 +250,5 @@ export async function transformConfigWithPendingPluginInstalls<T = void>(
   return await transformConfigFileWithRetry<T>({
     ...params,
     commit,
-  });
-}
-
-/** Mutating-draft adapter for config transforms that may contain pending plugin installs. */
-export async function mutateConfigWithPendingPluginInstalls<T = void>(
-  params: Omit<TransformConfigFileWithRetryParams<T>, "commit" | "transform"> & {
-    mutate: (draft: OpenClawConfig, context: ConfigMutationContext) => Promise<T | void> | T | void;
-  },
-): Promise<ConfigMutationResult<T>> {
-  return await transformConfigWithPendingPluginInstalls<T>({
-    ...params,
-    transform: async (currentConfig, context): Promise<ConfigTransformResult<T>> => {
-      const draft = structuredClone(currentConfig);
-      const result = (await params.mutate(draft, context)) as T | undefined;
-      return { nextConfig: draft, result };
-    },
   });
 }

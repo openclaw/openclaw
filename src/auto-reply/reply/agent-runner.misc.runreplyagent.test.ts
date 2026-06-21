@@ -28,7 +28,11 @@ import {
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
-import { testing as replyRunRegistryTesting, replyRunRegistry } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  testing as replyRunRegistryTesting,
+  replyRunRegistry,
+} from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -490,6 +494,72 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a provided reply operation active until final delivery completes", async () => {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    const replyOperation = createReplyOperation({
+      sessionKey,
+      sessionId: sessionEntry.sessionId,
+      resetTriggered: false,
+    });
+    const deliveryOrder: string[] = [];
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { agentMeta: {} },
+    });
+
+    vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
+      expect(key).toBe(sessionKey);
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      deliveryOrder.push("followup");
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+      replyOperation,
+    });
+
+    expectReplyText(result, "ok");
+    expect(replyRunRegistry.get(sessionKey)).toBe(replyOperation);
+    expect(replyOperation.result).toBeNull();
+    expect(scheduleFollowupDrain).not.toHaveBeenCalled();
+
+    deliveryOrder.push("final");
+    replyOperation.complete();
+
+    expect(deliveryOrder).toEqual(["final", "followup"]);
+    expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
+  });
+
   it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
     const { usageEvent } = await runBaseReplyWithAgentMeta({
       tmpPrefix: "openclaw-usage-diagnostic-",
@@ -707,7 +777,10 @@ describe("runReplyAgent block streaming", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
-    expect(result).toBeUndefined();
+    // The block pipeline streamed "Hello" but never sent "Final message",
+    // so the unsent text-only final is preserved (not dropped).
+    expect(result).toBeDefined();
+    expect((result as { text?: string }).text).toBe("Final message");
   });
 
   it("returns the final payload when onBlockReply times out", async () => {

@@ -34,6 +34,8 @@ import { resolveTranscriptPathForComparison } from "./session-transcript-path.js
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesWithSourceAsync,
+} from "./session-transcript-readers.js";
+import {
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
@@ -145,9 +147,13 @@ export async function handleSessionHistoryHttpRequest(
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
       ? await readRecentSessionMessagesWithStatsAsync(
-          entry.sessionId,
-          target.storePath,
-          entry.sessionFile,
+          {
+            agentId: target.agentId,
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
+            storePath: target.storePath,
+          },
           {
             ...resolveSessionHistoryTailReadOptions(limit),
             allowResetArchiveFallback: true,
@@ -159,9 +165,13 @@ export async function handleSessionHistoryHttpRequest(
   const fullSnapshot =
     boundedSnapshot === undefined && entry?.sessionId
       ? await readSessionMessagesWithSourceAsync(
-          entry.sessionId,
-          target.storePath,
-          entry.sessionFile,
+          {
+            agentId: target.agentId,
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
+            storePath: target.storePath,
+          },
           {
             mode: "full",
             reason: "session history cursor pagination",
@@ -204,9 +214,11 @@ export async function handleSessionHistoryHttpRequest(
   let sentHistory = history;
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
+      agentId: target.agentId,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: target.canonicalKey,
       storePath: target.storePath,
-      sessionFile: entry.sessionFile,
     },
     rawMessages: rawSnapshot,
     rawTranscriptSeq: boundedSnapshot?.totalMessages,

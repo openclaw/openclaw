@@ -6,7 +6,6 @@ import {
   clampTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { onLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -17,7 +16,7 @@ import type { EmbeddedRunTrigger } from "./params.js";
 /**
  * Default idle timeout for LLM streaming responses in milliseconds.
  */
-export const DEFAULT_LLM_IDLE_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_SECONDS * 1000;
+const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 
 /**
  * Detects loopback / private-network / `.local` base URLs. Local providers

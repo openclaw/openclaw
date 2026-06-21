@@ -2215,6 +2215,15 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     expectPackageInstallSpec("openclaw@latest");
+    const preflightParams = vi.mocked(fetchNpmPackageTargetStatus).mock.calls[0]?.[0];
+    expect(preflightParams).toEqual(
+      expect.objectContaining({
+        target: "latest",
+        spec: "openclaw@latest",
+        cwd: process.cwd(),
+      }),
+    );
+    expect(packageInstallCommandCall()?.[1].env).toBe(preflightParams?.env);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(
       vi
@@ -3718,6 +3727,12 @@ describe("update-cli", () => {
           .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*npm(?:\\.cmd)?$`,
         "i",
       ),
+    );
+    expect(vi.mocked(resolveNpmChannelTag)).toHaveBeenCalledWith(
+      expect.objectContaining({ command: installCommand }),
+    );
+    expect(vi.mocked(fetchNpmPackageTargetStatus)).toHaveBeenCalledWith(
+      expect.objectContaining({ command: installCommand }),
     );
     const installOptions = requiredInstallCall[1] as { timeoutMs?: number };
     expect(typeof installOptions.timeoutMs).toBe("number");
@@ -6283,6 +6298,56 @@ describe("update-cli", () => {
     expect((lastWriteJsonCall() as { channel?: string } | undefined)?.channel).toBe("beta");
   });
 
+  it("updateFinalizeCommand restores channels from the RPC pre-update config payload", async () => {
+    const tempDir = createCaseDir("openclaw-rpc-finalize");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateConfig = {
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      meta: { lastTouchedVersion: "2026.6.18" },
+    } as OpenClawConfig;
+    const postDoctorSnapshot: ConfigFileSnapshot = {
+      ...baseSnapshot,
+      sourceConfig: postDoctorConfig,
+      resolved: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      hash: "post-doctor",
+    };
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateConfig,
+        authoredConfig: preUpdateConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(postDoctorSnapshot);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateFinalizeCommand({ json: true, restart: false });
+      },
+    );
+
+    expect(syncPluginCall()?.config?.channels?.whatsapp).toEqual(
+      preUpdateConfig.channels?.whatsapp,
+    );
+    expect(lastReplaceConfigCall()?.nextConfig?.channels?.whatsapp).toEqual(
+      preUpdateConfig.channels?.whatsapp,
+    );
+  });
+
   it("updateFinalizeCommand reapplies requested channel against post-doctor config", async () => {
     const preDoctorConfig = { update: { channel: "stable" } } as OpenClawConfig;
     const postDoctorConfig = { update: { channel: "beta" } } as OpenClawConfig;
@@ -6316,6 +6381,40 @@ describe("update-cli", () => {
     expect(replaceConfigCall(1)?.nextConfig).toEqual({ update: { channel: "dev" } });
     expect(syncPluginCall()?.channel).toBe("dev");
     expect((lastWriteJsonCall() as { channel?: string } | undefined)?.channel).toBe("dev");
+  });
+
+  it("updateFinalizeCommand converges on the effective channel from env without persisting update.channel", async () => {
+    const noChannelConfig = {} as OpenClawConfig;
+    const noChannelSnapshot: ConfigFileSnapshot = {
+      ...baseSnapshot,
+      sourceConfig: noChannelConfig,
+      resolved: noChannelConfig,
+      runtimeConfig: noChannelConfig,
+      config: noChannelConfig,
+      hash: "no-channel",
+    };
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(noChannelSnapshot);
+    const priorEffective = process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL;
+    // Simulate a no-config git/source update whose effective channel is dev.
+    process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL = "dev";
+    try {
+      await updateFinalizeCommand({ json: true, restart: false });
+    } finally {
+      if (priorEffective === undefined) {
+        delete process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL;
+      } else {
+        process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL = priorEffective;
+      }
+    }
+    // Convergence runs on the effective (git/dev) channel...
+    expect(syncPluginCall()?.channel).toBe("dev");
+    // ...but the effective channel is never persisted to update.channel
+    // (no requested channel), so a default source update does not mutate config.
+    expect(syncPluginCall()?.config?.update?.channel).toBeUndefined();
+    const persistedDevChannel = vi
+      .mocked(replaceConfigFile)
+      .mock.calls.some(([params]) => params?.nextConfig?.update?.channel === "dev");
+    expect(persistedDevChannel).toBe(false);
   });
 
   it.each([
@@ -6388,7 +6487,9 @@ describe("update-cli", () => {
     expect(
       vi
         .mocked(runCommandWithTimeout)
-        .mock.calls.some((call) => Array.isArray(call[0]) && call[0][0] === "npm"),
+        .mock.calls.some(
+          (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "i",
+        ),
     ).toBe(shouldRunPackageUpdate);
   });
 

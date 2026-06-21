@@ -1670,6 +1670,8 @@ export async function spawnSubagentDirect(
       requesterDisplayKey: ownership.completionRequesterDisplayKey,
       task,
       taskName,
+      agentId: targetAgentId,
+      requesterAgentId,
       cleanup,
       label: label || undefined,
       model: resolvedModel,

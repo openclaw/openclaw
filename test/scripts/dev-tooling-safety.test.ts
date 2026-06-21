@@ -1,4 +1,5 @@
 // Dev Tooling Safety tests cover dev tooling safety script behavior.
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -76,6 +77,50 @@ describe("script-specific dev tooling hardening", () => {
   it("rejects unknown Discord smoke drivers instead of silently using token mode", () => {
     expect(discordSmokeTesting.parseDriverMode("webhook")).toBe("webhook");
     expect(() => discordSmokeTesting.parseDriverMode("curl")).toThrow(/Invalid --driver/u);
+  });
+
+  it("rejects unknown Discord smoke args before live Discord/OpenClaw work", () => {
+    expect(() => discordSmokeTesting.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/dev/discord-acp-plain-language-smoke.ts", "--wat"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+  });
+
+  it("prints Discord smoke usage without starting live validation", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/dev/discord-acp-plain-language-smoke.ts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: bun scripts/dev/discord-acp-plain-language-smoke.ts");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects missing Discord smoke option values before env fallbacks", () => {
+    expect(() => discordSmokeTesting.parseArgs(["--channel"])).toThrow(
+      "--channel requires a value",
+    );
+    expect(() => discordSmokeTesting.parseArgs(["--channel="])).toThrow(
+      "--channel requires a value",
+    );
+    expect(() => discordSmokeTesting.parseArgs(["--channel", "--json"])).toThrow(
+      "--channel requires a value",
+    );
   });
 
   it("redacts Discord webhook tokens from API paths", () => {
@@ -203,6 +248,45 @@ describe("script-specific dev tooling hardening", () => {
       }),
     ).rejects.toThrow(/exceeded total timeout/u);
     expect(calls).toBe(1);
+  });
+
+  it("prints TUI PTY watch usage without launching the watcher", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/dev/tui-pty-test-watch.ts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/dev/tui-pty-test-watch.ts");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects unknown TUI PTY watch args before launching the watcher", () => {
+    expect(() => tuiPtyWatchTesting.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/dev/tui-pty-test-watch.ts", "--wat"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stdout).toBe("");
+  });
+
+  it("keeps TUI PTY watch vitest args behind the separator", () => {
+    expect(tuiPtyWatchTesting.parseOptions(["--mode", "all", "--", "--help"])).toMatchObject({
+      mode: "all",
+      vitestArgs: ["--help"],
+    });
   });
 
   it("escalates stalled TUI PTY watch children after interrupt cleanup", async () => {
@@ -359,6 +443,44 @@ describe("script-specific dev tooling hardening", () => {
     );
   });
 
+  it("prints OpenAI realtime smoke help without launching live checks", () => {
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({ help: true });
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/dev/realtime-talk-live-smoke.ts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects unknown OpenAI realtime smoke args before launching live checks", () => {
+    expect(() => realtimeSmokeTesting.parseRealtimeSmokeArgs(["--wat"])).toThrow(
+      "Unknown argument: --wat",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/dev/realtime-talk-live-smoke.ts", "--wat"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+  });
+
   it("bounds OpenAI realtime smoke response body reads by content-length", async () => {
     const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
     const response = new Response("{}", {
@@ -368,6 +490,30 @@ describe("script-specific dev tooling hardening", () => {
     await expect(
       realtimeSmokeTesting.readBoundedText(response, "OpenAI Realtime test", maxBytes),
     ).rejects.toThrow(`OpenAI Realtime test response body exceeded ${maxBytes} bytes`);
+  });
+
+  it("rejects unsafe OpenAI realtime SDP answer content-length values before reading", async () => {
+    const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
+    const body = {
+      cancel: vi.fn(() => Promise.resolve()),
+      getReader: vi.fn(() => {
+        throw new Error("reader should not be acquired");
+      }),
+    };
+    const response = {
+      headers: new Headers({ "content-length": "9007199254740993" }),
+      body,
+    } as unknown as Response;
+
+    await expect(
+      realtimeSmokeTesting.readOpenAIRealtimeBrowserResponseText(
+        response,
+        "OpenAI Realtime SDP answer",
+        maxBytes,
+      ),
+    ).rejects.toThrow(`OpenAI Realtime SDP answer response body exceeded ${maxBytes} bytes`);
+    expect(body.getReader).not.toHaveBeenCalled();
+    expect(body.cancel).toHaveBeenCalledTimes(1);
   });
 
   it("bounds OpenAI realtime smoke response body reads by streamed bytes", async () => {
@@ -568,6 +714,60 @@ describe("script-specific dev tooling hardening", () => {
     expect(claudeUsageTesting.CLAUDE_COOKIE_HOST_SQL).toContain("host_key = 'claude.ai'");
     expect(claudeUsageTesting.CLAUDE_COOKIE_HOST_SQL).toContain("LIKE '%.claude.ai'");
     expect(claudeUsageTesting.CLAUDE_COOKIE_HOST_SQL).not.toContain("%claude.ai%");
+  });
+
+  it("rejects malformed Claude usage args before reading auth or browser state", () => {
+    expect(claudeUsageTesting.parseArgs(["--agent", "work", "--session-key=abc"])).toEqual({
+      agentId: "work",
+      help: false,
+      reveal: false,
+      sessionKey: "abc",
+    });
+    expect(claudeUsageTesting.parseArgs(["--help"])).toEqual({
+      agentId: "main",
+      help: true,
+      reveal: false,
+      sessionKey: undefined,
+    });
+    expect(() => claudeUsageTesting.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
+    expect(() => claudeUsageTesting.parseArgs(["--agent"])).toThrow("--agent requires a value");
+    expect(() => claudeUsageTesting.parseArgs(["--agent="])).toThrow("--agent requires a value");
+    expect(() => claudeUsageTesting.parseArgs(["--session-key", "--reveal"])).toThrow(
+      "--session-key requires a value",
+    );
+    expect(() => claudeUsageTesting.parseArgs(["--session-key= "])).toThrow(
+      "--session-key requires a value",
+    );
+  });
+
+  it("prints Claude usage help without opening auth stores", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/debug-claude-usage.ts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/debug-claude-usage.ts");
+    expect(result.stderr).toBe("");
+  });
+
+  it("fails missing Claude usage option values before defaulting to main auth", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/debug-claude-usage.ts", "--agent"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--agent requires a value");
   });
 
   it("aborts stalled Claude usage fetches at the request timeout", async () => {

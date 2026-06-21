@@ -162,14 +162,3 @@ function setPrecomputedSubcommandHelpText(
     [commandName]: value,
   };
 }
-
-export const testing = {
-  resetPrecomputedRootHelpTextForTests(): void {
-    precomputedRootHelpText = undefined;
-    precomputedBrowserHelpText = undefined;
-    precomputedSecretsHelpText = undefined;
-    precomputedNodesHelpText = undefined;
-    precomputedSubcommandHelpText = undefined;
-  },
-};
-export { testing as __testing };

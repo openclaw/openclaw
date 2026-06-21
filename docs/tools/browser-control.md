@@ -13,7 +13,12 @@ CLI, and scripting patterns (snapshots, refs, waits, debug flows).
 
 ## Control API (optional)
 
-For local integrations only, the Gateway exposes a small loopback HTTP API:
+For local integrations only, the Gateway exposes a small loopback HTTP API.
+This standalone server is opt-in — set the environment variable
+`OPENCLAW_EAGER_BROWSER_CONTROL_SERVER=1` in the gateway service environment
+and restart the gateway before the HTTP endpoints become available. Without
+this variable the browser control runtime still works through the CLI and
+agent tools, but nothing listens on the loopback control port.
 
 - Status/start/stop: `GET /`, `POST /start`, `POST /stop`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`
@@ -317,6 +322,7 @@ You can wait on more than just time/text:
   - `openclaw browser wait --url "**/dash"`
 - Wait for load state:
   - `openclaw browser wait --load networkidle`
+  - Supported on managed `openclaw` and raw/remote CDP profiles. The `user` and `existing-session` profiles reject `networkidle`; use `--url`, `--text`, a selector, or `--fn` waits there.
 - Wait for a JS predicate:
   - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:

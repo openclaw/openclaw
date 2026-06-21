@@ -23,7 +23,7 @@ function makeScenario(
     },
     objective: "exercise tool",
     successCriteria: ["tool is exercised"],
-    sourcePath: `qa/scenarios/runtime/tools/${tool}.md`,
+    sourcePath: `qa/scenarios/runtime/tools/${tool}.yaml`,
     execution: {
       kind: "flow",
       config: {

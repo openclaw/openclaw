@@ -447,7 +447,9 @@ async function resolveBundledWebFetchProviders(params: {
   return resolvePluginWebFetchProviders({
     config: params.sourceConfig,
     env,
-    origin: "bundled",
+    // Runtime credential resolution may load only bundled providers or verified
+    // official installs. Arbitrary external providers must not gain SecretRef access.
+    sandboxed: true,
   });
 }
 
@@ -512,12 +514,11 @@ function readConfiguredFetchProviderCredentialFallback(params: {
 }
 
 function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): string[] {
-  if (provider.requiresCredential === false) {
-    return [];
-  }
   return provider.inactiveSecretPaths?.length
     ? provider.inactiveSecretPaths
-    : [provider.credentialPath];
+    : provider.credentialPath
+      ? [provider.credentialPath]
+      : [];
 }
 
 /**

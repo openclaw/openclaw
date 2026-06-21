@@ -403,10 +403,19 @@ export async function sendWebGroupInboundMessage(params: {
         reply: params.spies.reply,
         sendMedia: params.spies.sendMedia,
       },
-      from: conversationId,
-      conversationId,
-      chatType: "group",
-      accountId,
+      admission: {
+        accountId,
+        conversation: {
+          kind: "group",
+          id: conversationId,
+        },
+        sender: {
+          id: params.senderE164,
+        },
+        senderAccess: {
+          reasonCode: "group_policy_allowed",
+        },
+      },
       group: params.mentionedJids?.length
         ? {
             mentions: {
@@ -431,7 +440,6 @@ export async function sendWebDirectInboundMessage(params: {
   const accountId = params.accountId ?? "default";
   await params.onMessage(
     createTestWebInboundMessage({
-      accountId,
       event: {
         id: params.id,
         timestamp: params.timestamp ?? Date.now(),
@@ -446,9 +454,16 @@ export async function sendWebDirectInboundMessage(params: {
         reply: params.spies.reply,
         sendMedia: params.spies.sendMedia,
       },
-      from: params.from,
-      conversationId: params.from,
-      chatType: "direct",
+      admission: {
+        accountId,
+        conversation: {
+          kind: "direct",
+          id: params.from,
+        },
+        sender: {
+          id: params.from,
+        },
+      },
     }),
   );
 }

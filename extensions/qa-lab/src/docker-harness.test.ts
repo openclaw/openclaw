@@ -52,7 +52,7 @@ describe("qa docker harness", () => {
       path.join(outputDir, "state", "openclaw.json"),
       path.join(outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
       path.join(outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),
-      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.md"),
+      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.yaml"),
       path.join(outputDir, "state", "seed-workspace", "IDENTITY.md"),
     ]) {
       expect(result.files).toContain(expectedFile);
@@ -90,7 +90,7 @@ describe("qa docker harness", () => {
     expect(compose).toContain(":/opt/openclaw-repo:ro");
     expect(compose).toContain("./state:/opt/openclaw-scaffold:ro");
     expect(compose).toContain(
-      "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/",
+      "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && rm -rf /tmp/openclaw/workspace/repo && ln -s /opt/openclaw-repo /tmp/openclaw/workspace/repo",
     );
     expect(compose).toContain("OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json");
     expect(compose).toContain("OPENCLAW_STATE_DIR: /tmp/openclaw/state");
@@ -125,10 +125,10 @@ describe("qa docker harness", () => {
     expect(kickoff).toContain("Lobster Invaders");
 
     const scenarios = await readFile(
-      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.md"),
+      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.yaml"),
       "utf8",
     );
-    expect(scenarios).toContain("```yaml qa-pack");
+    expect(scenarios).toContain("pack:");
     expect(scenarios).toContain("subagent-fanout-synthesis");
 
     const readme = await readFile(path.join(outputDir, "README.md"), "utf8");

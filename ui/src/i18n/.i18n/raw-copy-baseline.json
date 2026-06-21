@@ -297,6 +297,20 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/realtime-talk-catalog.ts",
+      "text": "Google"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/realtime-talk-catalog.ts",
+      "text": "OpenAI"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/chat/session-controls.ts",
@@ -1745,7 +1759,7 @@
       "text": "Ash"
     },
     {
-      "count": 2,
+      "count": 3,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/views/chat.ts",
@@ -1801,13 +1815,6 @@
       "text": "Gateway relay"
     },
     {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Google"
-    },
-    {
       "count": 2,
       "kind": "object-property",
       "name": "label",
@@ -1841,13 +1848,6 @@
       "name": "label",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Minimal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "OpenAI"
     },
     {
       "count": 1,
@@ -4048,7 +4048,7 @@
       "text": "Sanitized rich-text preview for quick reading."
     },
     {
-      "count": 3,
+      "count": 4,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/markdown-sidebar.ts",

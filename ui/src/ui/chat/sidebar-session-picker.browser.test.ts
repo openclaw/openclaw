@@ -1,12 +1,18 @@
 // Control UI tests cover sidebar session picker layering and interaction.
-import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
+import {
+  canRunPlaywrightChromium,
+  resolvePlaywrightChromiumExecutablePath,
+} from "../../test-helpers/control-ui-e2e.ts";
 
-const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe : describe.skip;
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
+  ? describe
+  : describe.skip;
 
-let browser: Browser;
+const pageBrowsers = new WeakMap<Page, Browser>();
 
 function readUiCss(): string {
   const files = [
@@ -27,7 +33,7 @@ function iconSvg() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>`;
 }
 
-function sidebarSessionPickerHtml(opts: { workspaceRail?: boolean } = {}) {
+function sidebarSessionPickerHtml(opts: { sidebarOpen?: boolean; workspaceRail?: boolean } = {}) {
   const optionButtons = Array.from({ length: 18 }, (_, index) => {
     const sessionKey = `dashboard-session-${index + 1}`;
     const selected = index === 0;
@@ -53,7 +59,7 @@ function sidebarSessionPickerHtml(opts: { workspaceRail?: boolean } = {}) {
   }).join("");
   const workspaceRail = opts.workspaceRail
     ? `
-        <aside class="chat-workspace-rail" aria-label="Workspace files">
+        <aside class="chat-workspace-rail" aria-label="Session workspace">
           <div class="chat-workspace-rail__header">
             <div class="chat-workspace-rail__title">
               <span class="chat-workspace-rail__eyebrow">Workspace</span>
@@ -65,20 +71,24 @@ function sidebarSessionPickerHtml(opts: { workspaceRail?: boolean } = {}) {
           </div>
           <div class="chat-workspace-rail__path">/workspace/openclaw</div>
           <div class="chat-workspace-rail__list" role="list">
-            <button class="chat-workspace-rail__file chat-workspace-rail__file--active" type="button" role="listitem">
-              <span class="chat-workspace-rail__file-icon">${iconSvg()}</span>
-              <span class="chat-workspace-rail__file-main">
-                <span class="chat-workspace-rail__file-name">ui/src/ui/chat/session-controls.ts</span>
-                <span class="chat-workspace-rail__file-meta">24 KB</span>
-              </span>
-            </button>
-            <button class="chat-workspace-rail__file" type="button" role="listitem">
-              <span class="chat-workspace-rail__file-icon">${iconSvg()}</span>
-              <span class="chat-workspace-rail__file-main">
-                <span class="chat-workspace-rail__file-name">ui/src/styles/layout.css</span>
-                <span class="chat-workspace-rail__file-meta">31 KB</span>
-              </span>
-            </button>
+            <div class="chat-workspace-rail__file chat-workspace-rail__file--active" role="listitem">
+              <button class="chat-workspace-rail__file-open" type="button">
+                <span class="chat-workspace-rail__file-icon">${iconSvg()}</span>
+                <span class="chat-workspace-rail__file-main">
+                  <span class="chat-workspace-rail__file-name">ui/src/ui/chat/session-controls.ts</span>
+                  <span class="chat-workspace-rail__file-meta">24 KB</span>
+                </span>
+              </button>
+            </div>
+            <div class="chat-workspace-rail__file" role="listitem">
+              <button class="chat-workspace-rail__file-open" type="button">
+                <span class="chat-workspace-rail__file-icon">${iconSvg()}</span>
+                <span class="chat-workspace-rail__file-main">
+                  <span class="chat-workspace-rail__file-name">ui/src/styles/layout.css</span>
+                  <span class="chat-workspace-rail__file-meta">31 KB</span>
+                </span>
+              </button>
+            </div>
           </div>
         </aside>
       `
@@ -157,32 +167,65 @@ function sidebarSessionPickerHtml(opts: { workspaceRail?: boolean } = {}) {
       <main class="content content--chat">
         <section class="card chat">
           <div class="chat-workbench">
-            <div class="chat-split-container">
-              <div class="chat-main">
-                <div class="chat-thread" role="log">
-                  <div class="chat-thread-inner">
-                    <div class="chat-group assistant">
-                      <div class="chat-group-messages">
-                        <div class="chat-bubble">
-                          <div class="chat-text">
-                            <p>Keep the sidebar session picker interactive even when the desktop chat workbench is visible.</p>
+            ${workspaceRail}
+            <div class="chat-workbench__main">
+              <div class="chat-split-container${opts.sidebarOpen ? " chat-split-container--open" : ""}">
+                <div class="chat-main" style="flex: ${opts.sidebarOpen ? "0 1 72%" : "1 1 100%"}">
+                  <div class="chat-thread" role="log">
+                    <div class="chat-thread-inner">
+                      <div class="chat-group assistant">
+                        <div class="chat-group-messages">
+                          <div class="chat-bubble">
+                            <div class="chat-text">
+                              <p>Keep the sidebar session picker interactive even when the desktop chat workbench is visible.</p>
+                            </div>
                           </div>
                         </div>
                       </div>
+                      <div
+                        style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:28px 0 0;padding:0 8px;"
+                      >
+                        <button class="btn" type="button">What can you do?</button>
+                        <button class="btn" type="button">Summarize recent sessions</button>
+                        <button class="btn" type="button">Help me configure a channel</button>
+                        <button class="btn" type="button">Check system health</button>
+                      </div>
                     </div>
-                    <div
-                      style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:28px 0 0;padding:0 8px;"
-                    >
-                      <button class="btn" type="button">What can you do?</button>
-                      <button class="btn" type="button">Summarize recent sessions</button>
-                      <button class="btn" type="button">Help me configure a channel</button>
-                      <button class="btn" type="button">Check system health</button>
+                  </div>
+                  <div class="agent-chat__input">
+                    <div class="agent-chat__composer-combobox">
+                      <textarea placeholder="Message OpenClaw"></textarea>
+                    </div>
+                    <div class="agent-chat__toolbar">
+                      <div class="agent-chat__toolbar-left">
+                        <button class="agent-chat__input-btn" type="button" aria-label="Attach file">
+                          ${iconSvg()}
+                        </button>
+                      </div>
+                      <button class="btn btn--ghost" type="button">Send</button>
                     </div>
                   </div>
                 </div>
+                ${
+                  opts.sidebarOpen
+                    ? `
+                      <resizable-divider style="width:14px;flex:0 0 14px;"></resizable-divider>
+                      <div class="chat-sidebar">
+                        <div class="sidebar-panel">
+                          <div class="sidebar-header">
+                            <div class="sidebar-title">AGENTS.md</div>
+                            <button class="btn" type="button">Close</button>
+                          </div>
+                          <div class="sidebar-content">
+                            <article class="sidebar-markdown">File preview content</article>
+                          </div>
+                        </div>
+                      </div>
+                    `
+                    : ""
+                }
               </div>
             </div>
-            ${workspaceRail}
           </div>
         </section>
       </main>
@@ -206,13 +249,39 @@ function sidebarSessionPickerHtml(opts: { workspaceRail?: boolean } = {}) {
 async function openSidebarSessionPickerFixture(
   width: number,
   height: number,
-  opts: { workspaceRail?: boolean } = {},
+  opts: { sidebarOpen?: boolean; workspaceRail?: boolean } = {},
 ): Promise<Page> {
-  const page = await browser.newPage({ viewport: { width, height } });
-  await page.setContent(
-    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sidebarSessionPickerHtml(opts)}</body></html>`,
-  );
-  return page;
+  const page = await openBrowserPage(width, height);
+  try {
+    await page.setContent(
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sidebarSessionPickerHtml(opts)}</body></html>`,
+    );
+    return page;
+  } catch (error) {
+    await closeBrowserPage(page);
+    throw error;
+  }
+}
+
+async function openBrowserPage(width: number, height: number): Promise<Page> {
+  const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  let page: Page | undefined;
+  try {
+    page = await browser.newPage({ viewport: { width, height } });
+    pageBrowsers.set(page, browser);
+    return page;
+  } catch (error) {
+    await page?.close().catch(() => {});
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function closeBrowserPage(page: Page): Promise<void> {
+  const browser = pageBrowsers.get(page);
+  pageBrowsers.delete(page);
+  await page.close().catch(() => {});
+  await browser?.close().catch(() => {});
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -224,14 +293,6 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(metrics.html).toBeLessThanOrEqual(metrics.viewport + 1);
   expect(metrics.body).toBeLessThanOrEqual(metrics.viewport + 1);
 }
-
-beforeAll(async () => {
-  browser = await chromium.launch({ headless: true });
-});
-
-afterAll(async () => {
-  await browser.close();
-});
 
 describeBrowserLayout("sidebar session picker browser layout", () => {
   it("keeps the collapsed sidebar session picker interactive above the desktop workbench when the workspace rail is visible", async () => {
@@ -286,7 +347,46 @@ describeBrowserLayout("sidebar session picker browser layout", () => {
         .poll(() => page.evaluate(() => document.body.dataset.clickedSession ?? ""))
         .toBe("dashboard-session-12");
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the file preview sidebar inside the main workbench column when the workspace rail is visible", async () => {
+    const page = await openSidebarSessionPickerFixture(1366, 900, {
+      sidebarOpen: true,
+      workspaceRail: true,
+    });
+    try {
+      await expectNoHorizontalOverflow(page);
+      const boxes = await page.evaluate(() => {
+        const rectFor = (selector: string) => {
+          const element = document.querySelector(selector);
+          if (!element) {
+            throw new Error(`Missing ${selector}`);
+          }
+          const rect = element.getBoundingClientRect();
+          return {
+            left: rect.left,
+            right: rect.right,
+            width: rect.width,
+          };
+        };
+        return {
+          main: rectFor(".chat-workbench__main"),
+          input: rectFor(".agent-chat__input"),
+          rail: rectFor(".chat-workspace-rail"),
+          sidebar: rectFor(".chat-sidebar"),
+          split: rectFor(".chat-split-container"),
+        };
+      });
+
+      expect(boxes.split.right).toBeLessThanOrEqual(boxes.rail.left + 1);
+      expect(boxes.sidebar.right).toBeLessThanOrEqual(boxes.rail.left + 1);
+      expect(boxes.input.right).toBeLessThanOrEqual(boxes.sidebar.left + 1);
+      expect(boxes.sidebar.left).toBeGreaterThanOrEqual(boxes.main.left - 1);
+      expect(boxes.sidebar.width).toBeGreaterThanOrEqual(300);
+    } finally {
+      await closeBrowserPage(page);
     }
   });
 });

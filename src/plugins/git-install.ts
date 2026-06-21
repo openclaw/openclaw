@@ -25,6 +25,11 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
 } from "./install.js";
+import {
+  emitPluginAuditSecurityEvent,
+  emitPluginInstallSecurityEvent,
+  pluginAuditOutcomeForReason,
+} from "./security-events.js";
 
 const GIT_SPEC_PREFIX = "git:";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
@@ -396,6 +401,17 @@ export async function installPluginFromGitSpec(
       sourcePath: repoDir,
     });
     if (preflight?.blocked) {
+      const reason =
+        preflight.blocked.code === "security_scan_failed"
+          ? "security_scan_failed"
+          : "security_scan_blocked";
+      emitPluginAuditSecurityEvent({
+        outcome: pluginAuditOutcomeForReason(reason),
+        reason,
+        pluginId: params.expectedPluginId,
+        mode: effectiveMode,
+        sourceFamily: "git",
+      });
       return buildBlockedGitInstallResult({ blocked: preflight.blocked });
     }
 
@@ -437,6 +453,7 @@ export async function installPluginFromGitSpec(
       expectedPluginId: params.expectedPluginId,
       logger: params.logger,
       mode: effectiveMode,
+      emitSuccessSecurityEvent: false,
       installPolicyRequest,
     });
     if (!result.ok) {
@@ -450,6 +467,14 @@ export async function installPluginFromGitSpec(
       if (!replaceResult.ok) {
         return replaceResult;
       }
+      emitPluginInstallSecurityEvent({
+        pluginId: result.pluginId,
+        mode: effectiveMode,
+        sourceFamily: "git",
+        extensionCount: result.extensions.length,
+        hasVersion: Boolean(result.version),
+        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      });
     }
 
     return {

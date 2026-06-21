@@ -1,6 +1,10 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
   const previous = new Map<string, string | undefined>();
@@ -26,6 +30,91 @@ function withEnv<T>(env: Record<string, string | undefined>, callback: () => T):
 }
 
 describe("bench-cli-startup", () => {
+  it("rejects unknown CLI options before running benchmarks", () => {
+    expect(() => testing.validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--wat"],
+      {
+        cwd: join(__dirname, "../.."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stderr).not.toContain("Node.js");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("writes compare-mode JSON output and creates parent directories", () => {
+    const tempDirs = createTempDirTracker();
+    const tmpDir = tempDirs.make("openclaw-cli-startup-compare-output-");
+    try {
+      const baselinePath = join(tmpDir, "baseline.json");
+      const candidatePath = join(tmpDir, "candidate.json");
+      const outputPath = join(tmpDir, "nested", "comparison.json");
+      const makeReport = (durationAvg: number, maxRssAvg: number) => ({
+        primary: {
+          entry: "openclaw.mjs",
+          cases: [
+            {
+              id: "version",
+              name: "--version",
+              args: ["--version"],
+              contract: null,
+              samples: [],
+              summary: {
+                sampleCount: 1,
+                durationMs: {
+                  avg: durationAvg,
+                  p50: durationAvg,
+                  p95: durationAvg,
+                  min: durationAvg,
+                  max: durationAvg,
+                },
+                firstOutputMs: null,
+                maxRssMb: {
+                  avg: maxRssAvg,
+                  p50: maxRssAvg,
+                  p95: maxRssAvg,
+                  min: maxRssAvg,
+                  max: maxRssAvg,
+                },
+                exitSummary: "code:0x1",
+              },
+            },
+          ],
+        },
+      });
+
+      writeFileSync(baselinePath, JSON.stringify(makeReport(100, 50)), "utf8");
+      writeFileSync(candidatePath, JSON.stringify(makeReport(125, 60)), "utf8");
+
+      const { comparison } = testing.readBenchmarkComparison(baselinePath, candidatePath);
+      testing.writeJsonOutput(outputPath, comparison);
+      expect(existsSync(outputPath)).toBe(true);
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+        baseline: baselinePath,
+        candidate: candidatePath,
+        deltas: [
+          {
+            id: "version",
+            name: "--version",
+            durationAvgDeltaMs: 25,
+            durationAvgDeltaPct: 25,
+            maxRssAvgDeltaMb: 10,
+            maxRssAvgDeltaPct: 20,
+          },
+        ],
+      });
+    } finally {
+      tempDirs.cleanup();
+    }
+  });
+
   it("fails reports with no measured samples", () => {
     expect(
       testing.collectFailedSamples({

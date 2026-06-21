@@ -27,9 +27,11 @@ import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -152,6 +154,12 @@ function expectListIncludes(
   for (const value of expected) {
     expect(list.includes(value)).toBe(true);
   }
+}
+
+function cronCreatorToolNames(
+  list: OpenClawToolsOptions["cronCreatorToolAllowlist"] | undefined,
+): string[] | undefined {
+  return list?.map((entry) => (typeof entry === "string" ? entry : entry.name));
 }
 
 describe("createOpenClawCodingTools", () => {
@@ -739,6 +747,88 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("process")).toBe(false);
   });
 
+  it("passes group-restricted tool surface to cron-created agent turns", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      sessionKey: "agent:main:whatsapp:group:restricted-room",
+      config: {
+        tools: { allow: ["read", "exec", "process", "cron"] },
+        channels: {
+          whatsapp: {
+            groups: {
+              "restricted-room": {
+                tools: { allow: ["read", "cron"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
+    const cronAllowNames = cronCreatorToolNames(cronAllow);
+    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expect(cronAllowNames?.includes("exec")).toBe(false);
+    expect(cronAllowNames?.includes("process")).toBe(false);
+  });
+
+  it("lets embedded attempts refresh a caller-owned cron creator tool surface", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const cronCreatorToolAllowlistRef: NonNullable<
+      OpenClawToolsOptions["cronCreatorToolAllowlist"]
+    > = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "cron"] } },
+      cronCreatorToolAllowlistRef,
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
+    expect(cronAllow).toBe(cronCreatorToolAllowlistRef);
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron"]);
+
+    replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlistRef, [
+      stubTool("read"),
+      stubTool("cron"),
+      stubTool("bundle_mcp_search"),
+    ]);
+
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron", "bundle_mcp_search"]);
+  });
+
+  it("passes deny-restricted tool surface to cron-created agent turns", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      sessionKey: "agent:main:whatsapp:group:restricted-room",
+      config: {
+        tools: { allow: ["read", "exec", "process", "cron"] },
+        channels: {
+          whatsapp: {
+            groups: {
+              "restricted-room": {
+                tools: { deny: ["exec", "process"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
+    const cronAllowNames = cronCreatorToolNames(cronAllow);
+    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expect(cronAllowNames?.includes("exec")).toBe(false);
+    expect(cronAllowNames?.includes("process")).toBe(false);
+  });
+
   it("records core tool-prep stages for hot-path diagnostics", () => {
     const stages: string[] = [];
 
@@ -895,6 +985,28 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("slack")).toBe(false);
     expect(names.has("telegram")).toBe(false);
     expect(names.has("whatsapp")).toBe(false);
+  });
+
+  it("separates the canonical message provider from transport tool policy", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:speaker-1": { deny: ["exec"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      toolPolicyMessageProvider: "discord-voice",
+      senderId: "speaker-1",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("tts")).toBe(false);
+    expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
   it("filters session tools for sub-agent sessions by default", () => {

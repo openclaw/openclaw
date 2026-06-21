@@ -143,7 +143,7 @@ export function buildLatestSubagentRunIndex(
 }
 
 /** Create a cached descendant counter for repeated list rendering checks. */
-export function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
+function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
   const pendingDescendantCache = new Map<string, number>();
   return (sessionKey: string) => {
     if (pendingDescendantCache.has(sessionKey)) {
@@ -157,7 +157,7 @@ export function createPendingDescendantCounter(runsSnapshot?: Map<string, Subage
 }
 
 /** Return whether a run should be shown in the active subagent section. */
-export function isActiveSubagentRun(
+function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
 ) {

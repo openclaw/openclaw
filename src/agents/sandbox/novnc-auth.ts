@@ -22,7 +22,7 @@ type NoVncObserverTokenEntry = {
   expiresAt: number;
 };
 
-export type NoVncObserverTokenPayload = {
+type NoVncObserverTokenPayload = {
   noVncPort: number;
   password?: string;
 };
@@ -61,21 +61,6 @@ export function generateNoVncPassword() {
     out += NOVNC_PASSWORD_ALPHABET[crypto.randomInt(0, NOVNC_PASSWORD_ALPHABET.length)];
   }
   return out;
-}
-
-export function buildNoVncDirectUrl(port: number) {
-  return `http://127.0.0.1:${port}/vnc.html`;
-}
-
-export function buildNoVncObserverTargetUrl(params: { port: number; password?: string }) {
-  const query = new URLSearchParams({
-    autoconnect: "1",
-    resize: "remote",
-  });
-  if (params.password?.trim()) {
-    query.set("password", params.password);
-  }
-  return `${buildNoVncDirectUrl(params.port)}#${query.toString()}`;
 }
 
 export function issueNoVncObserverToken(params: {

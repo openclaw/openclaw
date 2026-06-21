@@ -328,7 +328,7 @@ async function resolveConvexCredentialPayload(params: {
     chunks.push(parsed.data);
   }
   const serialized = chunks.join("");
-  if (serialized.length !== marker.byteLength) {
+  if (Buffer.byteLength(serialized, "utf8") !== marker.byteLength) {
     throw new Error("Chunked credential payload length mismatch.");
   }
   return JSON.parse(serialized) as unknown;
