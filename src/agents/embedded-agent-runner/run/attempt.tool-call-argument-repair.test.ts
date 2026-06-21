@@ -465,4 +465,30 @@ const re = /\d+/;
     });
     expect(result.finalArgs).not.toHaveProperty("foo");
   });
+
+  it("repairs smart-quoted cron add args without mangling keys", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "cron",
+      delta: String.raw` {“action”:“add”,“job”:{“name”:“Holiday Check-in”,“description”:“Casual check-in while on holiday, 2x per day”,“schedule”:{“kind”:“cron”,“expr”:“30 10,20 * * *”,“tz”:“Europe/Madrid”},“sessionTarget”:“isolated”,“payload”:{“kind”:“agentTurn”,“message”:“Holiday check-in: how’s everything going? Anything you need help with today?”},“enabled”:true}}`,
+    });
+
+    expectAllToolCallArgs(result, {
+      action: "add",
+      job: {
+        name: "Holiday Check-in",
+        description: "Casual check-in while on holiday, 2x per day",
+        schedule: {
+          kind: "cron",
+          expr: "30 10,20 * * *",
+          tz: "Europe/Madrid",
+        },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "Holiday check-in: how’s everything going? Anything you need help with today?",
+        },
+        enabled: true,
+      },
+    });
+  });
 });

@@ -28,22 +28,40 @@ const TOOLCALL_REPAIR_RESPONSES_APIS = new Set([
 const TOOLCALL_REPAIR_SMART_QUOTES = new Set(["\u201c", "\u201d", "\u201e", "\u201f"]);
 const MAX_TOOLCALL_REPAIR_MEMBER_KEY_CHARS = 96;
 const TOOLCALL_REPAIR_KNOWN_ARG_KEYS = new Set([
+  "action",
+  "allowUnsafeExternalContent",
+  "anchorMs",
   "args",
+  "at",
   "backupDir",
   "cmd",
   "command",
   "content",
+  "cron",
   "cwd",
+  "description",
   "edits",
+  "enabled",
+  "every",
+  "everyMs",
+  "exact",
+  "expr",
+  "fallbacks",
   "file",
   "file_path",
   "filePath",
   "filepath",
   "from",
+  "job",
+  "jobId",
+  "kind",
   "line_end",
   "line_start",
   "lines",
+  "lightContext",
   "message",
+  "model",
+  "name",
   "new_str",
   "new_string",
   "newText",
@@ -51,14 +69,25 @@ const TOOLCALL_REPAIR_KNOWN_ARG_KEYS = new Set([
   "old_string",
   "oldText",
   "path",
+  "patch",
   "paths",
+  "payload",
   "pattern",
   "query",
   "replacement",
+  "runMode",
+  "schedule",
+  "sessionTarget",
+  "stagger",
+  "staggerMs",
   "text",
+  "thinking",
   "timeoutMs",
+  "timeoutSeconds",
   "title",
   "to",
+  "toolsAllow",
+  "tz",
   "url",
   "urls",
   "workdir",
@@ -422,6 +451,12 @@ function readObjectValue(
   }
   if (key === "edits" && char === "[") {
     return readSmartQuotedEditArray(raw, startIndex);
+  }
+  if (char === "{") {
+    const obj = parseSmartQuotedToolCallObject(raw, startIndex, toolName);
+    if (obj) {
+      return { value: obj.args, endIndex: obj.endIndex };
+    }
   }
   return readJsonValue(raw, startIndex);
 }
