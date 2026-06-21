@@ -718,6 +718,56 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   }
 }
 
+export function createPreflightCompactionCancelSignal(replyOperation: ReplyOperation): { signal: AbortSignal; cleanup: () => void } {
+  const ctrl = new AbortController();
+  let cancelInterval: ReturnType<typeof setInterval> | undefined;
+
+  const clearPolling = () => {
+    if (cancelInterval) {
+      clearInterval(cancelInterval);
+      cancelInterval = undefined;
+    }
+  };
+
+  const startCancelPolling = () => {
+    cancelInterval = setInterval(() => {
+      if (ctrl.signal.aborted) {
+        clearPolling();
+        return;
+      }
+      if (replyOperation.result?.kind === "aborted") {
+        ctrl.abort(new Error("Preflight compaction cancelled"));
+        clearPolling();
+      }
+    }, 500);
+    ctrl.signal.addEventListener("abort", clearPolling);
+  };
+
+  if (replyOperation.abortSignal.aborted) {
+    const reason = replyOperation.abortSignal.reason;
+    if (!(reason instanceof Error && reason.name === "TimeoutError")) {
+      ctrl.abort(reason);
+    } else {
+      startCancelPolling();
+    }
+  } else {
+    replyOperation.abortSignal.addEventListener("abort", () => {
+      const reason = replyOperation.abortSignal.reason;
+      if (!(reason instanceof Error && reason.name === "TimeoutError")) {
+        ctrl.abort(reason);
+        return;
+      }
+      startCancelPolling();
+    }, { once: true });
+  }
+
+  if (replyOperation.result?.kind === "aborted" && !ctrl.signal.aborted) {
+    ctrl.abort(new Error("Preflight compaction cancelled"));
+  }
+
+  return { signal: ctrl.signal, cleanup: clearPolling };
+}
+
 /** Runs preflight compaction when session state exceeds configured thresholds. */
 export async function runPreflightCompactionIfNeeded(params: {
   cfg: OpenClawConfig;
@@ -943,6 +993,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       params.sessionKey ?? params.followupRun.run.sessionKey,
       { storePath: params.storePath },
     );
+    const cancelSignal = createPreflightCompactionCancelSignal(params.replyOperation);
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
       sessionKey: params.sessionKey,
@@ -978,8 +1029,9 @@ export async function runPreflightCompactionIfNeeded(params: {
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
-      abortSignal: params.replyOperation.abortSignal,
+      abortSignal: cancelSignal.signal,
     });
+    cancelSignal.cleanup();
 
     if (!result?.ok) {
       const reason = result?.reason ?? "not_compacted";

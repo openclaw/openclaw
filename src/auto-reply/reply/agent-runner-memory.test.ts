@@ -14,6 +14,7 @@ import {
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
+  createPreflightCompactionCancelSignal,
   runMemoryFlushIfNeeded,
   runPreflightCompactionIfNeeded,
   setAgentRunnerMemoryTestDeps,
@@ -117,6 +118,7 @@ type CompactEmbeddedAgentSessionParams = {
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
+  abortSignal?: AbortSignal;
 };
 
 function requireRefreshQueuedFollowupSessionCall(index = 0) {
@@ -2393,5 +2395,128 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.silentExpected).toBe(true);
     expect(flushCall.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+
+  it("preflight compaction passes a cancellation-only signal that excludes lifecycle timeout", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 42 },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+    };
+    const replyOperation = createReplyOperation();
+    const onCompactionNotice = vi.fn();
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+      onCompactionNotice,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedAgentSessionCall();
+    expect(compactCall.abortSignal).toBeDefined();
+    expect(compactCall.abortSignal).not.toBe(replyOperation.abortSignal);
+  });
+});
+
+describe("createPreflightCompactionCancelSignal", () => {
+  function createTestReplyOperation(
+    ctrl: AbortController,
+    result?: ReplyOperation["result"],
+  ): ReplyOperation {
+    const op = createReplyOperation();
+    Object.defineProperty(op, "abortSignal", {
+      value: ctrl.signal,
+      writable: false,
+    });
+    if (result !== undefined) {
+      Object.defineProperty(op, "result", {
+        value: result,
+        writable: true,
+      });
+    }
+    return op;
+  }
+
+  it("aborts on user abort", () => {
+    const replyCtrl = new AbortController();
+    const replyOperation = createTestReplyOperation(replyCtrl);
+    const { signal: cancelSignal } = createPreflightCompactionCancelSignal(replyOperation);
+
+    replyCtrl.abort(new Error("Reply operation aborted by user"));
+    expect(cancelSignal.aborted).toBe(true);
+  });
+
+  it("does not abort on lifecycle timeout (TimeoutError)", () => {
+    const replyCtrl = new AbortController();
+    const replyOperation = createTestReplyOperation(replyCtrl);
+    const { signal: cancelSignal2 } = createPreflightCompactionCancelSignal(replyOperation);
+
+    const timeout = new Error("chat run timed out");
+    timeout.name = "TimeoutError";
+    replyCtrl.abort(timeout);
+    expect(cancelSignal2.aborted).toBe(false);
+  });
+
+  it("aborts on explicit cancel after lifecycle timeout via replyOperation.result", async () => {
+    vi.useFakeTimers();
+    const replyCtrl = new AbortController();
+    const replyOperation = createTestReplyOperation(replyCtrl);
+
+    const timeout = new Error("chat run timed out");
+    timeout.name = "TimeoutError";
+    replyCtrl.abort(timeout);
+
+    const { signal: cancelSignal3 } = createPreflightCompactionCancelSignal(replyOperation);
+    expect(cancelSignal3.aborted).toBe(false);
+
+    (replyOperation as { result: ReplyOperation["result"] }).result = {
+      kind: "aborted",
+      code: "aborted_by_user",
+    };
+    await vi.advanceTimersByTimeAsync(600);
+    expect(cancelSignal3.aborted).toBe(true);
+    vi.useRealTimers();
   });
 });
