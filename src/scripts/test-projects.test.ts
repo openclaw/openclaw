@@ -882,6 +882,7 @@ describe("test-projects args", () => {
           "test/scripts/bench-cli-startup.test.ts",
           "test/scripts/check-package-dist-imports.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/e2e-text-file-utils.test.ts",
           "test/scripts/ios-configure-signing.test.ts",
           "test/scripts/ios-pin-version.test.ts",
           "test/scripts/ios-team-id.test.ts",
