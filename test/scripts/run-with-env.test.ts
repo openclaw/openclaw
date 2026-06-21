@@ -12,6 +12,29 @@ import {
   signalRunWithEnvChild,
 } from "../../scripts/run-with-env.mjs";
 
+const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
+
+function restoreEnvValue(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
+
+function withDefaultWindowsSystemRoot(run: () => void): void {
+  const originalSystemRoot = process.env.SystemRoot;
+  const originalWindir = process.env.WINDIR;
+  try {
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
+    run();
+  } finally {
+    restoreEnvValue("SystemRoot", originalSystemRoot);
+    restoreEnvValue("WINDIR", originalWindir);
+  }
+}
+
 async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
   const startedAt = Date.now();
   while (!predicate()) {
@@ -160,52 +183,56 @@ describe("run-with-env", () => {
   });
 
   it("signals Windows wrapped command trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+    withDefaultWindowsSystemRoot(() => {
+      const child = {
+        kill: vi.fn(),
+        pid: 12345,
+      };
+      const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    signalRunWithEnvChild(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
+      signalRunWithEnvChild(child, "SIGTERM", {
+        platform: "win32",
+        runTaskkill,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+      });
 
-    signalRunWithEnvChild(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
+      signalRunWithEnvChild(child, "SIGKILL", {
+        platform: "win32",
+        runTaskkill,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
-    });
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("force-kills Windows wrapped command trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
+    withDefaultWindowsSystemRoot(() => {
+      const child = {
+        kill: vi.fn(),
+        pid: 12345,
+      };
+      const runTaskkill = vi
+        .fn()
+        .mockReturnValueOnce({ error: undefined, status: 1 })
+        .mockReturnValueOnce({ error: undefined, status: 0 });
 
-    signalRunWithEnvChild(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
+      signalRunWithEnvChild(child, "SIGTERM", {
+        platform: "win32",
+        runTaskkill,
+      });
 
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
-    });
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP", "SIGINT"] as const)(

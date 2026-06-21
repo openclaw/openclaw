@@ -4,6 +4,7 @@ export type LiveTransportStandardScenarioId =
   | "mention-gating"
   | "allowlist-block"
   | "top-level-reply-shape"
+  | "quote-reply"
   | "restart-resume"
   | "thread-follow-up"
   | "thread-isolation"
@@ -48,6 +49,11 @@ const LIVE_TRANSPORT_STANDARD_SCENARIOS: readonly LiveTransportStandardScenarioD
     id: "top-level-reply-shape",
     title: "Top-level reply shape",
     description: "Top-level replies stay top-level when the lane is configured that way.",
+  },
+  {
+    id: "quote-reply",
+    title: "Quote reply",
+    description: "Reply-mode responses quote the triggering transport message.",
   },
   {
     id: "restart-resume",

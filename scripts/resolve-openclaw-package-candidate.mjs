@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -320,16 +321,17 @@ export function signalChildProcessTree(
     }
   }
   if (platform === "win32" && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
     const args = ["/PID", String(child.pid), "/T"];
     if (signal === "SIGKILL") {
       args.push("/F");
     }
-    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
     if (!result?.error && result?.status === 0) {
       return;
     }
     if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill("taskkill", [...args, "/F"], { stdio: "ignore" });
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
       if (!forceResult?.error && forceResult?.status === 0) {
         return;
       }
@@ -484,6 +486,18 @@ export async function readArtifactPackageCandidateMetadata(dir) {
   const parsed = JSON.parse(raw);
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`artifact package-candidate.json must contain a JSON object`);
+  }
+  const packageSourceSha =
+    typeof parsed.packageSourceSha === "string" ? parsed.packageSourceSha.trim() : "";
+  if (packageSourceSha && !/^[0-9a-f]{40}$/iu.test(packageSourceSha)) {
+    throw new Error(
+      "artifact package-candidate.json packageSourceSha must be a 40-character commit SHA",
+    );
+  }
+  if (typeof parsed.packageSourceSha === "string") {
+    return packageSourceSha
+      ? { ...parsed, packageSourceSha: packageSourceSha.toLowerCase() }
+      : { ...parsed, packageSourceSha: "" };
   }
   return parsed;
 }
@@ -888,6 +902,14 @@ function parseTrustedPort(value) {
   return Number.NaN;
 }
 
+function pathnameMatchesTrustedPrefix(pathname, prefix) {
+  if (prefix === "/") {
+    return true;
+  }
+  const normalizedPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
+  return pathname === prefix || pathname.startsWith(normalizedPrefix);
+}
+
 function toPathPrefixes(value, sourceId) {
   const prefixes = value === undefined ? ["/"] : value;
   if (!Array.isArray(prefixes) || prefixes.length === 0) {
@@ -979,7 +1001,11 @@ function validateTrustedPackageDownloadUrl(parsed, trustedSource, options = {}) 
       `package_url port ${packageUrlPort(parsed)} is not allowed by trusted package source ${trustedSource.id}`,
     );
   }
-  if (!trustedSource.pathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) {
+  if (
+    !trustedSource.pathPrefixes.some((prefix) =>
+      pathnameMatchesTrustedPrefix(parsed.pathname, prefix),
+    )
+  ) {
     throw new Error(
       `package_url path is not allowed by trusted package source ${trustedSource.id}`,
     );

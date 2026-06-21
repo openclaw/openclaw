@@ -1,5 +1,6 @@
 // Runs a command with inline KEY=value assignments while preserving signal behavior.
 import { spawn, spawnSync } from "node:child_process";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 const USAGE = "Usage: node scripts/run-with-env.mjs KEY=value [KEY=value ...] -- command [args...]";
@@ -104,16 +105,17 @@ export function signalRunWithEnvChild(
     }
   }
   if (platform === "win32" && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
     const args = ["/PID", String(child.pid), "/T"];
     if (signal === "SIGKILL") {
       args.push("/F");
     }
-    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
     if (!result?.error && result?.status === 0) {
       return;
     }
     if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill("taskkill", [...args, "/F"], { stdio: "ignore" });
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
       if (!forceResult?.error && forceResult?.status === 0) {
         return;
       }

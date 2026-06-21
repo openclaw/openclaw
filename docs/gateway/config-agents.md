@@ -249,9 +249,10 @@ Shared defaults for bounded runtime context surfaces.
 - `toolResultMaxChars`: advanced live tool-result ceiling used for persisted
   results and overflow recovery. Leave unset for the model-context auto cap:
   `16000` chars below 100K tokens, `32000` chars at 100K+ tokens, and `64000`
-  chars at 200K+ tokens. The effective cap is still limited to about 30% of the
-  model context window. `openclaw doctor --deep` prints the effective cap, and
-  doctor warns only when an explicit override is stale or has no effect.
+  chars at 200K+ tokens. Explicit values up to `1000000` are accepted for
+  long-context models, but the effective cap is still limited to about 30% of
+  the model context window. `openclaw doctor --deep` prints the effective cap,
+  and doctor warns only when an explicit override is stale or has no effect.
 - `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
   refresh injection.
 

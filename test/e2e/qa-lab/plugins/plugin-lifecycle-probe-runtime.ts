@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
@@ -269,16 +270,17 @@ async function runCommand(command: string, args: readonly string[], options: Com
         }
         if (!useProcessGroup && child.pid) {
           const runTaskkill = options.taskkillImpl ?? spawnSync;
+          const taskkillPath = resolveWindowsTaskkillPath();
           const args = ["/PID", String(child.pid), "/T"];
           if (signal === "SIGKILL") {
             args.push("/F");
           }
-          const result = runTaskkill("taskkill", args, { stdio: "ignore", windowsHide: true });
+          const result = runTaskkill(taskkillPath, args, { stdio: "ignore", windowsHide: true });
           if (!result.error && result.status === 0) {
             return;
           }
           if (signal !== "SIGKILL") {
-            const forceResult = runTaskkill("taskkill", [...args, "/F"], {
+            const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
               stdio: "ignore",
               windowsHide: true,
             });

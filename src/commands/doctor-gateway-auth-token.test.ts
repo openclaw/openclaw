@@ -5,11 +5,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome, writeStateDirDotEnv } from "../config/test-helpers.js";
+import { shouldRequireGatewayTokenForInstall } from "../gateway/auth-install-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  resolveGatewayAuthTokenForService,
-  shouldRequireGatewayTokenForInstall,
-} from "./doctor-gateway-auth-token.js";
+import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const envVar = (...parts: string[]) => parts.join("_");

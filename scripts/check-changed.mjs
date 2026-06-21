@@ -57,6 +57,8 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
   "apps/android/version.json",
 ]);
+const MACOS_APP_CI_PATH_RE =
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/plistbuddy\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
 
@@ -81,6 +83,10 @@ function hasAndroidVersionSyncPath(paths) {
   return paths.some((changedPath) =>
     ANDROID_VERSION_SYNC_PATHS.has(normalizeChangedPath(changedPath)),
   );
+}
+
+function hasMacosAppCiPath(paths) {
+  return paths.some((changedPath) => MACOS_APP_CI_PATH_RE.test(normalizeChangedPath(changedPath)));
 }
 
 function executableExistsOnPath(command, env = process.env) {
@@ -191,6 +197,10 @@ export function shouldRunRuntimeSidecarBaselineCheck(paths) {
   return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
 }
 
+export function shouldRunAppcastOwnerTest(paths) {
+  return paths.some((changedPath) => normalizeChangedPath(changedPath) === "appcast.xml");
+}
+
 export function shouldRunTestTempCreationReport(paths) {
   return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
 }
@@ -281,14 +291,26 @@ export function createChangedCheckPlan(result, options = {}) {
     add("prompt snapshot drift", ["prompt:snapshots:check"]);
   }
   if (shouldRunPromptSnapshotOwnerTest(result.paths)) {
-    add("prompt snapshot owner test", ["test:serial", "test/scripts/prompt-snapshots.test.ts"]);
+    add(
+      "prompt snapshot owner test",
+      ["test:serial", "test/scripts/prompt-snapshots.test.ts"],
+      baseEnv,
+    );
   }
   if (shouldRunRuntimeSidecarBaselineCheck(result.paths)) {
     add("runtime sidecar baseline", ["runtime-sidecars:check"]);
-    add("runtime sidecar owner test", [
-      "test:serial",
-      "src/plugins/bundled-plugin-metadata.test.ts",
-    ]);
+    add(
+      "runtime sidecar owner test",
+      ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
+      baseEnv,
+    );
+  }
+  if (shouldRunAppcastOwnerTest(result.paths)) {
+    add(
+      "appcast owner tests",
+      ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
+      baseEnv,
+    );
   }
   add("package patch guard", ["deps:patches:check"]);
 
@@ -392,6 +414,9 @@ export function createChangedCheckPlan(result, options = {}) {
     );
   } else if (lanes.apps) {
     addLint("lint apps", ["lint:apps"]);
+  }
+  if (hasMacosAppCiPath(result.paths)) {
+    add("macOS app CI tests", ["test:macos:ci"], baseEnv);
   }
 
   if (lanes.core || lanes.extensions) {

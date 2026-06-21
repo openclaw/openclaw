@@ -112,6 +112,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
       openclaw: {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
+        alwaysLoad: true,
         headers: {
           Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
           "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",

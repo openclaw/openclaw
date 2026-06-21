@@ -1,6 +1,7 @@
 // Memory Host SDK module implements qmd process behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
+import path from "node:path";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
@@ -15,6 +16,8 @@ type QmdChildProcess = {
   pid?: number;
   kill: (signal?: NodeJS.Signals) => boolean;
 };
+
+const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
 export type QmdBinaryUnavailableReason = "binary" | "workspace-cwd";
 
@@ -235,6 +238,49 @@ function shouldUseQmdProcessGroup(): boolean {
   return process.platform !== "win32";
 }
 
+function getEnvValueCaseInsensitive(
+  env: Record<string, string | undefined>,
+  expectedKey: string,
+): string | undefined {
+  const direct = env[expectedKey];
+  if (direct !== undefined) {
+    return direct;
+  }
+  const expected = expectedKey.toUpperCase();
+  const actualKey = Object.keys(env).find((key) => key.toUpperCase() === expected);
+  return actualKey ? env[actualKey] : undefined;
+}
+
+function normalizeWindowsSystemRoot(raw: string | undefined): string | null {
+  const trimmed = raw?.trim();
+  if (
+    !trimmed ||
+    trimmed.includes("\0") ||
+    trimmed.includes("\r") ||
+    trimmed.includes("\n") ||
+    trimmed.includes(";")
+  ) {
+    return null;
+  }
+  const normalized = path.win32.normalize(trimmed);
+  if (!path.win32.isAbsolute(normalized) || normalized.startsWith("\\\\")) {
+    return null;
+  }
+  const parsed = path.win32.parse(normalized);
+  if (!/^[A-Za-z]:\\$/.test(parsed.root) || normalized.length <= parsed.root.length) {
+    return null;
+  }
+  return normalized.replace(/[\\/]+$/, "");
+}
+
+function resolveWindowsTaskkillPath(env: Record<string, string | undefined> = process.env): string {
+  const systemRoot =
+    normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "SystemRoot")) ??
+    normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "WINDIR")) ??
+    DEFAULT_WINDOWS_SYSTEM_ROOT;
+  return path.win32.join(systemRoot, "System32", "taskkill.exe");
+}
+
 function signalQmdProcessTree(child: QmdChildProcess, signal?: NodeJS.Signals): void {
   if (shouldUseQmdProcessGroup() && typeof child.pid === "number") {
     try {
@@ -246,6 +292,26 @@ function signalQmdProcessTree(child: QmdChildProcess, signal?: NodeJS.Signals): 
       return;
     } catch {
       // Fall back to the direct child if the process group already disappeared.
+    }
+  }
+  if (!shouldUseQmdProcessGroup() && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = spawnSync(taskkillPath, args, { stdio: "ignore", windowsHide: true });
+    if (!result.error && result.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = spawnSync(taskkillPath, [...args, "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      if (!forceResult.error && forceResult.status === 0) {
+        return;
+      }
     }
   }
   if (signal === undefined) {

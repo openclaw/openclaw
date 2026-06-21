@@ -19,6 +19,7 @@ import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaDreamingStatus, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
+import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 type QaMemorySearchResult = {
   results?: Array<{ snippet?: string; text?: string; path?: string }>;
@@ -209,10 +210,14 @@ function signalQaCliProcessTree(
 ) {
   if (process.platform === "win32") {
     if (typeof child.pid === "number") {
-      const result = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
+      const result = spawnSync(
+        resolveQaWindowsSystem32ExePath("taskkill.exe"),
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
       if (!result.error && result.status === 0) {
         return;
       }

@@ -8,6 +8,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 const PLUGIN_ID = "secret-provider-proof";
 const INTEGRATION_ID = "vault";
@@ -1034,7 +1035,7 @@ function signalWindowsProcessTree(pid, signal, runTaskkill = childProcess.spawnS
     args.push("/F");
   }
   try {
-    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
     return !result?.error && result?.status === 0;
   } catch {
     return false;

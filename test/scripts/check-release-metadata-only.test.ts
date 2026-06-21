@@ -22,7 +22,9 @@ describe("check-release-metadata-only", () => {
 
   it("rejects missing ref option values", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("Expected --base <ref>.");
+    expect(() => parseArgs(["--base", "-h"])).toThrow("Expected --base <ref>.");
     expect(() => parseArgs(["--head"])).toThrow("Expected --head <ref>.");
+    expect(() => parseArgs(["--head", "-h"])).toThrow("Expected --head <ref>.");
     expect(() => parseArgs(["--base", ""])).toThrow("Expected --base <ref>.");
   });
 

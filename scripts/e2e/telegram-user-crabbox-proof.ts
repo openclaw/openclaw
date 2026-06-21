@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
@@ -618,12 +619,13 @@ export function signalCommandTree(
     if (signal === "SIGKILL") {
       args.push("/F");
     }
-    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
     if (!result?.error && result?.status === 0) {
       return;
     }
     if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill("taskkill", [...args, "/F"], { stdio: "ignore" });
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
       if (!forceResult?.error && forceResult?.status === 0) {
         return;
       }

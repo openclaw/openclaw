@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseReleaseVersion } from "../../../lib/npm-publish-plan.mjs";
-import { buildCmdExeCommandLine } from "../../../windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
 const command = args.shift();
@@ -215,7 +215,7 @@ function adaptStepForBaseline(step, baselineVersion, summary) {
 export function resolveUpgradeSurvivorOpenClawCommand(argv, params = {}) {
   const platform = params.platform ?? process.platform;
   if (platform === "win32") {
-    const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
+    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env);
     return {
       command: comSpec,
       args: ["/d", "/s", "/c", buildCmdExeCommandLine("openclaw.cmd", argv)],

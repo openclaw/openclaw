@@ -3,8 +3,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+const knownArgKeys = new Set(["report", "output", "lane", "reporturl", "artifacturl"]);
 const rawArgs = process.argv.slice(2);
-if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
+if (shouldPrintHelp(rawArgs)) {
   usage("", 0);
 }
 
@@ -86,7 +87,7 @@ function renderSummary(reportLocal, options) {
     for (const group of groups) {
       for (const metricId of keyMetricIds) {
         const metric = group.metrics?.[metricId];
-        if (!metric || metric.count === 0) {
+        if (!hasPositiveSampleCount(metric)) {
           continue;
         }
         lines.push(
@@ -198,8 +199,12 @@ function hasExplicitResourceCollectionSkip(reportLocal) {
 function hasSampledMetric(group, metricIds) {
   return metricIds.some((metricId) => {
     const metric = group?.metrics?.[metricId];
-    return metric && Number(metric.count) > 0;
+    return hasPositiveSampleCount(metric);
   });
+}
+
+function hasPositiveSampleCount(metric) {
+  return Number.isSafeInteger(metric?.count) && metric.count > 0;
 }
 
 function collectViolations(records) {
@@ -241,18 +246,17 @@ function value(input) {
 
 function parseArgs(argv) {
   const parsed = {};
-  const knownKeys = new Set(["report", "output", "lane", "reporturl", "artifacturl"]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg.startsWith("--")) {
       usage(`unexpected argument: ${arg}`);
     }
     const key = arg.slice(2).replaceAll("-", "");
-    if (!knownKeys.has(key)) {
+    if (!knownArgKeys.has(key)) {
       usage(`unknown argument: ${arg}`);
     }
     const valueLocal = argv[index + 1];
-    if (!valueLocal || valueLocal.startsWith("--")) {
+    if (!valueLocal || valueLocal.startsWith("-")) {
       usage(`${arg} requires a value`);
     }
     parsed[key] = valueLocal;
@@ -265,6 +269,28 @@ function parseArgs(argv) {
     reportUrl: parsed.reporturl,
     artifactUrl: parsed.artifacturl,
   };
+}
+
+function shouldPrintHelp(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      return true;
+    }
+    if (!arg.startsWith("--")) {
+      return false;
+    }
+    const key = arg.slice(2).replaceAll("-", "");
+    if (!knownArgKeys.has(key)) {
+      return false;
+    }
+    const optionValue = argv[index + 1];
+    if (!optionValue || optionValue.startsWith("-")) {
+      return false;
+    }
+    index += 1;
+  }
+  return false;
 }
 
 function usage(message, status = 2) {

@@ -29,10 +29,7 @@ import {
   resolveRunAuthProfile,
 } from "./agent-runner-auth-profile.js";
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
-import {
-  buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore,
-  resolveEnforceFinalTagWithResolver,
-} from "./agent-runner-run-params.js";
+import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
@@ -200,13 +197,6 @@ export const formatBunFetchSocketError = (message: string) => {
   ].join("\n");
 };
 
-/** Resolves whether final-answer tags should be enforced for a queued run. */
-export const resolveEnforceFinalTag = (
-  run: FollowupRun["run"],
-  provider: string,
-  model = run.model,
-) => resolveEnforceFinalTagWithResolver(run, provider, model, isReasoningTagProvider);
-
 /** Builds base embedded run params with auth and provider runtime hints. */
 export function buildEmbeddedRunBaseParams(
   params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0],
@@ -285,26 +275,6 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
-/** Builds extra context payloads for embedded run execution. */
-export function buildEmbeddedRunContexts(params: {
-  run: FollowupRun["run"];
-  replyRoute?: EmbeddedReplyRoute;
-  sessionCtx: TemplateContext;
-  hasRepliedRef: { value: boolean } | undefined;
-  provider: string;
-}) {
-  return {
-    authProfile: resolveRunAuthProfile(params.run, params.provider),
-    embeddedContext: buildEmbeddedContextFromTemplate({
-      run: params.run,
-      replyRoute: params.replyRoute,
-      sessionCtx: params.sessionCtx,
-      hasRepliedRef: params.hasRepliedRef,
-    }),
-    senderContext: buildTemplateSenderContext(params.sessionCtx),
-  };
-}
-
 /** Builds execution-specific embedded run params for queued reply dispatch. */
 export function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
@@ -317,7 +287,14 @@ export function buildEmbeddedRunExecutionParams(params: {
   promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
-  const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
+  const authProfile = resolveRunAuthProfile(params.run, params.provider);
+  const embeddedContext = buildEmbeddedContextFromTemplate({
+    run: params.run,
+    replyRoute: params.replyRoute,
+    sessionCtx: params.sessionCtx,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+  const senderContext = buildTemplateSenderContext(params.sessionCtx);
   const runBaseParams = buildEmbeddedRunBaseParams({
     run: params.run,
     provider: params.provider,

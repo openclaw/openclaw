@@ -12,6 +12,7 @@ import {
   resolveGroupKey,
   resolveTestArea,
 } from "../../scripts/lib/test-group-report.mjs";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   parseTestGroupReportArgs,
   resolveFullSuiteVitestEnv,
@@ -63,6 +64,10 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     await sleep(25);
   }
   throw new Error(`timed out waiting for pid ${pid} to exit`);
+}
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
 }
 
 function waitForChildClose(
@@ -622,17 +627,27 @@ describe("scripts/test-group-report child process guard", () => {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
 
     signalTestGroupReportChild(child, "SIGKILL", {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
   });
 
@@ -651,12 +666,22 @@ describe("scripts/test-group-report child process guard", () => {
       runTaskkill,
     });
 
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
   });
 

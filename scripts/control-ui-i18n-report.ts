@@ -128,7 +128,7 @@ export function parseArgs(argv: string[]): ReportArgs {
 
 function readOptionValue(argv: string[], index: number, flag: string) {
   const value = argv[index];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value`);
   }
   return value;

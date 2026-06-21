@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   assertInspectLoaded,
@@ -12,6 +13,10 @@ import {
 } from "./plugin-lifecycle-probe-runtime.js";
 
 const tempDirs = createTempDirTracker();
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 function makeTempDir(): string {
   return tempDirs.make("openclaw-plugin-lifecycle-probe-");
@@ -159,14 +164,24 @@ describe("plugin lifecycle matrix probe", () => {
 
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(taskkillImpl).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      expect(taskkillImpl).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
+      expect(taskkillImpl).toHaveBeenNthCalledWith(
+        1,
+        expectedTaskkillPath(),
+        ["/PID", "12345", "/T"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
+      expect(taskkillImpl).toHaveBeenNthCalledWith(
+        2,
+        expectedTaskkillPath(),
+        ["/PID", "12345", "/T", "/F"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
       expect(child.signals).toEqual([]);
 
       const error = await runError;

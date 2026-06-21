@@ -14,6 +14,7 @@ import {
   renderGroupedTestReport,
 } from "./lib/test-group-report.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
   applyParallelVitestCachePaths,
@@ -259,12 +260,13 @@ export function signalTestGroupReportChild(
     if (signal === "SIGKILL") {
       args.push("/F");
     }
-    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
     if (!result?.error && result?.status === 0) {
       return;
     }
     if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill("taskkill", [...args, "/F"], { stdio: "ignore" });
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
       if (!forceResult?.error && forceResult?.status === 0) {
         return;
       }

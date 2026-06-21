@@ -10,6 +10,12 @@ import {
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
+function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
+  const disallowedIndex = args?.indexOf("--disallowedTools") ?? -1;
+  expect(disallowedIndex).toBeGreaterThanOrEqual(0);
+  expect(args?.[disallowedIndex + 1]).toBe("ScheduleWakeup,CronCreate");
+}
+
 describe("normalizeClaudePermissionArgs", () => {
   it("leaves args alone when they omit permission flags", () => {
     expect(
@@ -356,8 +362,10 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.input).toBe("stdin");
     expect(backend.config.args).toContain("--setting-sources");
     expect(backend.config.args).toContain("user");
+    expectDefaultDisallowedTools(backend.config.args);
     expect(backend.config.resumeArgs).toContain("--setting-sources");
     expect(backend.config.resumeArgs).toContain("user");
+    expectDefaultDisallowedTools(backend.config.resumeArgs);
     expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
     expect(backend.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
