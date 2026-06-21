@@ -2,8 +2,7 @@ name: QA Lab Smoke Profile
 
 on:
   pull_request:
-    paths:
-      - .github/workflows/qa-lab-smoke-profile.yml
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   workflow_dispatch:
     inputs:
       ref:
@@ -23,7 +22,7 @@ on:
         required: false
         default: ""
       scenario_id:
-        description: Optional direct scenario target, e.g. the UX Matrix scenario from PR 3.
+        description: Optional direct scenario target. Empty runs qa_profile.
         required: false
         default: ""
       concurrency:
@@ -45,7 +44,7 @@ on:
         type: boolean
 
 concurrency:
-  group: qa-lab-smoke-profile-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event.pull_request.number || github.sha }}
+  group: qa-lab-smoke-profile-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && inputs.ref) || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -64,6 +63,7 @@ env:
 jobs:
   qa_lab_smoke_profile:
     name: Run QA Lab smoke profile
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -84,8 +84,8 @@ jobs:
 
       - name: Build private QA runtime
         env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
+          NODE_OPTIONS: --max-old-space-size=12288
+        run: pnpm build
 
       - name: Run QA evidence lane
         id: run_qa
@@ -93,20 +93,21 @@ jobs:
           INPUT_QA_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.qa_profile || 'smoke-ci' }}
           INPUT_SURFACE: ${{ github.event_name == 'workflow_dispatch' && inputs.surface || '' }}
           INPUT_CATEGORY: ${{ github.event_name == 'workflow_dispatch' && inputs.category || '' }}
-          INPUT_SCENARIO_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario_id || (github.event_name == 'pull_request' && 'gateway-smoke' || '') }}
+          INPUT_SCENARIO_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario_id || '' }}
           INPUT_CONCURRENCY: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrency || '1' }}
           INPUT_EVIDENCE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.evidence_mode || 'slim' }}
           INPUT_FAST: ${{ github.event_name != 'workflow_dispatch' || inputs.fast }}
         run: |
           set -euo pipefail
 
-          selected="${INPUT_SCENARIO_ID:-$INPUT_QA_PROFILE}"
+          selected="${INPUT_SCENARIO_ID:-profile-${INPUT_QA_PROFILE}}"
           artifact_label="${selected//[^A-Za-z0-9._-]/-}"
-          output_dir=".artifacts/qa-e2e/${artifact_label}"
+          output_dir=".artifacts/qa-e2e/${artifact_label}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           if [[ -n "$INPUT_SCENARIO_ID" ]]; then
             command=(
               pnpm openclaw qa suite
+              --repo-root .
               --provider-mode mock-openai
               --scenario "$INPUT_SCENARIO_ID"
               --concurrency "$INPUT_CONCURRENCY"
@@ -115,6 +116,7 @@ jobs:
           else
             command=(
               pnpm openclaw qa run
+              --repo-root .
               --qa-profile "$INPUT_QA_PROFILE"
               --provider-mode mock-openai
               --concurrency "$INPUT_CONCURRENCY"
@@ -129,6 +131,9 @@ jobs:
             fi
           fi
 
+          # After the Crabline channel-driver PR lands, this profile can add:
+          #   --channel-driver crabline
+          # The current branch intentionally stays main-compatible.
           if [[ "$INPUT_FAST" == "true" ]]; then
             command+=(--fast)
           fi
