@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
@@ -34,6 +35,7 @@ import {
 
 const PARALLEL_BASE_URL = "https://api.parallel.ai";
 const PARALLEL_SEARCH_PATHNAME = "/v1/search";
+const PARALLEL_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -144,7 +146,9 @@ async function runParallelSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        const detail = await res.text().catch(() => "");
+        const detail = await readResponseTextLimited(res, PARALLEL_ERROR_BODY_LIMIT_BYTES).catch(
+          () => "",
+        );
         throw new Error(`Parallel API error (${res.status}): ${detail || res.statusText}`);
       }
       try {
@@ -277,6 +281,7 @@ export const testing = {
   resolveParallelConfig,
   resolveParallelSearchCount,
   resolveParallelSearchEndpoint,
+  PARALLEL_ERROR_BODY_LIMIT_BYTES,
   USER_AGENT,
 } as const;
 

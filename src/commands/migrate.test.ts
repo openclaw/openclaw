@@ -56,7 +56,6 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 vi.mock("./migrate/skill-selection-prompt.js", () => ({
-  promptMigrationSelectionValues: mocks.multiselect,
   promptMigrationSkillSelectionValues: mocks.multiselect,
 }));
 

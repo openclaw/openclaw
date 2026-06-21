@@ -87,6 +87,7 @@ describe("secret target registry", () => {
   it("derives bundled plugin SecretInput contract target paths from plugin manifests", () => {
     const coreTargetIds = new Set(getCoreSecretTargetRegistry().map((entry) => entry.id));
     expect(coreTargetIds.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
+    expect(coreTargetIds.has("plugins.entries.codex.config.appServer.authToken")).toBe(false);
 
     const target = resolveConfigSecretTargetByPath([
       "plugins",
@@ -100,5 +101,26 @@ describe("secret target registry", () => {
     ]);
 
     expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
+
+    const codexAuthTarget = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "codex",
+      "config",
+      "appServer",
+      "authToken",
+    ]);
+    expect(codexAuthTarget?.entry?.id).toBe("plugins.entries.codex.config.appServer.authToken");
+
+    const codexHeaderTarget = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "codex",
+      "config",
+      "appServer",
+      "headers",
+      "x-codex-client-session-token",
+    ]);
+    expect(codexHeaderTarget?.entry?.id).toBe("plugins.entries.codex.config.appServer.headers.*");
   });
 });

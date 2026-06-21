@@ -1,0 +1,24 @@
+// Make Appcast tests cover release appcast script behavior.
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+const scriptPath = "scripts/make_appcast.sh";
+
+describe("make_appcast cleanup", () => {
+  it("does not reference release notes before their path is assigned", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const setupBlock = script.slice(
+      script.indexOf('TMP_DIR="$(mktemp -d)"'),
+      script.indexOf('cp -f "$ZIP" "$TMP_DIR/$ZIP_NAME"'),
+    );
+
+    expect(setupBlock).toContain('NOTES_HTML=""');
+    expect(setupBlock.indexOf('NOTES_HTML=""')).toBeLessThan(
+      setupBlock.indexOf("trap cleanup EXIT"),
+    );
+    expect(setupBlock).toContain(
+      'if [[ -n "$NOTES_HTML" && "${KEEP_SPARKLE_NOTES:-0}" != "1" ]]; then',
+    );
+    expect(setupBlock).toContain('rm -f "$NOTES_HTML"');
+  });
+});

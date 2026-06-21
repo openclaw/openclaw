@@ -1,8 +1,8 @@
+import { createServer } from "node:net";
 /**
  * Tests QA runtime command loading and private CLI gating.
  */
 import { Command } from "commander";
-import { createServer } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
@@ -25,16 +25,24 @@ vi.mock("../infra/openclaw-root.js", () => ({
 describe("plugin-sdk qa-runtime", () => {
   const tempDirs: string[] = [];
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
   beforeEach(() => {
+    vi.resetModules();
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
     resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   });
 
   afterEach(() => {
     cleanupTempDirs(tempDirs);
     restorePrivateQaCliEnv(originalPrivateQaCli);
+    if (originalBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+    }
   });
 
   async function occupyLoopbackPort(): Promise<{ close: () => Promise<void>; port: number }> {
@@ -57,6 +65,21 @@ describe("plugin-sdk qa-runtime", () => {
           server.close((error) => (error ? reject(error) : resolve()));
         });
       },
+    };
+  }
+
+  function cancelTrackedFetchResponse(ok = true) {
+    let canceled = false;
+    return {
+      response: {
+        ok,
+        body: {
+          cancel: vi.fn(async () => {
+            canceled = true;
+          }),
+        },
+      },
+      wasCanceled: () => canceled,
     };
   }
 
@@ -339,6 +362,52 @@ describe("plugin-sdk qa-runtime", () => {
 
     expect(runCommand).toHaveBeenCalledTimes(2);
     expect(fetchImpl).toHaveBeenCalledWith("http://172.18.0.4:18789/healthz");
+  });
+
+  it("cancels compose service health probe response bodies", async () => {
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const runCommand = vi.fn(async (_command: string, args: string[]) => {
+      if (args.includes("ps")) {
+        return { stdout: "qa-gateway-one\n", stderr: "" };
+      }
+      return { stdout: "172.18.0.4\n", stderr: "" };
+    });
+    const probe = cancelTrackedFetchResponse(true);
+    const fetchImpl = vi.fn(async () => probe.response);
+
+    await expect(
+      runtime.resolveComposeServiceUrl(
+        "gateway",
+        18789,
+        "/tmp/docker-compose.yml",
+        "/repo",
+        runCommand,
+        fetchImpl,
+      ),
+    ).resolves.toBe("http://172.18.0.4:18789/");
+    expect(probe.wasCanceled()).toBe(true);
+  });
+
+  it("cancels waitForHealth response bodies after each probe", async () => {
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const first = cancelTrackedFetchResponse(false);
+    const second = cancelTrackedFetchResponse(true);
+    const responses = [first.response, second.response];
+    const fetchImpl = vi.fn(async () => responses.shift() ?? second.response);
+    const sleepImpl = vi.fn(async () => {});
+
+    await runtime.waitForHealth("http://127.0.0.1:18789/healthz", {
+      fetchImpl,
+      sleepImpl,
+      timeoutMs: 1000,
+      pollMs: 1,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(first.wasCanceled()).toBe(true);
+    expect(second.wasCanceled()).toBe(true);
   });
 
   it("resolves an unpinned QA Docker host port away from an occupied loopback default", async () => {

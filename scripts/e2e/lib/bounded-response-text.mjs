@@ -11,14 +11,20 @@ function cancelReaderSoon(reader) {
     .catch(() => {});
 }
 
+function parseContentLengthHeader(headers) {
+  const raw = headers.get("content-length");
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
 export async function readBoundedResponseText(response, label, byteLimit, timeoutPromise) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw bodyTooLargeError(label, byteLimit);
-    }
+  const contentLength = parseContentLengthHeader(response.headers);
+  if (contentLength !== undefined && contentLength > byteLimit) {
+    await response.body?.cancel().catch(() => {});
+    throw bodyTooLargeError(label, byteLimit);
   }
   if (!response.body) {
     return "";

@@ -35,6 +35,7 @@ import {
 } from "./installed-plugin-index.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
@@ -202,16 +203,6 @@ function directoryChildFingerprint(directoryPath: string): unknown {
       .toSorted(([left], [right]) => left.localeCompare(right));
   } catch {
     return "unreadable";
-  }
-}
-
-function fileFingerprint(filePath: string): unknown {
-  try {
-    const stat = fs.statSync(filePath, { bigint: true });
-    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
-    return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
-  } catch {
-    return [filePath, "missing"];
   }
 }
 

@@ -8,9 +8,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
-
-const vectorToBlob = (embedding: number[]): Buffer =>
-  Buffer.from(new Float32Array(embedding).buffer);
+import { vectorToBlob } from "./vector-blob.js";
 
 function insertKeywordFixture(
   db: DatabaseSync,

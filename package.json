@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.6.8",
+  "version": "2026.6.9",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -975,6 +975,10 @@
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
     },
+    "./plugin-sdk/session-transcript-runtime": {
+      "types": "./dist/plugin-sdk/session-transcript-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-transcript-runtime.js"
+    },
     "./plugin-sdk/sqlite-runtime": {
       "types": "./dist/plugin-sdk/sqlite-runtime.d.ts",
       "default": "./dist/plugin-sdk/sqlite-runtime.js"
@@ -1592,9 +1596,9 @@
     "ghsa:patch": "node scripts/ghsa-patch.mjs",
     "ios:build": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && xcodebuild -project OpenClaw.xcodeproj -scheme OpenClaw -destination \"${IOS_DEST:-platform=iOS Simulator,name=iPhone 17}\" -configuration Debug build'",
     "ios:gen": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate'",
-	    "ios:open": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && open OpenClaw.xcodeproj'",
-	    "ios:release": "bash scripts/ios-release.sh",
-	    "ios:release:archive": "bash scripts/ios-release-archive.sh",
+    "ios:open": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && open OpenClaw.xcodeproj'",
+    "ios:release": "bash scripts/ios-release.sh",
+    "ios:release:archive": "bash scripts/ios-release-archive.sh",
     "ios:release:prepare": "bash scripts/ios-release-prepare.sh",
     "ios:release:signing:check": "bash -lc 'source ./scripts/lib/ios-fastlane.sh && cd apps/ios && run_ios_fastlane ios signing_check'",
     "ios:release:signing:plan": "bash -lc 'source ./scripts/lib/ios-fastlane.sh && cd apps/ios && run_ios_fastlane ios signing_plan'",

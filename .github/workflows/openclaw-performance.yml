@@ -45,7 +45,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: b63b6f9e20efb23641df00487e982230d81a90ac
+        default: 4f146016583018bad9e24f8e64a6af5f963bb7ee
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -66,6 +66,7 @@ env:
   OCM_LINUX_X64_SHA256: b849b8de5d77e97e0df9319703254ae95e29d7f26a7552ea79bf173ff110ea0a
   KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.5
+  KOVA_SCENARIO_TIMEOUT_MS: "300000"
 
 jobs:
   kova:
@@ -98,7 +99,7 @@ jobs:
             live: "true"
             include_filters: "scenario:agent-cold-warm-message"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || 'b63b6f9e20efb23641df00487e982230d81a90ac' }}
+      KOVA_REF: ${{ inputs.kova_ref || '4f146016583018bad9e24f8e64a6af5f963bb7ee' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -291,6 +292,7 @@ jobs:
             --auth "$AUTH_MODE"
             --parallel 1
             --repeat "$repeat"
+            --timeout-ms "$KOVA_SCENARIO_TIMEOUT_MS"
             --report-dir "$REPORT_DIR"
             --execute
             --json
@@ -361,6 +363,7 @@ jobs:
           - Kova repository: ${KOVA_REPOSITORY}
           - Kova ref: ${KOVA_REF}
           - Kova profile: ${PROFILE}
+          - Kova scenario timeout: ${KOVA_SCENARIO_TIMEOUT_MS}ms
           - Lane auth: ${AUTH_MODE}
           - Lane model: ${PERFORMANCE_MODEL_ID}
           - Lane repeat: ${repeat}

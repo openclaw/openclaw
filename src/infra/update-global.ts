@@ -743,20 +743,6 @@ export async function resolveGlobalRoot(
   return root || null;
 }
 
-/** Resolves the OpenClaw package root under a package manager's global root. */
-export async function resolveGlobalPackageRoot(
-  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
-  runCommand: CommandRunner,
-  timeoutMs: number,
-  pkgRoot?: string | null,
-): Promise<string | null> {
-  const root = await resolveGlobalRoot(managerOrCommand, runCommand, timeoutMs, pkgRoot);
-  if (!root) {
-    return null;
-  }
-  return path.join(root, PRIMARY_PACKAGE_NAME);
-}
-
 /**
  * Resolves the effective global install target, honoring an existing package
  * root when requested and detecting pnpm or bun layouts before command probes.

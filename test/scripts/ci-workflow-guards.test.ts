@@ -84,6 +84,23 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
+  it("keeps docs-change detection fail-safe and fixture-aware", () => {
+    const action = readFileSync(".github/actions/detect-docs-changes/action.yml", "utf8");
+
+    expect(action).toContain("docs_only:");
+    expect(action).toContain("docs_changed:");
+    expect(action).toContain('BASE="${{ github.event.before }}"');
+    expect(action).toContain('BASE="${{ github.event.pull_request.base.sha }}"');
+    expect(action).toContain(
+      'CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")',
+    );
+    expect(action).toContain('if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then');
+    expect(action).toContain("docs_only=false");
+    expect(action).toContain("docs_changed=false");
+    expect(action).toContain("test/fixtures/*)");
+    expect(action).toContain("docs/* | *.md | *.mdx)");
+  });
+
   it("runs the session accessor ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -270,6 +287,12 @@ describe("ci workflow guards", () => {
 
     expect(workflow).toContain('echo "phone_home_hydrating_http=${hydrating_http_code}"');
     expect(workflow).toContain('echo "phone_home_ready_http=${http_code}"');
+    expect(workflow).toContain('jq -e \'type == "number"\' <<<"$installation_model_id"');
+    expect(workflow).toContain('--arg testbox_id "$TESTBOX_ID"');
+    expect(workflow).toContain('--arg testbox_id "$testbox_id"');
+    expect(workflow).toContain('--argjson installation_model_id "$installation_model_id"');
+    expect(workflow).toContain('--data-binary @"$hydrating_body"');
+    expect(workflow).toContain('--data-binary @"$ready_body"');
     const hydratingFailureBlock = workflow.slice(
       workflow.indexOf('if [[ ! "$hydrating_http_code" =~ ^2 ]]; then'),
       workflow.indexOf('response="$(cat "$hydrating_response")"'),
@@ -292,6 +315,9 @@ describe("ci workflow guards", () => {
     expect(workflow).not.toContain(
       'phone_home_ready_http=${http_code}"\n\n          echo "============================================"',
     );
+    expect(workflow).not.toContain('\\"testbox_id\\": \\"${TESTBOX_ID}\\"');
+    expect(workflow).not.toContain('cat > "$ready_body" <<JSON');
+    expect(workflow).not.toContain('"testbox_id": "${testbox_id}"');
   });
 
   it("runs dependency policy guards in PR CI preflight", () => {

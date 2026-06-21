@@ -1,4 +1,5 @@
 // Generate Dependency Release Evidence tests cover generate dependency release evidence script behavior.
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,6 +17,22 @@ import {
 
 async function writeJson(dir: string, fileName: string, value: unknown) {
   await writeFile(path.join(dir, fileName), `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function runCli(...args: string[]) {
+  return spawnSync(
+    process.execPath,
+    ["scripts/generate-dependency-release-evidence.mjs", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
+}
+
+function expectNoNodeStack(stderr: string) {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
 }
 
 describe("generate-dependency-release-evidence", () => {
@@ -97,6 +114,23 @@ describe("generate-dependency-release-evidence", () => {
         "summary.md",
       ]),
     ).toThrow("Expected --github-output <value>.");
+  });
+
+  it("prints CLI help without generating evidence", () => {
+    const result = runCli("--help");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: node scripts/generate-dependency-release-evidence.mjs");
+    expect(result.stderr).toBe("");
+  });
+
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const result = runCli("--wat");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unsupported argument: --wat");
+    expectNoNodeStack(result.stderr);
   });
 
   it("falls back to fetching tags when local previous-release resolution misses", () => {

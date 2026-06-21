@@ -5,7 +5,7 @@ import OpenClawKit
 import WebKit
 
 @MainActor
-final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NSWindowDelegate {
+final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let sessionKey: String
     private let root: URL
     private let sessionDir: URL
@@ -159,6 +159,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         }
 
         self.webView.navigationDelegate = self
+        self.webView.uiDelegate = self
         self.window?.delegate = self
         self.container.onClose = { [weak self] in
             self?.hideCanvas()
