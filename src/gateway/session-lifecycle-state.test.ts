@@ -131,6 +131,128 @@ describe("session lifecycle state", () => {
     });
   });
 
+  it("repairs a same-session lifecycle error when a retry later succeeds", () => {
+    const failed = deriveGatewaySessionLifecycleSnapshot({
+      session: {
+        updatedAt: 1_000,
+        status: "running",
+        startedAt: 1_100,
+      },
+      event: {
+        ts: 1_500,
+        data: {
+          phase: "error",
+          error: "provider usage limit",
+          startedAt: 1_100,
+          endedAt: 1_500,
+        },
+      },
+    });
+
+    expect(failed).toMatchObject({
+      status: "failed",
+      abortedLastRun: false,
+      endedAt: 1_500,
+    });
+
+    expect(
+      deriveGatewaySessionLifecycleSnapshot({
+        session: failed,
+        event: {
+          ts: 1_900,
+          data: {
+            phase: "end",
+            startedAt: 1_100,
+            endedAt: 1_900,
+          },
+        },
+      }),
+    ).toEqual({
+      updatedAt: 1_900,
+      status: "done",
+      startedAt: 1_100,
+      endedAt: 1_900,
+      runtimeMs: 800,
+      abortedLastRun: false,
+    });
+  });
+
+  it("repairs an aborted terminal projection when the retry succeeds before cleanup", () => {
+    const aborted = deriveGatewaySessionLifecycleSnapshot({
+      session: {
+        updatedAt: 1_000,
+        status: "running",
+        startedAt: 1_100,
+      },
+      event: {
+        ts: 1_500,
+        data: {
+          phase: "end",
+          aborted: true,
+          stopReason: "rpc",
+          timeoutPhase: "queue",
+          providerStarted: false,
+          startedAt: 1_100,
+          endedAt: 1_500,
+        },
+      },
+    });
+
+    expect(aborted).toMatchObject({
+      status: "killed",
+      abortedLastRun: true,
+      endedAt: 1_500,
+    });
+
+    expect(
+      deriveGatewaySessionLifecycleSnapshot({
+        session: aborted,
+        event: {
+          ts: 1_700,
+          data: {
+            phase: "end",
+            startedAt: 1_100,
+            endedAt: 1_700,
+          },
+        },
+      }),
+    ).toMatchObject({
+      status: "done",
+      endedAt: 1_700,
+      runtimeMs: 600,
+      abortedLastRun: false,
+    });
+  });
+
+  it("does not let late lifecycle cleanup downgrade a successful session", () => {
+    const done = {
+      updatedAt: 1_900,
+      status: "done" as const,
+      startedAt: 1_100,
+      endedAt: 1_900,
+      runtimeMs: 800,
+      abortedLastRun: false,
+    };
+
+    expect(
+      deriveGatewaySessionLifecycleSnapshot({
+        session: done,
+        event: {
+          ts: 2_100,
+          data: {
+            phase: "end",
+            aborted: true,
+            stopReason: "rpc",
+            timeoutPhase: "queue",
+            providerStarted: false,
+            startedAt: 1_100,
+            endedAt: 2_100,
+          },
+        },
+      }),
+    ).toEqual(done);
+  });
+
   it("maps aborted stop reasons to killed", () => {
     expectPersistedLifecyclePatch({
       entry: { startedAt: 1_100 },

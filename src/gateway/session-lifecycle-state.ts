@@ -67,8 +67,12 @@ function mapAgentRunTerminalOutcomeToSessionStatus(
 }
 
 function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
+  return mapAgentRunTerminalOutcomeToSessionStatus(resolveTerminalOutcome(event));
+}
+
+function resolveTerminalOutcome(event: LifecycleEventLike): AgentRunTerminalOutcome {
   const phase = resolveLifecyclePhase(event);
-  const terminal = buildAgentRunTerminalOutcome({
+  return buildAgentRunTerminalOutcome({
     status: phase === "error" ? "error" : event.data?.aborted === true ? "timeout" : "ok",
     error: event.data?.error,
     stopReason: event.data?.stopReason,
@@ -78,7 +82,22 @@ function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
     startedAt: event.data?.startedAt,
     endedAt: event.data?.endedAt ?? event.ts,
   });
-  return mapAgentRunTerminalOutcomeToSessionStatus(terminal);
+}
+
+function shouldApplyTerminalLifecycleStatus(params: {
+  currentStatus?: SessionRunStatus;
+  nextStatus: SessionRunStatus;
+}): boolean {
+  if (params.currentStatus === params.nextStatus) {
+    return true;
+  }
+  if (params.currentStatus === "done") {
+    return false;
+  }
+  if (params.nextStatus === "done") {
+    return true;
+  }
+  return params.currentStatus === "running" || params.currentStatus === undefined;
 }
 
 function resolveLifecycleStartedAt(
@@ -145,12 +164,27 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
     };
   }
 
+  const terminal = resolveTerminalOutcome(params.event);
+  const status = mapAgentRunTerminalOutcomeToSessionStatus(terminal);
+  if (
+    !shouldApplyTerminalLifecycleStatus({ currentStatus: existing?.status, nextStatus: status })
+  ) {
+    return {
+      updatedAt: existing?.updatedAt,
+      status: existing?.status,
+      startedAt: existing?.startedAt,
+      endedAt: existing?.endedAt,
+      runtimeMs: existing?.runtimeMs,
+      abortedLastRun: existing?.abortedLastRun,
+    };
+  }
+
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
   return {
     updatedAt,
-    status: resolveTerminalStatus(params.event),
+    status,
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({
@@ -158,7 +192,7 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
       endedAt,
       existingRuntimeMs: existing?.runtimeMs,
     }),
-    abortedLastRun: resolveTerminalStatus(params.event) === "killed",
+    abortedLastRun: status === "killed",
   };
 }
 

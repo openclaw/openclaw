@@ -494,7 +494,10 @@ function shouldApplyRunScopedStatusUpdate(params: {
   if (!isTerminalTaskStatus(params.nextStatus)) {
     return false;
   }
-  return params.currentStatus === "succeeded" && params.nextStatus !== "lost";
+  if (params.currentStatus === "succeeded") {
+    return params.nextStatus !== "lost";
+  }
+  return params.nextStatus === "succeeded";
 }
 
 function resolveTaskTerminalOutcome(params: {
@@ -547,6 +550,25 @@ function buildTaskLifecycleTerminalOutcome(params: {
     providerStarted: params.data?.providerStarted,
     startedAt: params.startedAt,
     endedAt: params.endedAt,
+  });
+}
+
+function shouldApplyTerminalLifecycleEvent(params: {
+  currentStatus: TaskStatus;
+  terminal: AgentRunTerminalOutcome;
+}): boolean {
+  const nextStatus = mapAgentRunTerminalOutcomeToTaskStatus(params.terminal);
+  if (isTerminalTaskStatus(params.currentStatus)) {
+    if (params.currentStatus === "succeeded") {
+      return false;
+    }
+    if (params.currentStatus === "cancelled" && nextStatus === "succeeded") {
+      return false;
+    }
+  }
+  return shouldApplyRunScopedStatusUpdate({
+    currentStatus: params.currentStatus,
+    nextStatus,
   });
 }
 
@@ -1611,9 +1633,6 @@ function ensureListener() {
     }
     const now = evt.ts || Date.now();
     for (const current of scopedTasks) {
-      if (isTerminalTaskStatus(current.status)) {
-        continue;
-      }
       const patch: Partial<TaskRecord> = {
         lastEventAt: now,
       };
@@ -1626,6 +1645,9 @@ function ensureListener() {
           patch.startedAt = startedAt;
         }
         if (phase === "start") {
+          if (isTerminalTaskStatus(current.status)) {
+            continue;
+          }
           patch.status = "running";
         } else if (phase === "end") {
           const terminal = buildTaskLifecycleTerminalOutcome({
@@ -1634,9 +1656,19 @@ function ensureListener() {
             startedAt,
             endedAt: endedAt ?? now,
           });
+          if (
+            !shouldApplyTerminalLifecycleEvent({
+              currentStatus: current.status,
+              terminal,
+            })
+          ) {
+            continue;
+          }
           patch.status = mapAgentRunTerminalOutcomeToTaskStatus(terminal);
           patch.endedAt = terminal.endedAt ?? now;
-          if (terminal.error) {
+          if (patch.status === "succeeded") {
+            patch.error = undefined;
+          } else if (terminal.error) {
             patch.error = terminal.error;
           }
         } else if (phase === "error") {
@@ -1646,11 +1678,23 @@ function ensureListener() {
             startedAt,
             endedAt: endedAt ?? now,
           });
+          if (
+            !shouldApplyTerminalLifecycleEvent({
+              currentStatus: current.status,
+              terminal,
+            })
+          ) {
+            continue;
+          }
           patch.status = mapAgentRunTerminalOutcomeToTaskStatus(terminal);
           patch.endedAt = terminal.endedAt ?? now;
-          patch.error = terminal.error ?? current.error;
+          patch.error =
+            patch.status === "succeeded" ? undefined : (terminal.error ?? current.error);
         }
       } else if (evt.stream === "error") {
+        if (isTerminalTaskStatus(current.status)) {
+          continue;
+        }
         patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
       }
       const stateChangeEvent =
@@ -1860,7 +1904,9 @@ function updateTaskStateByRunId(params: {
     if (params.lastEventAt != null) {
       patch.lastEventAt = params.lastEventAt;
     }
-    if (params.error !== undefined) {
+    if (params.status && nextStatus === "succeeded") {
+      patch.error = undefined;
+    } else if (params.error !== undefined) {
       patch.error = params.error;
     }
     if (params.progressSummary !== undefined) {
