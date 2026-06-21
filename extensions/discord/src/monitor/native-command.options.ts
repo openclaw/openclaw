@@ -118,9 +118,10 @@ export function buildDiscordCommandOptions(params: {
               ? await resolveChoiceContext(interaction)
               : null;
           const currentCfg = resolveConfig?.() ?? cfg;
-          // Native /think choices need live-discovery metadata; empty keeps config fallback.
+          // Autocomplete cannot defer beyond Discord's three-second deadline.
+          // Cache-only catalog reads never start discovery or filesystem work.
           const choiceCatalog =
-            command.key === "think" ? await loadModelCatalog({ config: currentCfg }) : undefined;
+            command.key === "think" ? await loadModelCatalog({ cacheOnly: true }) : undefined;
           const choices = resolveCommandArgChoices({
             command,
             arg,
@@ -137,6 +138,11 @@ export function buildDiscordCommandOptions(params: {
           await interaction.respond(
             filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),
           );
+          if (command.key === "think" && !choiceCatalog?.length) {
+            // The interaction is acknowledged now, so a failed startup warmup can retry
+            // discovery without risking Discord's response deadline.
+            void loadModelCatalog({ config: currentCfg });
+          }
         }
       : undefined;
     const choices =
