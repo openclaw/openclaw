@@ -130,6 +130,19 @@ function hasFeishuUploadPart(data: Record<string, unknown>): boolean {
   return Buffer.isBuffer(data.file) || Buffer.isBuffer(data.image);
 }
 
+function stringifyMultipartFieldValue(value: unknown): string | undefined {
+  switch (typeof value) {
+    case "string":
+      return value;
+    case "number":
+    case "boolean":
+    case "bigint":
+      return String(value);
+    default:
+      return undefined;
+  }
+}
+
 function normalizeMultipartUploadData<D>(
   opts: Lark.HttpRequestOptions<D>,
 ): Lark.HttpRequestOptions<D> {
@@ -150,7 +163,10 @@ function normalizeMultipartUploadData<D>(
       form.append(key, new Blob([value]), key === "file" && fileName ? fileName : `${key}.bin`);
       continue;
     }
-    form.append(key, String(value));
+    const fieldValue = stringifyMultipartFieldValue(value);
+    if (fieldValue !== undefined) {
+      form.append(key, fieldValue);
+    }
   }
 
   return { ...opts, data: form as D };
