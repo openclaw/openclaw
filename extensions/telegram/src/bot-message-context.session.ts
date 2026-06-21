@@ -1,6 +1,6 @@
 // Telegram plugin module implements bot message context.session behavior.
-import path from "node:path";
 import {
+  type BuildChannelInboundEventContextParams,
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
   classifyChannelInboundEvent,
@@ -33,6 +33,11 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
+
+type TelegramMentionFacts = NonNullable<
+  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
+>;
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -140,39 +145,6 @@ function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReply
   return withoutForwarded;
 }
 
-function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
-  const toInboundMediaPath = (id: string): string | undefined => {
-    if (
-      !id ||
-      id === "." ||
-      id === ".." ||
-      id.includes("/") ||
-      id.includes("\\") ||
-      id.includes("\0")
-    ) {
-      return undefined;
-    }
-    return `media://inbound/${encodeURIComponent(id)}`;
-  };
-  const decodeInboundMediaId = (id: string): string | undefined => {
-    try {
-      return decodeURIComponent(id);
-    } catch {
-      return undefined;
-    }
-  };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (canonicalMatch?.[1]) {
-    const id = decodeInboundMediaId(canonicalMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
-  }
-  const normalized = mediaPath.replace(/\\/g, "/");
-  if (!normalized.includes("/media/inbound/")) {
-    return undefined;
-  }
-  return toInboundMediaPath(path.posix.basename(normalized));
-}
-
 function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): string {
   const forwardedAt = timestampMsToIsoString(entry.forwardedDate);
   const mediaPath = entry.mediaPath ? resolveTelegramPromptMediaPath(entry.mediaPath) : undefined;
@@ -220,6 +192,7 @@ export async function buildTelegramInboundContextPayload(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
+  mentionFacts: TelegramMentionFacts;
   hasControlCommand: boolean;
   stickerCacheHit?: boolean;
   audioTranscribedMediaIndex?: number;
@@ -270,6 +243,7 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
+    mentionFacts,
     hasControlCommand,
     stickerCacheHit,
     audioTranscribedMediaIndex,
@@ -539,11 +513,13 @@ export async function buildTelegramInboundContextPayload(params: {
       bodyForAgent: bodyText,
       commandBody,
       inboundHistory,
+      sourceModality: msg.voice ? "voice" : undefined,
     },
     access: {
       commands: {
         authorized: commandAuthorized,
       },
+      mentions: mentionFacts,
     },
     command:
       commandSource === "native"

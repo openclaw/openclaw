@@ -506,13 +506,13 @@ export const FIELD_HELP: Record<string, string> = {
   "web.reconnect.maxAttempts":
     "Maximum reconnect attempts before giving up for the current failure sequence (0 means no retries). Use finite caps for controlled failure handling in automation-sensitive environments.",
   "web.whatsapp":
-    "WhatsApp Web socket timing controls used by Baileys and OpenClaw's local outbound operation bounds. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
+    "WhatsApp Web socket timing controls used by Baileys and OpenClaw's local outbound and inbound read-receipt operation bounds. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
   "web.whatsapp.keepAliveIntervalMs":
     "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
   "web.whatsapp.connectTimeoutMs":
     "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
   "web.whatsapp.defaultQueryTimeoutMs":
-    "Default Baileys query timeout and OpenClaw outbound send/presence operation bound in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows socket operations need longer.",
+    "Default Baileys query timeout and OpenClaw outbound send/presence and inbound read-receipt operation bound in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows socket operations need longer.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
@@ -692,6 +692,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable metrics signal export to the configured OpenTelemetry collector endpoint. Keep enabled for runtime health dashboards, and disable only if metric volume must be minimized.",
   "diagnostics.otel.logs":
     "Enable log signal export through OpenTelemetry in addition to local logging sinks. Use this when centralized log correlation is required across services and agents.",
+  "diagnostics.otel.logsExporter":
+    'Log export sink for diagnostics.otel.logs. Use "otlp" for the configured OTLP logs endpoint, "stdout" for one JSON record per stdout line in container log pipelines, and "both" when both sinks are required.',
   "diagnostics.otel.sampleRate":
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
@@ -911,7 +913,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.openaiCodex.enabled":
     "Enable native Codex web search for Codex-capable models.",
   "tools.web.search.openaiCodex.mode":
-    'Native Codex web search mode: "cached" (default) or "live".',
+    'Native Codex web search preference: "cached" (default; unrestricted Codex turns resolve it to live) or "live".',
   "tools.web.search.openaiCodex.allowedDomains":
     "Optional domain allowlist passed to the native Codex web_search tool.",
   "tools.web.search.openaiCodex.contextSize":
@@ -1158,7 +1160,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.envelopeTimezone":
     'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
   "agents.defaults.envelopeTimestamp":
-    'Include absolute timestamps in message envelopes ("on" or "off").',
+    'Include absolute timestamps in message envelopes, direct agent prompt prefixes, and embedded model-input prefixes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models":
     "Configured model catalog and allowlist (keys are full provider/model IDs or literal provider/* entries for dynamic provider catalogs).",
@@ -1230,8 +1232,6 @@ export const FIELD_HELP: Record<string, string> = {
     'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128\u2013512 tokens) while keeping non-weight VRAM bounded. Lower to 1024\u20132048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum \u2014 not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40\u202f960 tokens can push VRAM from ~8.8\u202fGB to ~32\u202fGB).',
   "agents.defaults.memorySearch.fallback":
     'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
-  "agents.defaults.memorySearch.store.path":
-    "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
   "agents.defaults.memorySearch.store.vector.enabled":
     "Enables the sqlite-vec extension used for vector similarity queries in memory search (default: true). Keep this enabled for normal semantic recall; disable only for debugging or fallback-only operation.",
   "agents.defaults.memorySearch.store.vector.extensionPath":
@@ -1498,7 +1498,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.timeoutSeconds":
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 180). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
-    "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
+    "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":

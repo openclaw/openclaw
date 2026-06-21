@@ -182,6 +182,20 @@ vi.mock("./debug-commands.js", () => ({
     if (!raw.startsWith("/debug")) {
       return null;
     }
+    const parts = raw.trim().split(/\s+/);
+    const action = parts[1];
+    if (action === "set") {
+      const assignment = raw.slice(raw.indexOf(" set ") + 5).trim();
+      const equalsIndex = assignment.indexOf("=");
+      return {
+        action: "set",
+        path: assignment.slice(0, equalsIndex),
+        value: JSON.parse(assignment.slice(equalsIndex + 1)),
+      };
+    }
+    if (action === "unset") {
+      return { action: "unset", path: parts.slice(2).join(" ") };
+    }
     return { action: "show" };
   }),
 }));
@@ -525,6 +539,56 @@ describe("command gating", () => {
     expect(output).toContain("Config updated: gateway.auth.token=");
     expect(output).toContain(REDACTED_SENTINEL);
     expect(output).not.toContain("OPENCLAW_CONFIG_SET_CANARY_TOKEN_65623");
+  });
+
+  it("redacts secret-shaped fields from /debug show replies", async () => {
+    getConfigOverridesMock.mockReturnValueOnce({
+      gateway: {
+        auth: {
+          token: "OPENCLAW_DEBUG_SHOW_CANARY_TOKEN_65623",
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: "OPENCLAW_DEBUG_SHOW_CANARY_BOT_TOKEN_65623",
+        },
+      },
+      messages: {
+        ackReaction: ":)",
+      },
+    });
+    const params = buildParams("/debug show", {
+      commands: { debug: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = true;
+
+    const result = await handleDebugCommand(params, true);
+    const output = result?.reply?.text ?? "";
+
+    expect(output).toContain("Debug overrides (memory-only)");
+    expect(output).toContain(REDACTED_SENTINEL);
+    expect(output).toContain("ackReaction");
+    expect(output).not.toContain("OPENCLAW_DEBUG_SHOW_CANARY_TOKEN_65623");
+    expect(output).not.toContain("OPENCLAW_DEBUG_SHOW_CANARY_BOT_TOKEN_65623");
+  });
+
+  it("redacts secret-shaped values from /debug set acknowledgements", async () => {
+    const params = buildParams(
+      '/debug set gateway.auth.token="OPENCLAW_DEBUG_SET_CANARY_TOKEN_65623"',
+      {
+        commands: { debug: true, text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+    );
+    params.command.senderIsOwner = true;
+
+    const result = await handleDebugCommand(params, true);
+    const output = result?.reply?.text ?? "";
+
+    expect(output).toContain("Debug override set: gateway.auth.token=");
+    expect(output).toContain(REDACTED_SENTINEL);
+    expect(output).not.toContain("OPENCLAW_DEBUG_SET_CANARY_TOKEN_65623");
   });
 
   it("returns explicit unauthorized replies for native privileged commands", async () => {

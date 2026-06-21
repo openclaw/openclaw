@@ -34,9 +34,9 @@ const MANIFEST_LOCK_REL_PATH = path.join(TARGET_LOCKS_REL_DIR, "proposals-manife
 const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
-export const MAX_PROPOSAL_BYTES = 1024 * 1024;
+const MAX_PROPOSAL_BYTES = 1024 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
-export const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
+const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
 const SKILL_WORKSHOP_LOCK_OPTIONS: FileLockOptions = {
   retries: {
@@ -76,7 +76,7 @@ function contentSizeBytes(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
 
-export function assertSkillProposalContentSize(content: string): void {
+function assertSkillProposalContentSize(content: string): void {
   if (contentSizeBytes(content) > MAX_PROPOSAL_BYTES) {
     throw new Error("Skill proposal is too large.");
   }
@@ -86,11 +86,7 @@ function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): 
   return path.resolve(options.stateDir ?? resolveStateDir(options.env));
 }
 
-export function resolveWorkshopPath(options: SkillWorkshopStoreOptions = {}): string {
-  return path.join(resolveSkillWorkshopStateDir(options), WORKSHOP_REL_DIR);
-}
-
-export function resolveProposalDir(
+function resolveProposalDir(
   proposalId: string,
   options: SkillWorkshopStoreOptions = {},
 ): string {
@@ -98,7 +94,7 @@ export function resolveProposalDir(
   return path.join(resolveSkillWorkshopStateDir(options), proposalRelativeDir(proposalId));
 }
 
-export function resolveProposalRecordPath(
+function resolveProposalRecordPath(
   proposalId: string,
   options: SkillWorkshopStoreOptions = {},
 ): string {
@@ -446,7 +442,7 @@ export function createSkillProposalRollback(params: {
   };
 }
 
-export function assertProposalId(proposalId: string): void {
+function assertProposalId(proposalId: string): void {
   if (!PROPOSAL_ID_PATTERN.test(proposalId)) {
     throw new Error("Invalid skill proposal id.");
   }

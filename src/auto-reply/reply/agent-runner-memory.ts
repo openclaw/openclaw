@@ -849,9 +849,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof activeTranscriptBytes === "number" &&
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
-  const stalePersistedPromptTokens = hasPersistedTotalTokens
-    ? Math.floor(persistedTotalTokens)
-    : undefined;
+  const stalePersistedPromptTokens =
+    hasPersistedTotalTokens && entry.totalTokensFresh !== false
+      ? Math.floor(persistedTotalTokens)
+      : undefined;
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
   const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
   const usageProjectedTokenCount =

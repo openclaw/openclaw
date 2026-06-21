@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Detect changed paths
         id: scope
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             if (context.eventName === "workflow_dispatch") {
@@ -65,7 +65,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -216,7 +216,7 @@ jobs:
 
       - name: Upload Periphery report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ios-periphery

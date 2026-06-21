@@ -221,7 +221,13 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
-/** Builds system prompt context for group/channel conversations. */
+/**
+ * Builds trusted group/channel delivery guidance.
+ *
+ * Room names, members, and history are rendered separately as untrusted inbound
+ * context. Legacy automatic delivery posts text final replies directly, but
+ * files/images/attachments still need message(action=send).
+ */
 export function buildGroupChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -231,16 +237,22 @@ export function buildGroupChatContext(params: {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const botUsername = normalizeOptionalString(params.sessionCtx.BotUsername);
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} group chat.`);
+  if (params.sessionCtx.ExplicitlyMentionedBot === true && botUsername) {
+    lines.push(
+      `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`,
+    );
+  }
   if (messageToolOnly) {
     lines.push(
       "Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat.",
     );
   } else {
     lines.push(
-      "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+      "Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same group; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
     );
   }
   lines.push(

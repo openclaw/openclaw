@@ -21,6 +21,8 @@ export type MentionSource =
   | "command_bypass"
   | "none";
 
+export type InboundSourceModality = "text" | "voice" | "audio" | "image" | "video" | "document";
+
 type StickerContextMetadata = {
   cachedDescription?: string;
   emoji?: string;
@@ -190,6 +192,8 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  /** Original message modality before transcription or other media normalization. */
+  SourceModality?: InboundSourceModality;
   MediaWorkspaceDir?: string;
   /** Attachment indexes whose audio was already transcribed before media understanding runs. */
   MediaTranscribedIndexes?: number[];

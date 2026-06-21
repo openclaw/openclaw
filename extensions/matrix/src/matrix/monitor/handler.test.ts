@@ -913,6 +913,31 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
+  it("processes room messages mentioned via bracketed @displayName in formatted_body", async () => {
+    const recordInboundSession = vi.fn(async () => {});
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      getMemberDisplayName: async () => "Display Name",
+      recordInboundSession,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixRoomMessageEvent({
+        eventId: "$bracketed-display-name-mention",
+        content: {
+          msgtype: "m.text",
+          body: "@[Display Name] please reply",
+          formatted_body:
+            '<a href="https://matrix.to/#/@bot:example.org">@[Display Name]</a> please reply',
+          "m.mentions": { user_ids: ["@bot:example.org"] },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
   it("does not fetch self displayName for plain-text room mentions", async () => {
     const getMemberDisplayName = vi.fn(async () => "Tom Servo");
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
@@ -3204,13 +3229,13 @@ describe("matrix monitor handler draft streaming", () => {
     expect(editMessageMatrixMock).toHaveBeenCalledWith(
       "!room:example.org",
       "$draft1",
-      expect.stringContaining("completed"),
+      expect.stringContaining("Exec"),
       expect.any(Object),
     );
     const recoveredEdit = mockCalls(editMessageMatrixMock, "editMessageMatrix").find(
-      ([, eventId, body]) =>
-        eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
+      ([, eventId, body]) => eventId === "$draft1" && typeof body === "string",
     );
+    expect(recoveredEdit?.[2]).not.toContain("completed");
     expect(recoveredEdit?.[2]).not.toContain("failed");
     expect(recoveredEdit?.[2]).not.toContain("run openclaw cron -> run jq");
   });
@@ -3268,7 +3293,8 @@ describe("matrix monitor handler draft streaming", () => {
       ([, eventId, body]) =>
         eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
     );
-    expect(completedEdit?.[2]).not.toContain("install dependencies");
+    expect(completedEdit).toBeUndefined();
+    expect(singleTextMessageBody()).toContain("install dependencies");
   });
 
   it("replaces Matrix patch progress when the patch summary completes", async () => {

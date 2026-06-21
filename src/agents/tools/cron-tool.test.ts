@@ -19,6 +19,7 @@ vi.mock("../../config/sessions/delivery-info.js", () => ({
   extractDeliveryInfo: extractDeliveryInfoMock,
 }));
 
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import { createCronTool } from "./cron-tool.js";
 
@@ -333,7 +334,13 @@ describe("cron tool", () => {
     });
 
     const params = expectSingleGatewayCallMethod("cron.list");
-    expect(params).toEqual({ includeDisabled: true, agentId: "agent-123", limit: 200, offset: 0 });
+    expect(params).toEqual({
+      includeDisabled: true,
+      compact: true,
+      agentId: "agent-123",
+      limit: 200,
+      offset: 0,
+    });
     expect(result.details).toEqual({
       jobs: [{ id: "job-current", name: "current" }],
       total: 1,
@@ -385,11 +392,23 @@ describe("cron tool", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
     expect(readGatewayCall(0)).toEqual({
       method: "cron.list",
-      params: { includeDisabled: true, agentId: "agent-123", limit: 200, offset: 0 },
+      params: {
+        includeDisabled: true,
+        compact: true,
+        agentId: "agent-123",
+        limit: 200,
+        offset: 0,
+      },
     });
     expect(readGatewayCall(1)).toEqual({
       method: "cron.list",
-      params: { includeDisabled: true, agentId: "agent-123", limit: 200, offset: 200 },
+      params: {
+        includeDisabled: true,
+        compact: true,
+        agentId: "agent-123",
+        limit: 200,
+        offset: 200,
+      },
     });
     expect(result.details).toEqual({
       jobs: [{ id: "job-current", name: "current" }],
@@ -429,7 +448,7 @@ describe("cron tool", () => {
     });
 
     const params = expectSingleGatewayCallMethod("cron.list");
-    expect(params).toEqual({ includeDisabled: false, agentId: "agent-123" });
+    expect(params).toEqual({ includeDisabled: false, compact: true, agentId: "agent-123" });
   });
 
   it("prefers explicit cron list agent id over the requester session", async () => {
@@ -444,7 +463,32 @@ describe("cron tool", () => {
     });
 
     const params = expectSingleGatewayCallMethod("cron.list");
-    expect(params).toEqual({ includeDisabled: true, agentId: "ops" });
+    expect(params).toEqual({ includeDisabled: true, compact: true, agentId: "ops" });
+  });
+
+  it("retries cron.list without compact for older gateways", async () => {
+    callGatewayMock
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid cron.list params: at root: unexpected property 'compact'",
+        }),
+      )
+      .mockResolvedValueOnce({ jobs: [] });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    await tool.execute("call-list-older-gateway", { action: "list" });
+
+    expect(readGatewayCall(0)).toEqual({
+      method: "cron.list",
+      params: { includeDisabled: false, compact: true, agentId: "agent-123" },
+    });
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.list",
+      params: { includeDisabled: false, agentId: "agent-123" },
+    });
   });
 
   describe("wake routing", () => {
@@ -599,6 +643,18 @@ describe("cron tool", () => {
     );
   });
 
+  it("documents due-by-default cron run mode", () => {
+    const tool = createTestCronTool();
+    const parameters = tool.parameters as SchemaLike;
+    const runMode = parameters.properties?.runMode;
+
+    expect(tool.description).toContain(
+      'run: run only if due by default; needs jobId; pass runMode="force" to trigger now',
+    );
+    expect(runMode?.description).toContain('omitted defaults to "due"');
+    expect(runMode?.description).toContain('use "force" to trigger now');
+  });
+
   it("advertises delivery threadId in the tool schema", () => {
     const tool = createTestCronTool();
     const parameters = tool.parameters as SchemaLike;
@@ -666,8 +722,8 @@ describe("cron tool", () => {
     ],
     ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
-    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "force" }],
-    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "force" }],
+    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "due" }],
+    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "due" }],
     ["get", { action: "get", jobId: "job-1" }, { id: "job-1" }],
     ["get", { action: "get", id: "job-2" }, { id: "job-2" }],
     ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
@@ -688,7 +744,7 @@ describe("cron tool", () => {
       id: "job-legacy",
     });
 
-    expect(readGatewayCall().params).toEqual({ id: "job-primary", mode: "force" });
+    expect(readGatewayCall().params).toEqual({ id: "job-primary", mode: "due" });
   });
 
   it("supports due-only run mode", async () => {
@@ -700,6 +756,17 @@ describe("cron tool", () => {
     });
 
     expect(readGatewayCall().params).toEqual({ id: "job-due", mode: "due" });
+  });
+
+  it("supports force run mode", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-force", {
+      action: "run",
+      jobId: "job-force",
+      runMode: "force",
+    });
+
+    expect(readGatewayCall().params).toEqual({ id: "job-force", mode: "force" });
   });
 
   it("normalizes cron.add job payloads", async () => {

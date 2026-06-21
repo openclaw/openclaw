@@ -5,7 +5,6 @@
  * either fire-and-forget or awaited during tests/shutdown.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runSkillResearchAutoCapture } from "../../skills/research/autocapture.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
@@ -17,6 +16,7 @@ type AgentEndSideEffectsParams = Parameters<typeof runAgentHarnessAgentEndHook>[
 
 async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Promise<void> {
   try {
+    const { runSkillResearchAutoCapture } = await import("../../skills/research/autocapture.js");
     await runSkillResearchAutoCapture({
       event: params.event,
       ctx: params.ctx,

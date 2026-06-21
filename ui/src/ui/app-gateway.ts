@@ -152,6 +152,8 @@ type GatewayHost = {
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
   reconcileWebPushState?: () => Promise<void> | void;
+  realtimeTalkOptionsOpen?: boolean;
+  fetchRealtimeTalkCatalog?: () => Promise<void>;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiBootstrapReady?: Promise<void> | null;
 };
@@ -810,6 +812,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       host.chatError = null;
       host.hello = hello;
+      if (host.realtimeTalkOptionsOpen) {
+        void host.fetchRealtimeTalkCatalog?.();
+      }
       applySnapshot(host, hello);
       prepareHelloScopedComposerRestore(host);
       restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {

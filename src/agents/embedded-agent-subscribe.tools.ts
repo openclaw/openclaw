@@ -461,7 +461,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
     return false;
   }
@@ -671,10 +671,6 @@ export function extractToolResultMediaArtifact(
   }
 
   return undefined;
-}
-
-export function extractToolResultMediaPaths(result: unknown): string[] {
-  return extractToolResultMediaArtifact(result)?.mediaUrls ?? [];
 }
 
 export function extractToolErrorCode(result: unknown): string | undefined {
@@ -972,13 +968,21 @@ export function extractMessagingToolSendResult(
   if (!extracted?.to) {
     return pending;
   }
+  const extractedThreadId = normalizeOptionalString(extracted.threadId);
+  const providerReportedThread =
+    extractedThreadId != null ||
+    extracted.threadImplicit === true ||
+    extracted.threadSuppressed === true;
+  // Thread route fields are one state. Mixing provider and pending values can
+  // create contradictory implicit and suppressed evidence.
+  const threadEvidence = providerReportedThread ? extracted : pending;
   return {
     ...pending,
     ...extracted,
     accountId: normalizeOptionalString(extracted.accountId) ?? pending.accountId,
     to: normalizeTargetForProvider(providerId ?? pending.provider, extracted.to),
-    threadId: normalizeOptionalString(extracted.threadId),
-    threadImplicit: extracted.threadImplicit === true ? true : undefined,
-    threadSuppressed: extracted.threadSuppressed === true ? true : undefined,
+    threadId: normalizeOptionalString(threadEvidence.threadId),
+    threadImplicit: threadEvidence.threadImplicit === true ? true : undefined,
+    threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
 }

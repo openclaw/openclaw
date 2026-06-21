@@ -56,17 +56,17 @@ Prereqs:
 - `xcodegen`
 - `fastlane`
 - Apple account signed into Xcode for the canonical OpenClaw team (`FWJYW4S8P8`)
-- `asc` CLI authenticated for the canonical OpenClaw team
-- Release-owner access to the encrypted signing repo password (`ASC_MATCH_PASSWORD`)
+- Fastlane Apple Developer Portal session for the canonical OpenClaw team when creating bundle IDs or enabling services
+- Release-owner access to the encrypted signing repo password (`MATCH_PASSWORD`)
 - App Store Connect app already created for `ai.openclawfoundation.app`
-- App Store Connect API key set up in Keychain via `scripts/ios-asc-keychain-setup.sh` when auto-resolving a build number or uploading to App Store Connect
+- App Store Connect API key set up in Keychain via `scripts/ios-app-store-connect-keychain-setup.sh` when auto-resolving a build number or uploading to App Store Connect
 
 Release behavior:
 
 - Local development uses the canonical `ai.openclawfoundation.app*` bundle IDs when the OpenClaw team is available, and unique `ai.openclawfoundation.app.test.*` bundle IDs only for non-canonical fallback teams.
 - App Store release uses canonical `ai.openclawfoundation.app*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/AppStoreRelease.xcconfig`.
 - App Store release uses manual `Apple Distribution` signing with profile names pinned in `apps/ios/Config/AppStoreSigning.json`.
-- `asc` owns one-time Developer Portal setup and encrypted signing sync. Fastlane owns release handling after those assets exist.
+- Fastlane owns one-time Developer Portal setup, encrypted `match` signing sync to the repo/branch pinned in `apps/ios/Config/AppStoreSigning.json`, and release handling.
 - App Store release also switches the app to `OpenClawPushTransport=relay`, `OpenClawPushDistribution=official`, `OpenClawPushAPNsEnvironment=production`, and a production `aps-environment` entitlement.
 - `pnpm ios:release:upload` generates App Store screenshots and uploads release notes before archiving and uploading the IPA.
 - `pnpm ios:release` remains a compatibility alias for `pnpm ios:release:upload`; prefer the explicit upload command in new release docs and automation.
@@ -93,16 +93,17 @@ Signing setup commands:
 pnpm ios:release:signing:plan
 pnpm ios:release:signing:check
 pnpm ios:release:signing:setup
-ASC_MATCH_PASSWORD=... pnpm ios:release:signing:sync:push
-ASC_MATCH_PASSWORD=... pnpm ios:release:signing:sync:pull
+MATCH_PASSWORD=... pnpm ios:release:signing:sync:push
+MATCH_PASSWORD=... pnpm ios:release:signing:sync:pull
 ```
 
 Release-owner secrets:
 
 - App Store Connect API auth uses Keychain for private key material plus non-secret `apps/ios/fastlane/.env` variables.
-- The encrypted signing repo password lives outside this repo in the release-owner vault and is exposed locally as `ASC_MATCH_PASSWORD`.
+- The encrypted signing repo password lives outside this repo in the release-owner vault and is exposed locally as `MATCH_PASSWORD`.
+- The share sheet requires the Apple Developer App Group in `apps/ios/Config/AppStoreSigning.json` to be associated with both the app and share-extension bundle IDs before App Store profiles are regenerated.
 - Apple Distribution private keys, certificates, provisioning profiles, and decrypted signing sync output stay under `apps/ios/build/` or Keychain and are gitignored.
-- Rotating release signing means revoking/replacing the Developer Portal certificate or profile with `asc`, then pushing a fresh encrypted sync state.
+- Rotating release signing means refreshing Fastlane `match` assets and pushing a fresh encrypted sync state.
 
 Prepare the generated release xcconfig/project without archiving:
 
@@ -142,22 +143,23 @@ fastlane ios auth_check
 2. If auth is missing, bootstrap it once on this Mac:
 
 ```bash
-scripts/ios-asc-keychain-setup.sh \
+scripts/ios-app-store-connect-keychain-setup.sh \
   --key-path /absolute/path/to/AuthKey_XXXXXXXXXX.p8 \
   --issuer-id YOUR_ISSUER_ID \
   --write-env
 ```
 
-This should create `apps/ios/fastlane/.env` with the non-secret ASC variables while the private key stays in Keychain.
+This should create `apps/ios/fastlane/.env` with non-secret App Store Connect variables while the private key stays in Keychain.
 
 3. Confirm the App Store Connect app and Apple Developer identifiers/capabilities exist for:
    - `ai.openclawfoundation.app`
    - `ai.openclawfoundation.app.share`
    - `ai.openclawfoundation.app.activitywidget`
    - `ai.openclawfoundation.app.watchkitapp`
-   - `ai.openclawfoundation.app.watchkitapp.extension`
 
-   Use `pnpm ios:release:signing:setup` for the initial portal setup, then `ASC_MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted signing assets to the shared private repo.
+   The main app and share extension must both be associated with the App Group pinned in `apps/ios/Config/AppStoreSigning.json`.
+
+   Use `pnpm ios:release:signing:setup` for the initial portal setup, then `MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted Fastlane match assets to the shared private repo.
 
 4. Optional: set a custom official relay URL for the build. If unset, the release flow uses `https://ios-push-relay.openclaw.ai`.
 

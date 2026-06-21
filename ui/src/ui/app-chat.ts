@@ -24,6 +24,7 @@ import {
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
+import { clearChatMessagesFromCache, type ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import {
@@ -99,6 +100,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatQueueBySession?: Record<string, ChatQueueItem[]>;
+  chatMessagesBySession?: ChatMessageCache;
   chatRunId: string | null;
   chatSending: boolean;
   lastError?: string | null;
@@ -1958,6 +1960,13 @@ async function dispatchSlashCommand(
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
+function clearCachedChatMessagesForSession(host: ChatHost, sessionKey: string) {
+  if (!host.chatMessagesBySession) {
+    return;
+  }
+  clearChatMessagesFromCache(host.chatMessagesBySession, host, { sessionKey });
+}
+
 async function clearChatHistory(host: ChatHost) {
   if (!host.client || !host.connected) {
     return;
@@ -1969,6 +1978,7 @@ async function clearChatHistory(host: ChatHost) {
       ...scopedAgentParamsForSession(host, host.sessionKey),
     });
     host.chatMessages = [];
+    clearCachedChatMessagesForSession(host, host.sessionKey);
     host.chatSideResult = null;
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome: hadActiveRun ? "interrupted" : undefined,

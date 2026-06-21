@@ -18,6 +18,11 @@ private struct GatewayRelayIdentityResponse: Decodable {
     let publicKey: String
 }
 
+private struct WatchChatPreview {
+    var items: [OpenClawWatchChatItem]
+    var statusText: String?
+}
+
 /// Ensures notification requests return promptly even if the system prompt blocks.
 private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -54,6 +59,8 @@ private enum IOSDeepLinkAgentPolicy {
 @Observable
 // swiftlint:disable type_body_length file_length
 final class NodeAppModel {
+    private nonisolated static let watchChatPreviewItemLimit = 5
+
     struct AgentDeepLinkPrompt: Identifiable, Equatable {
         let id: String
         let messagePreview: String
@@ -191,6 +198,8 @@ final class NodeAppModel {
     @ObservationIgnored private var foregroundGatewayResumeCheckInFlight = false
     private var lastSignificantLocationWakeAt: Date?
     @ObservationIgnored private let watchReplyCoordinator = WatchReplyCoordinator()
+    @ObservationIgnored private let watchChatCoordinator = WatchChatCoordinator()
+    @ObservationIgnored private let appleReviewDemoChatTransport = AppleReviewDemoChatTransport()
     private var watchExecApprovalPromptsByID: [String: ExecApprovalPrompt] = [:]
     private var pendingWatchExecApprovalRecoveryIDs: [String] = []
     private var pendingForegroundActionDrainInFlight = false
@@ -243,6 +252,7 @@ final class NodeAppModel {
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
     private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
     private static let foregroundResumeHealthTimeoutSeconds = 1
+    private static let watchChatCompletionWaitMs = 45000
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
@@ -312,6 +322,19 @@ final class NodeAppModel {
                     return
                 }
                 await self.refreshWatchExecApprovalSnapshotOnDemand(reason: "watch_request")
+            }
+        }
+        self.watchMessagingService.setAppSnapshotRequestHandler { [weak self] event in
+            Task { @MainActor in
+                guard let self else { return }
+                GatewayDiagnostics.log(
+                    "node app model: watch app snapshot request id=\(event.requestId)")
+                await self.syncWatchAppSnapshot(reason: "watch_app_request", includeChat: true)
+            }
+        }
+        self.watchMessagingService.setAppCommandHandler { [weak self] event in
+            Task { @MainActor in
+                await self?.handleWatchAppCommand(event)
             }
         }
 
@@ -1910,6 +1933,14 @@ extension NodeAppModel {
         self.agentDisplayName(for: self.chatAgentId, fallback: "Main")
     }
 
+    var chatAgentAvatarURL: String? {
+        self.agentIdentityValue(for: self.chatAgentId, key: "avatarUrl")
+    }
+
+    var chatAgentAvatarText: String? {
+        self.agentIdentityValue(for: self.chatAgentId, key: "emoji")
+    }
+
     var activeAgentName: String {
         self.agentDisplayName(for: self.selectedOrDefaultAgentId, fallback: "Main")
     }
@@ -1928,6 +1959,18 @@ extension NodeAppModel {
             return name.isEmpty ? match.id : name
         }
         return resolvedId
+    }
+
+    private func agentIdentityValue(for agentId: String, key: String) -> String? {
+        let resolvedId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !resolvedId.isEmpty,
+              let match = self.gatewayAgents.first(where: { $0.id == resolvedId }),
+              let rawValue = match.identity?[key]?.value as? String
+        else {
+            return nil
+        }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     func connectToGateway(
@@ -2802,9 +2845,22 @@ extension NodeAppModel {
     }
 
     private func setOperatorConnected(_ connected: Bool) {
+        let changed = self.operatorConnected != connected
         self.operatorConnected = connected
         self.operatorStatusText = connected ? "Connected" : "Offline"
         self.refreshOperatorAdminScopeFromStore()
+        guard connected else {
+            guard changed else { return }
+            Task { [weak self] in
+                await self?.syncWatchAppSnapshot(reason: "operator_offline")
+            }
+            return
+        }
+        Task { [weak self] in
+            await self?.flushQueuedWatchChatsIfAvailable()
+            guard changed else { return }
+            await self?.syncWatchAppSnapshot(reason: "operator_online")
+        }
     }
 
     private func refreshOperatorAdminScopeFromStore() {
@@ -3011,6 +3067,7 @@ extension NodeAppModel {
     func onNodeGatewayConnected() async {
         await self.registerAPNsTokenIfNeeded()
         await self.flushQueuedWatchRepliesIfConnected()
+        await self.syncWatchAppSnapshot(reason: "node_connected", includeChat: true)
         await self.syncWatchExecApprovalSnapshot(reason: "node_connected")
         await self.resumePendingForegroundNodeActionsIfNeeded(trigger: "node_connected")
     }
@@ -3215,10 +3272,11 @@ extension NodeAppModel {
             "watch exec approval: status changed "
                 + "reachable=\(status.reachable) activation=\(status.activationState) "
                 + "backgrounded=\(self.isBackgrounded)")
-        guard self.isBackgrounded else { return }
         guard status.supported, status.paired, status.appInstalled else { return }
         guard status.reachable || status.activationState == "activated" else { return }
         let reason = status.reachable ? "watch_reachable" : "watch_activated"
+        await self.syncWatchAppSnapshot(reason: reason, includeChat: status.reachable)
+        guard self.isBackgrounded else { return }
         await self.syncWatchExecApprovalSnapshot(reason: reason)
     }
 
@@ -3303,6 +3361,7 @@ extension NodeAppModel {
             self.watchExecApprovalLogger.error(
                 "watch approval prompt error=\(error.localizedDescription, privacy: .public)")
         }
+        await self.syncWatchAppSnapshot(reason: "\(reason)_app")
         await self.syncWatchExecApprovalSnapshot(reason: "\(reason)_snapshot")
     }
 
@@ -3328,6 +3387,7 @@ extension NodeAppModel {
             self.watchExecApprovalLogger.error(
                 "watch approval resolve error=\(error.localizedDescription, privacy: .public)")
         }
+        await self.syncWatchAppSnapshot(reason: "resolved_app")
         await self.syncWatchExecApprovalSnapshot(reason: "resolved_snapshot")
     }
 
@@ -3351,6 +3411,7 @@ extension NodeAppModel {
             self.watchExecApprovalLogger.error(
                 "watch approval expiry error=\(error.localizedDescription, privacy: .public)")
         }
+        await self.syncWatchAppSnapshot(reason: "expired_\(reason.rawValue)_app")
         await self.syncWatchExecApprovalSnapshot(reason: "expired_\(reason.rawValue)")
     }
 
@@ -3393,10 +3454,311 @@ extension NodeAppModel {
         }
     }
 
+    private func makeWatchChatPreview() async -> WatchChatPreview {
+        do {
+            let payload: OpenClawChatHistoryPayload
+            if self.isAppleReviewDemoModeEnabled {
+                payload = try await self.appleReviewDemoChatTransport.requestHistory(sessionKey: self.chatSessionKey)
+            } else {
+                guard self.isOperatorGatewayConnected else {
+                    return WatchChatPreview(
+                        items: [],
+                        statusText: "Connect iPhone chat to read messages")
+                }
+                payload = try await IOSGatewayChatTransport(gateway: self.operatorSession)
+                    .requestHistory(sessionKey: self.chatSessionKey)
+            }
+
+            let items = Self.makeWatchChatItems(from: payload.messages ?? [])
+            return WatchChatPreview(
+                items: items,
+                statusText: items.isEmpty ? "No chat messages yet" : nil)
+        } catch {
+            GatewayDiagnostics.log("watch app snapshot: chat preview failed error=\(error.localizedDescription)")
+            return WatchChatPreview(items: [], statusText: "Chat unavailable")
+        }
+    }
+
+    private nonisolated static func decodeWatchChatMessage(
+        _ raw: OpenClawKit.AnyCodable) -> OpenClawChatMessage?
+    {
+        guard let data = try? JSONEncoder().encode(raw) else { return nil }
+        return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+    }
+
+    private nonisolated static func makeWatchChatItems(
+        from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem]
+    {
+        var readableMessages: [(OpenClawChatMessage, String)] = []
+        for item in raw.reversed() {
+            guard let message = self.decodeWatchChatMessage(item) else { continue }
+            let text = self.watchChatText(from: message)
+            guard !text.isEmpty else { continue }
+            readableMessages.append((message, text))
+            if readableMessages.count == self.watchChatPreviewItemLimit {
+                break
+            }
+        }
+        return Array(readableMessages.reversed()).enumerated().map { index, entry in
+            let timestampMs = self.watchTimestampMs(entry.0.timestamp)
+            let stableTime = timestampMs.map(String.init) ?? entry.0.id.uuidString
+            return OpenClawWatchChatItem(
+                id: "\(entry.0.role)-\(stableTime)-\(index)",
+                role: entry.0.role,
+                text: self.truncatedWatchChatText(entry.1),
+                timestampMs: timestampMs)
+        }
+    }
+
+    private nonisolated static func watchChatText(from message: OpenClawChatMessage) -> String {
+        let parts = message.content.compactMap { content -> String? in
+            let kind = (content.type ?? "text").lowercased()
+            guard kind.isEmpty || kind == "text" else { return nil }
+            if let text = self.nonEmptyWatchChatText(content.text) {
+                return text
+            }
+            if let text = self.nonEmptyWatchChatText(content.content?.value as? String) {
+                return text
+            }
+            if let dict = content.content?.value as? [String: OpenClawKit.AnyCodable],
+               let text = self.nonEmptyWatchChatText(dict["text"]?.value as? String)
+            {
+                return text
+            }
+            return nil
+        }
+        let contentText = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !contentText.isEmpty {
+            return contentText
+        }
+        return message.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private nonisolated static func nonEmptyWatchChatText(_ text: String?) -> String? {
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private nonisolated static func truncatedWatchChatText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 240 else { return trimmed }
+        return "\(trimmed.prefix(237))..."
+    }
+
+    private nonisolated static func watchTimestampMs(_ timestamp: Double?) -> Int? {
+        guard let timestamp, timestamp.isFinite, timestamp >= 0 else { return nil }
+        let milliseconds = timestamp > 100_000_000_000 ? timestamp : timestamp * 1000
+        let maxReasonableEpochMs: Double = 32_503_680_000_000
+        guard milliseconds.isFinite,
+              milliseconds >= 0,
+              milliseconds <= maxReasonableEpochMs
+        else {
+            return nil
+        }
+        return Int(milliseconds)
+    }
+
+    private func makeWatchAppSnapshot(
+        chatPreview: WatchChatPreview? = nil) -> OpenClawWatchAppSnapshotMessage
+    {
+        self.pruneExpiredWatchExecApprovalPrompts()
+        let watchGatewayConnected = self.isAppleReviewDemoModeEnabled
+            || (self.gatewayConnected && self.operatorConnected)
+        let displayStatusText = self.gatewayDisplayStatusText
+        let watchGatewayStatusText = watchGatewayConnected || displayStatusText != "Connected"
+            ? displayStatusText
+            : self.operatorStatusText
+        return OpenClawWatchAppSnapshotMessage(
+            gatewayStatusText: watchGatewayStatusText,
+            gatewayConnected: watchGatewayConnected,
+            agentName: self.chatAgentName,
+            agentAvatarURL: self.chatAgentAvatarURL,
+            agentAvatarText: self.chatAgentAvatarText,
+            sessionKey: self.chatSessionKey,
+            gatewayStableID: self.currentWatchChatGatewayStableID(),
+            talkStatusText: self.talkMode.statusText,
+            talkEnabled: self.talkMode.isEnabled,
+            talkListening: self.talkMode.isListening,
+            talkSpeaking: self.talkMode.isSpeaking,
+            pendingApprovalCount: self.watchExecApprovalPromptsByID.count,
+            chatItems: chatPreview?.items,
+            chatStatusText: chatPreview?.statusText,
+            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            snapshotId: UUID().uuidString)
+    }
+
+    private func handleWatchAppCommand(_ event: WatchAppCommandEvent) async {
+        GatewayDiagnostics.log(
+            "watch app command: handle id=\(event.commandId) command=\(event.command.rawValue)")
+        switch event.command {
+        case .refresh:
+            break
+        case .openChat:
+            self.openChat(sessionKey: event.sessionKey ?? self.chatSessionKey)
+        case .sendChat:
+            await self.handleWatchChatCommand(event)
+            return
+        case .startTalk:
+            guard !self.isAppleReviewDemoModeEnabled else { break }
+            self.talkMode.updateMainSessionKey(event.sessionKey ?? self.chatSessionKey)
+            self.setTalkEnabled(true)
+        case .stopTalk:
+            self.setTalkEnabled(false)
+        }
+        await self.syncWatchAppSnapshot(
+            reason: "watch_command_\(event.command.rawValue)",
+            includeChat: true)
+    }
+
+    private func handleWatchChatCommand(_ event: WatchAppCommandEvent) async {
+        guard self.watchChatCommandTargetsCurrentGateway(event) else {
+            GatewayDiagnostics.log("watch chat send skipped: stale gateway target")
+            await self.syncWatchAppSnapshot(reason: "watch_chat_stale_gateway", includeChat: true)
+            return
+        }
+        let eventGatewayID = self.normalizedWatchChatGatewayStableID(event)
+        switch self.watchChatCoordinator.ingest(
+            event,
+            isChatAvailable: self.isWatchChatAvailableForSend(),
+            gatewayStableID: eventGatewayID)
+        {
+        case .dropMissingFields:
+            GatewayDiagnostics.log("watch chat send skipped: missing commandId/text")
+        case .dropMissingTarget:
+            GatewayDiagnostics.log("watch chat send skipped: missing gateway target")
+        case let .deduped(commandId):
+            GatewayDiagnostics.log("watch chat send deduped commandId=\(commandId)")
+        case let .queue(commandId):
+            GatewayDiagnostics.log("watch chat send queued commandId=\(commandId)")
+            await self.syncWatchAppSnapshot(reason: "watch_chat_queued", includeChat: true)
+        case .forward:
+            _ = await self.forwardWatchChatMessage(event, requeueOnFailure: true)
+        }
+    }
+
+    private func flushQueuedWatchChatsIfAvailable() async {
+        let gatewayStableID = self.currentWatchChatGatewayStableID()
+        while let event = self.watchChatCoordinator.nextQueuedCommand(
+            isChatAvailable: self.isWatchChatAvailableForSend(),
+            gatewayStableID: gatewayStableID)
+        {
+            guard self.watchChatCommandTargetsCurrentGateway(event) else {
+                GatewayDiagnostics.log("watch chat send skipped: stale queued gateway target")
+                self.watchChatCoordinator.removeQueuedCommand(
+                    commandId: event.commandId,
+                    gatewayStableID: gatewayStableID)
+                continue
+            }
+            let sent = await self.forwardWatchChatMessage(event, requeueOnFailure: false)
+            guard sent else { return }
+            self.watchChatCoordinator.removeQueuedCommand(
+                commandId: event.commandId,
+                gatewayStableID: gatewayStableID)
+        }
+    }
+
+    private func isWatchChatAvailableForSend() -> Bool {
+        self.isAppleReviewDemoModeEnabled || self.isOperatorGatewayConnected
+    }
+
+    private func currentWatchChatGatewayStableID() -> String? {
+        self.connectedGatewayID?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizedWatchChatGatewayStableID(_ event: WatchAppCommandEvent) -> String? {
+        let gatewayStableID = event.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return gatewayStableID.isEmpty ? nil : gatewayStableID
+    }
+
+    private func watchChatCommandTargetsCurrentGateway(_ event: WatchAppCommandEvent) -> Bool {
+        let eventGatewayID = self.normalizedWatchChatGatewayStableID(event) ?? ""
+        let currentGatewayID = self.currentWatchChatGatewayStableID() ?? ""
+        guard !eventGatewayID.isEmpty, !currentGatewayID.isEmpty else { return false }
+        return eventGatewayID == currentGatewayID
+    }
+
+    private func forwardWatchChatMessage(
+        _ event: WatchAppCommandEvent,
+        requeueOnFailure: Bool) async -> Bool
+    {
+        let text = event.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty else {
+            GatewayDiagnostics.log("watch chat send skipped: empty text")
+            return true
+        }
+
+        let sessionKey = (event.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? event.sessionKey!
+            : self.chatSessionKey
+        self.focusChatSession(sessionKey)
+
+        do {
+            if self.isAppleReviewDemoModeEnabled {
+                _ = try await self.appleReviewDemoChatTransport.sendMessage(
+                    sessionKey: sessionKey,
+                    message: text,
+                    thinking: "auto",
+                    idempotencyKey: event.commandId,
+                    attachments: [])
+                await self.syncWatchAppSnapshot(reason: "watch_chat_sent", includeChat: true)
+                return true
+            }
+
+            guard self.isOperatorGatewayConnected else {
+                GatewayDiagnostics.log("watch chat send skipped: operator gateway disconnected")
+                if requeueOnFailure {
+                    self.watchChatCoordinator.requeueFront(
+                        event,
+                        gatewayStableID: self.normalizedWatchChatGatewayStableID(event))
+                }
+                return false
+            }
+
+            let transport = IOSGatewayChatTransport(gateway: self.operatorSession)
+            let response = try await transport.sendMessage(
+                sessionKey: sessionKey,
+                message: text,
+                thinking: "auto",
+                idempotencyKey: event.commandId,
+                attachments: [])
+            await self.syncWatchAppSnapshot(reason: "watch_chat_sent", includeChat: true)
+            let completed = await transport.waitForRunCompletion(
+                runId: response.runId,
+                timeoutMs: Self.watchChatCompletionWaitMs)
+            guard completed else { return true }
+            await self.syncWatchAppSnapshot(reason: "watch_chat_completed", includeChat: true)
+            return true
+        } catch {
+            GatewayDiagnostics.log("watch chat send failed error=\(error.localizedDescription)")
+            if requeueOnFailure {
+                self.watchChatCoordinator.requeueFront(
+                    event,
+                    gatewayStableID: self.normalizedWatchChatGatewayStableID(event))
+            }
+            return false
+        }
+    }
+
+    private func syncWatchAppSnapshot(reason: String, includeChat: Bool = false) async {
+        let chatPreview = includeChat ? await self.makeWatchChatPreview() : nil
+        let message = self.makeWatchAppSnapshot(chatPreview: chatPreview)
+        do {
+            _ = try await self.watchMessagingService.syncAppSnapshot(message)
+            GatewayDiagnostics.log(
+                "watch app snapshot: sent reason=\(reason) "
+                    + "connected=\(message.gatewayConnected) approvals=\(message.pendingApprovalCount) "
+                    + "chatItems=\(message.chatItems?.count ?? -1)")
+        } catch {
+            GatewayDiagnostics.log(
+                "watch app snapshot: failed reason=\(reason) error=\(error.localizedDescription)")
+        }
+    }
+
     private func refreshWatchExecApprovalSnapshotOnDemand(reason: String) async {
         GatewayDiagnostics.log("watch exec approval: refresh on demand start reason=\(reason)")
         await self.hydrateWatchExecApprovalCacheIfNeeded(reason: reason)
         await self.syncWatchExecApprovalSnapshot(reason: reason)
+        await self.syncWatchAppSnapshot(reason: "\(reason)_app", includeChat: true)
         GatewayDiagnostics.log("watch exec approval: refresh on demand end reason=\(reason)")
     }
 
@@ -4660,8 +5022,32 @@ extension NodeAppModel {
         self.watchReplyCoordinator.queuedCount
     }
 
+    func _test_queuedWatchChatCommandCount() -> Int {
+        self.watchChatCoordinator.queuedCount
+    }
+
+    func _test_queuedWatchChatCommandIds() -> [String] {
+        self.watchChatCoordinator.queuedCommandIds
+    }
+
+    func _test_setConnectedGatewayID(_ gatewayID: String?) {
+        self.connectedGatewayID = gatewayID
+    }
+
+    static func _test_resetPersistedWatchChatQueueState() {
+        WatchChatCoordinator.resetPersistedQueue()
+    }
+
     func _test_setGatewayConnected(_ connected: Bool) {
         self.gatewayConnected = connected
+    }
+
+    func _test_setOperatorConnected(_ connected: Bool) {
+        self.setOperatorConnected(connected)
+    }
+
+    nonisolated static func _test_makeWatchChatItems(from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem] {
+        self.makeWatchChatItems(from: raw)
     }
 
     func _test_isGatewayConnected() -> Bool {

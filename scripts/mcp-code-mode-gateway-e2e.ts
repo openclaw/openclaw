@@ -1,6 +1,5 @@
 // Mcp Code Mode Gateway E2E script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -12,14 +11,13 @@ import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shar
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
+import { writeProbeMcpServer } from "./e2e/lib/mcp-code-mode-probe-server.ts";
 import {
   type McpCodeModeMentions,
   validateMcpCodeModeResult,
 } from "./e2e/lib/mcp-code-mode-validation.ts";
 import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
-
-const require = createRequire(import.meta.url);
 
 async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -93,41 +91,6 @@ function restoreEnvValue(key: string, value: string | undefined): void {
   } else {
     process.env[key] = value;
   }
-}
-
-async function writeProbeMcpServer(serverPath: string) {
-  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
-  const zodPath = require.resolve("zod");
-  await fs.mkdir(path.dirname(serverPath), { recursive: true });
-  await fs.writeFile(
-    serverPath,
-    `#!/usr/bin/env node
-import { McpServer } from ${JSON.stringify(sdkMcpServerPath)};
-import { StdioServerTransport } from ${JSON.stringify(sdkStdioServerPath)};
-import { z } from ${JSON.stringify(zodPath)};
-
-const notes = new Map([
-  ["alpha", "fixture-note-alpha"],
-  ["beta", "fixture-note-beta"],
-]);
-const server = new McpServer({ name: "code-mode-fixture", version: "1.0.0" });
-
-server.tool(
-  "lookup_note",
-  "Look up one read-only fixture note by id.",
-  {
-    id: z.string().describe("Fixture note id to look up."),
-  },
-  async ({ id }) => ({
-    content: [{ type: "text", text: notes.get(id) ?? "missing-note" }],
-  }),
-);
-
-await server.connect(new StdioServerTransport());
-`,
-    { encoding: "utf8", mode: 0o755 },
-  );
 }
 
 async function writeConfig(params: {

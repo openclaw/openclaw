@@ -69,7 +69,12 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isWithinDir } from "./path-safety.js";
+import {
+  detectLegacyDebugProxyCaptureSidecar,
+  migrateLegacyDebugProxyCaptureSidecar,
+} from "./state-migrations.debug-proxy.js";
 import {
   ensureDir,
   existsDir,
@@ -113,6 +118,11 @@ export type LegacyStateDetection = {
   };
   pluginInstallIndex: {
     sourcePath: string;
+    hasLegacy: boolean;
+  };
+  debugProxyCaptureSidecar: {
+    sourcePath: string;
+    blobDir: string;
     hasLegacy: boolean;
   };
   stateSchema: {
@@ -472,12 +482,53 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
 }
 
+function readAuthoritativeCurrentNpmIdentity(
+  record: InstalledPluginIndex["installRecords"][string],
+): { name: string; version: string } | null {
+  const resolvedName = readInstallRecordStringField(record, "resolvedName");
+  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  if (resolvedName && resolvedVersion) {
+    return { name: resolvedName, version: resolvedVersion };
+  }
+  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
+  const parsed = resolvedSpec ? parseRegistryNpmSpec(resolvedSpec) : null;
+  if (parsed?.selectorKind === "exact-version" && parsed.selector) {
+    return { name: parsed.name, version: parsed.selector };
+  }
+  return null;
+}
+
+function legacyNpmInstallRecordSupersededByCurrent(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
+    return false;
+  }
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  const legacyParsedSpec = legacySpec ? parseRegistryNpmSpec(legacySpec) : null;
+  if (legacyParsedSpec?.selectorKind !== "exact-version") {
+    return false;
+  }
+  const currentIdentity = readAuthoritativeCurrentNpmIdentity(currentRecord);
+  return Boolean(
+    currentIdentity &&
+    legacyParsedSpec.selector &&
+    currentIdentity.name === legacyParsedSpec.name &&
+    currentIdentity.version === legacyParsedSpec.selector,
+  );
+}
+
 function legacyInstallRecordCoveredByCurrent(
   currentRecord: InstalledPluginIndex["installRecords"][string],
   legacyRecord: InstalledPluginIndex["installRecords"][string],
 ): boolean {
   if (currentRecord.source !== legacyRecord.source) {
     return false;
+  }
+  if (legacyNpmInstallRecordSupersededByCurrent({ currentRecord, legacyRecord })) {
+    return true;
   }
   for (const key of Object.keys(legacyRecord).toSorted()) {
     const currentValue = readInstallRecordField(currentRecord, key);
@@ -2401,10 +2452,6 @@ export function resetAutoMigrateLegacyStateForTest() {
   cachedLegacySessionSurfaces = null;
 }
 
-export function resetAutoMigrateLegacyAgentDirForTest() {
-  resetAutoMigrateLegacyStateForTest();
-}
-
 export function resetAutoMigrateLegacyStateDirForTest() {
   autoMigrateStateDirChecked = false;
 }
@@ -2839,6 +2886,7 @@ export async function detectLegacyStateMigrations(params: {
   );
   const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
   const hasPluginInstallIndex = fileExists(pluginInstallIndexPath);
+  const debugProxyCaptureSidecar = detectLegacyDebugProxyCaptureSidecar(stateDir, env);
   const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
@@ -2902,6 +2950,11 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (hasPluginInstallIndex) {
     preview.push(`- Plugin install index: ${pluginInstallIndexPath} → shared SQLite state`);
+  }
+  if (debugProxyCaptureSidecar.hasLegacy) {
+    preview.push(
+      `- Debug proxy capture sidecar: ${debugProxyCaptureSidecar.sourcePath} → shared SQLite state`,
+    );
   }
   if (stateSchemaMigrations.length > 0) {
     preview.push("- Shared SQLite schema: agent database registry primary key → agent_id,path");
@@ -2967,6 +3020,7 @@ export async function detectLegacyStateMigrations(params: {
       sourcePath: pluginInstallIndexPath,
       hasLegacy: hasPluginInstallIndex,
     },
+    debugProxyCaptureSidecar,
     stateSchema: {
       hasLegacy: stateSchemaMigrations.length > 0,
       preview: stateSchemaMigrations.map((migration) => migration.path),
@@ -3488,6 +3542,10 @@ export async function runLegacyStateMigrations(params: {
   const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
     stateDir: detected.stateDir,
   });
+  const debugProxyCaptureSidecar = migrateLegacyDebugProxyCaptureSidecar({
+    stateDir: detected.stateDir,
+    detected: detected.debugProxyCaptureSidecar,
+  });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
     stateDir: detected.stateDir,
   });
@@ -3521,6 +3579,7 @@ export async function runLegacyStateMigrations(params: {
       ...stateSchema.changes,
       ...pluginStateSidecar.changes,
       ...pluginInstallIndex.changes,
+      ...debugProxyCaptureSidecar.changes,
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
       ...execApprovals.changes,
@@ -3535,6 +3594,7 @@ export async function runLegacyStateMigrations(params: {
       ...stateSchema.warnings,
       ...pluginStateSidecar.warnings,
       ...pluginInstallIndex.warnings,
+      ...debugProxyCaptureSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
       ...execApprovals.warnings,
@@ -3546,21 +3606,6 @@ export async function runLegacyStateMigrations(params: {
       ...channelPlans.warnings,
     ],
   };
-}
-
-export async function autoMigrateLegacyAgentDir(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-  now?: () => number;
-}): Promise<{
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-}> {
-  return await autoMigrateLegacyState(params);
 }
 
 /**
@@ -3863,6 +3908,10 @@ export async function autoMigrateLegacyState(params: {
     const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
       stateDir: detected.stateDir,
     });
+    const debugProxyCaptureSidecar = migrateLegacyDebugProxyCaptureSidecar({
+      stateDir: detected.stateDir,
+      detected: detected.debugProxyCaptureSidecar,
+    });
     const taskStateSidecars = await migrateLegacyTaskStateSidecars({
       stateDir: detected.stateDir,
     });
@@ -3884,6 +3933,7 @@ export async function autoMigrateLegacyState(params: {
       ...acpSessionMetadata.changes,
       ...pluginStateSidecar.changes,
       ...pluginInstallIndex.changes,
+      ...debugProxyCaptureSidecar.changes,
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
       ...execApprovals.changes,
@@ -3897,6 +3947,7 @@ export async function autoMigrateLegacyState(params: {
       ...acpSessionMetadata.warnings,
       ...pluginStateSidecar.warnings,
       ...pluginInstallIndex.warnings,
+      ...debugProxyCaptureSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
       ...execApprovals.warnings,
@@ -3912,6 +3963,7 @@ export async function autoMigrateLegacyState(params: {
         acpSessionMetadata.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
         pluginInstallIndex.changes.length > 0 ||
+        debugProxyCaptureSidecar.changes.length > 0 ||
         taskStateSidecars.changes.length > 0 ||
         deliveryQueues.changes.length > 0 ||
         execApprovals.changes.length > 0 ||
@@ -3929,6 +3981,7 @@ export async function autoMigrateLegacyState(params: {
     !detected.pluginPlans?.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
     !detected.pluginInstallIndex.hasLegacy &&
+    !detected.debugProxyCaptureSidecar.hasLegacy &&
     !detected.stateSchema.hasLegacy &&
     !detected.taskStateSidecars.hasLegacy &&
     !detected.deliveryQueues.hasLegacy &&
@@ -3966,6 +4019,10 @@ export async function autoMigrateLegacyState(params: {
   const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
     stateDir: detected.stateDir,
   });
+  const debugProxyCaptureSidecar = migrateLegacyDebugProxyCaptureSidecar({
+    stateDir: detected.stateDir,
+    detected: detected.debugProxyCaptureSidecar,
+  });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
     stateDir: detected.stateDir,
   });
@@ -3999,6 +4056,7 @@ export async function autoMigrateLegacyState(params: {
     ...acpSessionMetadata.changes,
     ...pluginStateSidecar.changes,
     ...pluginInstallIndex.changes,
+    ...debugProxyCaptureSidecar.changes,
     ...taskStateSidecars.changes,
     ...deliveryQueues.changes,
     ...execApprovals.changes,
@@ -4016,6 +4074,7 @@ export async function autoMigrateLegacyState(params: {
     ...acpSessionMetadata.warnings,
     ...pluginStateSidecar.warnings,
     ...pluginInstallIndex.warnings,
+    ...debugProxyCaptureSidecar.warnings,
     ...taskStateSidecars.warnings,
     ...deliveryQueues.warnings,
     ...execApprovals.warnings,

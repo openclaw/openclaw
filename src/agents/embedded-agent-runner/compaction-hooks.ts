@@ -113,7 +113,7 @@ export async function runPostCompactionSideEffects(params: {
 }
 
 /** Narrow adapter over the global hook runner methods used by compaction. */
-export type CompactionHookRunner = {
+type CompactionHookRunner = {
   hasHooks?: (hookName?: string) => boolean;
   runBeforeCompaction?: (
     metrics: { messageCount: number; tokenCount?: number; sessionFile?: string },

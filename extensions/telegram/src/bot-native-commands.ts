@@ -1135,12 +1135,18 @@ export const registerTelegramNativeCommands = ({
                 sessionKey: await resolveTargetSessionKey(),
               })
             : {};
+        // Native /think choices need live-discovery metadata; empty keeps config fallback.
+        const menuModelCatalog =
+          commandDefinition?.key === "think" && menuNeedsModelContext
+            ? await loadModelCatalog({ config: runtimeCfg })
+            : undefined;
         const menu = commandDefinition
           ? resolveCommandArgMenu({
               command: commandDefinition,
               args: commandArgs,
               cfg: runtimeCfg,
               ...menuModelContext,
+              ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
             })
           : null;
         if (menu && commandDefinition) {

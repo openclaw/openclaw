@@ -33,17 +33,19 @@ import type {
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
+  resolveFreshSessionTotalTokens,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
-  resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -55,21 +57,18 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
-  formatTokenCount as formatTokenCountShared,
+  formatTokenCount,
   formatUsd,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { formatFastModeLabel } from "./status-labels.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
   model?: AgentDefaults["model"] | string;
 };
-
-export const formatTokenCount = formatTokenCountShared;
 
 type QueueStatus = {
   mode?: string;
@@ -109,6 +108,7 @@ export type StatusArgs = {
   subagentsLine?: string;
   taskLine?: string;
   pluginHealthLine?: string;
+  channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -322,8 +322,10 @@ const readUsageFromSessionLog = (
     const snapshot = readRecentSessionUsageFromTranscript(
       {
         agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
-        sessionFile: sessionEntry?.sessionFile,
+        sessionEntry,
+        sessionFile: logPath,
         sessionId,
+        sessionKey,
         storePath,
       },
       256 * 1024,
@@ -788,21 +790,24 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? (cappedAgentContextTokens ?? activeContextTokens)
         : cappedAgentContextTokens))
     : undefined;
+  const runtimeSnapshotHasFallbackProvenance =
+    initialFallbackState.active ||
+    hasSessionAutoModelFallbackProvenance(entry) ||
+    areRuntimeModelRefsEquivalent(activeModelLabel, modelRefs.selected.label || "unknown", {
+      config: args.config,
+    });
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
-  // snapshot when available. Separately, callers can pass an explicit configured
-  // cap that should still apply on fallback paths, but it cannot exceed the
-  // active runtime window when that window is known. Persisted runtime snapshots
-  // still take precedence over configured caps so historical fallback sessions
-  // keep their last known live limit even if the active model later becomes
-  // unresolvable.
+  // snapshot only when it belongs to a real fallback/equivalent runtime. A
+  // transcript-derived previous model is stale after a manual switch and must
+  // not pin the newly selected model to the old context window. Separately,
+  // callers can pass an explicit configured cap that should still apply on
+  // fallback paths, but it cannot exceed the active runtime window when that
+  // window is known. Persisted runtime snapshots still take precedence over
+  // configured caps so historical fallback sessions keep their last known live
+  // limit even if the active model later becomes unresolvable.
   const contextTokens = runtimeDiffersFromSelected
-    ? (explicitRuntimeContextTokens ??
-      (() => {
-        const runtimeSnapshotHasFallbackProvenance =
-          initialFallbackState.active ||
-          hasSessionAutoModelFallbackProvenance(entry) ||
-          areRuntimeModelRefsEquivalent(activeModelLabel, modelRefs.selected.label || "unknown");
+    ? (() => {
         if (!runtimeSnapshotHasFallbackProvenance) {
           if (typeof selectedContextTokens === "number") {
             if (explicitConfiguredContextTokens !== undefined) {
@@ -820,6 +825,9 @@ export function buildStatusMessage(args: StatusArgs): string {
             return agentContextTokens;
           }
           return DEFAULT_CONTEXT_TOKENS;
+        }
+        if (explicitRuntimeContextTokens !== undefined) {
+          return explicitRuntimeContextTokens;
         }
         if (cappedPersistedContextTokens !== undefined) {
           const trustedPersistedContextTokens = cappedPersistedContextTokens;
@@ -852,7 +860,7 @@ export function buildStatusMessage(args: StatusArgs): string {
           return activeContextTokens;
         }
         return DEFAULT_CONTEXT_TOKENS;
-      })())
+      })()
     : (resolveContextTokensForModel({
         cfg: contextConfig,
         ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
@@ -892,8 +900,18 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
 
   const updatedAt = entry?.updatedAt;
+  const sessionStartedAt = resolveSessionLifecycleTimestamps({
+    entry,
+    agentId: args.agentId,
+    storePath: args.sessionStorePath,
+  }).sessionStartedAt;
+  const sessionDuration =
+    typeof sessionStartedAt === "number"
+      ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
+      : undefined;
   const sessionLine = [
     `Session: ${args.sessionKey ?? "unknown"}`,
+    sessionDuration ? `duration ${sessionDuration}` : null,
     typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)
@@ -950,7 +968,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Execution: ${execution.label}`,
     `Runtime: ${agentRuntimeLabel}`,
     `Think: ${thinkLevel}`,
-    formatFastModeLabel(fastMode),
+    `Fast: ${fastMode ? "on" : "off"}`,
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,
@@ -1088,6 +1106,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `🧵 ${sessionLine}`,
     args.subagentsLine,
     args.taskLine,
+    args.channelFeatureLine,
     `⚙️ ${optionsLine}`,
     args.pluginHealthLine,
     pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,

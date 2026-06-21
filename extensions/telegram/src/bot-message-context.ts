@@ -477,7 +477,7 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     topicConfig,
     providerMentionPatterns: cfg.channels?.telegram?.accounts?.[account.accountId]?.mentionPatterns,
-    requireMention,
+    requireMention: Boolean(requireMention),
     options,
     groupHistories,
     historyLimit,
@@ -533,6 +533,7 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     topicConfig,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
+    mentionFacts: bodyResult.mentionFacts,
     hasControlCommand: bodyResult.hasControlCommand,
     stickerCacheHit: bodyResult.stickerCacheHit,
     ...(bodyResult.audioTranscribedMediaIndex !== undefined

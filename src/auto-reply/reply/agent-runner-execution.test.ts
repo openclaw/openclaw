@@ -2,11 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { loggingState } from "../../logging/state.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -26,6 +29,7 @@ import {
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import {
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+  PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
@@ -155,6 +159,7 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
   );
   return {
     BILLING_ERROR_USER_MESSAGE: "billing",
+    formatBillingErrorMessage: actual.formatBillingErrorMessage,
     formatRateLimitOrOverloadedErrorCopy: (message: string) => {
       if (/model\s+(?:is\s+)?at capacity/i.test(message)) {
         return "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
@@ -5142,6 +5147,69 @@ describe("runAgentTurnWithFallback", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("logs Codex app-server compaction completion while notices stay silent by default", async () => {
+    const onBlockReply = vi.fn();
+    const consoleLog = vi.fn();
+    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "compact" });
+    loggingState.rawConsole = {
+      log: consoleLog,
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    try {
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => ({
+          result: await params.run("openai", "gpt-5.5"),
+          provider: "openai",
+          model: "gpt-5.5",
+          attempts: [{ provider: "anthropic", model: "claude", error: "rate limit" }],
+        }),
+      );
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onAgentEvent?.({
+          stream: "compaction",
+          data: {
+            phase: "start",
+            backend: "codex-app-server",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "compaction-1",
+          },
+        });
+        await params.onAgentEvent?.({
+          stream: "compaction",
+          data: {
+            phase: "end",
+            completed: true,
+            backend: "codex-app-server",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "compaction-1",
+          },
+        });
+        return { payloads: [{ text: "final" }], meta: {} };
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams({
+          opts: { onBlockReply },
+        }),
+      });
+
+      expect(result.kind).toBe("success");
+      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(consoleLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
+        "codex app-server auto-compaction succeeded for openai/gpt-5.5; refreshed session context",
+      );
+    } finally {
+      loggingState.rawConsole = null;
+      setLoggerOverride(null);
+      resetLogger();
+    }
+  });
+
   it("emits a compaction start notice when notifyUser is enabled", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -6414,6 +6482,39 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces provider internal errors without session reset guidance before reply", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(
+        "The AI service returned an internal error. Please try again in a moment.",
+        {
+          reason: "server_error",
+          provider: "fyapis",
+          model: "gpt-5.5",
+          status: 500,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(PROVIDER_INTERNAL_ERROR_USER_MESSAGE);
+      expect(result.payload.text).not.toContain("/new");
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
   it("surfaces billing guidance for Volcengine Coding Plan subscription failures before reply", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error(
@@ -6437,6 +6538,55 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toBe("billing");
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
+  it("preserves neutral billing guidance for OAuth failover errors", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "oauth"), {
+        reason: "billing",
+        provider: "Anthropic",
+        model: "claude-sonnet-4-5",
+        authMode: "oauth",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("check your account for subscription or usage limits");
+      expect(result.payload.text).not.toContain("API key");
+      expect(result.payload.text).not.toContain("top up");
+    }
+  });
+
+  it("preserves neutral billing guidance after fallback exhaustion", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error("All models failed (1): openai/gpt-5.5: billing"), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "billing",
+            reason: "billing",
+            authMode: "oauth",
+          },
+        ],
+        soonestCooldownExpiry: null,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("check your account for subscription or usage limits");
+      expect(result.payload.text).not.toContain("API key");
+      expect(result.payload.text).not.toContain("top up");
     }
   });
 

@@ -11,6 +11,7 @@ import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-targe
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
@@ -313,7 +314,10 @@ export function createCronToolSchema(): TSchema {
       patch: createCronPatchObjectSchema(),
       text: Type.Optional(Type.String()),
       mode: optionalStringEnum(CRON_WAKE_MODES),
-      runMode: optionalStringEnum(CRON_RUN_MODES),
+      runMode: optionalStringEnum(CRON_RUN_MODES, {
+        description:
+          'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',
+      }),
       contextMessages: Type.Optional(
         Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
       ),
@@ -333,8 +337,6 @@ export function createCronToolSchema(): TSchema {
     { additionalProperties: true },
   );
 }
-
-export const CronToolSchema = createCronToolSchema();
 
 type CronToolOptions = {
   agentSessionKey?: string;
@@ -683,6 +685,15 @@ function readCronListNextOffset(result: unknown, currentOffset: number): number 
   return Number.isFinite(nextOffset) && nextOffset > currentOffset ? nextOffset : undefined;
 }
 
+function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
+  return (
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("invalid cron.list params") &&
+    error.message.includes("unexpected property 'compact'")
+  );
+}
+
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
   const role = typeof message.role === "string" ? message.role : "";
   if (role !== "user" && role !== "assistant") {
@@ -759,12 +770,12 @@ Main cron => system events for heartbeat. Isolated cron => background task in \`
 
 ACTIONS:
 - status: scheduler status
-- list: jobs; includeDisabled true includes disabled; agentId filter auto-filled from session
+- list: compact job summaries; includeDisabled true includes disabled; use get for full job details; agentId filter auto-filled from session
 - get: one job; needs jobId
 - add: create job; needs job object
 - update: patch job; needs jobId + patch
 - remove: delete job; needs jobId
-- run: trigger now; needs jobId
+- run: run only if due by default; needs jobId; pass runMode="force" to trigger now
 - runs: run history; needs jobId
 - wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane.
 
@@ -864,12 +875,24 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           let offset = 0;
           let result: unknown;
           let shouldContinue = true;
+          let useCompactList = true;
           while (shouldContinue) {
-            result = await callGateway("cron.list", gatewayOpts, {
-              includeDisabled,
-              agentId: listAgentId,
-              ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
-            });
+            try {
+              result = await callGateway("cron.list", gatewayOpts, {
+                includeDisabled,
+                ...(useCompactList ? { compact: true } : {}),
+                agentId: listAgentId,
+                ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
+              });
+            } catch (error) {
+              if (!useCompactList || !isOlderGatewayWithoutCompactCronList(error)) {
+                throw error;
+              }
+              // Protocol v4 gateways predating compact reject the additive field.
+              // Retry without it for mixed-version correctness; remove at the next protocol break.
+              useCompactList = false;
+              continue;
+            }
             if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
               shouldContinue = false;
             } else {
@@ -1064,7 +1087,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
           const runMode =
-            params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
+            params.runMode === "due" || params.runMode === "force" ? params.runMode : "due";
           return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {

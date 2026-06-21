@@ -349,7 +349,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
         },
@@ -434,7 +434,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: true, onSearch: false },
           },
         },
@@ -478,7 +478,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: true, onSearch: false },
           },
         },
@@ -533,7 +533,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -601,7 +601,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -648,7 +648,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -686,7 +686,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -6062,8 +6062,8 @@ describe("QmdMemoryManager", () => {
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(false);
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
-      ok: false,
-      error: "QMD semantic vectors are unavailable",
+      ok: true,
+      checked: false,
     });
     expect(spawnMock.mock.calls.length).toBe(baselineCalls);
     expect(manager.status().vector).toEqual({

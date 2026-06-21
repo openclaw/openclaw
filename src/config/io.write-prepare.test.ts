@@ -170,6 +170,45 @@ describe("config io write prepare", () => {
     });
   });
 
+  it("does not reintroduce legacy openai-codex model params after doctor route repair", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { reasoning_effort: "high" },
+            },
+          },
+        },
+      },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            models: {
+              "openai/gpt-5.5": {
+                params: { reasoning_effort: "high" },
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(persisted.agents?.defaults?.models).not.toHaveProperty("openai-codex/gpt-5.5");
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
+      params: { reasoning_effort: "high" },
+      agentRuntime: { id: "codex" },
+    });
+  });
+
   it("normalizes retired Google model refs during unrelated config writes", () => {
     const sourceConfig: OpenClawConfig = {
       agents: {

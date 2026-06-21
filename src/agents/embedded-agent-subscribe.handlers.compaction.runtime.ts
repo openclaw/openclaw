@@ -4,7 +4,7 @@
 import { resolveStorePath, updateSessionStoreEntry } from "../config/sessions.js";
 
 /** Persist the highest observed compaction count after a successful subscribed run. */
-export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+export default async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
   configStore?: string;

@@ -3,6 +3,10 @@ import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import {
+  applyFileBackedSessionStoreMaintenance,
+  applyQuotaSuspensionTtlMaintenance,
+} from "./store-maintenance-operations.js";
+import {
   collectSessionMaintenancePreserveKeys,
   registerSessionMaintenancePreserveKeysProvider,
 } from "./store-maintenance-preserve.js";
@@ -144,6 +148,128 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
   });
 });
 
+describe("applyQuotaSuspensionTtlMaintenance", () => {
+  it("returns whole-store resume and clear results from the storage-neutral operation", () => {
+    const now = Date.now();
+    const store = makeStore([
+      [
+        "suspended",
+        {
+          ...makeEntry(now),
+          quotaSuspension: {
+            schemaVersion: 1,
+            suspendedAt: now - 30_000,
+            expectedResumeBy: now - 1,
+            state: "suspended",
+            reason: "quota_exhausted",
+            failedProvider: "anthropic",
+            failedModel: "claude-opus-4-6",
+            laneId: "main",
+          },
+        },
+      ],
+      [
+        "expired",
+        {
+          ...makeEntry(now),
+          quotaSuspension: {
+            schemaVersion: 1,
+            suspendedAt: now - 61_000,
+            expectedResumeBy: now - 31_000,
+            state: "active",
+            reason: "circuit_open",
+            failedProvider: "anthropic",
+            failedModel: "claude-opus-4-6",
+            laneId: "fallback",
+          },
+        },
+      ],
+    ]);
+
+    const result = applyQuotaSuspensionTtlMaintenance({
+      store,
+      now,
+      ttlMs: 30_000,
+      log: false,
+    });
+
+    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
+    expect(store.suspended.quotaSuspension?.state).toBe("resuming");
+    expect(store.expired.quotaSuspension).toBeUndefined();
+  });
+});
+
+describe("applyFileBackedSessionStoreMaintenance", () => {
+  it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
+    const now = Date.now();
+    const store = makeStore([
+      [
+        "stale",
+        { sessionId: "stale-session", sessionFile: "stale.jsonl", updatedAt: now - 30 * DAY_MS },
+      ],
+      [
+        "stale-shared",
+        {
+          sessionId: "shared-session",
+          sessionFile: "shared-old.jsonl",
+          updatedAt: now - 30 * DAY_MS,
+        },
+      ],
+      ["fresh-shared", { sessionId: "shared-session", updatedAt: now }],
+      ["active", { sessionId: "active-session", updatedAt: now - 30 * DAY_MS }],
+    ]);
+    const archiveCalls: Array<{
+      removedSessionFiles: Array<[string, string | undefined]>;
+      referencedSessionIds: Set<string>;
+    }> = [];
+    let trajectoryCleanupReferencedIds: Set<string> | undefined;
+
+    const result = await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      activeSessionKey: "active",
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        maxEntries: 500,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: {
+        archiveRemovedSessionTranscripts: async (params) => {
+          archiveCalls.push({
+            removedSessionFiles: [...params.removedSessionFiles],
+            referencedSessionIds: new Set(params.referencedSessionIds),
+          });
+          return new Set();
+        },
+        removeRemovedSessionTrajectoryArtifacts: async (params) => {
+          trajectoryCleanupReferencedIds = new Set(params.referencedSessionIds);
+        },
+        cleanupArchivedSessionTranscripts: async () => {},
+      },
+    });
+
+    expect(result.changedStore).toBe(true);
+    expect(store.stale).toBeUndefined();
+    expect(store["stale-shared"]).toBeUndefined();
+    expect(store).toHaveProperty("fresh-shared");
+    expect(store).toHaveProperty("active");
+    expect(archiveCalls).toEqual([
+      {
+        removedSessionFiles: [
+          ["stale-session", "stale.jsonl"],
+          ["shared-session", "shared-old.jsonl"],
+        ],
+        referencedSessionIds: new Set(["shared-session", "active-session"]),
+      },
+    ]);
+    expect(trajectoryCleanupReferencedIds).toEqual(new Set(["shared-session", "active-session"]));
+  });
+});
+
 describe("capEntryCount", () => {
   it("over limit: keeps N most recent by updatedAt, deletes rest", () => {
     const now = Date.now();
@@ -266,6 +392,15 @@ describe("capEntryCount", () => {
 });
 
 describe("isProtectedSessionMaintenanceEntry", () => {
+  it("treats generated ACP bridge sessions as disposable", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:acp-bridge:session-1", {
+        ...makeEntry(Date.now()),
+        chatType: "group",
+      }),
+    ).toBe(false);
+  });
+
   it("does not protect synthetic sessions just because they carry group metadata", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:subagent:worker", {

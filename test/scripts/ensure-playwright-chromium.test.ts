@@ -75,6 +75,39 @@ describe("ensurePlaywrightChromium", () => {
     expect(logs.join("\n")).toContain("Using system Chromium at /usr/bin/chromium-browser");
   });
 
+  it("installs Playwright ffmpeg when recorded UI tests request it", () => {
+    const logs: string[] = [];
+    const spawnSync = vi.fn(() => ({ status: 0 }));
+
+    expect(
+      ensurePlaywrightChromium({
+        cwd: "/repo",
+        ensureFfmpeg: true,
+        env: { PATH: "/bin" },
+        executablePath: "/cache/chromium/chrome",
+        existsSync: (path: string) => path === "/usr/bin/chromium-browser",
+        log: (line: string) => logs.push(line),
+        spawnSync,
+        stdio: "pipe",
+      }),
+    ).toBe(0);
+    expect(spawnSync).toHaveBeenCalledWith("/usr/bin/chromium-browser", ["--version"], {
+      stdio: "ignore",
+    });
+    expect(spawnSync).toHaveBeenCalledWith(
+      "pnpm",
+      ["--dir", "ui", "exec", "playwright", "install", "ffmpeg"],
+      {
+        cwd: "/repo",
+        env: { PATH: "/bin" },
+        shell: false,
+        stdio: "pipe",
+        windowsVerbatimArguments: undefined,
+      },
+    );
+    expect(logs.join("\n")).toContain("Using system Chromium at /usr/bin/chromium-browser");
+  });
+
   it("skips a broken system Chromium binary and uses the first runnable candidate", () => {
     const logs: string[] = [];
     const spawnSync = vi.fn((path: string) => ({

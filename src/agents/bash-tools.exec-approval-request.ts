@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type {
   ExecApprovalCommandSpan,
+  ExecApprovalUnavailableDecision,
   ExecAsk,
   ExecSecurity,
   SystemRunApprovalPlan,
@@ -42,7 +43,7 @@ function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpans
 }
 
 /** Gateway payload fields used to register or wait for an exec approval decision. */
-export type RequestExecApprovalDecisionParams = {
+type RequestExecApprovalDecisionParams = {
   id: string;
   command?: string;
   commandArgv?: string[];
@@ -55,6 +56,7 @@ export type RequestExecApprovalDecisionParams = {
   ask: ExecAsk;
   warningText?: string;
   commandSpans?: ExecApprovalCommandSpan[];
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -87,6 +89,9 @@ function buildExecApprovalRequestToolParams(
     ask: params.ask,
     warningText: params.warningText,
     commandSpans: params.commandSpans,
+    ...(params.unavailableDecisions?.length
+      ? { unavailableDecisions: params.unavailableDecisions }
+      : {}),
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
@@ -153,13 +158,19 @@ export async function registerExecApprovalRequest(
   return { id, expiresAtMs };
 }
 
-/** Waits for a registered approval decision, returning null when it expires. */
-export async function waitForExecApprovalDecision(id: string): Promise<string | null> {
+/** Uses a pre-resolved decision or waits for the registered approval id. */
+export async function resolveRegisteredExecApprovalDecision(params: {
+  approvalId: string;
+  preResolvedDecision: string | null | undefined;
+}): Promise<string | null> {
+  if (params.preResolvedDecision !== undefined) {
+    return params.preResolvedDecision ?? null;
+  }
   try {
     const decisionResult = await callGatewayTool<{ decision: string }>(
       "exec.approval.waitDecision",
       { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id },
+      { id: params.approvalId },
     );
     return parseDecision(decisionResult).value;
   } catch (err) {
@@ -170,28 +181,6 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
     }
     throw err;
   }
-}
-
-/** Uses a pre-resolved decision or waits for the registered approval id. */
-export async function resolveRegisteredExecApprovalDecision(params: {
-  approvalId: string;
-  preResolvedDecision: string | null | undefined;
-}): Promise<string | null> {
-  if (params.preResolvedDecision !== undefined) {
-    return params.preResolvedDecision ?? null;
-  }
-  return await waitForExecApprovalDecision(params.approvalId);
-}
-
-/** Registers an approval request and waits unless the gateway returned a final decision. */
-export async function requestExecApprovalDecision(
-  params: RequestExecApprovalDecisionParams,
-): Promise<string | null> {
-  const registration = await registerExecApprovalRequest(params);
-  if (Object.hasOwn(registration, "finalDecision")) {
-    return registration.finalDecision ?? null;
-  }
-  return await waitForExecApprovalDecision(registration.id);
 }
 
 type HostExecApprovalParams = {
@@ -207,6 +196,7 @@ type HostExecApprovalParams = {
   ask: ExecAsk;
   warningText?: string;
   commandSpans?: ExecApprovalCommandSpan[];
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
   commandHighlighting?: boolean;
   agentId?: string;
   resolvedPath?: string;
@@ -315,6 +305,7 @@ async function buildHostApprovalDecisionParams(
     ask: params.ask,
     warningText: params.warningText,
     commandSpans,
+    unavailableDecisions: params.unavailableDecisions,
     ...buildExecApprovalRequesterContext({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -324,13 +315,6 @@ async function buildHostApprovalDecisionParams(
     suppressDelivery: params.suppressDelivery,
     ...buildExecApprovalTurnSourceContext(params),
   };
-}
-
-/** Requests and waits for an approval decision for host/node exec. */
-export async function requestExecApprovalDecisionForHost(
-  params: HostExecApprovalParams,
-): Promise<string | null> {
-  return await requestExecApprovalDecision(await buildHostApprovalDecisionParams(params));
 }
 
 /** Registers a host/node approval request without waiting for a decision. */

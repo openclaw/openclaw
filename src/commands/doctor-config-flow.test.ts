@@ -752,6 +752,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
       channelName && channelName in byChannel
         ? byChannel[channelName as keyof typeof byChannel]
         : fallback,
+    resolveDoctorChannelAccountIds: () => undefined,
   };
 });
 

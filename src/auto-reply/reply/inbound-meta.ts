@@ -17,6 +17,7 @@ import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
+const INBOUND_SOURCE_MODALITIES = new Set(["text", "voice", "audio", "image", "video", "document"]);
 
 /** Options for building the user-context prefix added to inbound prompts. */
 type InboundUserContextPrefixOptions = {
@@ -461,6 +462,26 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   return channelValue;
 }
 
+function resolveInboundSourceModality(ctx: TemplateContext): string | undefined {
+  const sourceModality = normalizePromptMetadataString(ctx.SourceModality)?.toLowerCase();
+  if (sourceModality && INBOUND_SOURCE_MODALITIES.has(sourceModality)) {
+    return sourceModality;
+  }
+  const resolveMediaType = (value: unknown): string | undefined => {
+    const mediaType = normalizePromptMetadataString(value);
+    if (!mediaType) {
+      return undefined;
+    }
+    const slash = mediaType.indexOf("/");
+    const mediaKind = (slash > 0 ? mediaType.slice(0, slash) : mediaType).toLowerCase();
+    if (mediaKind === "application" || mediaKind === "text") {
+      return "document";
+    }
+    return INBOUND_SOURCE_MODALITIES.has(mediaKind) ? mediaKind : undefined;
+  };
+  return resolveMediaType(ctx.MediaType) ?? ctx.MediaTypes?.map(resolveMediaType).find(Boolean);
+}
+
 function resolveInboundFormattingHints(ctx: TemplateContext):
   | {
       text_markup: string;
@@ -586,6 +607,7 @@ export function buildInboundUserContextPrefix(
         normalizePromptMetadataString(ctx.SenderUsername))
       : undefined,
     timestamp: timestampStr,
+    source_modality: resolveInboundSourceModality(ctx),
     group_subject: normalizePromptMetadataString(ctx.GroupSubject),
     group_channel: normalizePromptMetadataString(ctx.GroupChannel),
     group_space: normalizePromptMetadataString(ctx.GroupSpace),

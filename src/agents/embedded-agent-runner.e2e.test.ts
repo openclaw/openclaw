@@ -312,6 +312,43 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
   });
 };
 
+const addAnthropicProvider = (
+  cfg: ReturnType<typeof createEmbeddedAgentRunnerOpenAiConfig>,
+  modelIds: string[],
+) => ({
+  ...cfg,
+  models: {
+    providers: {
+      ...cfg.models?.providers,
+      anthropic: {
+        api: "anthropic-messages" as const,
+        apiKey: "sk-test",
+        baseUrl: "https://example.com",
+        models: modelIds.map((id) => ({
+          id,
+          name: `Mock ${id}`,
+          reasoning: false,
+          input: ["text" as const],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 16_000,
+          maxTokens: 2048,
+        })),
+      },
+    },
+  },
+});
+
+const mockSuccessfulEmbeddedAttempt = () => {
+  runEmbeddedAttemptMock.mockResolvedValueOnce(
+    makeEmbeddedRunnerAttempt({
+      assistantTexts: ["ok"],
+      lastAssistant: buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "ok" }],
+      }),
+    }),
+  );
+};
+
 function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
   const call = mock.mock.calls[0];
   if (!call) {
@@ -338,14 +375,7 @@ describe("runEmbeddedAgent", () => {
         list: [{ id: "research", model: "openrouter/research-default" }],
       },
     };
-    runEmbeddedAttemptMock.mockResolvedValueOnce(
-      makeEmbeddedRunnerAttempt({
-        assistantTexts: ["ok"],
-        lastAssistant: buildEmbeddedRunnerAssistant({
-          content: [{ type: "text", text: "ok" }],
-        }),
-      }),
-    );
+    mockSuccessfulEmbeddedAttempt();
 
     await runEmbeddedAgent({
       sessionId: "configured-default-model",
@@ -383,14 +413,7 @@ describe("runEmbeddedAgent", () => {
       },
     };
     setRuntimeConfigSnapshot(cfg);
-    runEmbeddedAttemptMock.mockResolvedValueOnce(
-      makeEmbeddedRunnerAttempt({
-        assistantTexts: ["ok"],
-        lastAssistant: buildEmbeddedRunnerAssistant({
-          content: [{ type: "text", text: "ok" }],
-        }),
-      }),
-    );
+    mockSuccessfulEmbeddedAttempt();
 
     await runEmbeddedAgent({
       sessionId: "runtime-config-default-model",
@@ -413,6 +436,85 @@ describe("runEmbeddedAgent", () => {
       cfg,
       expect.objectContaining({ skipAgentDiscovery: true }),
     );
+  });
+
+  it("uses the session-key agent default when agentId is inferred", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = {
+      ...addAnthropicProvider(createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]), [
+        "claude-opus-4-7",
+      ]),
+      agents: {
+        defaults: {
+          model: { primary: "openai/mock-1" },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-opus-4-7" },
+          },
+        ],
+      },
+    };
+    mockSuccessfulEmbeddedAttempt();
+
+    await runEmbeddedAgent({
+      sessionId: "session-key-agent-default",
+      sessionKey: "agent:research:embedded:session-key-agent-default",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("session-key-agent-default"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "anthropic",
+      "claude-opus-4-7",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipAgentDiscovery: true }),
+    );
+    expect(
+      (firstRunEmbeddedAttemptParams() as { model?: { provider?: string; id?: string } }).model,
+    ).toEqual(expect.objectContaining({ provider: "anthropic", id: "claude-opus-4-7" }));
+  });
+
+  it("resolves model-only provider refs instead of prefixing the default provider", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = addAnthropicProvider(createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]), [
+      "claude-sonnet-4-6",
+    ]);
+    mockSuccessfulEmbeddedAttempt();
+
+    await runEmbeddedAgent({
+      sessionId: "model-only-provider-ref",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      model: "anthropic/claude-sonnet-4-6",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("model-only-provider-ref"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "anthropic",
+      "claude-sonnet-4-6",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipAgentDiscovery: true }),
+    );
+    expect(
+      (firstRunEmbeddedAttemptParams() as { model?: { provider?: string; id?: string } }).model,
+    ).toEqual(expect.objectContaining({ provider: "anthropic", id: "claude-sonnet-4-6" }));
   });
 
   it("skips models.json generation when dynamic model resolution succeeds", async () => {

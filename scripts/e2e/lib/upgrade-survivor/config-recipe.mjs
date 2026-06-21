@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseReleaseVersion } from "../../../lib/npm-publish-plan.mjs";
 import { buildCmdExeCommandLine } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -40,26 +41,37 @@ function readConfigSection(fileName) {
   return JSON.stringify(JSON.parse(fs.readFileSync(fileUrl, "utf8")));
 }
 
-function parseReleaseVersion(version) {
-  const match = /^([0-9]{4})\.([0-9]+)\.([0-9]+)/u.exec(String(version ?? ""));
-  if (!match) {
-    return null;
-  }
-  return match.slice(1).map((part) => Number.parseInt(part, 10));
-}
-
-function isReleaseBefore(version, minimum) {
-  const parsed = parseReleaseVersion(version);
-  const minimumParsed = parseReleaseVersion(minimum);
+export function isReleaseBefore(version, minimum) {
+  const parsed = parseReleaseVersion(String(version ?? ""));
+  const minimumParsed = parseReleaseFloor(minimum);
   if (!parsed || !minimumParsed) {
     return false;
   }
-  for (let index = 0; index < parsed.length; index += 1) {
-    if (parsed[index] !== minimumParsed[index]) {
-      return parsed[index] < minimumParsed[index];
+  for (const key of ["year", "month", "patch"]) {
+    const delta = parsed[key] - minimumParsed[key];
+    if (delta !== 0) {
+      return delta < 0;
     }
   }
   return false;
+}
+
+function parseReleaseFloor(version) {
+  const match = /^([0-9]{4})\.([1-9][0-9]?)\.([0-9]+)$/u.exec(String(version ?? ""));
+  if (!match) {
+    return null;
+  }
+  const [year, month, patch] = match.slice(1).map((part) => Number(part));
+  if (
+    !Number.isSafeInteger(year) ||
+    !Number.isSafeInteger(month) ||
+    !Number.isSafeInteger(patch) ||
+    month < 1 ||
+    month > 12
+  ) {
+    return null;
+  }
+  return { year, month, patch };
 }
 
 function configSetJsonFile(id, intent, configPath, fileName) {

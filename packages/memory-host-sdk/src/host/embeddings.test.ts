@@ -97,6 +97,20 @@ describe("local embedding provider", () => {
     expect(runtime.getEmbeddingFor).toHaveBeenCalledWith("test query");
   });
 
+  it("truncates local embeddings before normalizing them", async () => {
+    mockLocalEmbeddingRuntime(new Float32Array([3, 4, 12]));
+    const provider = await createLocalEmbeddingProviderInProcess({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      outputDimensionality: 2,
+    });
+
+    await expect(provider.embedQuery("test query")).resolves.toEqual([0.6, 0.8]);
+    await expect(provider.embedBatch(["test document"])).resolves.toEqual([[0.6, 0.8]]);
+  });
+
   it("passes default contextSize (4096) to createEmbeddingContext when not configured", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
@@ -363,6 +377,10 @@ process.on("message", (message) => {
       process.send({ id: message.id, ok: false, error: "missing nodeLlamaCppImportUrl" });
       return;
     }
+    if (message.options.outputDimensionality !== 2) {
+      process.send({ id: message.id, ok: false, error: "missing outputDimensionality" });
+      return;
+    }
     process.send({ id: message.id, ok: true });
     return;
   }
@@ -385,6 +403,7 @@ process.on("message", (message) => {
         provider: "local",
         model: "",
         fallback: "none",
+        outputDimensionality: 2,
       },
       {
         workerScriptPath: workerScript,

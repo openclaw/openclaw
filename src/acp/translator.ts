@@ -374,7 +374,7 @@ export class AcpGatewayAgent implements Agent {
     const meta = parseSessionMeta(params["_meta"]);
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
-      fallbackKey: `acp:${sessionId}`,
+      fallbackKey: `acp-bridge:${sessionId}`,
     });
 
     const session = this.sessionStore.createSession({

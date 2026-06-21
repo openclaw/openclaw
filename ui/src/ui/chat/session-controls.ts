@@ -29,6 +29,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   formatInheritedThinkingLabel,
@@ -739,7 +740,7 @@ function renderChatSessionPickerPopover(
   `;
 }
 
-function renderChatQuotaPill(state: AppViewState) {
+export function renderChatQuotaPill(state: AppViewState) {
   const windows = collectQuotaWindowsFromAuthStatus(
     state.modelAuthStatusResult,
     isMonitoredAuthProvider,
@@ -958,16 +959,6 @@ function resolveChatFastModeSelectState(
   };
 }
 
-function sessionModelMatchesDefaults(
-  row: SessionsListResult["sessions"][number] | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-): boolean {
-  return (
-    (!row?.modelProvider || row.modelProvider === defaults?.modelProvider) &&
-    (!row?.model || row.model === defaults?.model)
-  );
-}
-
 function buildThinkingOptions(
   levels: readonly GatewayThinkingLevelOption[],
   currentOverride: string,
@@ -1006,18 +997,14 @@ function resolveThinkingLevelOptions(
   model: string | null,
   catalog: readonly ThinkingCatalogEntry[],
 ): GatewayThinkingLevelOption[] {
-  const sessionModelMatchesDefaultsLocal =
-    (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
-    (!activeRow?.model || activeRow.model === defaults?.model);
+  const modelMatchesDefaults = sessionModelMatchesDefaults(activeRow, defaults);
   const catalogEntry =
     provider && model
       ? catalog.find((entry) => entry.provider === provider && entry.id === model)
       : undefined;
   const explicitLevels =
     (activeRow?.thinkingLevels?.length ? activeRow.thinkingLevels : null) ??
-    (sessionModelMatchesDefaultsLocal && defaults?.thinkingLevels?.length
-      ? defaults.thinkingLevels
-      : null);
+    (modelMatchesDefaults && defaults?.thinkingLevels?.length ? defaults.thinkingLevels : null);
   if (explicitLevels) {
     if (catalogEntry?.reasoning === false && isOffOnlyThinkingLevels(explicitLevels)) {
       return [];
@@ -1026,9 +1013,7 @@ function resolveThinkingLevelOptions(
   }
   const explicitLabels =
     (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
-    (sessionModelMatchesDefaultsLocal && defaults?.thinkingOptions?.length
-      ? defaults.thinkingOptions
-      : null);
+    (modelMatchesDefaults && defaults?.thinkingOptions?.length ? defaults.thinkingOptions : null);
   if (catalogEntry?.reasoning === false) {
     if (!explicitLabels || explicitLabels.every(isOffThinkingOption)) {
       return [];

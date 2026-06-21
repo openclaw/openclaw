@@ -225,6 +225,40 @@ function normalizeTestClaudeBackendConfig(
   };
 }
 
+function readTestGeminiOutput(
+  args: readonly string[] | undefined,
+): NonNullable<CliBackendConfig["output"]> {
+  for (let index = 0; index < (args?.length ?? 0); index += 1) {
+    const arg = args?.[index];
+    const value =
+      arg === "--output-format" || arg === "-o"
+        ? args?.[index + 1]
+        : arg?.startsWith("--output-format=")
+          ? arg.slice("--output-format=".length)
+          : arg?.startsWith("-o=")
+            ? arg.slice("-o=".length)
+            : undefined;
+    if (value === "stream-json") {
+      return "jsonl";
+    }
+    if (value === "json" || value === "text") {
+      return value;
+    }
+  }
+  return "text";
+}
+
+function normalizeTestGeminiBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  const output = readTestGeminiOutput(config.args);
+  const resumeOutput = readTestGeminiOutput(config.resumeArgs ?? config.args);
+  return {
+    ...config,
+    output,
+    resumeOutput,
+    jsonlDialect: output === "jsonl" || resumeOutput === "jsonl" ? "gemini-stream-json" : undefined,
+  };
+}
+
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
 });
@@ -343,18 +377,33 @@ beforeEach(() => {
       id: "google-gemini-cli",
       bundleMcp: true,
       bundleMcpMode: "gemini-system-settings",
+      authEpochMode: "profile-only",
+      prepareExecution: async () => null,
+      normalizeConfig: normalizeTestGeminiBackendConfig,
       config: {
         command: "gemini",
-        args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
-        resumeArgs: [
+        args: [
           "--skip-trust",
-          "--resume",
-          "{sessionId}",
+          "--approval-mode",
+          "auto_edit",
           "--output-format",
-          "json",
+          "stream-json",
           "--prompt",
           "{prompt}",
         ],
+        resumeArgs: [
+          "--skip-trust",
+          "--approval-mode",
+          "auto_edit",
+          "--resume",
+          "{sessionId}",
+          "--output-format",
+          "stream-json",
+          "--prompt",
+          "{prompt}",
+        ],
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
         imageArg: "@",
         imagePathScope: "workspace",
         modelArg: "--model",
@@ -935,11 +984,66 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 });
 
 describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
-  it("uses Gemini CLI json args and existing-session resume mode", () => {
+  it("uses Gemini CLI stream-json args and existing-session resume mode", () => {
     const resolved = requireCliBackendConfig("google-gemini-cli");
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("gemini-system-settings");
+    expect(resolved?.authEpochMode).toBe("profile-only");
+    expect(resolved?.prepareExecution).toBeTypeOf("function");
+    expect(resolved?.config.args).toEqual([
+      "--skip-trust",
+      "--approval-mode",
+      "auto_edit",
+      "--output-format",
+      "stream-json",
+      "--prompt",
+      "{prompt}",
+    ]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "--skip-trust",
+      "--approval-mode",
+      "auto_edit",
+      "--resume",
+      "{sessionId}",
+      "--output-format",
+      "stream-json",
+      "--prompt",
+      "{prompt}",
+    ]);
+    expect(resolved?.config.output).toBe("jsonl");
+    expect(resolved?.config.resumeOutput).toBe("jsonl");
+    expect(resolved?.config.jsonlDialect).toBe("gemini-stream-json");
+    expect(resolved?.config.modelArg).toBe("--model");
+    expect(resolved?.config.sessionMode).toBe("existing");
+    expect(resolved?.config.sessionIdFields).toEqual(["session_id", "sessionId"]);
+    expect(resolved?.config.modelAliases?.pro).toBe("gemini-3.1-pro-preview");
+  });
+
+  it("keeps legacy Gemini CLI json arg overrides on the json parser", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "google-gemini-cli": {
+              command: "gemini",
+              args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+              resumeArgs: [
+                "--skip-trust",
+                "--resume",
+                "{sessionId}",
+                "--output-format=json",
+                "--prompt",
+                "{prompt}",
+              ],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = requireCliBackendConfig("google-gemini-cli", cfg);
+
     expect(resolved?.config.args).toEqual([
       "--skip-trust",
       "--output-format",
@@ -947,19 +1051,38 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
       "--prompt",
       "{prompt}",
     ]);
-    expect(resolved?.config.resumeArgs).toEqual([
-      "--skip-trust",
-      "--resume",
-      "{sessionId}",
-      "--output-format",
-      "json",
-      "--prompt",
-      "{prompt}",
-    ]);
-    expect(resolved?.config.modelArg).toBe("--model");
-    expect(resolved?.config.sessionMode).toBe("existing");
-    expect(resolved?.config.sessionIdFields).toEqual(["session_id", "sessionId"]);
-    expect(resolved?.config.modelAliases?.pro).toBe("gemini-3.1-pro-preview");
+    expect(resolved?.config.output).toBe("json");
+    expect(resolved?.config.resumeOutput).toBe("json");
+    expect(resolved?.config.jsonlDialect).toBeUndefined();
+  });
+
+  it("keeps Gemini CLI short stream-json arg overrides on the jsonl parser", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "google-gemini-cli": {
+              command: "gemini",
+              args: ["--skip-trust", "-o", "stream-json", "--prompt", "{prompt}"],
+              resumeArgs: [
+                "--skip-trust",
+                "--resume",
+                "{sessionId}",
+                "-o=stream-json",
+                "--prompt",
+                "{prompt}",
+              ],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = requireCliBackendConfig("google-gemini-cli", cfg);
+
+    expect(resolved?.config.output).toBe("jsonl");
+    expect(resolved?.config.resumeOutput).toBe("jsonl");
+    expect(resolved?.config.jsonlDialect).toBe("gemini-stream-json");
   });
 
   it("uses Codex CLI bundle MCP config overrides", () => {

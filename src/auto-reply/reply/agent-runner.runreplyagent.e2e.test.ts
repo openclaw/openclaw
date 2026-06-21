@@ -15,6 +15,11 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+  type ReplyOptionsWithOperationRunState,
+} from "./reply-operation-run-state.js";
 import { createReplyOperation, testing as replyRunTesting } from "./reply-run-registry.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -152,7 +157,7 @@ beforeEach(() => {
 });
 
 function createMinimalRun(params?: {
-  opts?: GetReplyOptions;
+  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
@@ -245,13 +250,14 @@ function createMinimalRun(params?: {
 
 describe("runReplyAgent heartbeat followup guard", () => {
   it("drops heartbeat runs when reply-lane admission finds an active owner", async () => {
+    const runState: ReplyOperationRunState = {};
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "active-session",
       resetTriggered: false,
     });
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true },
+      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: false,
       shouldFollowup: false,
     });
@@ -261,7 +267,19 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(runState.admission).toEqual({ status: "skipped", reason: "active-run" });
     active.complete();
+  });
+
+  it("records the operation owned by an admitted heartbeat run", async () => {
+    const runState: ReplyOperationRunState = {};
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
+    });
+
+    await run();
+
+    expect(runState.admission).toEqual({ status: "owned" });
   });
 
   it("runs visible turns with the session id returned by admission", async () => {
@@ -315,8 +333,12 @@ describe("runReplyAgent heartbeat followup guard", () => {
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
     const abortController = new AbortController();
     abortController.abort();
+    const runState: ReplyOperationRunState = {};
     const { run, typing } = createMinimalRun({
-      opts: { abortSignal: abortController.signal },
+      opts: {
+        abortSignal: abortController.signal,
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
       isActive: false,
       shouldFollowup: false,
     });
@@ -326,11 +348,13 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(runState.admission).toEqual({ status: "skipped", reason: "aborted" });
   });
 
   it("drops heartbeat runs when another run is active", async () => {
+    const runState: ReplyOperationRunState = {};
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true },
+      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
       shouldFollowup: true,
       resolvedQueueMode: "collect",
@@ -342,6 +366,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(runState.admission).toEqual({ status: "skipped", reason: "active-run" });
   });
 
   it("drops heartbeat runs before steering active streams", async () => {
@@ -399,6 +424,11 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("keeps typing alive when a followup is queued behind a live active run", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,
@@ -416,9 +446,10 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.cleanup).not.toHaveBeenCalled();
+    active.complete();
   });
 
-  it("starts draining immediately when the active snapshot is already stale", async () => {
+  it("starts draining after enqueue when the reply lane owner is already gone", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,
@@ -431,9 +462,34 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the drain dormant until the reply lane owner clears", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    await run();
+
+    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+    active.complete();
+
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
   });
 
   it("drains followup queue when an unexpected exception escapes the run path", async () => {

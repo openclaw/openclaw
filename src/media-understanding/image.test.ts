@@ -884,6 +884,59 @@ describe("describeImageWithModel", () => {
     ]);
   });
 
+  it("places DashScope image prompts in user content before images", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-completions",
+        provider: "qwen",
+        id: "qwen-vl-max-latest",
+        input: ["text", "image"],
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "qwen",
+      model: "qwen-vl-max-latest",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "dashscope ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "qwen",
+      model: "qwen-vl-max-latest",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "dashscope ok",
+      model: "qwen-vl-max-latest",
+    });
+    const firstCall = requireFirstMockCall(completeMock, "DashScope image completion");
+    const [, context] = firstCall;
+    expect(context.systemPrompt).toBeUndefined();
+    const userMessage = context.messages[0];
+    if (!userMessage) {
+      throw new Error("expected DashScope image completion user message");
+    }
+    expect(userMessage.content).toEqual([
+      { type: "text", text: "Describe the image." },
+      {
+        type: "image",
+        data: Buffer.from("png-bytes").toString("base64"),
+        mimeType: "image/png",
+      },
+    ]);
+  });
+
   it.each([
     {
       name: "direct OpenAI Responses baseUrl",

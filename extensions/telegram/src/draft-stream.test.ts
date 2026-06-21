@@ -632,6 +632,20 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
+  it("keeps rich preview html out of plain preview gating", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true, minInitialChars: 10 });
+
+    stream.updatePreview({
+      text: "Plan",
+      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("clamps rich previews to the block limit", async () => {
     const api = createMockDraftApi();
     const text = Array.from({ length: 501 }, (_, index) => `paragraph ${index}`).join("\n\n");

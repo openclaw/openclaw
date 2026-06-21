@@ -137,7 +137,6 @@ import {
   buildTelegramNonInterruptingReplyFenceKey,
   buildTelegramReplyFenceLaneKey,
   endTelegramReplyFence,
-  getTelegramReplyFenceSizeForTests,
   isTelegramReplyFenceSuperseded,
   releaseTelegramReplyFenceAbortController,
   resetTelegramReplyFenceForTests,
@@ -146,7 +145,7 @@ import {
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
 
-export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
+export { resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
@@ -458,7 +457,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
       parts.push(renderTelegramProgressStringLine(text));
     }
   }
-  if (line.status && line.status !== line.detail) {
+  if (line.status && line.status !== "completed" && line.status !== line.detail) {
     parts.push(`<i>${escapeTelegramProgressHtml(line.status)}</i>`);
   }
   return parts.join(" ");
@@ -467,6 +466,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
 function renderTelegramProgressDraftPreview(
   text: string,
   lines: readonly ChannelProgressDraftCompositorLine[],
+  richMessages: boolean,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   const [heading] = trimmed.split(/\r?\n/u, 1);
@@ -474,9 +474,13 @@ function renderTelegramProgressDraftPreview(
   const htmlParts = heading?.trim()
     ? [`<b>${escapeTelegramProgressHtml(heading.trim())}</b>`, ...renderedLines]
     : renderedLines;
+  const html = htmlParts.join("<br>");
+  if (!richMessages) {
+    return { text: html, parseMode: "HTML" };
+  }
   return {
     text: trimmed,
-    richMessage: buildTelegramRichHtml(htmlParts.join("<br>"), { skipEntityDetection: true }),
+    richMessage: buildTelegramRichHtml(html, { skipEntityDetection: true }),
   };
 }
 
@@ -1075,7 +1079,11 @@ export const dispatchTelegramMessage = async ({
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
       answerLane.stream?.updatePreview(
-        renderTelegramProgressDraftPreview(streamText, options?.lines ?? []),
+        renderTelegramProgressDraftPreview(
+          streamText,
+          options?.lines ?? [],
+          telegramCfg.richMessages === true,
+        ),
       );
       if (options?.flush) {
         await answerLane.stream?.flush();
@@ -1620,6 +1628,15 @@ export const dispatchTelegramMessage = async ({
       }
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
+    const normalizeDeliveryPayload = (payload: ReplyPayload): ReplyPayload | undefined => {
+      return projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([payload], {
+          cfg,
+          sessionKey: ctxPayload.SessionKey,
+          surface: "telegram",
+        }),
+      )[0];
+    };
     const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
       if (replyQuoteText != null) {
         return true;
@@ -1961,10 +1978,14 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
 
+                    const normalizedPayload = normalizeDeliveryPayload(payload);
+                    if (!normalizedPayload) {
+                      return;
+                    }
                     const deduped =
                       info.kind === "final"
-                        ? deduplicateBlockSentMedia(payload, sentBlockMediaUrls)
-                        : payload;
+                        ? deduplicateBlockSentMedia(normalizedPayload, sentBlockMediaUrls)
+                        : normalizedPayload;
                     if (deduped === undefined) {
                       return;
                     }
@@ -1974,15 +1995,25 @@ export const dispatchTelegramMessage = async ({
                       shouldSuppressLocalTelegramExecApprovalPrompt({
                         cfg,
                         accountId: route.accountId,
-                        payload,
+                        payload: effectivePayload,
                       })
                     ) {
                       queuedFinal = true;
                       return;
                     }
                     const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
+                    const lanePayload =
+                      info.kind === "block" &&
+                      typeof payload.text === "string" &&
+                      typeof effectivePayload.text === "string" &&
+                      payload.text !== effectivePayload.text &&
+                      payload.text.trimEnd() === effectivePayload.text &&
+                      !effectivePayload.mediaUrl &&
+                      !effectivePayload.mediaUrls?.length
+                        ? { ...effectivePayload, text: payload.text }
+                        : effectivePayload;
                     const split = splitTextIntoLaneSegments(
-                      { text: effectivePayload.text },
+                      { text: lanePayload.text },
                       payload.isReasoning,
                     );
                     const segments = split.segments;
@@ -1999,8 +2030,7 @@ export const dispatchTelegramMessage = async ({
                     const isToolPayloadAfterFinal =
                       info.kind === "tool" && (finalAnswerDeliveryStarted || finalAnswerDelivered);
                     const isNonTerminalWarningAfterDeliveredFinal =
-                      isReplyPayloadNonTerminalToolErrorWarning(effectivePayload) &&
-                      finalAnswerDelivered;
+                      isReplyPayloadNonTerminalToolErrorWarning(payload) && finalAnswerDelivered;
                     if (
                       (isToolPayloadAfterFinal || isNonTerminalWarningAfterDeliveredFinal) &&
                       !reply.hasMedia &&
@@ -2113,7 +2143,7 @@ export const dispatchTelegramMessage = async ({
                         (entry) =>
                           queuedAnswerBlockRotationMatchesDelivery(
                             entry,
-                            effectivePayload,
+                            lanePayload,
                             info.assistantMessageIndex,
                           ),
                       );
@@ -2145,7 +2175,7 @@ export const dispatchTelegramMessage = async ({
                       if (segment.lane === "answer" && info.kind === "block") {
                         const preparedAnswerLane = await prepareAnswerLaneForText();
                         const shouldRotateQueuedBlock = takeQueuedAnswerBlockRotation(
-                          effectivePayload,
+                          lanePayload,
                           info.assistantMessageIndex,
                         );
                         if (shouldRotateQueuedBlock && !preparedAnswerLane) {
@@ -2165,7 +2195,7 @@ export const dispatchTelegramMessage = async ({
                           : await deliverLaneText({
                               laneName: segment.lane,
                               text: segment.update.text,
-                              payload: effectivePayload,
+                              payload: lanePayload,
                               infoKind: info.kind,
                               buttons: telegramButtons,
                             });
@@ -2179,7 +2209,7 @@ export const dispatchTelegramMessage = async ({
                           result.kind === "preview-finalized" ||
                           result.kind === "preview-retained")
                       ) {
-                        lastAnswerBlockPayload = effectivePayload;
+                        lastAnswerBlockPayload = lanePayload;
                         lastAnswerBlockText = segment.update.text;
                         lastAnswerBlockButtons = telegramButtons;
                       }
@@ -2196,8 +2226,12 @@ export const dispatchTelegramMessage = async ({
                       }
                     }
                     const trackBlockMedia = (delivered: boolean) => {
-                      if (delivered && info.kind === "block" && payload.mediaUrls?.length) {
-                        for (const url of payload.mediaUrls) {
+                      if (
+                        delivered &&
+                        info.kind === "block" &&
+                        effectivePayload.mediaUrls?.length
+                      ) {
+                        for (const url of effectivePayload.mediaUrls) {
                           sentBlockMediaUrls.add(url);
                         }
                       }

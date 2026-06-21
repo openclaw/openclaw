@@ -5,6 +5,7 @@
  */
 import {
   hasNonEmptyString as hasNonEmptyStringField,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -27,6 +28,7 @@ type RawToolCallBlock = {
   name?: unknown;
   input?: unknown;
   arguments?: unknown;
+  partialJson?: unknown;
 };
 
 const RAW_TOOL_CALL_BLOCK_TYPES = new Set([
@@ -70,6 +72,45 @@ function hasToolCallId(block: RawToolCallBlock): boolean {
     hasNonEmptyStringField(block.tool_call_id) ||
     hasNonEmptyStringField(block.tool_use_id)
   );
+}
+
+function hasPartialJson(
+  block: RawToolCallBlock,
+): block is RawToolCallBlock & { partialJson: string } {
+  return typeof block.partialJson === "string";
+}
+
+function isCompleteJsonObject(value: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
+function isFinalizedOpenAIResponsesToolCall(
+  message: AgentMessage,
+  block: RawToolCallBlock,
+): boolean {
+  if (
+    message.role !== "assistant" ||
+    !("stopReason" in message) ||
+    message.stopReason !== "toolUse" ||
+    !hasPartialJson(block) ||
+    typeof block.id !== "string" ||
+    "input" in block ||
+    !block.arguments ||
+    typeof block.arguments !== "object" ||
+    Array.isArray(block.arguments) ||
+    (!isCompleteJsonObject(block.partialJson) &&
+      (block.partialJson.trim() !== "" || Object.keys(block.arguments).length > 0))
+  ) {
+    return false;
+  }
+
+  const separator = block.id.indexOf("|");
+  return separator > 0 && separator < block.id.length - 1;
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
@@ -116,6 +157,7 @@ function isReplaySafeThinkingAssistantTurn(
     const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
     if (
       !hasToolCallInput(block) ||
+      hasPartialJson(block) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
       !isAllowedToolCallName(block.name, allowedToolNames)
@@ -242,7 +284,7 @@ function normalizeLegacyToolResultId(
   return { ...message, toolCallId: toolCall.id, isError: true };
 }
 
-export { DEFAULT_MISSING_TOOL_RESULT_TEXT, makeMissingToolResult };
+export { makeMissingToolResult };
 
 type ToolCallInputRepairReport = {
   messages: AgentMessage[];
@@ -382,31 +424,72 @@ function repairToolCallInputs(
     let messageChanged = false;
 
     for (const block of msg.content) {
-      if (
-        isRawToolCallBlock(block) &&
-        (!hasToolCallInput(block) ||
-          !hasToolCallId(block) ||
-          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames))
-      ) {
-        droppedToolCalls += 1;
-        droppedInMessage += 1;
-        changed = true;
-        messageChanged = true;
-        continue;
-      }
       if (isRawToolCallBlock(block)) {
-        if (RAW_TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? "")) {
-          const sanitized = sanitizeToolCallBlock(block);
-          if (sanitized !== block) {
-            changed = true;
-            messageChanged = true;
-          }
-          nextContent.push(sanitized as typeof block);
+        // Drop genuinely incomplete streaming artifacts (missing required fields).
+        if (
+          !hasToolCallInput(block) ||
+          !hasToolCallId(block) ||
+          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames)
+        ) {
+          droppedToolCalls += 1;
+          droppedInMessage += 1;
+          changed = true;
+          messageChanged = true;
           continue;
         }
-      } else {
-        nextContent.push(block);
       }
+      let workBlock = block;
+      if (isRawToolCallBlock(block) && hasPartialJson(block)) {
+        if (!isFinalizedOpenAIResponsesToolCall(msg, block)) {
+          droppedToolCalls += 1;
+          droppedInMessage += 1;
+          changed = true;
+          messageChanged = true;
+          continue;
+        }
+
+        // Legacy generic Responses transport persisted successful toolUse turns
+        // with the scratch buffer intact. Strip it only when terminal state and
+        // the provider-specific finalized shape both prove completion.
+        const stripped = { ...block };
+        delete (stripped as RawToolCallBlock & { partialJson?: unknown }).partialJson;
+        workBlock = stripped;
+        changed = true;
+        messageChanged = true;
+      }
+      if (isRawToolCallBlock(workBlock)) {
+        if (RAW_TOOL_CALL_BLOCK_TYPES.has((workBlock as { type?: string }).type ?? "")) {
+          // Only sanitize (redact) sessions_spawn blocks; all others are passed through
+          // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
+          const blockName =
+            typeof (workBlock as { name?: unknown }).name === "string"
+              ? (workBlock as { name: string }).name.trim()
+              : undefined;
+          if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
+            const sanitized = sanitizeToolCallBlock(workBlock);
+            if (sanitized !== workBlock) {
+              changed = true;
+              messageChanged = true;
+            }
+            nextContent.push(sanitized as typeof block);
+          } else if (typeof (workBlock as { name?: unknown }).name === "string") {
+            const rawName = (workBlock as { name: string }).name;
+            const trimmedName = rawName.trim();
+            if (rawName !== trimmedName && trimmedName) {
+              const renamed = { ...(workBlock as object), name: trimmedName } as typeof block;
+              nextContent.push(renamed);
+              changed = true;
+              messageChanged = true;
+            } else {
+              nextContent.push(workBlock);
+            }
+          } else {
+            nextContent.push(workBlock);
+          }
+          continue;
+        }
+      }
+      nextContent.push(workBlock);
     }
 
     if (droppedInMessage > 0) {

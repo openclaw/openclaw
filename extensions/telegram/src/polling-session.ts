@@ -755,10 +755,21 @@ export class TelegramPollingSession {
     });
   }
 
+  #activeSpooledUpdateHandlerKeysForSpool(spoolDir: string): Set<string> {
+    const handlerKeys = new Set<string>();
+    for (const handlerKey of activeSpooledUpdateHandlersByLane.keys()) {
+      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+        handlerKeys.add(handlerKey);
+      }
+    }
+    return handlerKeys;
+  }
+
   #activeSpooledUpdateLaneKeysForSpool(spoolDir: string): Set<string> {
     const laneKeys = new Set<string>();
-    for (const [handlerKey, handler] of activeSpooledUpdateHandlersByLane) {
-      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+    for (const handlerKey of this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir)) {
+      const handler = activeSpooledUpdateHandlersByLane.get(handlerKey);
+      if (handler) {
         laneKeys.add(handler.laneKey);
       }
     }
@@ -1119,7 +1130,15 @@ export class TelegramPollingSession {
             this.#status.notePollingError(handler.timeoutMessage);
           }
         }
-        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(drain.blockedByLane);
+        // Active handlers can outlive their owning session after shutdown grace.
+        // Recover every handler for this spool, including lone handlers with no backlog.
+        const timeoutCandidateHandlerKeys = this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir);
+        for (const handlerKey of drain.blockedByLane) {
+          timeoutCandidateHandlerKeys.add(handlerKey);
+        }
+        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(
+          timeoutCandidateHandlerKeys,
+        );
         if (timedOutRecovery?.restart) {
           requestStopForRestart();
         } else if (timedOutRecovery) {

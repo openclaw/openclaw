@@ -107,6 +107,7 @@ const ERROR_PATTERNS = {
     // Chinese provider overloaded messages
     "服务过载",
     "当前负载过高",
+    "访问量过大",
   ],
   serverError: [
     "an error occurred while processing",

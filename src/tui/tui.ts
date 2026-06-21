@@ -22,6 +22,11 @@ import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+} from "../process/windows-command.js";
+import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
@@ -124,14 +129,24 @@ export function resolveLocalAuthCliInvocation(params?: {
     : { command, args: [runNodePath, "models", "auth", "login"] };
 }
 
-export function resolveLocalAuthSpawnOptions(params: {
+export function resolveLocalAuthSpawnInvocation(params: {
   command: string;
+  args: string[];
   platform?: NodeJS.Platform;
-}): { shell?: true } {
+}): {
+  args: string[];
+  command: string;
+  options: { windowsHide?: true; windowsVerbatimArguments?: true };
+} {
   const platform = params.platform ?? process.platform;
-  return platform === "win32" && /\.(cmd|bat)$/iu.test(params.command.trim())
-    ? { shell: true }
-    : {};
+  if (!isWindowsBatchCommand(params.command.trim(), platform)) {
+    return { command: params.command, args: params.args, options: {} };
+  }
+  return {
+    command: resolveTrustedWindowsCmdExe(platform),
+    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.command, params.args)],
+    options: { windowsHide: true, windowsVerbatimArguments: true },
+  };
 }
 
 export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
@@ -1191,11 +1206,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
                   }
                 }
 
-                const child = spawn(command, args, {
+                const invocation = resolveLocalAuthSpawnInvocation({ command, args });
+                const child = spawn(invocation.command, invocation.args, {
                   cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
                   env: process.env,
                   stdio: "inherit",
-                  ...resolveLocalAuthSpawnOptions({ command }),
+                  ...invocation.options,
                 });
                 child.once("error", reject);
                 child.once("exit", (exitCode, signal) => {
@@ -1292,6 +1308,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleChatEvent,
     handleAgentEvent,
     handleBtwEvent,
+    handleSessionsChangedEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
@@ -1520,6 +1537,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
     }
+    if (evt.event === "sessions.changed") {
+      handleSessionsChangedEvent(evt.payload);
+    }
   };
 
   client.onConnected = () => {
@@ -1532,6 +1552,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }
     setConnectionStatus(isLocalMode ? "local ready" : "connected");
     void (async () => {
+      try {
+        await client.subscribeSessionEvents?.();
+      } catch (err) {
+        chatLog.addSystem(`session event subscribe failed: ${String(err)}`);
+      }
       await refreshAgents();
       await restoreRememberedSession();
       updateHeader();

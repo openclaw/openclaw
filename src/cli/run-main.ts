@@ -2,14 +2,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
-import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
@@ -18,6 +16,7 @@ import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
+  normalizeRootLogLevelArgv,
   normalizeRootNoColorArgv,
 } from "./argv.js";
 import {
@@ -34,6 +33,7 @@ import {
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
@@ -288,9 +288,9 @@ async function closeCliMemoryManagers(): Promise<void> {
 
 async function disposeCliAgentHarnesses(): Promise<void> {
   try {
-    const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } =
+    const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
       await import("../agents/harness/registry.js");
-    if (listAgentHarnessIds().length === 0) {
+    if (listRegisteredAgentHarnesses().length === 0) {
       return;
     }
     await disposeRegisteredAgentHarnesses();
@@ -425,10 +425,52 @@ function isNoColorConsumedAsCommandOptionValue(
   return pendingValue;
 }
 
+function isLogLevelConsumedAsCommandOption(
+  program: CommanderCommand,
+  remainingArgs: readonly string[],
+  logLevelIndex: number,
+): boolean {
+  let command = program;
+  let pendingValue = false;
+  for (let index = 0; index < logLevelIndex; index += 1) {
+    const arg = remainingArgs[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    if (pendingValue) {
+      pendingValue = false;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      const option = findCommandOption(command, arg);
+      if (!option && index === logLevelIndex - 1 && !arg.includes("=")) {
+        return true;
+      }
+      pendingValue = shouldOptionConsumeFollowingToken(option, arg, remainingArgs[index + 1]);
+      continue;
+    }
+    command = findSubcommand(command, arg) ?? command;
+  }
+
+  if (pendingValue) {
+    return true;
+  }
+
+  const arg = remainingArgs[logLevelIndex];
+  return command !== program && arg !== undefined && findCommandOption(command, arg) !== undefined;
+}
+
 function normalizeRootNoColorArgvForProgram(argv: string[], program: CommanderCommand): string[] {
   return normalizeRootNoColorArgv(argv, {
     shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
       isNoColorConsumedAsCommandOptionValue(program, remainingArgs, noColorIndex),
+  });
+}
+
+function normalizeRootLogLevelArgvForProgram(argv: string[], program: CommanderCommand): string[] {
+  return normalizeRootLogLevelArgv(argv, {
+    shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
+      isLogLevelConsumedAsCommandOption(program, remainingArgs, logLevelIndex),
   });
 }
 
@@ -559,14 +601,25 @@ async function resolveUnownedCliPrimaryMessage(params: {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
     await loadManifestCommandAliasesRuntimeModule();
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
-  return (
-    resolveMissingPluginCommandMessageFromPolicy(params.primary, params.config, {
+  const pluginPolicyMessage = resolveMissingPluginCommandMessageFromPolicy(
+    params.primary,
+    params.config,
+    {
       resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
       resolveToolOwner: resolveManifestToolOwner,
       resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
-    }) ??
-    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`
+    },
   );
+  if (pluginPolicyMessage) {
+    return pluginPolicyMessage;
+  }
+  const suggestion = formatCliCommandSuggestions(params.primary);
+  return [
+    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`,
+    suggestion,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
@@ -1051,7 +1104,10 @@ export async function runCli(argv: string[] = process.argv) {
         }
       }
 
-      parseArgv = normalizeRootNoColorArgvForProgram(parseArgv, program);
+      parseArgv = normalizeRootLogLevelArgvForProgram(
+        normalizeRootNoColorArgvForProgram(parseArgv, program),
+        program,
+      );
       stopStartupProgress();
 
       try {
@@ -1072,8 +1128,4 @@ export async function runCli(argv: string[] = process.argv) {
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
   }
-}
-
-export function isCliMainModule(): boolean {
-  return isMainModule({ currentFile: fileURLToPath(import.meta.url) });
 }

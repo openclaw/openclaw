@@ -22,6 +22,8 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { resolveApiKeyForProfile as resolveApiKeyForProfileImpl } from "../auth-profiles/oauth.js";
+import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
@@ -69,8 +71,6 @@ vi.mock("../video-generation-task-status.js", () => ({
   buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildVideoGenerationTaskStatusText: vi.fn(() => ""),
   findActiveVideoGenerationTaskForSession: vi.fn(() => undefined),
-  getVideoGenerationTaskProviderId: vi.fn(() => undefined),
-  isActiveVideoGenerationTask: vi.fn(() => false),
 }));
 
 vi.mock("../image-generation-task-status.js", () => ({
@@ -79,8 +79,6 @@ vi.mock("../image-generation-task-status.js", () => ({
   buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildImageGenerationTaskStatusText: vi.fn(() => ""),
   findActiveImageGenerationTaskForSession: vi.fn(() => undefined),
-  getImageGenerationTaskProviderId: vi.fn(() => undefined),
-  isActiveImageGenerationTask: vi.fn(() => false),
 }));
 
 vi.mock("../music-generation-task-status.js", () => ({
@@ -267,6 +265,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
+      resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
@@ -323,6 +322,596 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         preparedExecution: null,
       }),
     ).toBe(false);
+  });
+
+  it("passes raw refreshed OAuth profile fields to profile-owned CLI preparation", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "google-gemini-cli:user@example.test";
+    const prepareExecution = vi.fn(async () => ({
+      env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
+    }));
+    const resolveApiKeyForProfile = vi.fn(async () => ({
+      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+      profileId: authProfileId,
+      profileType: "oauth" as const,
+      provider: "google-gemini-cli",
+      email: "user@example.test",
+    }));
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "raw-access-token",
+            refresh: "raw-refresh-token",
+            expires: 1_800_000_000_000,
+            projectId: "project-1",
+            email: "user@example.test",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: false,
+          authEpochMode: "profile-only",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        timeoutMs: 1_000,
+        runId: "run-test-gemini-oauth-raw-profile-fields",
+        authProfileId,
+        config: {},
+      });
+
+      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileId,
+          authCredential: expect.objectContaining({
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "raw-access-token",
+            refresh: "raw-refresh-token",
+            expires: 1_800_000_000_000,
+          }),
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stages the resolved OAuth fallback profile for Gemini CLI preparation", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const legacyProfileId = "google-gemini-cli:default";
+    const resolvedProfileId = "google-gemini-cli:user@example.test";
+    const prepareExecution = vi.fn(async () => ({
+      env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
+    }));
+    const resolveApiKeyForProfile = vi.fn(async () => ({
+      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+      profileId: resolvedProfileId,
+      profileType: "oauth" as const,
+      provider: "google-gemini-cli",
+      email: "user@example.test",
+    }));
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [legacyProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "stale-access-token",
+            refresh: "stale-refresh-token",
+            expires: 1_700_000_000_000,
+            email: "legacy@example.test",
+          },
+          [resolvedProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "resolved-access-token",
+            refresh: "resolved-refresh-token",
+            expires: 1_800_000_000_000,
+            projectId: "project-1",
+            email: "user@example.test",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: false,
+          authEpochMode: "profile-only",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        timeoutMs: 1_000,
+        runId: "run-test-gemini-oauth-fallback-profile",
+        authProfileId: legacyProfileId,
+        config: {},
+      });
+
+      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileId: resolvedProfileId,
+          authCredential: expect.objectContaining({
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "resolved-access-token",
+            refresh: "resolved-refresh-token",
+            expires: 1_800_000_000_000,
+          }),
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("selects the configured Gemini CLI OAuth profile when no explicit profile is passed", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "google-gemini-cli:user@example.test";
+    const prepareExecution = vi.fn(async () => ({
+      env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
+    }));
+    const resolveApiKeyForProfile = vi.fn(async () => ({
+      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+      profileId: authProfileId,
+      profileType: "oauth" as const,
+      provider: "google-gemini-cli",
+      email: "user@example.test",
+    }));
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "raw-access-token",
+            refresh: "raw-refresh-token",
+            expires: 1_800_000_000_000,
+            projectId: "project-1",
+            email: "user@example.test",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: false,
+          authEpochMode: "profile-only",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        timeoutMs: 1_000,
+        runId: "run-test-gemini-oauth-default-profile",
+        config: {
+          auth: {
+            profiles: {
+              [authProfileId]: {
+                provider: "google-gemini-cli",
+                mode: "oauth",
+                email: "user@example.test",
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileId: authProfileId,
+          agentDir,
+        }),
+      );
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileId,
+          authCredential: expect.objectContaining({
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "raw-access-token",
+            refresh: "raw-refresh-token",
+            expires: 1_800_000_000_000,
+          }),
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stages adopted OAuth credentials for Gemini CLI preparation", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "google-gemini-cli:user@example.test";
+    const prepareExecution = vi.fn(async () => ({
+      env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
+    }));
+    const resolveApiKeyForProfile = vi.fn(async () => ({
+      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+      profileId: authProfileId,
+      profileType: "oauth" as const,
+      provider: "google-gemini-cli",
+      email: "user@example.test",
+      credential: {
+        type: "oauth" as const,
+        provider: "google-gemini-cli",
+        access: "adopted-access-token",
+        refresh: "adopted-refresh-token",
+        expires: 1_900_000_000_000,
+        projectId: "project-1",
+        email: "user@example.test",
+      },
+    }));
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "stale-access-token",
+            refresh: "stale-refresh-token",
+            expires: 1_700_000_000_000,
+            projectId: "project-1",
+            email: "user@example.test",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: false,
+          authEpochMode: "profile-only",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        timeoutMs: 1_000,
+        runId: "run-test-gemini-oauth-adopted-credential",
+        authProfileId,
+        config: {},
+      });
+
+      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileId,
+          authCredential: expect.objectContaining({
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "adopted-access-token",
+            refresh: "adopted-refresh-token",
+            expires: 1_900_000_000_000,
+          }),
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not expose auth profile credentials to non-Gemini CLI prepare hooks", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "test-cli:secret";
+    const prepareExecution = vi.fn(async (_ctx: unknown) => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "api_key",
+            provider: "test-cli",
+            key: "secret-key",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test-plugin",
+          bundleMcp: false,
+          prepareExecution,
+          config: {
+            command: "test-cli",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-non-gemini-credential-boundary",
+        authProfileId,
+        config: {},
+      });
+
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileId,
+        }),
+      );
+      expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets Gemini CLI preparation override generated MCP system settings auth", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const profileSystemSettingsPath = path.join(dir, "profile-system-settings.json");
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const prepareExecution = vi.fn(async (_ctx: unknown) => ({
+      env: {
+        GEMINI_CLI_SYSTEM_SETTINGS_PATH: profileSystemSettingsPath,
+      },
+    }));
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: true,
+          bundleMcpMode: "gemini-system-settings",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+    });
+
+    let cleanup: (() => Promise<void>) | undefined;
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        timeoutMs: 1_000,
+        runId: "run-test-gemini-mcp-system-settings",
+        config: {},
+      });
+      cleanup = context.preparedBackend.cleanup;
+
+      const prepareExecutionArg = prepareExecution.mock.calls[0]?.[0] as
+        | { env?: Record<string, string> }
+        | undefined;
+      const generatedSystemSettingsPath = prepareExecutionArg?.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+      expect(typeof generatedSystemSettingsPath).toBe("string");
+      expect(generatedSystemSettingsPath).not.toBe(profileSystemSettingsPath);
+      const generatedSettings = JSON.parse(
+        fs.readFileSync(generatedSystemSettingsPath ?? "", "utf8"),
+      ) as {
+        mcp?: { allowed?: string[] };
+        mcpServers?: Record<string, { url?: string }>;
+      };
+      expect(generatedSettings.mcp?.allowed).toEqual(["openclaw"]);
+      expect(generatedSettings.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:31783/mcp");
+      expect(context.preparedBackend.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(
+        profileSystemSettingsPath,
+      );
+    } finally {
+      await cleanup?.();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans generated Gemini MCP settings when auth preparation fails", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    let generatedSystemSettingsPath: string | undefined;
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const prepareExecution = vi.fn(async (ctx: unknown) => {
+      generatedSystemSettingsPath = (ctx as { env?: Record<string, string> }).env
+        ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+      throw new Error("Gemini auth profile was selected but no credential material was found");
+    });
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: true,
+          bundleMcpMode: "gemini-system-settings",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+    });
+
+    try {
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "agent:main:main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          timeoutMs: 1_000,
+          runId: "run-test-gemini-mcp-cleanup-on-auth-failure",
+          config: {},
+        }),
+      ).rejects.toThrow(/no credential material/);
+
+      expect(generatedSystemSettingsPath).toBeTruthy();
+      expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {
@@ -1596,7 +2185,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
       expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
       expect(context.systemPrompt).not.toContain("## Memory Recall");
-      expect(context.systemPrompt).not.toContain("memory_search");
+      expect(context.systemPrompt).not.toMatch(/^- memory_search\b/m);
       expect(context.systemPromptReport.tools.entries).toEqual([]);
       expect(context.promptToolNamesHash).toBeUndefined();
       expect(context.preparedBackend.env).toBeUndefined();

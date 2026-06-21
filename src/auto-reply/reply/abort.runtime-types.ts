@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 /** Result from the fast abort path before normal reply dispatch starts. */
-export type FastAbortResult = {
+type FastAbortResult = {
   handled: boolean;
   aborted: boolean;
   stoppedSubagents?: number;

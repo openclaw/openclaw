@@ -6,18 +6,17 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
-import { modelKey } from "./model-selection-normalize.js";
-import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  buildConfiguredModelCatalog,
+  dedupeModelCatalogEntries,
+} from "./model-selection-shared.js";
 import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   createModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
-export type ProviderAuthChecker = (
-  provider: string,
-  modelApi?: string,
-) => boolean | Promise<boolean>;
+type ProviderAuthChecker = (provider: string, modelApi?: string) => boolean | Promise<boolean>;
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
@@ -56,7 +55,7 @@ async function resolveProviderAuthCheck(
   return isPromiseLike(result) ? await result : result;
 }
 
-export async function modelCatalogEntryHasProviderAuth(
+async function modelCatalogEntryHasProviderAuth(
   providerAuthChecker: ProviderAuthChecker,
   entry: ModelCatalogEntry,
 ): Promise<boolean> {
@@ -78,22 +77,6 @@ function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntr
   return entries.toSorted(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
   );
-}
-
-function dedupeModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  // Preserve the first occurrence after precedence merging while removing
-  // provider/id duplicates from configured and auth-backed catalogs.
-  const seen = new Set<string>();
-  const next: ModelCatalogEntry[] = [];
-  for (const entry of entries) {
-    const key = modelKey(entry.provider, entry.id);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    next.push(entry);
-  }
-  return next;
 }
 
 /**

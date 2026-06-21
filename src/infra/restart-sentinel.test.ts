@@ -6,7 +6,6 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildRestartSuccessContinuation,
-  consumeRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
@@ -51,7 +50,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("restart sentinel", () => {
-  it("writes and consumes a sentinel", async () => {
+  it("writes and reads a sentinel", async () => {
     await withRestartSentinelStateDir(async () => {
       const payload = {
         kind: "update" as const,
@@ -70,13 +69,6 @@ describe("restart sentinel", () => {
       const read = await readRestartSentinel();
       expect(read?.payload.kind).toBe("update");
       expect(read?.payload.continuation).toEqual(payload.continuation);
-
-      const consumed = await consumeRestartSentinel();
-      expect(consumed?.payload.sessionKey).toBe(payload.sessionKey);
-      expect(consumed?.payload.continuation).toEqual(payload.continuation);
-
-      const empty = await readRestartSentinel();
-      expect(empty).toBeNull();
     });
   });
 

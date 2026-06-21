@@ -595,8 +595,8 @@ describe("web search provider auto-detection", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to brave when no keys available", () => {
-    expect(resolveSearchProvider({})).toBe("brave");
+  it("returns no provider when no credentials are available", () => {
+    expect(resolveSearchProvider({})).toBe("");
   });
 
   it("auto-detects brave when only BRAVE_API_KEY is set", () => {

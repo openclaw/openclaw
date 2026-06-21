@@ -6,11 +6,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  BLANK_USER_FALLBACK_TEXT,
-  CORRUPTED_IMAGE_FALLBACK_TEXT,
-  repairSessionFileIfNeeded,
-} from "./session-file-repair.js";
+import { repairSessionFileIfNeeded } from "./session-file-repair.js";
+
+const BLANK_USER_FALLBACK_TEXT = "(continue)";
+const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
 
 function buildSessionHeaderAndMessage() {
   const header = {

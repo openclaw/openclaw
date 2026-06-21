@@ -50,13 +50,6 @@ export function appendSerializedJsonlEntrySync(
   return content;
 }
 
-export function appendJsonlEntriesSync(filePath: string, entries: readonly unknown[]): void {
-  if (entries.length === 0) {
-    return;
-  }
-  appendFileSync(filePath, serializeJsonlEntries(entries), "utf-8");
-}
-
 export async function writeJsonlEntry(
   filePath: string,
   entry: unknown,
@@ -84,7 +77,13 @@ export async function writeJsonlLines(
 }
 
 export async function appendJsonlEntry(filePath: string, entry: unknown): Promise<void> {
-  const serializedEntry = serializeJsonlEntry(entry);
+  await appendSerializedJsonlEntry(filePath, serializeJsonlEntry(entry));
+}
+
+export async function appendSerializedJsonlEntry(
+  filePath: string,
+  serializedEntry: string,
+): Promise<void> {
   const handle = await fs.open(filePath, "a+", 0o600);
   try {
     const stat = await handle.stat();

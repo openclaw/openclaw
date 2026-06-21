@@ -9,6 +9,7 @@ require "cgi"
 default_platform(:ios)
 
 APP_STORE_APP_IDENTIFIER = "ai.openclawfoundation.app"
+DEFAULT_APP_STORE_CONNECT_KEYCHAIN_SERVICE = "openclaw-app-store-connect-key"
 DEFAULT_SNAPSHOT_DEVICES = ["iPhone 16 Pro Max", "iPad Pro 13-inch (M4)"].freeze
 DEFAULT_WATCH_SNAPSHOT_DEVICE = "Apple Watch Ultra 3 (49mm)"
 WATCH_SCREENSHOT_MODE_DEFAULTS_KEY = "openclaw.watch.screenshotMode"
@@ -18,6 +19,17 @@ REQUIRED_SCREENSHOT_FAMILIES = {
   "iPhone" => /iPhone/,
   "13-inch iPad" => /iPad (Air|Pro) 13-inch/
 }.freeze
+PUBLIC_METADATA_FILENAMES = [
+  "description.txt",
+  "keywords.txt",
+  "marketing_url.txt",
+  "name.txt",
+  "privacy_url.txt",
+  "promotional_text.txt",
+  "release_notes.txt",
+  "subtitle.txt",
+  "support_url.txt"
+].freeze
 
 def load_env_file(path)
   return unless File.exist?(path)
@@ -273,7 +285,7 @@ def capture_watch_screenshot
   device_name = device.fetch("name")
   udid = device.fetch("udid")
   output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
-  output_path = File.join(output_dir, "#{device_name}-01-quick-reply.png")
+  output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
   derived_data_path = File.join(ios_root, "build", "WatchScreenshotDerivedData")
   app_path = File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
 
@@ -281,6 +293,8 @@ def capture_watch_screenshot
   Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
   FileUtils.rm_rf(derived_data_path)
 
+  # Single-target watch apps only expose generic simulator build destinations in Xcode.
+  # Keep the selected UDID for install/launch/screenshot below.
   sh(
     xcodebuild_shell_join([
       "xcodebuild",
@@ -291,7 +305,7 @@ def capture_watch_screenshot
       "-configuration",
       "Debug",
       "-destination",
-      "platform=watchOS Simulator,id=#{udid}",
+      "generic/platform=watchOS Simulator",
       "-derivedDataPath",
       derived_data_path,
       "build",
@@ -299,10 +313,8 @@ def capture_watch_screenshot
   )
 
   UI.user_error!("Watch screenshot build did not produce #{app_path}.") unless File.exist?(app_path)
-  extension_path = File.join(app_path, "PlugIns", "OpenClawWatchExtension.appex")
   watch_app_identifier = bundle_identifier_for_product(app_path)
-  watch_extension_identifier = bundle_identifier_for_product(extension_path)
-  screenshot_mode_bundle_identifiers = [watch_app_identifier, watch_extension_identifier]
+  screenshot_mode_bundle_identifiers = [watch_app_identifier]
 
   sh("#{shell_join(["xcrun", "simctl", "boot", udid])} >/dev/null 2>&1 || true")
   sh(shell_join(["xcrun", "simctl", "bootstatus", udid, "-b"]))
@@ -349,7 +361,7 @@ def maybe_decode_hex_keychain_secret(value)
     beginPemMarker = %w[BEGIN PRIVATE KEY].join(" ") # pragma: allowlist secret
     endPemMarker = %w[END PRIVATE KEY].join(" ")
     if decoded.include?(beginPemMarker) || decoded.include?(endPemMarker)
-      UI.message("Decoded hex-encoded ASC key content from Keychain.")
+      UI.message("Decoded hex-encoded App Store Connect key content from Keychain.")
       return decoded
     end
   rescue StandardError
@@ -359,11 +371,11 @@ def maybe_decode_hex_keychain_secret(value)
   candidate
 end
 
-def read_asc_key_content_from_keychain
-  service = ENV["ASC_KEYCHAIN_SERVICE"]
-  service = "openclaw-asc-key" unless env_present?(service)
+def read_app_store_connect_key_content_from_keychain
+  service = ENV["APP_STORE_CONNECT_KEYCHAIN_SERVICE"]
+  service = DEFAULT_APP_STORE_CONNECT_KEYCHAIN_SERVICE unless env_present?(service)
 
-  account = ENV["ASC_KEYCHAIN_ACCOUNT"]
+  account = ENV["APP_STORE_CONNECT_KEYCHAIN_ACCOUNT"]
   account = ENV["USER"] unless env_present?(account)
   account = ENV["LOGNAME"] unless env_present?(account)
   return nil unless env_present?(account)
@@ -385,7 +397,7 @@ def read_asc_key_content_from_keychain
     key_content = maybe_decode_hex_keychain_secret(key_content)
     return nil unless env_present?(key_content)
 
-    UI.message("Loaded ASC key content from Keychain service '#{service}' (account '#{account}').")
+    UI.message("Loaded App Store Connect key content from Keychain service '#{service}' (account '#{account}').")
     key_content
   rescue Errno::ENOENT
     nil
@@ -423,8 +435,16 @@ def app_store_signing_manifest
   JSON.parse(File.read(File.join(ios_root, "Config", "AppStoreSigning.json")))
 end
 
+def app_store_signing_targets
+  app_store_signing_manifest.fetch("targets")
+end
+
+def app_store_bundle_identifiers
+  app_store_signing_targets.map { |target| target.fetch("bundleId") }
+end
+
 def app_store_provisioning_profiles
-  app_store_signing_manifest.fetch("targets").each_with_object({}) do |target, profiles|
+  app_store_signing_targets.each_with_object({}) do |target, profiles|
     profiles[target.fetch("bundleId")] = target.fetch("profileName")
   end
 end
@@ -467,8 +487,137 @@ def write_app_store_export_options(path)
   PLIST
 end
 
+def produce_services_for_target(target)
+  services = {}
+  if target.fetch("capabilities").include?("PUSH_NOTIFICATIONS")
+    services[:push_notification] = "on"
+  end
+  if target.fetch("capabilities").include?("APP_GROUPS")
+    services[:app_group] = "on"
+  end
+  services
+end
+
+def ensure_release_bundle_ids!
+  manifest = app_store_signing_manifest
+  app_store_signing_targets.each do |target|
+    options = {
+      app_identifier: target.fetch("bundleId"),
+      app_name: target.fetch("displayName"),
+      skip_itc: true,
+      team_id: manifest.fetch("teamId")
+    }
+    services = produce_services_for_target(target)
+    options[:enable_services] = services unless services.empty?
+    produce(**options)
+    unless services.empty?
+      modify_services(
+        app_identifier: target.fetch("bundleId"),
+        services: services,
+        team_id: manifest.fetch("teamId")
+      )
+    end
+  end
+end
+
+def app_store_match_options(readonly:, target:, api_key:)
+  manifest = app_store_signing_manifest
+  options = {
+    type: manifest.fetch("profileType"),
+    app_identifier: target.fetch("bundleId"),
+    profile_name: target.fetch("profileName"),
+    git_url: manifest.fetch("signingRepo"),
+    git_branch: manifest.fetch("signingBranch"),
+    platform: "ios",
+    team_id: manifest.fetch("teamId"),
+    readonly: readonly
+  }
+  options[:api_key] = api_key if api_key
+  options
+end
+
+def validate_match_profile_mapping!(target)
+  bundle_id = target.fetch("bundleId")
+  expected_profile_name = target.fetch("profileName")
+  actual = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] || {}
+  actual_profile_name = actual[bundle_id]
+  return if actual_profile_name == expected_profile_name
+
+  UI.user_error!(
+    "Fastlane match did not resolve the pinned App Store profile for #{bundle_id}: expected #{expected_profile_name}, got #{actual_profile_name || "no match output"}"
+  )
+end
+
+def match_profile_env_key(target, suffix)
+  ["sigh", target.fetch("bundleId"), app_store_signing_manifest.fetch("profileType"), suffix].join("_")
+end
+
+def profile_plist_value(profile_path, key_path)
+  Tempfile.create(["openclaw-profile", ".plist"]) do |file|
+    stdout, stderr, status = Open3.capture3("security", "cms", "-D", "-i", profile_path)
+    unless status.success?
+      detail = stderr.to_s.strip
+      detail = stdout.to_s.strip if detail.empty?
+      UI.user_error!("Failed to decode provisioning profile #{profile_path}: #{detail}")
+    end
+
+    file.write(stdout)
+    file.flush
+    value, _plist_stderr, plist_status = Open3.capture3("/usr/libexec/PlistBuddy", "-c", "Print:#{key_path}", file.path)
+    return nil unless plist_status.success?
+
+    value.to_s.strip
+  end
+end
+
+def profile_plist_array_values(profile_path, key_path)
+  raw = profile_plist_value(profile_path, key_path)
+  return [] unless raw
+
+  raw.lines.map(&:strip).reject do |line|
+    line.empty? || line == "Array {" || line == "}"
+  end
+end
+
+def validate_match_profile_capabilities!(target)
+  capabilities = target.fetch("capabilities")
+  return if capabilities.empty?
+
+  profile_path = ENV[match_profile_env_key(target, "profile-path")]
+  UI.user_error!("Fastlane match did not expose an installed profile path for #{target.fetch("bundleId")}.") unless env_present?(profile_path)
+
+  if capabilities.include?("PUSH_NOTIFICATIONS")
+    aps_environment = profile_plist_value(profile_path, "Entitlements:aps-environment")
+    if aps_environment != "production"
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing production push entitlement; expected aps-environment=production, got #{aps_environment || "missing"}."
+      )
+    end
+  end
+
+  if capabilities.include?("APP_GROUPS")
+    expected_app_groups = target.fetch("appGroups")
+    actual_app_groups = profile_plist_array_values(profile_path, "Entitlements:com.apple.security.application-groups")
+    missing = expected_app_groups - actual_app_groups
+    unless missing.empty?
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing App Groups #{missing.join(", ")}; actual groups: #{actual_app_groups.empty? ? "missing" : actual_app_groups.join(", ")}."
+      )
+    end
+  end
+end
+
+def sync_app_store_signing!(readonly:)
+  api_key = readonly ? nil : app_store_connect_api_key_config
+  app_store_signing_targets.each do |target|
+    match(**app_store_match_options(readonly: readonly, target: target, api_key: api_key))
+    validate_match_profile_mapping!(target)
+    validate_match_profile_capabilities!(target)
+  end
+end
+
 def release_signing_check!
-  sh(shell_join(["node", File.join(repo_root, "scripts", "ios-release-signing.mjs"), "--mode", "check"]))
+  sync_app_store_signing!(readonly: true)
 end
 
 def release_notes_path
@@ -483,6 +632,19 @@ def release_notes_metadata_path
   target_dir = File.join(temp_root, "en-US")
   FileUtils.mkdir_p(target_dir)
   FileUtils.cp(source, File.join(target_dir, "release_notes.txt"))
+  temp_root
+end
+
+def public_metadata_path
+  source = File.join(__dir__, "metadata")
+  temp_root = Dir.mktmpdir("openclaw-app-store-metadata")
+  Dir.children(source).each do |entry|
+    source_entry = File.join(source, entry)
+    next unless File.directory?(source_entry)
+    next unless PUBLIC_METADATA_FILENAMES.any? { |filename| File.exist?(File.join(source_entry, filename)) }
+
+    FileUtils.cp_r(source_entry, File.join(temp_root, entry))
+  end
   temp_root
 end
 
@@ -563,7 +725,7 @@ def resolve_release_build_number(api_key:, short_version:)
   next_build.to_s
 end
 
-def release_build_number_needs_asc_auth?
+def release_build_number_needs_app_store_connect_auth?
   explicit = ENV["IOS_RELEASE_BUILD_NUMBER"]
   !env_present?(explicit)
 end
@@ -640,58 +802,58 @@ def build_app_store_release(context)
   }
 end
 
-platform :ios do
-  private_lane :asc_api_key do
-    load_env_file(File.join(__dir__, ".env"))
-    clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
-    clear_empty_env_var("ASC_KEY_PATH")
-    clear_empty_env_var("ASC_KEY_CONTENT")
+def app_store_connect_api_key_config
+  load_env_file(File.join(__dir__, ".env"))
+  clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
+  clear_empty_env_var("APP_STORE_CONNECT_KEY_PATH")
+  clear_empty_env_var("APP_STORE_CONNECT_KEY_CONTENT")
 
-    api_key = nil
+  api_key = nil
 
-    key_path = ENV["APP_STORE_CONNECT_API_KEY_PATH"]
-    if env_present?(key_path)
-      api_key = app_store_connect_api_key(path: key_path)
+  key_path = ENV["APP_STORE_CONNECT_API_KEY_PATH"]
+  if env_present?(key_path)
+    api_key = app_store_connect_api_key(path: key_path)
+  else
+    p8_path = ENV["APP_STORE_CONNECT_KEY_PATH"]
+    if env_present?(p8_path)
+      key_id = ENV["APP_STORE_CONNECT_KEY_ID"]
+      issuer_id = ENV["APP_STORE_CONNECT_ISSUER_ID"]
+      UI.user_error!("Missing APP_STORE_CONNECT_KEY_ID or APP_STORE_CONNECT_ISSUER_ID for APP_STORE_CONNECT_KEY_PATH auth.") if [key_id, issuer_id].any? { |v| !env_present?(v) }
+
+      api_key = app_store_connect_api_key(
+        key_id: key_id,
+        issuer_id: issuer_id,
+        key_filepath: p8_path
+      )
     else
-      p8_path = ENV["ASC_KEY_PATH"]
-      if env_present?(p8_path)
-        key_id = ENV["ASC_KEY_ID"]
-        issuer_id = ENV["ASC_ISSUER_ID"]
-        UI.user_error!("Missing ASC_KEY_ID or ASC_ISSUER_ID for ASC_KEY_PATH auth.") if [key_id, issuer_id].any? { |v| !env_present?(v) }
+      key_id = ENV["APP_STORE_CONNECT_KEY_ID"]
+      issuer_id = ENV["APP_STORE_CONNECT_ISSUER_ID"]
+      key_content = ENV["APP_STORE_CONNECT_KEY_CONTENT"]
+      key_content = read_app_store_connect_key_content_from_keychain unless env_present?(key_content)
 
-        api_key = app_store_connect_api_key(
-          key_id: key_id,
-          issuer_id: issuer_id,
-          key_filepath: p8_path
-        )
-      else
-        key_id = ENV["ASC_KEY_ID"]
-        issuer_id = ENV["ASC_ISSUER_ID"]
-        key_content = ENV["ASC_KEY_CONTENT"]
-        key_content = read_asc_key_content_from_keychain unless env_present?(key_content)
+      UI.user_error!(
+        "Missing App Store Connect API key. Set APP_STORE_CONNECT_API_KEY_PATH (json), APP_STORE_CONNECT_KEY_PATH (p8), or APP_STORE_CONNECT_KEY_ID/APP_STORE_CONNECT_ISSUER_ID with APP_STORE_CONNECT_KEY_CONTENT (or Keychain via APP_STORE_CONNECT_KEYCHAIN_SERVICE/APP_STORE_CONNECT_KEYCHAIN_ACCOUNT)."
+      ) if [key_id, issuer_id, key_content].any? { |v| !env_present?(v) }
 
-        UI.user_error!(
-          "Missing App Store Connect API key. Set APP_STORE_CONNECT_API_KEY_PATH (json), ASC_KEY_PATH (p8), or ASC_KEY_ID/ASC_ISSUER_ID with ASC_KEY_CONTENT (or Keychain via ASC_KEYCHAIN_SERVICE/ASC_KEYCHAIN_ACCOUNT)."
-        ) if [key_id, issuer_id, key_content].any? { |v| !env_present?(v) }
+      is_base64 = key_content.include?("BEGIN PRIVATE KEY") ? false : true
 
-        is_base64 = key_content.include?("BEGIN PRIVATE KEY") ? false : true
-
-        api_key = app_store_connect_api_key(
-          key_id: key_id,
-          issuer_id: issuer_id,
-          key_content: key_content,
-          is_key_content_base64: is_base64
-        )
-      end
+      api_key = app_store_connect_api_key(
+        key_id: key_id,
+        issuer_id: issuer_id,
+        key_content: key_content,
+        is_key_content_base64: is_base64
+      )
     end
-
-    api_key
   end
 
+  api_key
+end
+
+platform :ios do
   private_lane :prepare_app_store_context do |options|
     require_api_key = options[:require_api_key] == true
-    needs_api_key = require_api_key || release_build_number_needs_asc_auth?
-    api_key = needs_api_key ? asc_api_key : nil
+    needs_api_key = require_api_key || release_build_number_needs_app_store_connect_auth?
+    api_key = needs_api_key ? app_store_connect_api_key_config : nil
     sync_ios_versioning!
     version_metadata = read_ios_version_metadata
     version = version_metadata[:version]
@@ -706,6 +868,37 @@ platform :ios do
       short_version: short_version,
       version: version
     }
+  end
+
+  desc "Print the App Store signing plan"
+  lane :signing_plan do
+    sh(shell_join(["node", File.join(repo_root, "scripts", "ios-release-signing.mjs"), "--mode", "plan"]))
+  end
+
+  desc "Check local App Store signing assets through Fastlane match"
+  lane :signing_check do
+    sync_app_store_signing!(readonly: true)
+    UI.success("Fastlane match App Store signing assets are available locally.")
+  end
+
+  desc "Create Developer Portal bundle IDs/services and sync App Store signing assets"
+  lane :signing_setup do
+    ensure_release_bundle_ids!
+    sync_app_store_signing!(readonly: false)
+    UI.success("Fastlane App Store signing setup is complete.")
+  end
+
+  desc "Pull encrypted App Store signing assets from the shared Fastlane match repo"
+  lane :signing_sync_pull do
+    sync_app_store_signing!(readonly: true)
+    UI.success("Pulled Fastlane match App Store signing assets.")
+  end
+
+  desc "Create or refresh encrypted App Store signing assets in the shared Fastlane match repo"
+  lane :signing_sync_push do
+    ensure_release_bundle_ids!
+    sync_app_store_signing!(readonly: false)
+    UI.success("Pushed Fastlane match App Store signing assets.")
   end
 
   desc "Build an App Store distribution archive locally without uploading"
@@ -765,10 +958,10 @@ platform :ios do
   lane :metadata do
     sync_ios_versioning!
     version_metadata = read_ios_version_metadata
-    api_key = asc_api_key
+    api_key = app_store_connect_api_key_config
     clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
-    app_identifier = ENV["ASC_APP_IDENTIFIER"]
-    app_id = ENV["ASC_APP_ID"]
+    app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
+    app_id = ENV["APP_STORE_CONNECT_APP_ID"]
     app_identifier = nil unless env_present?(app_identifier)
     app_id = nil unless env_present?(app_id)
 
@@ -780,7 +973,7 @@ platform :ios do
       validate_required_screenshots!(paths)
     end
 
-    metadata_path = File.join(__dir__, "metadata")
+    metadata_path = public_metadata_path
     skip_metadata = ENV["DELIVER_METADATA"] != "1"
     if release_notes_upload_requested? && skip_metadata
       metadata_path = release_notes_metadata_path
@@ -849,7 +1042,7 @@ platform :ios do
 
   desc "Validate App Store Connect API auth"
   lane :auth_check do
-    asc_api_key
+    app_store_connect_api_key_config
     UI.success("App Store Connect API auth loaded successfully.")
   end
 end

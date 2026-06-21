@@ -75,7 +75,7 @@ let lastClientOptions: {
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-  onClose?: (code: number, reason: string) => void;
+  onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
   onConnectError?: (err: Error) => void;
 } | null = null;
 let lastRequestOptions: {
@@ -88,13 +88,66 @@ let lastRequestOptions: {
     onAccepted?: (payload: unknown) => void;
   };
 } | null = null;
-type StartMode = "hello" | "close" | "connect-error" | "silent" | "startup-retry-then-hello";
+type StartMode =
+  | "hello"
+  | "close"
+  | "connect-error"
+  | "silent"
+  | "startup-retry-then-hello"
+  | "clean-prehello-close-then-hello"
+  | "repeated-clean-prehello-close";
+type StubGatewayClientCloseInfo = {
+  phase: "pre-hello" | "post-hello";
+  transientPreHelloCleanClose: boolean;
+};
 let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
 let closeReason = "";
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
 let connectError: Error | null = null;
+
+function startStubGatewayClient() {
+  startCalls += 1;
+  if (startMode === "hello") {
+    void lastClientOptions?.onHelloOk?.({
+      features: {
+        methods: helloMethods,
+      },
+    });
+  } else if (startMode === "startup-retry-then-hello") {
+    void lastClientOptions?.onHelloOk?.({
+      features: {
+        methods: helloMethods,
+      },
+    });
+  } else if (startMode === "clean-prehello-close-then-hello") {
+    lastClientOptions?.onClose?.(1000, "", {
+      phase: "pre-hello",
+      transientPreHelloCleanClose: true,
+    });
+    void lastClientOptions?.onHelloOk?.({
+      features: {
+        methods: helloMethods,
+      },
+    });
+  } else if (startMode === "repeated-clean-prehello-close") {
+    lastClientOptions?.onClose?.(1000, "", {
+      phase: "pre-hello",
+      transientPreHelloCleanClose: true,
+    });
+    lastClientOptions?.onClose?.(1000, "", {
+      phase: "pre-hello",
+      transientPreHelloCleanClose: true,
+    });
+  } else if (startMode === "connect-error") {
+    lastClientOptions?.onConnectError?.(
+      connectError ?? connectAssemblyErrorState.create("device private key invalid"),
+    );
+  } else if (startMode === "close") {
+    lastClientOptions?.onClose?.(closeCode, closeReason);
+  }
+}
 
 vi.mock("./client.js", () => ({
   describeGatewayCloseCode: (code: number) => {
@@ -119,7 +172,7 @@ vi.mock("./client.js", () => ({
       approvalRuntimeToken?: string;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-      onClose?: (code: number, reason: string) => void;
+      onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
       onConnectError?: (err: Error) => void;
     }) {
       lastClientOptions = opts;
@@ -133,26 +186,7 @@ vi.mock("./client.js", () => ({
       return { ok: true };
     }
     start() {
-      startCalls += 1;
-      if (startMode === "hello") {
-        void lastClientOptions?.onHelloOk?.({
-          features: {
-            methods: helloMethods,
-          },
-        });
-      } else if (startMode === "startup-retry-then-hello") {
-        void lastClientOptions?.onHelloOk?.({
-          features: {
-            methods: helloMethods,
-          },
-        });
-      } else if (startMode === "connect-error") {
-        lastClientOptions?.onConnectError?.(
-          connectError ?? connectAssemblyErrorState.create("device private key invalid"),
-        );
-      } else if (startMode === "close") {
-        lastClientOptions?.onClose?.(closeCode, closeReason);
-      }
+      startStubGatewayClient();
     }
     stop() {}
   },
@@ -174,7 +208,6 @@ const {
   buildGatewayProbeConnectionDetails,
   callGateway,
   callGatewayCli,
-  callGatewayScoped,
   formatGatewayClientRequestErrorJson,
   formatGatewayTransportErrorJson,
   isGatewayTransportError,
@@ -191,7 +224,7 @@ class StubGatewayClient {
     mode?: string;
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-    onClose?: (code: number, reason: string) => void;
+    onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
     onConnectError?: (err: Error) => void;
   }) {
     lastClientOptions = opts;
@@ -210,26 +243,7 @@ class StubGatewayClient {
     return { ok: true };
   }
   start() {
-    startCalls += 1;
-    if (startMode === "hello") {
-      void lastClientOptions?.onHelloOk?.({
-        features: {
-          methods: helloMethods,
-        },
-      });
-    } else if (startMode === "startup-retry-then-hello") {
-      void lastClientOptions?.onHelloOk?.({
-        features: {
-          methods: helloMethods,
-        },
-      });
-    } else if (startMode === "connect-error") {
-      lastClientOptions?.onConnectError?.(
-        connectError ?? connectAssemblyErrorState.create("device private key invalid"),
-      );
-    } else if (startMode === "close") {
-      lastClientOptions?.onClose?.(closeCode, closeReason);
-    }
+    startStubGatewayClient();
   }
   stop() {}
   async stopAndWait() {}
@@ -742,10 +756,10 @@ describe("callGateway url resolution", () => {
   it("passes explicit scopes through, including empty arrays", async () => {
     setLocalLoopbackGatewayConfig();
 
-    await callGatewayScoped({ method: "health", scopes: ["operator.read"] });
+    await callGateway({ method: "health", scopes: ["operator.read"] });
     expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
 
-    await callGatewayScoped({ method: "health", scopes: [] });
+    await callGateway({ method: "health", scopes: [] });
     expect(lastClientOptions?.scopes).toStrictEqual([]);
   });
 
@@ -1360,6 +1374,30 @@ describe("callGateway error details", () => {
     await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
 
     expect(lastRequestOptions?.method).toBe("health");
+  });
+
+  it("keeps the request alive through one transient pre-hello clean close", async () => {
+    startMode = "clean-prehello-close-then-hello";
+    setLocalLoopbackGatewayConfig();
+
+    await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+    expect(lastRequestOptions?.method).toBe("health");
+  });
+
+  it("surfaces repeated transient pre-hello clean closes", async () => {
+    startMode = "repeated-clean-prehello-close";
+    setLocalLoopbackGatewayConfig();
+
+    let err: Error | null = null;
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      err = caught as Error;
+    }
+
+    expect(err?.message).toContain("gateway closed (1000 normal closure): no close reason");
+    expect(lastRequestOptions).toBeNull();
   });
 
   it("rejects immediately when the client reports a connect error", async () => {

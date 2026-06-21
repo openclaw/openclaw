@@ -233,7 +233,7 @@ export function analyzeBootstrapBudget(params: {
 }
 
 /** Builds a stable signature for once-per-truncation warning suppression. */
-export function buildBootstrapTruncationSignature(
+function buildBootstrapTruncationSignature(
   analysis: BootstrapBudgetAnalysis,
 ): string | undefined {
   if (!analysis.hasTruncation) {
@@ -267,7 +267,7 @@ export function buildBootstrapTruncationSignature(
 }
 
 /** Formats human-readable warning lines for the most important truncated files. */
-export function formatBootstrapTruncationWarningLines(params: {
+function formatBootstrapTruncationWarningLines(params: {
   analysis: BootstrapBudgetAnalysis;
   maxFiles?: number;
 }): string[] {

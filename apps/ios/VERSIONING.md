@@ -90,10 +90,11 @@ Pinned iOS version `2026.4.10` maps to:
   - prepares App Store distribution signing and bundle settings against the pinned iOS version
 - `scripts/ios-release-signing.mjs`
   - validates the checked-in App Store signing manifest
-  - creates or verifies Developer Portal bundle IDs, capabilities, certificates, and profiles through `asc`
-  - syncs encrypted signing assets with the private shared signing repo
+  - renders the temporary release xcconfig profile pins
 - `apps/ios/fastlane/Fastfile`
   - resolves version metadata from the pinned iOS helper
+  - creates or verifies Developer Portal bundle IDs/services through Fastlane `produce`
+  - syncs encrypted App Store signing assets with Fastlane `match`
   - increments App Store Connect build numbers for the pinned short version
   - uploads screenshots and release notes before archiving a release build
 

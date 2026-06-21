@@ -149,6 +149,9 @@ export class CodexAppServerEventProjector {
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
+  // Codex emits each typed item completion before its matching raw response item.
+  // Pair by protocol order because contributors may rewrite only the typed text.
+  private pendingRawCommentaryEchoes = 0;
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
   private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
@@ -653,6 +656,7 @@ export class CodexAppServerEventProjector {
       this.assistantTextByItem.set(item.id, item.text);
       if (item.text && this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text });
+        this.pendingRawCommentaryEchoes += 1;
       }
     }
     this.recordNativeGeneratedMedia(item);
@@ -914,12 +918,16 @@ export class CodexAppServerEventProjector {
     if (readString(item, "role") !== "assistant") {
       return;
     }
+    const phase = readString(item, "phase");
+    if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
+      this.pendingRawCommentaryEchoes -= 1;
+      return;
+    }
     const text = extractRawAssistantText(item);
     if (!text) {
       return;
     }
     const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
-    const phase = readString(item, "phase");
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }

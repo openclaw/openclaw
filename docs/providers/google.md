@@ -435,11 +435,14 @@ WebSocket endpoint, sends the initial setup payload, and waits for
 
   </Accordion>
 
-  <Accordion title="Gemini CLI JSON usage notes">
-    When using the `google-gemini-cli` OAuth provider, OpenClaw normalizes
-    the CLI JSON output as follows:
+  <Accordion title="Gemini CLI usage notes">
+    When using the `google-gemini-cli` OAuth provider, OpenClaw uses Gemini
+    CLI `stream-json` output by default and normalizes usage from the final
+    `stats` payload. Legacy `--output-format json` overrides still use the
+    JSON parser.
 
-    - Reply text comes from the CLI JSON `response` field.
+    - Streamed reply text comes from assistant `message` events.
+    - For legacy JSON output, reply text comes from the CLI JSON `response` field.
     - Usage falls back to `stats` when the CLI leaves `usage` empty.
     - `stats.cached` is normalized into OpenClaw `cacheRead`.
     - If `stats.input` is missing, OpenClaw derives input tokens from

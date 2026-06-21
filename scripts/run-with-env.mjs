@@ -1,5 +1,5 @@
 // Runs a command with inline KEY=value assignments while preserving signal behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 const USAGE = "Usage: node scripts/run-with-env.mjs KEY=value [KEY=value ...] -- command [args...]";
@@ -80,6 +80,48 @@ export function resolveForceKillDelayMs(env = process.env) {
   return parsed;
 }
 
+/**
+ * Signals the wrapped command tree when this small parent wrapper is stopped.
+ */
+export function signalRunWithEnvChild(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useChildProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useChildProcessGroup && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        child.kill(signal);
+        return;
+      }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill("taskkill", [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
+}
+
 function main(argv = process.argv.slice(2)) {
   if (isRunWithEnvHelpRequest(argv)) {
     console.log(USAGE);
@@ -120,20 +162,7 @@ function main(argv = process.argv.slice(2)) {
   const forwardedSignals = useChildProcessGroup
     ? ["SIGTERM", "SIGHUP", "SIGINT"]
     : ["SIGTERM", "SIGHUP"];
-  const signalChild = (signal) => {
-    if (useChildProcessGroup && typeof child.pid === "number") {
-      try {
-        process.kill(-child.pid, signal);
-        return;
-      } catch (error) {
-        if (error?.code !== "ESRCH") {
-          child.kill(signal);
-          return;
-        }
-      }
-    }
-    child.kill(signal);
-  };
+  const signalChild = (signal) => signalRunWithEnvChild(child, signal, { useChildProcessGroup });
   const childProcessGroupAlive = () => {
     if (!useChildProcessGroup || typeof child.pid !== "number") {
       return false;

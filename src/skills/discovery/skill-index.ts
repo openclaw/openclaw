@@ -18,7 +18,7 @@ export type SkillIndexEntry = {
   userInvocable: boolean;
 };
 
-export type SkillIndex = {
+type SkillIndex = {
   entries: SkillIndexEntry[];
   runtimeEntries: SkillEntry[];
   promptVisibleEntries: SkillEntry[];
@@ -27,7 +27,7 @@ export type SkillIndex = {
   byNormalizedName: ReadonlyMap<string, readonly SkillIndexEntry[]>;
 };
 
-export type BuildSkillIndexOptions = {
+type BuildSkillIndexOptions = {
   bundledNames?: ReadonlySet<string>;
   agentSkillFilter?: readonly string[];
 };

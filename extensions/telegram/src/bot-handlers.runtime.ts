@@ -1,6 +1,5 @@
 // Telegram plugin module implements bot handlers behavior.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -25,6 +24,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
@@ -37,6 +37,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -44,11 +45,13 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
-import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
+import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   normalizeDmAllowFromWithStore,
   firstDefined,
+  isSenderAllowed,
+  normalizeAllowFrom,
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
@@ -123,6 +126,7 @@ import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
+import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { resolveTelegramGroupHistoryContextMode } from "./group-history-context.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import {
@@ -160,40 +164,8 @@ import {
   isTelegramEditTargetMissingError,
   isTelegramMessageHasNoTextError,
 } from "./network-errors.js";
+import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
-
-function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
-  const toInboundMediaPath = (id: string): string | undefined => {
-    if (
-      !id ||
-      id === "." ||
-      id === ".." ||
-      id.includes("/") ||
-      id.includes("\\") ||
-      id.includes("\0")
-    ) {
-      return undefined;
-    }
-    return `media://inbound/${encodeURIComponent(id)}`;
-  };
-  const decodeInboundMediaId = (id: string): string | undefined => {
-    try {
-      return decodeURIComponent(id);
-    } catch {
-      return undefined;
-    }
-  };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (canonicalMatch?.[1]) {
-    const id = decodeInboundMediaId(canonicalMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
-  }
-  const normalized = mediaPath.replace(/\\/g, "/");
-  if (!normalized.includes("/media/inbound/")) {
-    return undefined;
-  }
-  return toInboundMediaPath(path.posix.basename(normalized));
-}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -1292,13 +1264,18 @@ export const registerTelegramHandlers = ({
   const resolveReplyMediaForChain = async (
     ctx: TelegramContext,
     chain: TelegramCachedMessageNode[],
+    shouldHydrateMedia: (node: TelegramCachedMessageNode, index: number) => Promise<boolean>,
   ): Promise<{ replyMedia: TelegramMediaRef[]; replyChain: TelegramReplyChainEntry[] }> => {
     const replyMedia: TelegramMediaRef[] = [];
     const replyChain: TelegramReplyChainEntry[] = [];
-    for (const node of chain) {
+    for (const [index, node] of chain.entries()) {
       let mediaRef: TelegramMediaRef | undefined;
       const replyFileId = resolveInboundMediaFileId(node.sourceMessage);
-      if (replyFileId && hasInboundMedia(node.sourceMessage)) {
+      if (
+        replyFileId &&
+        hasInboundMedia(node.sourceMessage) &&
+        (await shouldHydrateMedia(node, index))
+      ) {
         try {
           const media = await resolveMedia({
             ctx: {
@@ -1349,9 +1326,65 @@ export const registerTelegramHandlers = ({
     };
     try {
       const replyChainNodes = await buildReplyChainForMessage(params.msg);
+      const isGroupConversation =
+        params.msg.chat.type === "group" || params.msg.chat.type === "supergroup";
+      const runtimeCfg = telegramDeps.getRuntimeConfig();
+      const runtimeTelegramCfg = resolveTelegramAccount({ cfg: runtimeCfg, accountId }).config;
+      const isForum =
+        params.msg.chat.type === "supergroup" &&
+        Boolean(params.msg.chat.is_forum || params.msg.is_topic_message);
+      const scopedThreadId = resolveTelegramForumThreadId({
+        isForum,
+        messageThreadId: params.msg.message_thread_id,
+      });
+      const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+        runtimeTelegramCfg,
+        params.msg.chat.id,
+        scopedThreadId,
+      );
+      const scopedAllowFrom = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+      const configuredGroupAllowFrom =
+        scopedAllowFrom ??
+        opts.groupAllowFrom ??
+        runtimeTelegramCfg.groupAllowFrom ??
+        runtimeTelegramCfg.allowFrom ??
+        opts.allowFrom;
+      const contextVisibilityMode = resolveChannelContextVisibilityMode({
+        cfg: runtimeCfg,
+        channel: "telegram",
+        accountId,
+      });
+      const shouldHydrateReplyMedia = async (
+        node: TelegramCachedMessageNode,
+        index: number,
+      ): Promise<boolean> => {
+        if (!isGroupConversation) {
+          return true;
+        }
+        const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+          cfg: runtimeCfg,
+          allowFrom: configuredGroupAllowFrom,
+          accountId,
+          senderId: node.senderId,
+        });
+        const effectiveAllow = normalizeAllowFrom(expandedAllowFrom);
+        const senderAllowed = effectiveAllow.hasEntries
+          ? isSenderAllowed({
+              allow: effectiveAllow,
+              senderId: node.senderId,
+              senderUsername: node.senderUsername,
+            })
+          : true;
+        return evaluateSupplementalContextVisibility({
+          mode: contextVisibilityMode,
+          kind: index === 0 ? "quote" : "thread",
+          senderAllowed,
+        }).include;
+      };
       const { replyMedia, replyChain } = await resolveReplyMediaForChain(
         params.ctx,
         replyChainNodes,
+        shouldHydrateReplyMedia,
       );
       const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
       const currentMessageId =
@@ -1366,19 +1399,15 @@ export const registerTelegramHandlers = ({
           path: currentPromptMediaPath,
         });
       }
-      const isGroupConversation =
-        params.msg.chat.type === "group" || params.msg.chat.type === "supergroup";
-      if (!isGroupConversation) {
-        for (const entry of replyChain) {
-          const promptMediaPath = entry.mediaPath
-            ? resolveTelegramPromptMediaPath(entry.mediaPath)
-            : undefined;
-          if (entry.messageId && entry.mediaPath && promptMediaPath) {
-            promptContextMediaByMessageId.set(entry.messageId, {
-              path: promptMediaPath,
-              ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
-            });
-          }
+      for (const entry of replyChain) {
+        const promptMediaPath = entry.mediaPath
+          ? resolveTelegramPromptMediaPath(entry.mediaPath)
+          : undefined;
+        if (entry.messageId && entry.mediaPath && promptMediaPath) {
+          promptContextMediaByMessageId.set(entry.messageId, {
+            path: promptMediaPath,
+            ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
+          });
         }
       }
       const promptContext = await buildPromptContextForMessage(
@@ -2706,7 +2735,12 @@ export const registerTelegramHandlers = ({
         } catch (err) {
           throw new TelegramRetryableCallbackError(err);
         }
-        const { byProvider, providers, modelNames } = modelData;
+        const {
+          byProvider,
+          providers,
+          modelNames,
+          resolvedDefault: activeResolvedDefault,
+        } = modelData;
 
         const editMessageWithButtons = async (
           text: string,
@@ -2780,8 +2814,10 @@ export const registerTelegramHandlers = ({
           const totalPages = calculateTotalPages(models.length, pageSize);
           const safePage = Math.max(1, Math.min(page, totalPages));
 
-          // Resolve current model from session (prefer overrides)
-          const currentModel = sessionState.model;
+          // Resolve current model from session (prefer overrides), then the active default.
+          const currentModel =
+            sessionState.model ||
+            `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
 
           const buttons = buildModelsKeyboard({
             provider,

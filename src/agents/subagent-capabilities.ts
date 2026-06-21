@@ -7,7 +7,10 @@ import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,7 +24,6 @@ import {
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
 /** Resolved role for a main session, orchestrating subagent, or leaf subagent. */
 export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
@@ -96,14 +98,14 @@ function findEntryBySessionId(
   store: SessionCapabilityStore,
   sessionId: string,
 ): SessionCapabilityEntry | undefined {
-  const normalizedSessionId = normalizeSubagentSessionKey(sessionId);
+  const normalizedSessionId = normalizeOptionalString(sessionId);
   if (!normalizedSessionId) {
     return undefined;
   }
   for (const entry of Object.values(store)) {
     // Older callers may know the session id but not the exact store key, so
     // persisted entries are searchable by their normalized embedded sessionId.
-    const candidateSessionId = normalizeSubagentSessionKey(entry?.sessionId);
+    const candidateSessionId = normalizeOptionalString(entry?.sessionId);
     if (candidateSessionId === normalizedSessionId) {
       return entry;
     }
@@ -139,7 +141,7 @@ export function resolveSubagentCapabilityStore(
     store?: SessionCapabilityStore;
   },
 ): SessionCapabilityStore | undefined {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey) {
     return opts?.store;
   }
@@ -201,7 +203,7 @@ function isStoredSubagentEnvelopeSession(
   },
   visited = new Set<string>(),
 ): boolean {
-  const normalizedSessionKey = normalizeSubagentSessionKey(params.sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(params.sessionKey);
   if (!normalizedSessionKey || visited.has(normalizedSessionKey)) {
     return false;
   }
@@ -228,7 +230,7 @@ function isStoredSubagentEnvelopeSession(
     return true;
   }
 
-  const spawnedBy = normalizeSubagentSessionKey(entry?.spawnedBy);
+  const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
   if (!spawnedBy) {
     return false;
   }
@@ -256,7 +258,7 @@ export function isSubagentEnvelopeSession(
     entry?: SessionCapabilityEntry;
   },
 ): boolean {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey) {
     return false;
   }
@@ -286,7 +288,7 @@ export function resolveStoredSubagentCapabilities(
     store?: SessionCapabilityStore;
   },
 ) {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   const maxSpawnDepth =
     opts?.cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (!normalizedSessionKey) {
@@ -339,7 +341,7 @@ export function resolveStoredSubagentInheritedToolDenylist(
     store?: SessionCapabilityStore;
   },
 ): string[] {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
     return [];
   }
@@ -360,7 +362,7 @@ export function resolveStoredSubagentInheritedToolAllowlist(
     store?: SessionCapabilityStore;
   },
 ): string[] {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
     return [];
   }

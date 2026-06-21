@@ -118,6 +118,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
   replyRunRegistry,
   runAfterReplyOperationClear,
@@ -133,6 +134,26 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function scheduleFollowupDrainAfterReplyOperationClear(params: {
+  operation: ReplyOperation;
+  queueKey: string;
+  runFollowup: (run: FollowupRun) => Promise<void>;
+}): void {
+  runAfterReplyOperationClear(params.operation, (admissionSessionId) => {
+    const completedSessionId = params.operation.sessionId;
+    const runFollowupAfterClear =
+      admissionSessionId === completedSessionId
+        ? params.runFollowup
+        : (queued: FollowupRun) =>
+            params.runFollowup(
+              queued.run.sessionId === completedSessionId
+                ? { ...queued, admissionSessionId }
+                : queued,
+            );
+    scheduleFollowupDrain(params.queueKey, runFollowupAfterClear);
+  });
+}
 
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
@@ -1202,6 +1223,7 @@ export async function runReplyAgent(params: {
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const replyOperationRunState = resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
@@ -1295,6 +1317,9 @@ export async function runReplyAgent(params: {
   });
 
   if (activeRunQueueAction === "drop") {
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
+    }
     typing.cleanup();
     return undefined;
   }
@@ -1312,12 +1337,19 @@ export async function runReplyAgent(params: {
       typing.cleanup();
       return undefined;
     }
-    // Re-check liveness after enqueue so a stale active snapshot cannot leave
-    // the followup queue idle if the original run already finished.
-    const queuedBehindActiveRun = isRunActive?.() === true;
-    if (!queuedBehindActiveRun) {
+    // The queue must stay dormant while the active owner can still collect
+    // messages. Registering after enqueue closes the owner-clear race.
+    const activeReplyOperation = replyRunRegistry.get(queueKey);
+    if (activeReplyOperation) {
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: activeReplyOperation,
+        queueKey,
+        runFollowup: queuedRunFollowupTurn,
+      });
+    } else {
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
+    const queuedBehindActiveRun = isRunActive?.() === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
       await typingSignals.signalToolStart();
@@ -1405,6 +1437,9 @@ export async function runReplyAgent(params: {
   let replyOperation: ReplyOperation;
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "owned" };
+    }
   } else {
     const replyTurnKind = resolveReplyTurnKind(opts);
     const admission = await admitReplyTurn({
@@ -1415,6 +1450,12 @@ export async function runReplyAgent(params: {
       routeThreadId: replyRouteThreadId,
       upstreamAbortSignal: opts?.abortSignal,
     });
+    if (replyOperationRunState) {
+      replyOperationRunState.admission =
+        admission.status === "owned"
+          ? { status: "owned" }
+          : { status: "skipped", reason: admission.reason };
+    }
     if (admission.status === "skipped") {
       typing.cleanup();
       if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
@@ -1449,19 +1490,6 @@ export async function runReplyAgent(params: {
   const returnWithQueuedFollowupDrain = <T>(value: T): T => {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
-  };
-  const drainQueuedFollowupsAfterClear = (admissionSessionId: string) => {
-    const completedSessionId = replyOperation.sessionId;
-    const runFollowupAfterClear =
-      admissionSessionId === completedSessionId
-        ? runFollowupTurn
-        : (queued: FollowupRun) =>
-            runFollowupTurn(
-              queued.run.sessionId === completedSessionId
-                ? { ...queued, admissionSessionId }
-                : queued,
-            );
-    scheduleFollowupDrain(queueKey, runFollowupAfterClear);
   };
   const restartRecoveryDeliveryRunId = crypto.randomUUID();
   let trackedRestartRecoveryDeliveryContext = false;
@@ -2611,10 +2639,13 @@ export async function runReplyAgent(params: {
       );
     }
     if (shouldDrainQueuedFollowupsAfterClear) {
-      if (providedReplyOperation) {
-        runAfterReplyOperationClear(replyOperation, drainQueuedFollowupsAfterClear);
-      } else {
-        replyOperation.completeThen(() => drainQueuedFollowupsAfterClear(replyOperation.sessionId));
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: replyOperation,
+        queueKey,
+        runFollowup: runFollowupTurn,
+      });
+      if (!providedReplyOperation) {
+        replyOperation.complete();
       }
     } else if (!providedReplyOperation) {
       replyOperation.complete();

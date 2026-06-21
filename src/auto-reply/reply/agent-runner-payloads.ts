@@ -1,5 +1,8 @@
 /** Builds final reply payloads after sanitization, media normalization, and dedupe. */
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
@@ -375,7 +378,20 @@ export async function buildReplyPayloads(params: {
     }
     const reply = resolveSendableOutboundReplyParts(payload);
     if (!reply.hasMedia) {
-      return null;
+      // Aggregate coverage suppresses plain text split across streamed blocks; rich content needs
+      // exact evidence. Partial coverage cannot safely reconstruct a formatted remainder, so
+      // preserve the complete final rather than silently truncate it.
+      const hasRichContent = hasOutboundReplyContent(
+        { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },
+        { trimText: true },
+      );
+      const wasSent = hasRichContent
+        ? params.blockReplyPipeline?.hasSentExactPayload?.(payload)
+        : params.blockReplyPipeline?.hasSentPayload(payload);
+      if (wasSent) {
+        return null;
+      }
+      return payload;
     }
     if (!reply.trimmedText) {
       return payload;

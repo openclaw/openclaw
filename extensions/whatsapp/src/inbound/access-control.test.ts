@@ -71,10 +71,16 @@ async function checkCommandAuthorizedForDm(params: {
         senderE164: params.senderE164 ?? params.from ?? "+15550001111",
         selfE164: params.selfE164 ?? "+15550009999",
       },
-      accountId: params.accountId ?? "work",
-      chatType: "direct",
-      from: params.from ?? "+15550001111",
-      conversationId: params.from ?? "+15550001111",
+      admission: {
+        accountId: params.accountId ?? "work",
+        conversation: {
+          kind: "direct",
+          id: params.from ?? "+15550001111",
+        },
+        sender: {
+          id: params.senderE164 ?? params.from ?? "+15550001111",
+        },
+      },
     }) as never,
   });
 }
@@ -97,10 +103,19 @@ async function checkCommandAuthorizedForGroup(params: {
         senderE164: params.senderE164 ?? "+15550001111",
         selfE164: params.selfE164 ?? "+15550009999",
       },
-      accountId: params.accountId ?? "work",
-      chatType: "group",
-      from: params.from ?? "120363401234567890@g.us",
-      conversationId: params.from ?? "120363401234567890@g.us",
+      admission: {
+        accountId: params.accountId ?? "work",
+        conversation: {
+          kind: "group",
+          id: params.from ?? "120363401234567890@g.us",
+        },
+        sender: {
+          id: params.senderE164 ?? "+15550001111",
+        },
+        senderAccess: {
+          reasonCode: "group_policy_allowed",
+        },
+      },
     }) as never,
   });
 }

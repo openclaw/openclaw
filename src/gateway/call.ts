@@ -33,6 +33,7 @@ import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.j
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
+  type GatewayClientCloseInfo,
   type GatewayClientOptions,
   type GatewayClientRequestOptions,
 } from "./client.js";
@@ -97,10 +98,6 @@ type CallGatewayBaseOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
-};
-
-export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
-  scopes: OperatorScope[];
 };
 
 export type CallGatewayCliOptions = CallGatewayBaseOptions & {
@@ -451,10 +448,6 @@ export const testing = {
       deps?.loadGatewayTlsRuntime ?? defaultGatewayCallDeps.loadGatewayTlsRuntime;
     gatewayCallDeps.loadDeviceAuthToken =
       deps?.loadDeviceAuthToken ?? defaultGatewayCallDeps.loadDeviceAuthToken;
-  },
-  setCreateGatewayClientForTests(createGatewayClient?: typeof defaultCreateGatewayClient): void {
-    gatewayCallDeps.createGatewayClient =
-      createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
   },
   resetDepsForTests(): void {
     gatewayCallDeps.createGatewayClient = defaultGatewayCallDeps.createGatewayClient;
@@ -917,6 +910,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     let ignoreClose = false;
     const startAbort = new AbortController();
     let primaryRequestStarted = false;
+    let suppressedPreHelloCleanCloses = 0;
     const cleanup = () => {
       startAbort.abort();
       if (abortHandler) {
@@ -1019,8 +1013,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
           }
         })();
       },
-      onClose: (code, reason) => {
+      onClose: (code, reason, info?: GatewayClientCloseInfo) => {
         if (settled || ignoreClose) {
+          return;
+        }
+        if (
+          !primaryRequestStarted &&
+          info?.transientPreHelloCleanClose === true &&
+          suppressedPreHelloCleanCloses < 1
+        ) {
+          suppressedPreHelloCleanCloses += 1;
           return;
         }
         ignoreClose = true;
@@ -1223,12 +1225,6 @@ export async function buildGatewayProbeConnectionDetails(
       ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
       : {}),
   };
-}
-
-export async function callGatewayScoped<T = Record<string, unknown>>(
-  opts: CallGatewayScopedOptions,
-): Promise<T> {
-  return await callGatewayWithScopes(opts, opts.scopes);
 }
 
 export async function callGatewayCli<T = Record<string, unknown>>(

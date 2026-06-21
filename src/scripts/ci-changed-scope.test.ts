@@ -374,15 +374,6 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
-    expect(detectChangedScope(["src/plugins/import-specifier.test.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: true,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-    });
     expect(detectChangedScope(["scripts/npm-runner.mjs"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -689,7 +680,6 @@ describe("detectChangedScope", () => {
   it("identifies CI routing changes as fast Node-only CI scope", () => {
     expect(
       detectNodeFastScope([
-        ".github/workflows/ci.yml",
         "scripts/check-changed.mjs",
         "scripts/ci-changed-scope.mjs",
         "scripts/run-vitest.mjs",
@@ -705,6 +695,14 @@ describe("detectChangedScope", () => {
       runFastOnly: true,
       runPluginContracts: false,
       runCiRouting: true,
+    });
+  });
+
+  it("keeps CI workflow edits off fast-only scope so native lanes can run", () => {
+    expect(detectNodeFastScope([".github/workflows/ci.yml"])).toEqual({
+      runFastOnly: false,
+      runPluginContracts: false,
+      runCiRouting: false,
     });
   });
 

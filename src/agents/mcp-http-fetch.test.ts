@@ -1,4 +1,5 @@
 import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 /**
  * Regression coverage for MCP HTTP fetch wrappers.
  * Verifies SSRF-guarded fetch, scoped dispatcher behavior, and same-origin headers.
@@ -9,7 +10,6 @@ import {
   buildMcpHttpFetch,
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
-  type FetchLike,
 } from "./mcp-http-fetch.js";
 
 const testGlobal = globalThis as Record<string, unknown>;

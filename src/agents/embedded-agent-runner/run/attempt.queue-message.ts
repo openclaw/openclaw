@@ -15,7 +15,7 @@ export type EmbeddedAgentActiveSessionSteerTarget = {
 };
 
 /** Default wait for a steered user message to appear in the active transcript. */
-export const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
+const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
 function extractQueuedUserMessageText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
