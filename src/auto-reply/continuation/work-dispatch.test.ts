@@ -44,9 +44,13 @@ vi.mock("../../sessions/session-key-utils.js", () => ({
     return match ? { agentId: match[1] } : undefined;
   },
   isSubagentSessionKey: (sessionKey: string) => {
-    if (typeof sessionKey !== "string" || sessionKey.length === 0) return false;
+    if (typeof sessionKey !== "string" || sessionKey.length === 0) {
+      return false;
+    }
     const lower = sessionKey.toLowerCase();
-    if (lower.startsWith("subagent:")) return true;
+    if (lower.startsWith("subagent:")) {
+      return true;
+    }
     return lower.replace(/^agent:[^:]+:/, "").startsWith("subagent:");
   },
 }));
