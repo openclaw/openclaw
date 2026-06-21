@@ -101,10 +101,11 @@ imsg send --to "+14155551212" --text "Hi" --service sms
 
 ## Safety Rules
 
-1. **Always confirm recipient and message content** before sending
-2. **Never send to unknown numbers** without explicit user approval
-3. **Be careful with attachments** - confirm file path exists
-4. **Rate limit yourself** - don't spam
+1. **Resolve first, send second** - show phone/chat ID, service, text, and attachments
+2. **Wait for explicit approval of the shown preview** before `imsg send`
+3. **Never send to unknown numbers** unless the user approves the resolved number
+4. **Be careful with attachments** - confirm each file path exists
+5. **Rate limit yourself** - don't spam
 
 ## Example Workflow
 
