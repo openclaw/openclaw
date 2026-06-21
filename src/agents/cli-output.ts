@@ -45,6 +45,8 @@ export type CliOutput = {
     process?: CliProcessDiagnostics;
   };
   finalPromptText?: string;
+  /** True when the turn emitted tool_use blocks; distinguishes tool-only turns from empty replies. */
+  hadToolCalls?: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTexts?: string[];
@@ -526,6 +528,39 @@ function isClaudeToolUseBlockType(type: unknown): boolean {
   return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
 }
 
+function usesClaudeStreamJsonDialect(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+}): boolean {
+  return (
+    params.backend.jsonlDialect === "claude-stream-json" || isClaudeCliProvider(params.providerId)
+  );
+}
+
+function claudeRecordHasToolUseBlock(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+}): boolean {
+  if (!usesClaudeStreamJsonDialect(params)) {
+    return false;
+  }
+  const parsed = params.parsed;
+  if (parsed.type === "stream_event" && isRecord(parsed.event)) {
+    const event = parsed.event;
+    return (
+      event.type === "content_block_start" &&
+      isRecord(event.content_block) &&
+      isClaudeToolUseBlockType(event.content_block.type)
+    );
+  }
+  if (parsed.type === "assistant" && isRecord(parsed.message)) {
+    const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+    return content.some((block) => isRecord(block) && isClaudeToolUseBlockType(block.type));
+  }
+  return false;
+}
+
 function isClaudeAssistantToolResultBlockType(type: unknown): boolean {
   return typeof type === "string" && type.endsWith("_tool_result") && type !== "tool_result";
 }
@@ -750,6 +785,7 @@ export function createCliJsonlStreamingParser(params: {
 }) {
   let lineBuffer = "";
   let assistantText = "";
+  let sawToolUse = false;
   let pendingClaudeText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
@@ -815,6 +851,16 @@ export function createCliJsonlStreamingParser(params: {
       return;
     }
 
+    if (
+      claudeRecordHasToolUseBlock({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+      })
+    ) {
+      sawToolUse = true;
+    }
+
     if (classifyClaudeCommentary && parsed.type === "result") {
       flushPendingClaudeAssistantText();
     }
@@ -827,7 +873,12 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (result) {
-      output = result;
+      // Claude may finish with an empty result even though assistant text was
+      // streamed (or the turn was tool-only). Preserve the accumulated text
+      // instead of dropping it, mirroring how session metadata is kept.
+      output = result.text
+        ? result
+        : { ...result, text: assistantText || texts.join("\n").trim(), hadToolCalls: sawToolUse };
       return;
     }
 
@@ -985,6 +1036,8 @@ export function parseCliJsonl(
   }
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  let assistantText = "";
+  let sawToolUse = false;
   const texts: string[] = [];
   let geminiText = "";
   let geminiErrorText: string | undefined;
@@ -999,6 +1052,10 @@ export function parseCliJsonl(
       const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
       if (shouldUseUsage) {
         usage = nextUsage ?? usage;
+      }
+
+      if (claudeRecordHasToolUseBlock({ backend, providerId, parsed })) {
+        sawToolUse = true;
       }
 
       if (isGeminiStreamJsonDialect({ backend, providerId })) {
@@ -1034,7 +1091,17 @@ export function parseCliJsonl(
         usage,
       });
       if (claudeResult) {
-        return claudeResult;
+        if (claudeResult.text) {
+          return claudeResult;
+        }
+        // Claude may finish with an empty result even though assistant text was
+        // streamed (or the turn was tool-only). Preserve the accumulated text
+        // instead of dropping it, mirroring how session metadata is kept.
+        return {
+          ...claudeResult,
+          text: assistantText || texts.join("\n").trim(),
+          hadToolCalls: sawToolUse,
+        };
       }
 
       const item = isRecord(parsed.item) ? parsed.item : null;
@@ -1043,6 +1110,18 @@ export function parseCliJsonl(
         if (!type || type.includes("message")) {
           texts.push(item.text);
         }
+      }
+
+      const delta = parseClaudeCliStreamingDelta({
+        backend,
+        providerId,
+        parsed,
+        textSoFar: assistantText,
+        sessionId,
+        usage,
+      });
+      if (delta) {
+        assistantText = delta.text;
       }
     }
   }

@@ -659,6 +659,7 @@ describe("parseCliJsonl", () => {
     expect(result).toEqual({
       text: "",
       sessionId: "session-456",
+      hadToolCalls: false,
       usage: {
         input: 18,
         output: undefined,
@@ -666,6 +667,88 @@ describe("parseCliJsonl", () => {
         cacheWrite: undefined,
         total: undefined,
       },
+    });
+  });
+
+  it("preserves streamed assistant text when the final result text is empty", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-456" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Hello" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: " world" },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-456",
+          result: "",
+          usage: {
+            input_tokens: 18,
+            output_tokens: 4,
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Hello world",
+      sessionId: "session-456",
+      hadToolCalls: false,
+      usage: {
+        input: 18,
+        output: 4,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+
+  it("flags tool-only turns when the final result text is empty", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-456" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [{ type: "tool_use", id: "tool-1", name: "read_file", input: {} }],
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-456",
+          result: "",
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-456",
+      hadToolCalls: true,
+      usage: undefined,
     });
   });
 
@@ -785,6 +868,86 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+  });
+
+  it("preserves streamed deltas when the final result event has empty text", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "hello" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: " world" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-stream", result: "" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "hello world",
+      sessionId: "session-stream",
+      hadToolCalls: false,
+      usage: undefined,
+    });
+  });
+
+  it("flags tool-only turns when the final result event has empty text", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "tool-1", name: "read_file" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-stream", result: "" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: "session-stream",
+      hadToolCalls: true,
+      usage: undefined,
+    });
   });
 
   it("streams Gemini message deltas and tool events", () => {

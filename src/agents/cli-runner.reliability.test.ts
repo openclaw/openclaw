@@ -162,14 +162,16 @@ function buildPreparedContext(params?: {
   model?: string;
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
   allowEmptyAssistantReplyAsSilent?: boolean;
+  backendOutput?: "text" | "jsonl";
 }): PreparedCliRunContext {
   // Common prepared context fixture for runPreparedCliAgent reliability branches.
   const provider = params?.provider ?? "codex-cli";
   const model = params?.model ?? "gpt-5.4";
+  const useJsonl = params?.backendOutput === "jsonl";
   const backend = {
-    command: "codex",
-    args: ["exec", "--json"],
-    output: "text" as const,
+    command: useJsonl ? "claude" : "codex",
+    args: useJsonl ? ["-p", "--output-format", "stream-json", "--verbose"] : ["exec", "--json"],
+    output: useJsonl ? ("jsonl" as const) : ("text" as const),
     input: "arg" as const,
     modelArg: "--model",
     sessionMode: "existing" as const,
@@ -293,6 +295,20 @@ function readTranscriptMessages(sessionFile: string): unknown[] {
 
 const CLI_RESEED_PROMPT =
   "Continue this conversation using the OpenClaw transcript below as prior session history.\n\n<conversation_history>\nUser: earlier context\n</conversation_history>\n\n<next_user_message>\nhi\n</next_user_message>";
+
+// Claude stream-json transcript for a verifiably tool-only turn: a tool_use
+// block followed by an empty final result. Parses to { text: "", hadToolCalls:
+// true } so the runner exercises the empty tool-only fallback policy.
+const TOOL_ONLY_EMPTY_JSONL = [
+  JSON.stringify({ type: "init", session_id: "tool-only-session" }),
+  JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [{ type: "tool_use", id: "tool-1", name: "read_file", input: {} }],
+    },
+  }),
+  JSON.stringify({ type: "result", session_id: "tool-only-session", result: "" }),
+].join("\n");
 
 describe("runCliAgent reliability", () => {
   afterEach(() => {
@@ -2875,6 +2891,70 @@ describe("runCliAgent reliability", () => {
       buildPreparedContext({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
+        allowEmptyAssistantReplyAsSilent: true,
+      }),
+    );
+
+    expect(result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+    expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
+    expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
+  });
+
+  it("fails over empty tool-only CLI output when silence is not allowed", async () => {
+    // A verifiably tool-only Claude turn (tool_use block, empty final result)
+    // must still fail over when the caller did not opt into silent replies, so
+    // existing fallback chains are not silently swallowed.
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: TOOL_ONLY_EMPTY_JSONL,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await expect(
+      runPreparedCliAgent(
+        buildPreparedContext({
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          backendOutput: "jsonl",
+        }),
+      ),
+    ).rejects.toThrow("CLI backend returned an empty response.");
+  });
+
+  it("returns silent payload for empty tool-only CLI output when silence is allowed", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: TOOL_ONLY_EMPTY_JSONL,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        backendOutput: "jsonl",
         allowEmptyAssistantReplyAsSilent: true,
       }),
     );
