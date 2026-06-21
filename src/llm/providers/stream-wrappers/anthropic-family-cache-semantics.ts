@@ -104,6 +104,14 @@ export function resolveAnthropicCacheRetentionFamily(params: {
     }
   }
   if (
+    normalizedProvider === "litellm" &&
+    params.hasExplicitCacheConfig &&
+    typeof params.modelId === "string" &&
+    isLiteLLMAnthropicModel(params.modelId)
+  ) {
+    return "custom-anthropic-api";
+  }
+  if (
     normalizedProvider !== "amazon-bedrock" &&
     params.hasExplicitCacheConfig &&
     params.modelApi === "anthropic-messages"
