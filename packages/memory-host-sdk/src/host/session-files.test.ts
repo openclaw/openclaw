@@ -926,6 +926,31 @@ describe("loadSessionTranscriptClassificationForSessionsDir", () => {
     expect(result.cronRunTranscriptPaths.size).toBe(0);
   });
 
+  it("classifies a subagent as cron-run when spawnedBy is a cron-run key without parent entry", () => {
+    // Regression test for the missing-parent lineage gap: a subagent whose
+    // spawnedBy key matches isCronRunSessionKey should be classified as
+    // cron-descended even when the parent cron row has been pruned or was
+    // never in the store. See PR #93187 review.
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const subSession = path.join(sessionsDir, "orphan-sub.jsonl");
+    fsSync.writeFileSync(subSession, "");
+
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:subagent:orphan-uuid": {
+          sessionFile: subSession,
+          spawnedBy: "agent:main:cron:job-1:run:run-42",
+        },
+      }),
+    );
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    expect(result.cronRunTranscriptPaths.size).toBe(1);
+    expect(result.dreamingNarrativeTranscriptPaths.size).toBe(0);
+  });
+
   it("handles cycles in spawnedBy chain without infinite loop", () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });

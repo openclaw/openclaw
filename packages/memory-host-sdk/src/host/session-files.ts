@@ -298,6 +298,13 @@ export function loadSessionTranscriptClassificationForSessionsDir(
     // Mark as not-yet-resolved to guard against cycles.
     cronCache.set(sessionKey, false);
     if (typeof entry.spawnedBy === "string" && entry.spawnedBy.trim().length > 0) {
+      // Check the spawnedBy key directly before requiring a parent store entry:
+      // a subagent whose spawnedBy is already a cron-run key is cron-descended
+      // even when the parent row has been pruned or was never in this store.
+      if (isCronRunSessionKey(entry.spawnedBy)) {
+        cronCache.set(sessionKey, true);
+        return true;
+      }
       const parentEntry = store[entry.spawnedBy];
       if (parentEntry) {
         const result = isCronSession(entry.spawnedBy, parentEntry);
