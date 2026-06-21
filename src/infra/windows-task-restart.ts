@@ -10,6 +10,7 @@ import { resolveTaskScriptPath } from "../daemon/schtasks.js";
 import { formatErrorMessage } from "./errors.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import { getWindowsCmdExePath } from "./windows-install-roots.js";
 
 const TASK_RESTART_RETRY_LIMIT = 12;
 const TASK_RESTART_RETRY_DELAY_SEC = 1;
@@ -61,7 +62,12 @@ function buildScheduledTaskRestartScript(params: {
   ];
   if (taskScriptPath) {
     const quotedScript = quoteCmdScriptArg(taskScriptPath);
-    lines.push(`if exist ${quotedScript} (`, `  start "" /min cmd.exe /d /c ${quotedScript}`, ")");
+    const quotedCmd = quoteCmdScriptArg(getWindowsCmdExePath());
+    lines.push(
+      `if exist ${quotedScript} (`,
+      `  start "" /min ${quotedCmd} /d /c ${quotedScript}`,
+      ")",
+    );
   }
   lines.push(
     ":cleanup",
@@ -91,7 +97,8 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
       })}\r\n`,
       "utf8",
     );
-    const child = spawn("cmd.exe", ["/d", "/s", "/c", quotedScriptPath], {
+    const cmdExePath = getWindowsCmdExePath();
+    const child = spawn(cmdExePath, ["/d", "/s", "/c", quotedScriptPath], {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
@@ -100,7 +107,7 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
     return {
       ok: true,
       method: "schtasks",
-      tried: [`schtasks /Run /TN "${taskName}"`, `cmd.exe /d /s /c ${quotedScriptPath}`],
+      tried: [`schtasks /Run /TN "${taskName}"`, `${cmdExePath} /d /s /c ${quotedScriptPath}`],
     };
   } catch (err) {
     try {

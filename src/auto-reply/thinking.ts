@@ -268,11 +268,6 @@ function supportsThinkingLevel(
   );
 }
 
-/** Return whether provider/model supports the xhigh thinking level. */
-export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  return supportsThinkingLevel(provider, model, "xhigh");
-}
-
 /** List thinking level ids supported by provider/model. */
 export function listThinkingLevels(
   provider?: string | null,

@@ -91,6 +91,23 @@ cleanup_dmg() {
 }
 trap cleanup_dmg EXIT
 
+detach_dmg() {
+  local attempt
+  for attempt in {1..15}; do
+    if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
+      MOUNTED=0
+      return
+    fi
+    if (( attempt >= 3 )) && hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
+      MOUNTED=0
+      return
+    fi
+    # Finder can retain the just-closed volume briefly on macOS runners.
+    sleep 2
+  done
+  return 1
+}
+
 mkdir -p "$DMG_SOURCE" "$MOUNT_POINT"
 cp -R "$APP_PATH" "$DMG_SOURCE/"
 ln -s /Applications "$DMG_SOURCE/Applications"
@@ -161,20 +178,7 @@ end tell
 EOF
 fi
 
-for i in {1..5}; do
-  if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
-    MOUNTED=0
-    break
-  fi
-  if [[ "$i" == "3" ]]; then
-    if hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
-      MOUNTED=0
-      break
-    fi
-  fi
-  sleep 2
-done
-if [[ "$MOUNTED" == "1" ]]; then
+if ! detach_dmg; then
   echo "Error: Failed to detach DMG mount: $MOUNT_POINT" >&2
   exit 1
 fi

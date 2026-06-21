@@ -4,6 +4,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+  getWindowsWmicExePath,
+} from "./windows-install-roots.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -21,7 +26,7 @@ export type WindowsProcessArgsResult =
 
 function readListeningPidsViaPowerShell(port: number, timeoutMs: number): number[] | null {
   const ps = spawnSync(
-    "powershell",
+    getWindowsPowerShellExePath(),
     [
       "-NoProfile",
       "-Command",
@@ -71,7 +76,7 @@ export function readWindowsListeningPidsResultSync(
   if (powershellPids != null) {
     return { ok: true, pids: powershellPids };
   }
-  const netstat = spawnSync("netstat", ["-ano", "-p", "tcp"], {
+  const netstat = spawnSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano", "-p", "tcp"], {
     encoding: "utf8",
     timeout: timeoutMs,
     windowsHide: true,
@@ -115,7 +120,7 @@ export function readWindowsProcessArgsResultSync(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): WindowsProcessArgsResult {
   const powershell = spawnSync(
-    "powershell",
+    getWindowsPowerShellExePath(),
     [
       "-NoProfile",
       "-Command",
@@ -132,7 +137,7 @@ export function readWindowsProcessArgsResultSync(
     return { ok: true, args: command ? parseCmdScriptCommandLine(command) : null };
   }
   const wmic = spawnSync(
-    "wmic",
+    getWindowsWmicExePath(),
     ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
     {
       encoding: "utf8",

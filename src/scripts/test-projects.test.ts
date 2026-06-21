@@ -887,7 +887,6 @@ describe("test-projects args", () => {
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
-          "test/scripts/openai-chat-tools-client.test.ts",
           "test/scripts/parallels-smoke-model.test.ts",
           "test/scripts/plugins-assertions.test.ts",
           "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
@@ -918,6 +917,7 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts",
           "test/openclaw-launcher.e2e.test.ts",
         ],
         includePatterns: null,
@@ -1020,12 +1020,12 @@ describe("test-projects args", () => {
     ).toStrictEqual([]);
   });
 
-  it("routes auth setup script changes to the focused tooling planner test", () => {
+  it("routes auth setup script changes to the focused auth monitor test", () => {
     const changedPaths = ["scripts/setup-auth-system.sh"];
 
     expect(resolveChangedTestTargetPlan(changedPaths)).toEqual({
       mode: "targets",
-      targets: ["test/scripts/test-projects.test.ts"],
+      targets: ["test/scripts/auth-monitor.test.ts"],
     });
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
@@ -1033,7 +1033,7 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/test-projects.test.ts"],
+        includePatterns: ["test/scripts/auth-monitor.test.ts"],
         watchMode: false,
       },
     ]);
