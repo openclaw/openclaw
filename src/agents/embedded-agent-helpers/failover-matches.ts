@@ -107,9 +107,6 @@ const ERROR_PATTERNS = {
     // Chinese provider overloaded messages
     "服务过载",
     "当前负载过高",
-    // Zhipu (GLM) overload contract: code 1305 ships a 200 body
-    // "该模型当前访问量过大，请您稍后再试" (model traffic too high); the
-    // distinctive phrase is the overload signal failover keys on (#93211).
     "访问量过大",
   ],
   serverError: [
