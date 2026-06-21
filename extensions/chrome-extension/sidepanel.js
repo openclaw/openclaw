@@ -604,22 +604,26 @@ async function deliverTurn(text) {
   // subscription on the same sessionKey. Fall back to a direct gateway turn if
   // no node is hosting the bridge.
   let routedThroughNode = false;
-  let nodeFallbackAllowed = true;
+  // Require a POSITIVE gateway-only signal (fallbackAllowed === true) before any
+  // direct (unconfined) send. Default closed so a node-confined turn never
+  // silently drops gateway.tools.byNode confinement.
+  let directFallbackAllowed = false;
   try {
     const nodeRes = await chrome.runtime.sendMessage({ type: "nodeTurn", message: sendText, sessionKey });
     routedThroughNode = !!(nodeRes && nodeRes.ok);
-    // Only fall back to a direct (unconfined) gateway turn when no node hosts
-    // the bridge. If a node WAS hosting (a node-confined turn is expected) and
-    // routing failed, fail closed rather than silently dropping the
-    // gateway.tools.byNode confinement.
-    if (nodeRes && nodeRes.ok === false && nodeRes.fallbackAllowed === false) {
-      nodeFallbackAllowed = false;
+    // Only fall back to a direct gateway turn when the background worker
+    // POSITIVELY reports a gateway-only intake (fallbackAllowed === true). A
+    // node-hosted intake (fallbackAllowed === false) OR a rejected
+    // chrome.runtime.sendMessage (caught below) leaves this false, so the turn
+    // fails closed instead of running unconfined.
+    if (nodeRes && nodeRes.ok === false && nodeRes.fallbackAllowed === true) {
+      directFallbackAllowed = true;
     }
   } catch {
-    // background/relay unavailable — fall through to a direct gateway turn.
+    // background worker/relay unreachable: unknown intake, fail closed (no direct send).
   }
   if (!routedThroughNode) {
-    if (!nodeFallbackAllowed) {
+    if (!directFallbackAllowed) {
       addMessage(
         "system",
         "Couldn't reach the hosting node, so this node-confined turn was not sent (it would otherwise run with the unrestricted gateway tool surface). Reconnect the node and retry.",
