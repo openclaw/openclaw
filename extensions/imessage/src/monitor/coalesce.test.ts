@@ -175,6 +175,17 @@ describe("isStandaloneIMessageUrlPreviewPayload", () => {
     ).toBe(true);
   });
 
+  it("matches scheme-less www URL preview rows", () => {
+    expect(
+      isStandaloneIMessageUrlPreviewPayload(
+        makePayload({
+          text: "www.example.com/article",
+          balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("does not match already-complete URL balloon messages with text context", () => {
     expect(
       isStandaloneIMessageUrlPreviewPayload(

@@ -26,6 +26,9 @@ function isSingleUrlToken(text: string): boolean {
   if (/\s/.test(text)) {
     return false;
   }
+  if (/^www\.[^\s.]+\.[^\s]+$/i.test(text)) {
+    return true;
+  }
   try {
     const url = new URL(text);
     return url.protocol === "http:" || url.protocol === "https:";
