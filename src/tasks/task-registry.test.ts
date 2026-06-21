@@ -1785,7 +1785,9 @@ describe("task-registry", () => {
           "Required completion ended with progress-only text, not a final deliverable.",
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
 
       expectRecordFields(requireTaskByRunId("run-subagent-progress-only"), {
         status: "succeeded",
