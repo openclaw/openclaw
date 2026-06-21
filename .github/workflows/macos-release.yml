@@ -17,6 +17,26 @@ on:
         required: false
         default: main
         type: string
+      release_sha:
+        description: Exact 40-character release tag commit authenticated by npm preflight evidence
+        required: true
+        type: string
+      verifier_run_id:
+        description: Completed npm preflight verifier producer run id
+        required: true
+        type: string
+      verifier_run_attempt:
+        description: Completed npm preflight verifier producer run attempt
+        required: true
+        type: string
+      verifier_artifact_name:
+        description: Attempt-qualified tag-preflight verifier artifact name
+        required: true
+        type: string
+      verifier_payload_sha256:
+        description: SHA-256 of the exact tag-preflight verifier payload bytes
+        required: true
+        type: string
 
 concurrency:
   group: macos-release-${{ inputs.tag }}
@@ -30,8 +50,112 @@ jobs:
   validate_macos_release_request:
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     steps:
+      - name: Authenticate npm tag-preflight verifier evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          PUBLIC_RELEASE_BRANCH: ${{ inputs.public_release_branch }}
+          VERIFIER_RUN_ID: ${{ inputs.verifier_run_id }}
+          VERIFIER_RUN_ATTEMPT: ${{ inputs.verifier_run_attempt }}
+          VERIFIER_ARTIFACT_NAME: ${{ inputs.verifier_artifact_name }}
+          VERIFIER_PAYLOAD_SHA256: ${{ inputs.verifier_payload_sha256 }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_sha must be 40 lowercase hexadecimal characters." >&2
+            exit 1
+          fi
+          if [[ ! "$VERIFIER_RUN_ID" =~ ^[1-9][0-9]*$ || ! "$VERIFIER_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Verifier producer run id and attempt must be positive decimal strings." >&2
+            exit 1
+          fi
+          if [[ ! "$VERIFIER_PAYLOAD_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Verifier payload digest must be 64 lowercase hexadecimal characters." >&2
+            exit 1
+          fi
+          if [[ "$PUBLIC_RELEASE_BRANCH" != "main" && ! "$PUBLIC_RELEASE_BRANCH" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && ! "$PUBLIC_RELEASE_BRANCH" =~ ^stable/[0-9]{4}\.[1-9][0-9]*\.33$ ]]; then
+            echo "public_release_branch must be main, release/YYYY.M.PATCH, or stable/YYYY.M.33, got ${PUBLIC_RELEASE_BRANCH}." >&2
+            exit 1
+          fi
+
+          evidence_root="$RUNNER_TEMP/openclaw-macos-tag-preflight"
+          rm -rf "$evidence_root"
+          mkdir -p "$evidence_root/payload"
+          producer_json="$evidence_root/producer.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${VERIFIER_RUN_ID}" > "$producer_json"
+          jq -e \
+            --arg id "$VERIFIER_RUN_ID" \
+            --arg attempt "$VERIFIER_RUN_ATTEMPT" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            '(.id | tostring) == $id and
+             (.run_attempt | tostring) == $attempt and
+             .repository.full_name == $repository and
+             .event == "workflow_dispatch" and
+             .path == ".github/workflows/openclaw-npm-release.yml" and
+             .status == "completed" and
+             .conclusion == "success"' \
+            "$producer_json" >/dev/null
+
+          artifacts_json="$evidence_root/artifacts.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${VERIFIER_RUN_ID}/artifacts?per_page=100" > "$artifacts_json"
+          artifact_count="$(jq --arg name "$VERIFIER_ARTIFACT_NAME" '[.artifacts[] | select(.name == $name and .expired == false)] | length' "$artifacts_json")"
+          if [[ "$artifact_count" != "1" ]]; then
+            echo "Expected exactly one unexpired verifier artifact named ${VERIFIER_ARTIFACT_NAME}; found ${artifact_count}." >&2
+            exit 1
+          fi
+          gh run download "$VERIFIER_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "$VERIFIER_ARTIFACT_NAME" --dir "$evidence_root/payload"
+          mapfile -t payload_files < <(find "$evidence_root/payload" -type f -print)
+          verifier_payload="$evidence_root/payload/release-operation-verifier-v1.json"
+          if [[ "${#payload_files[@]}" != "1" || "${payload_files[0]}" != "$verifier_payload" ]]; then
+            echo "Verifier artifact must contain exactly one release-operation-verifier-v1.json and no extra payload." >&2
+            exit 1
+          fi
+          if [[ "$(sha256sum "$verifier_payload" | awk '{print $1}')" != "$VERIFIER_PAYLOAD_SHA256" ]]; then
+            echo "Verifier payload digest mismatch." >&2
+            exit 1
+          fi
+
+          PRODUCER_JSON="$producer_json" VERIFIER_PAYLOAD="$verifier_payload" node <<'NODE'
+          const { readFileSync } = require("node:fs");
+          const producer = JSON.parse(readFileSync(process.env.PRODUCER_JSON, "utf8"));
+          const payload = JSON.parse(readFileSync(process.env.VERIFIER_PAYLOAD, "utf8"));
+          const fail = (message) => { throw new Error(message); };
+          const closed = (value, keys, label) => {
+            if (value === null || typeof value !== "object" || Array.isArray(value)) fail(`${label} must be an object`);
+            const actual = Object.keys(value).sort();
+            const expected = [...keys].sort();
+            if (JSON.stringify(actual) !== JSON.stringify(expected)) fail(`${label} has unknown or missing fields`);
+          };
+          const sha = /^[0-9a-f]{40}$/;
+          const digest = /^[0-9a-f]{64}$/;
+          closed(payload, ["schemaVersion", "ok", "operation", "releaseVersion", "releaseClass", "releaseSelector", "policyMode", "policySource", "execution", "target"], "verifier payload");
+          closed(payload.policySource, ["sha", "blobs"], "policySource");
+          closed(payload.policySource.blobs, ["releaseVersionPolicySha256", "stableReleaseLinesModuleSha256", "verifyReleaseOperationSha256", "stableLinesSha256"], "policySource.blobs");
+          closed(payload.execution, ["event", "workflowPath", "executionRef", "runHeadSha", "runId", "runAttempt"], "execution");
+          closed(payload.target, ["targetRef", "targetSha", "releaseTag", "authorizedSourceRef", "authorizedSourceTipSha", "targetReachableFromAuthorizedSource"], "target");
+          if (payload.schemaVersion !== 1 || payload.ok !== true || payload.operation !== "tag-preflight") fail("expected successful tag-preflight verifier v1 evidence");
+          if (payload.policyMode === "legacy") {
+            if (payload.releaseSelector !== null) fail("legacy verifier evidence must use a null selector");
+          } else if (payload.policyMode !== "strict" || !["alpha", "beta", "daily", "stable"].includes(payload.releaseSelector)) {
+            fail("invalid verifier selector policy");
+          }
+          const selectorClass = payload.releaseClass === "stable-base" || payload.releaseClass === "stable-patch" ? "stable" : payload.releaseClass;
+          if (payload.policyMode === "strict" && selectorClass !== payload.releaseSelector) fail("verifier selector and release class mismatch");
+          if (!sha.test(payload.policySource.sha) || !digest.test(payload.policySource.blobs.releaseVersionPolicySha256) || !digest.test(payload.policySource.blobs.stableReleaseLinesModuleSha256) || !digest.test(payload.policySource.blobs.verifyReleaseOperationSha256)) fail("invalid verifier policy source digests");
+          const stableDigest = payload.policySource.blobs.stableLinesSha256;
+          if ((selectorClass === "stable" && !digest.test(stableDigest)) || (selectorClass !== "stable" && stableDigest !== null)) fail("stable-lines digest applicability mismatch");
+          const expectedSourceRef = `refs/heads/${process.env.PUBLIC_RELEASE_BRANCH}`;
+          if (payload.execution.event !== "workflow_dispatch" || payload.execution.workflowPath !== ".github/workflows/openclaw-npm-release.yml" || payload.execution.runId !== process.env.VERIFIER_RUN_ID || payload.execution.runAttempt !== process.env.VERIFIER_RUN_ATTEMPT || payload.execution.runHeadSha !== producer.head_sha || payload.execution.executionRef !== expectedSourceRef) fail("verifier execution does not equal authenticated npm preflight run");
+          if (payload.releaseVersion !== process.env.RELEASE_TAG.slice(1) || payload.target.targetRef !== `refs/tags/${process.env.RELEASE_TAG}` || payload.target.targetSha !== process.env.RELEASE_SHA || payload.target.releaseTag !== process.env.RELEASE_TAG || payload.target.authorizedSourceRef !== expectedSourceRef || !sha.test(payload.target.authorizedSourceTipSha) || payload.target.targetReachableFromAuthorizedSource !== true) fail("tag-preflight target does not equal macOS dispatch target");
+          const expectedArtifact = `release-operation-verifier-v1-tag-preflight-${payload.releaseVersion}-${process.env.VERIFIER_RUN_ID}-${process.env.VERIFIER_RUN_ATTEMPT}`;
+          if (process.env.VERIFIER_ARTIFACT_NAME !== expectedArtifact) fail("verifier artifact name is not attempt-qualified for the payload");
+          NODE
+
       - name: Validate tag input format
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -45,8 +169,21 @@ jobs:
       - name: Checkout selected tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ inputs.release_sha }}
           fetch-depth: 0
+
+      - name: Verify release tag still resolves to authenticated SHA
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          observed_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [[ "$observed_sha" != "$RELEASE_SHA" || "$(git rev-parse HEAD^{commit})" != "$RELEASE_SHA" ]]; then
+            echo "Release tag moved after authenticated npm preflight evidence." >&2
+            exit 1
+          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -72,8 +209,8 @@ jobs:
           PUBLIC_RELEASE_BRANCH: ${{ inputs.public_release_branch }}
         run: |
           set -euo pipefail
-          if [[ "${PUBLIC_RELEASE_BRANCH}" != "main" && ! "${PUBLIC_RELEASE_BRANCH}" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
-            echo "public_release_branch must be main or release/YYYY.M.PATCH, got ${PUBLIC_RELEASE_BRANCH}." >&2
+          if [[ "${PUBLIC_RELEASE_BRANCH}" != "main" && ! "${PUBLIC_RELEASE_BRANCH}" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && ! "${PUBLIC_RELEASE_BRANCH}" =~ ^stable/[0-9]{4}\.[1-9][0-9]*\.33$ ]]; then
+            echo "public_release_branch must be main, release/YYYY.M.PATCH, or stable/YYYY.M.33, got ${PUBLIC_RELEASE_BRANCH}." >&2
             exit 1
           fi
           RELEASE_SHA=$(git rev-parse HEAD)
