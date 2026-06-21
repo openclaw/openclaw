@@ -230,7 +230,9 @@ export async function markRestartAbortedMainSessions(params: {
               (entry.status === "running" ||
                 run.observedAt === undefined ||
                 normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
-                entry.updatedAt < run.observedAt) &&
+                // Timing heuristic only valid for stale-gen (pre-restart) runs; same-gen runs must not reopen completed sessions.
+                (entry.updatedAt < run.observedAt &&
+                  run.lifecycleGeneration !== currentLifecycleGeneration)) &&
               params.isActiveRun?.(run) !== false,
           );
           if (
