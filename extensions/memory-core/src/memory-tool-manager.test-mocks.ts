@@ -24,6 +24,7 @@ type MemoryBackend = "builtin" | "qmd";
 let backend: MemoryBackend = "builtin";
 let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
+let statusOverrides: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
 let getManagerImpl:
   | ((params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
@@ -54,6 +55,7 @@ const stubManager = {
     sources: ["memory" as const],
     sourceCounts: [{ source: "memory" as const, files: 1, chunks: 1 }],
     custom: customStatus,
+    ...statusOverrides,
   }),
   sync: vi.fn(),
   probeVectorAvailability: vi.fn(async () => true),
@@ -93,6 +95,10 @@ export function setMemoryCustomStatus(next: Record<string, unknown> | undefined)
   customStatus = next;
 }
 
+export function setMemoryStatusOverrides(next: Record<string, unknown> | undefined): void {
+  statusOverrides = next;
+}
+
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
@@ -120,6 +126,7 @@ export function resetMemoryToolMockState(overrides?: {
   backend = overrides?.backend ?? "builtin";
   workspaceDir = "/workspace";
   customStatus = undefined;
+  statusOverrides = undefined;
   getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
   readFileImpl =

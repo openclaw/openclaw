@@ -11,6 +11,7 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
+  setMemoryStatusOverrides,
 } from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
@@ -55,6 +56,67 @@ describe("memory tool schemas", () => {
     expect(searchCorpus.enum).toEqual(["memory", "wiki", "all", "sessions"]);
     expect(getCorpus.anyOf).toBeUndefined();
     expect(getCorpus.enum).toEqual(["memory", "wiki", "all"]);
+  });
+});
+
+describe("memory_search zero-hit sync decisions", () => {
+  it("only forces sync for unavailable or unready index status", () => {
+    const decide = memoryToolsTesting.shouldForceSyncAfterZeroResults;
+    const healthy = {
+      backend: "qmd",
+      dirty: false,
+      files: 27,
+      chunks: 472,
+      vector: { available: true },
+      fts: { available: true },
+      custom: { indexIdentity: { status: "valid" } },
+    };
+
+    expect(decide(healthy)).toEqual({
+      shouldSync: false,
+      reason: "healthy_zero_hit",
+    });
+    expect(decide({ ...healthy, dirty: true })).toEqual({
+      shouldSync: false,
+      reason: "healthy_zero_hit",
+    });
+    expect(decide({ ...healthy, backend: "builtin", dirty: true })).toEqual({
+      shouldSync: true,
+      reason: "dirty_index",
+    });
+    expect(decide({ ...healthy, backend: undefined, dirty: true })).toEqual({
+      shouldSync: true,
+      reason: "dirty_index",
+    });
+    expect(decide({ ...healthy, vector: { enabled: false, available: false } })).toEqual({
+      shouldSync: false,
+      reason: "healthy_zero_hit",
+    });
+    expect(decide({ ...healthy, fts: { enabled: false, available: false } })).toEqual({
+      shouldSync: false,
+      reason: "healthy_zero_hit",
+    });
+    expect(decide({ ...healthy, custom: { indexIdentity: { status: "missing" } } })).toEqual({
+      shouldSync: true,
+      reason: "index_identity_invalid",
+    });
+    expect(decide({ ...healthy, chunks: 0 })).toEqual({
+      shouldSync: true,
+      reason: "no_indexed_chunks",
+    });
+    expect(decide({ ...healthy, files: 0 })).toEqual({
+      shouldSync: true,
+      reason: "no_indexed_files",
+    });
+    expect(decide({ ...healthy, vector: { available: false } })).toEqual({
+      shouldSync: true,
+      reason: "vector_unavailable",
+    });
+    expect(decide({ ...healthy, fts: { available: false } })).toEqual({
+      shouldSync: true,
+      reason: "fts_unavailable",
+    });
+    expect(decide(null)).toEqual({ shouldSync: true, reason: "status_unavailable" });
   });
 });
 
@@ -313,7 +375,7 @@ describe("memory_search unavailable payloads", () => {
     expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
-  it("forces a sync and retries once when the first search has zero hits", async () => {
+  it("returns a healthy zero-hit without forcing sync when the index is ready", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
       searchCalls += 1;
@@ -339,11 +401,45 @@ describe("memory_search unavailable payloads", () => {
       },
     });
     const result = await tool.execute("zero-hit-retry", { query: "hidden thread codename" });
+    const details = result.details as { results?: Array<{ path: string }> };
 
-    expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
-      "MEMORY.md",
-    );
+    expect(details.results).toEqual([]);
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("preserves the dirty zero-hit retry for non-qmd backends", async () => {
+    let searchCalls = 0;
+    setMemoryStatusOverrides({ dirty: true });
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        return [];
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Thread-hidden codename: ORBIT-22.",
+          source: "memory" as const,
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("zero-hit-retry", { query: "hidden thread codename" });
+    const details = result.details as { results?: Array<{ path: string }> };
+
+    expect(details.results).toEqual([expect.objectContaining({ path: "MEMORY.md" })]);
     expect(searchCalls).toBe(2);
+    expect(getMemorySyncMockCalls()).toBe(1);
   });
 
   it("returns unavailable metadata when the index identity is paused", async () => {

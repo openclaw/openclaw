@@ -44,6 +44,15 @@ type MemorySearchToolResult =
   | MemoryCorpusSearchResult;
 type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWithPurpose>>;
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
+type MemorySearchZeroResultStatus = {
+  backend?: unknown;
+  dirty?: unknown;
+  files?: unknown;
+  chunks?: unknown;
+  vector?: unknown;
+  fts?: unknown;
+  custom?: unknown;
+};
 
 const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
@@ -76,10 +85,42 @@ function recordMemorySearchToolCooldown(key: string, error: string): void {
   });
 }
 
+function shouldForceSyncAfterZeroResults(status: MemorySearchZeroResultStatus | null | undefined): {
+  shouldSync: boolean;
+  reason: string;
+} {
+  if (!status || typeof status !== "object") {
+    return { shouldSync: true, reason: "status_unavailable" };
+  }
+  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  if (indexIdentity?.status && indexIdentity.status !== "valid") {
+    return { shouldSync: true, reason: "index_identity_invalid" };
+  }
+  if (typeof status.chunks === "number" && status.chunks <= 0) {
+    return { shouldSync: true, reason: "no_indexed_chunks" };
+  }
+  if (typeof status.files === "number" && status.files <= 0) {
+    return { shouldSync: true, reason: "no_indexed_files" };
+  }
+  const vectorStatus = asRecord(status.vector);
+  if (vectorStatus?.available === false && vectorStatus.enabled !== false) {
+    return { shouldSync: true, reason: "vector_unavailable" };
+  }
+  const ftsStatus = asRecord(status.fts);
+  if (ftsStatus?.available === false && ftsStatus.enabled !== false) {
+    return { shouldSync: true, reason: "fts_unavailable" };
+  }
+  if (status.dirty === true && status.backend !== "qmd") {
+    return { shouldSync: true, reason: "dirty_index" };
+  }
+  return { shouldSync: false, reason: "healthy_zero_hit" };
+}
+
 export const testing = {
   resetMemorySearchToolCooldowns() {
     memorySearchToolCooldowns.clear();
   },
+  shouldForceSyncAfterZeroResults,
 } as const;
 
 function isActiveMemoryManagerContext(
@@ -532,13 +573,16 @@ export function createMemorySearchTool(options: {
                     return;
                   }
                   if (rawResults.length === 0 && activeMemory.manager.sync) {
-                    await activeMemory.manager.sync({ reason: "search", force: true });
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
-                    pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
-                      activeMemory.manager.status(),
-                    );
-                    if (pausedIndexIdentityReason) {
-                      return;
+                    const syncDecision = shouldForceSyncAfterZeroResults(statusBeforeRetry);
+                    if (syncDecision.shouldSync) {
+                      await activeMemory.manager.sync({ reason: "search", force: true });
+                      rawResults = await activeMemory.manager.search(query, searchOptions);
+                      pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
+                        activeMemory.manager.status(),
+                      );
+                      if (pausedIndexIdentityReason) {
+                        return;
+                      }
                     }
                   }
                   rawResults = await filterMemorySearchHitsBySessionVisibility({
