@@ -105,7 +105,7 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 
 function generatedSchemaAllowsGroupAllowFrom(channelName: string, path: SchemaPath): boolean {
   const schema = findGeneratedChannelConfigSchema(channelName);
-  return !schema || schemaAllowsConfigPath(schema, path);
+  return !!schema && schemaAllowsConfigPath(schema, path);
 }
 
 function migrateRecord(params: {
