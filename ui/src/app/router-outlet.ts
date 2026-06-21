@@ -15,19 +15,13 @@ export type RouterOutletOptions<
   TLoadContext = unknown,
   TData = unknown,
 > = {
-  fallbackRouteId?: TRouteId;
   retryContext?: TLoadContext;
 };
 
-type RouterOutletSelection = {
+export type RouterOutletSelection = {
   status: RouterState<string, unknown, unknown>["status"];
   active: RouteMatch<string, unknown, unknown> | undefined;
   pending: RouteMatch<string, unknown, unknown> | undefined;
-};
-
-type RouterViewSelection = {
-  routeId: string | undefined;
-  module: unknown;
 };
 
 function selectRouterOutletState(
@@ -49,18 +43,6 @@ function equalRouterOutletState(
     previous.active === next.active &&
     previous.pending === next.pending
   );
-}
-
-function selectRouterViewState(state: RouterState<string, unknown, unknown>): RouterViewSelection {
-  const target = state.pendingMatches[0] ?? state.matches[0];
-  return {
-    routeId: target?.routeId,
-    module: target?.module,
-  };
-}
-
-function equalRouterViewState(previous: RouterViewSelection, next: RouterViewSelection): boolean {
-  return previous.routeId === next.routeId && previous.module === next.module;
 }
 
 type RouterOutletRuntime = Router<string, unknown, unknown, unknown>;
@@ -124,28 +106,25 @@ export function renderRouterOutlet<
 >(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   context: TContext,
+  selection: RouterOutletSelection,
   options: RouterOutletOptions<TRouteId, TLoadContext, TData> = {},
 ): unknown {
-  const state = router.getState();
-  const renderedMatch = state.pendingMatches[0] ?? state.matches[0];
+  const renderedMatch = selection.pending ?? selection.active;
   if (renderedMatch?.status === "notFound") {
     return null;
   }
   if (renderedMatch?.status === "redirected") {
     return null;
   }
-  const routeId =
-    renderedMatch?.routeId ??
-    (state.status === "idle" || state.status === "loading" ? options.fallbackRouteId : null);
-  if (!routeId) {
-    if (renderedMatch?.error) {
-      return renderError(router, options.retryContext, renderedMatch.error, renderedMatch.routeId);
-    }
+  if (!renderedMatch) {
     return renderPending();
   }
 
+  const routeId = renderedMatch.routeId;
   if (!renderedMatch?.module) {
-    return renderPending();
+    return renderedMatch.error
+      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
+      : renderPending();
   }
   if (!isRenderableModule<TContext, TData>(renderedMatch.module)) {
     return renderedMatch.error
@@ -170,19 +149,19 @@ export function renderRouterOutlet<
 class RouterOutletDirective extends AsyncDirective {
   private router?: RouterOutletRuntime;
   private context: unknown;
-  private options: RouterOutletOptions<string, unknown, unknown> = {};
+  private renderApp?: (selection: RouterOutletSelection, context: unknown) => unknown;
   private unsubscribe?: () => boolean;
 
   override render(
     router: unknown,
     context: unknown,
-    options: RouterOutletOptions<string, unknown, unknown> = {},
+    renderApp: (selection: RouterOutletSelection, context: unknown) => unknown,
   ) {
     const runtime = router as RouterOutletRuntime;
     this.updateSubscription(runtime);
     this.context = context;
-    this.options = options;
-    return renderRouterOutlet(runtime, context, options);
+    this.renderApp = renderApp;
+    return renderApp(selectRouterOutletState(runtime.getState()), context);
   }
 
   override disconnected() {
@@ -204,9 +183,9 @@ class RouterOutletDirective extends AsyncDirective {
     this.router = router;
     this.unsubscribe = router.subscribeSelector(
       selectRouterOutletState,
-      () => {
-        if (this.isConnected) {
-          this.setValue(renderRouterOutlet(router, this.context, this.options));
+      (selection) => {
+        if (this.isConnected && this.renderApp) {
+          this.setValue(this.renderApp(selection, this.context));
         }
       },
       equalRouterOutletState,
@@ -216,77 +195,10 @@ class RouterOutletDirective extends AsyncDirective {
 
 const routerOutletDirective = directive(RouterOutletDirective);
 
-class RouterViewDirective extends AsyncDirective {
-  private router?: RouterOutletRuntime;
-  private context: unknown;
-  private renderView?: (selection: RouterViewSelection, context: unknown) => unknown;
-  private unsubscribe?: () => boolean;
-
-  override render(
-    router: unknown,
-    context: unknown,
-    renderView: (selection: RouterViewSelection, context: unknown) => unknown,
-  ) {
-    const runtime = router as RouterOutletRuntime;
-    this.updateSubscription(runtime);
-    this.context = context;
-    this.renderView = renderView;
-    return renderView(selectRouterViewState(runtime.getState()), context);
-  }
-
-  override disconnected() {
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
-  }
-
-  override reconnected() {
-    if (this.router) {
-      this.updateSubscription(this.router);
-    }
-  }
-
-  private updateSubscription(router: RouterOutletRuntime) {
-    if (this.router === router && this.unsubscribe) {
-      return;
-    }
-    this.unsubscribe?.();
-    this.router = router;
-    this.unsubscribe = router.subscribeSelector(
-      selectRouterViewState,
-      (selection) => {
-        if (this.isConnected && this.renderView) {
-          this.setValue(this.renderView(selection, this.context));
-        }
-      },
-      equalRouterViewState,
-    );
-  }
-}
-
-const routerViewDirective = directive(RouterViewDirective);
-
-export function routerView<TContext>(
+export function routerOutlet<TContext>(
   router: Router<string, unknown, unknown, unknown>,
   context: TContext,
-  render: (selection: RouterViewSelection, context: TContext) => unknown,
+  render: (selection: RouterOutletSelection, context: TContext) => unknown,
 ): unknown {
-  return routerViewDirective(router, context, render);
-}
-
-export function routerOutlet<
-  TRouteId extends string,
-  TLoadContext,
-  TModule,
-  TContext,
-  TData = unknown,
->(
-  router: Router<TRouteId, TLoadContext, TModule, TData>,
-  context: TContext,
-  options: RouterOutletOptions<TRouteId, TLoadContext, TData> = {},
-): unknown {
-  return routerOutletDirective(
-    router,
-    context,
-    options as unknown as RouterOutletOptions<string, unknown, unknown>,
-  );
+  return routerOutletDirective(router, context, render);
 }

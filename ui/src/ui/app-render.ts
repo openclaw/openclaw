@@ -4,7 +4,11 @@ import { styleMap } from "lit/directives/style-map.js";
 import { SIDEBAR_SECTIONS, subtitleForRoute, titleForRoute } from "../app-navigation.ts";
 import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
-import { routerOutlet, routerView } from "../app/router-outlet.ts";
+import {
+  renderRouterOutlet,
+  routerOutlet,
+  type RouterOutletSelection,
+} from "../app/router-outlet.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatCommands } from "./app-chat.ts";
@@ -282,28 +286,18 @@ export function renderApp(state: AppViewState) {
   if (!state.connected) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
-  return routerView(appRouter, state, (routeView) =>
-    renderConnectedApp(state, {
-      routeId: routeView.routeId as RouteId | undefined,
-      module: routeView.module,
-    }),
-  );
+  return routerOutlet(appRouter, state, (selection) => renderConnectedApp(state, selection));
 }
 
-function renderConnectedApp(
-  state: AppViewState,
-  routeView: {
-    routeId: RouteId | undefined;
-    module: unknown;
-  },
-) {
+function renderConnectedApp(state: AppViewState, routeView: RouterOutletSelection) {
   const updatableState = state as AppViewState & { requestUpdate?: () => void };
   const requestHostUpdate =
     typeof updatableState.requestUpdate === "function"
       ? () => updatableState.requestUpdate?.()
       : undefined;
-  const renderedRouteId = routeView.routeId ?? state.routeId;
-  const activeRouteModule = routeView.module;
+  const renderedMatch = routeView.pending ?? routeView.active;
+  const renderedRouteId = renderedMatch?.routeId as RouteId | undefined;
+  const activeRouteModule = renderedMatch?.module;
   const isChat =
     renderedRouteId === "chat" ||
     (typeof activeRouteModule === "object" &&
@@ -315,14 +309,9 @@ function renderConnectedApp(
     activeRouteModule !== null &&
     "header" in activeRouteModule &&
     activeRouteModule.header === true;
-  const routedPage = routerOutlet(
-    appRouter,
-    { state },
-    {
-      fallbackRouteId: state.routeId,
-      retryContext: routeLoadContext(state as unknown as SettingsHost),
-    },
-  );
+  const routedPage = renderRouterOutlet(appRouter, { state }, routeView, {
+    retryContext: routeLoadContext(state as unknown as SettingsHost),
+  });
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !state.onboarding;
@@ -584,7 +573,7 @@ function renderConnectedApp(
               </button>
             </div>`
           : nothing}
-        ${routeOwnsHeader || isChat
+        ${routeOwnsHeader || isChat || !renderedRouteId
           ? nothing
           : html`<section
               class=${chatHeaderHidden

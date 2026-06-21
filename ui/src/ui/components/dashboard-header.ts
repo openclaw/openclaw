@@ -9,7 +9,7 @@ export class DashboardHeader extends LitElement {
     return this;
   }
 
-  @property() routeId: RouteId = "overview";
+  @property() routeId?: RouteId;
   @property() basePath = "";
   @property() agentLabel = "";
 
@@ -31,7 +31,7 @@ export class DashboardHeader extends LitElement {
   };
 
   override render() {
-    const label = titleForRoute(this.routeId);
+    const label = this.routeId ? titleForRoute(this.routeId) : "";
     const rawAgentLabel = this.agentLabel.trim();
     // Skip the agent crumb when it repeats the brand crumb ("OpenClaw › OpenClaw › …").
     const agentLabel = rawAgentLabel.toLowerCase() === "openclaw" ? "" : rawAgentLabel;

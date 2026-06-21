@@ -162,9 +162,11 @@ export function renderRouteNavItem(
   opts?: { activeRouteId?: RouteId; collapsed?: boolean },
 ) {
   const href = pathForRoute(routeId, state.basePath);
-  const activeRouteId = opts?.activeRouteId ?? state.routeId;
+  const activeRouteId = opts?.activeRouteId;
   const isActive =
-    routeId === "config" ? isSettingsNavigationRoute(activeRouteId) : activeRouteId === routeId;
+    routeId === "config"
+      ? activeRouteId !== undefined && isSettingsNavigationRoute(activeRouteId)
+      : activeRouteId === routeId;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   const preload = (event: Event, immediate = false) => {
     if (isActive) {
@@ -225,7 +227,7 @@ export function renderRouteNavItem(
             const mainSessionKey = resolveSidebarChatSessionKey(state);
             resetChatStateForSessionSwitch(state, mainSessionKey);
           }
-          if (state.routeId !== "chat") {
+          if (activeRouteId !== undefined && activeRouteId !== "chat") {
             void state.loadAssistantIdentity();
           }
         }

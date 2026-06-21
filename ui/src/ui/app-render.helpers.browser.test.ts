@@ -95,7 +95,7 @@ describe("chat header controls (browser)", () => {
   it("keeps the sidebar settings entry active for nested settings tabs", async () => {
     const state = createState({ routeId: "appearance" });
     const container = document.createElement("div");
-    render(renderRouteNavItem(state, "config"), container);
+    render(renderRouteNavItem(state, "config", { activeRouteId: "appearance" }), container);
     await Promise.resolve();
 
     const link = requireElement(
