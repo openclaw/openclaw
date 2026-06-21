@@ -228,6 +228,28 @@ export async function runKnipUnusedFiles(params = {}) {
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const parentSignalHandlers = [];
+    const cleanupParentSignalHandlers = () => {
+      for (const { signal, handler } of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.length = 0;
+    };
+    const relayParentSignal = (signal) => {
+      const handler = () => {
+        signalProcessTree(child, signal);
+        signalProcessTree(child, "SIGKILL");
+        cleanupParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.push({ signal, handler });
+      process.once(signal, handler);
+    };
+    if (process.platform !== "win32") {
+      relayParentSignal("SIGINT");
+      relayParentSignal("SIGTERM");
+      relayParentSignal("SIGHUP");
+    }
 
     const heartbeatTimer = setInterval(() => {
       writeStatus(
@@ -255,6 +277,7 @@ export async function runKnipUnusedFiles(params = {}) {
       clearTimeout(timeoutTimer);
       clearInterval(heartbeatTimer);
       clearTimeout(killTimer);
+      cleanupParentSignalHandlers();
       resolve({
         ...result,
         output: output.join(""),

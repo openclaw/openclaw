@@ -134,13 +134,17 @@ function runAssertInstalled({
 
 function runAssertClawhubInstalled({
   contextEngineIds = [],
+  installPathRelative,
 }: {
   contextEngineIds?: string[];
+  installPathRelative?: string;
 } = {}) {
   const label = `clawhub-context-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
   const home = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-home-"));
-  const installPath = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-install-"));
+  const installPath = installPathRelative
+    ? `${home}${path.sep}${installPathRelative}`
+    : path.join(home, ".openclaw", "extensions", pluginId);
   const scratchRoot = tmpdir();
   const pluginsJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-plugins.json`);
   const inspectJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-inspect.json`);
@@ -148,6 +152,8 @@ function runAssertClawhubInstalled({
   const installPathMarker = path.join(scratchRoot, `kitchen-sink-${label}-install-path.txt`);
   const installsPath = path.join(home, ".openclaw", "plugins", "installs.json");
   try {
+    mkdirSync(path.join(home, ".openclaw", "extensions"), { recursive: true });
+    mkdirSync(installPath, { recursive: true });
     const inspectPayload = fullSurfaceInspectPayload(pluginId);
     inspectPayload.plugin.contextEngineIds = contextEngineIds;
     writeJson(pluginsJsonPath, {
@@ -191,7 +197,6 @@ function runAssertClawhubInstalled({
     });
   } finally {
     rmSync(home, { force: true, recursive: true });
-    rmSync(installPath, { force: true, recursive: true });
     rmSync(pluginsJsonPath, { force: true });
     rmSync(inspectJsonPath, { force: true });
     rmSync(inspectAllJsonPath, { force: true });
@@ -325,6 +330,16 @@ describe("kitchen-sink plugin assertions", () => {
     });
 
     expect(result.status).toBe(0);
+  });
+
+  it("rejects ClawHub kitchen-sink install paths that resolve outside managed extensions", () => {
+    const result = runAssertClawhubInstalled({
+      contextEngineIds: ["openclaw-kitchen-sink-fixture"],
+      installPathRelative: [".openclaw", "extensions", "..", "escaped-kitchen-sink"].join(path.sep),
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("kitchen-sink ClawHub install path resolved outside");
   });
 
   it("keeps exhaustive diagnostic matching available for synchronized fixtures", () => {

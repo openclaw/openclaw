@@ -50,10 +50,12 @@ describe("scripts/qa-lab-up", () => {
   });
 
   it.each([
+    [["--gateway-port", ""], "--gateway-port must be a positive integer."],
     [["--gateway-port", "1.5"], "--gateway-port must be a positive integer."],
     [["--gateway-port", "0x1000"], "--gateway-port must be a positive integer."],
     [["--gateway-port", "0"], "--gateway-port must be a positive integer."],
     [["--gateway-port", "65536"], "--gateway-port must be a TCP port from 1 to 65535."],
+    [["--qa-lab-port", ""], "--qa-lab-port must be a positive integer."],
     [["--qa-lab-port", "1e4"], "--qa-lab-port must be a positive integer."],
     [["--qa-lab-port", "65536"], "--qa-lab-port must be a TCP port from 1 to 65535."],
   ])("rejects invalid TCP ports: %j", async (args, errorMessage) => {

@@ -83,6 +83,17 @@ for (const signal of Object.keys(CROSS_OS_SIGNAL_EXIT_CODES) as NodeJS.Signals[]
   });
 }
 
+function exitForwardedSignalWhenChildTreesDone() {
+  if (forwardedSignalExitCode === undefined || CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.size > 0) {
+    return;
+  }
+  if (forwardedSignalForceKillTimer) {
+    clearTimeout(forwardedSignalForceKillTimer);
+    forwardedSignalForceKillTimer = undefined;
+  }
+  process.exit(forwardedSignalExitCode);
+}
+
 const providerConfig = {
   openai: {
     extensionId: "openai",
@@ -2741,16 +2752,21 @@ async function postDiscordMessage(params) {
   }
 }
 
-async function deleteDiscordMessage(params) {
+export async function deleteDiscordMessage(params) {
   if (!params.messageId) {
     return;
   }
-  await fetch(
-    `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
-    buildDiscordFetchInit(params.token, {
-      method: "DELETE",
-    }),
-  ).catch(() => undefined);
+  try {
+    const response = await fetch(
+      `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
+      buildDiscordFetchInit(params.token, {
+        method: "DELETE",
+      }),
+    );
+    await response.body?.cancel?.().catch(() => undefined);
+  } catch {
+    // Cleanup is best-effort; the smoke result should not fail after readback succeeds.
+  }
 }
 
 async function waitForInstalledDiscordReadback(params) {
@@ -4009,15 +4025,23 @@ async function runCommandInvocation(invocation, options) {
     });
 
     child.on("error", (error) => {
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.killChildTree("SIGKILL");
+      }
       activeChildTree.unregister();
       finalize(() => rejectPromise(error));
     });
 
     child.on("close", (exitCode) => {
-      activeChildTree.unregister();
       if (forwardedSignalExitCode !== undefined) {
+        // The leader can exit on SIGTERM while descendants remain in its group.
+        // Kill the group before unregistering so signal forwarding cannot leave them running.
+        activeChildTree.killChildTree("SIGKILL");
+        activeChildTree.unregister();
+        finalize(exitForwardedSignalWhenChildTreesDone);
         return;
       }
+      activeChildTree.unregister();
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,

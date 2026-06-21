@@ -593,6 +593,47 @@ export function resolveTsdownBuildInvocation(params = {}) {
   };
 }
 
+function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+export function signalTsdownBuildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group may already be gone; fall back to the direct child handle.
+    }
+  }
+  if (platform === "win32" && child.pid) {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
+  }
+  child.kill(signal);
+}
+
 export async function runTsdownBuildInvocation(invocation, params = {}) {
   const stdout = params.stdout ?? process.stdout;
   const stderr = params.stderr ?? process.stderr;
@@ -608,8 +649,11 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   let timedOut = false;
   let settled = false;
   let lastOutputAt = Date.now();
+  let forceKillAt = null;
 
-  const useProcessGroup = timeoutMs !== null && process.platform !== "win32";
+  const platform = params.platform ?? process.platform;
+  const runTaskkill = params.runTaskkill ?? spawnSync;
+  const useProcessGroup = platform !== "win32";
   const child = spawn(invocation.command, invocation.args, {
     ...invocation.options,
     detached: useProcessGroup,
@@ -621,15 +665,36 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   }
 
   function signalChild(signal) {
-    if (useProcessGroup && child.pid) {
-      try {
-        process.kill(-child.pid, signal);
-        return;
-      } catch {
-        // The group may already be gone; fall back to the direct child handle.
-      }
+    signalTsdownBuildProcessTree(child, signal, {
+      platform,
+      runTaskkill,
+      useProcessGroup,
+    });
+  }
+
+  const parentSignalHandlers = [];
+  function cleanupParentSignalHandlers() {
+    for (const { signal, handler } of parentSignalHandlers) {
+      process.off(signal, handler);
     }
-    child.kill(signal);
+    parentSignalHandlers.length = 0;
+  }
+
+  function relayParentSignal(signal) {
+    const handler = () => {
+      signalChild(signal);
+      signalChild("SIGKILL");
+      cleanupParentSignalHandlers();
+      process.kill(process.pid, signal);
+    };
+    parentSignalHandlers.push({ signal, handler });
+    process.once(signal, handler);
+  }
+
+  if (useProcessGroup) {
+    relayParentSignal("SIGINT");
+    relayParentSignal("SIGTERM");
+    relayParentSignal("SIGHUP");
   }
 
   function processTreeAlive() {
@@ -661,11 +726,15 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   }
 
   async function finishTimedOutProcessTree() {
-    if (!processTreeAlive()) {
-      return;
+    const graceRemainingMs =
+      forceKillAt === null ? TERMINATION_GRACE_MS : Math.max(0, forceKillAt - Date.now());
+    if (graceRemainingMs > 0) {
+      await waitForProcessTreeExit(graceRemainingMs);
     }
-    signalChild("SIGKILL");
-    await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+    if (processTreeAlive()) {
+      signalChild("SIGKILL");
+      await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+    }
   }
 
   child.stdout?.on("data", (chunk) => {
@@ -704,6 +773,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
           timedOut = true;
           stderr.write(`[tsdown-build] timeout after ${timeoutMs}ms${pidText}; sending SIGTERM\n`);
           signalChild("SIGTERM");
+          forceKillAt = Date.now() + TERMINATION_GRACE_MS;
           setTimeout(() => {
             if (!settled) {
               stderr.write(`[tsdown-build] forcing SIGKILL${pidText}\n`);
@@ -716,6 +786,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   return new Promise((resolve) => {
     child.once("error", (error) => {
       settled = true;
+      cleanupParentSignalHandlers();
       clearInterval(heartbeat);
       clearTimeout(timeout);
       stderr.write(`[tsdown-build] failed to start: ${String(error)}\n`);
@@ -730,6 +801,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
     child.once("close", (status, signal) => {
       function finish() {
         settled = true;
+        cleanupParentSignalHandlers();
         clearInterval(heartbeat);
         clearTimeout(timeout);
         resolve({

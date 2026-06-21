@@ -241,6 +241,8 @@ function normalizeLiveUsage(
 function buildEmbeddedRunnerConfig(
   params: LiveResolvedModel & {
     cacheRetention: "none" | "short" | "long";
+    compactionModel?: string;
+    modelAlias?: string;
     transport?: "sse" | "websocket";
   },
 ): OpenClawConfig {
@@ -264,12 +266,14 @@ function buildEmbeddedRunnerConfig(
       defaults: {
         models: {
           [modelKey]: {
+            ...(params.modelAlias ? { alias: params.modelAlias } : {}),
             params: {
               cacheRetention: params.cacheRetention,
               ...(params.transport ? { transport: params.transport } : {}),
             },
           },
         },
+        ...(params.compactionModel ? { compaction: { model: params.compactionModel } } : {}),
       },
     },
   };
@@ -371,7 +375,9 @@ async function compactLiveCacheSession(params: {
       config: buildEmbeddedRunnerConfig({
         apiKey: params.apiKey,
         cacheRetention: params.cacheRetention,
+        compactionModel: "live-compaction",
         model: params.model,
+        modelAlias: "live-compaction",
       }),
       provider: params.model.provider,
       model: params.model.id,

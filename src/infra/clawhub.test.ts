@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
@@ -61,7 +62,7 @@ function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: U
 }
 
 describe("clawhub helpers", () => {
-  const originalHome = process.env.HOME;
+  const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
 
   afterEach(() => {
     delete process.env.OPENCLAW_CLAWHUB_URL;
@@ -71,12 +72,7 @@ describe("clawhub helpers", () => {
     delete process.env.OPENCLAW_CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWDHUB_CONFIG_PATH;
-    delete process.env.XDG_CONFIG_HOME;
-    if (originalHome == null) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    originalEnv.restore();
   });
 
   it("parses explicit ClawHub package specs", () => {
@@ -264,7 +260,7 @@ describe("clawhub helpers", () => {
         await withTempDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
           const configPath = path.join(xdgRoot, "clawhub", "config.json");
           const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
-          process.env.XDG_CONFIG_HOME = xdgRoot;
+          setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
           try {
             await fs.mkdir(path.dirname(configPath), { recursive: true });
             await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");

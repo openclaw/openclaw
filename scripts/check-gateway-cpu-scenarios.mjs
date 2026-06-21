@@ -444,7 +444,7 @@ export const testing = {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(
     /** @param {unknown} error */ (error) => {
-      console.error(error instanceof Error ? error.stack : String(error));
+      console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },
   );

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
@@ -23,6 +24,7 @@ export const ARTIFACT_TARBALL_SCAN_MAX_ENTRIES = 10_000;
 const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
+const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -194,25 +196,17 @@ function run(command, args, options = {}) {
     });
     let timedOut = false;
     let killTimer;
-    let timeoutReject;
-    const killChild = (signal) => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The process group can disappear between timeout and cleanup.
-        }
-      }
-      child.kill(signal);
-    };
+    let forceKillAt;
+    const killChild = (signal) => signalChildProcessTree(child, signal, { useProcessGroup });
     const terminateChild = () => {
       killChild("SIGTERM");
+      const killAfterMs = options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS;
+      forceKillAt = Date.now() + killAfterMs;
       killTimer = setTimeout(() => {
         killTimer = undefined;
+        forceKillAt = undefined;
         killChild("SIGKILL");
-        timeoutReject?.();
-      }, options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS);
+      }, killAfterMs);
     };
     const timeout =
       options.timeoutMs === undefined
@@ -243,6 +237,7 @@ function run(command, args, options = {}) {
       }
       if (killTimer && !timedOut) {
         clearTimeout(killTimer);
+        forceKillAt = undefined;
       }
       ACTIVE_CHILD_KILLERS.delete(killChild);
       if (
@@ -260,7 +255,13 @@ function run(command, args, options = {}) {
           `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`,
         );
         if (killTimer) {
-          timeoutReject = () => reject(timeoutError);
+          void finishTimedOutProcessTree(child, {
+            forceKillAt,
+            killChild,
+            killTimer,
+            killAfterMs: options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS,
+            useProcessGroup,
+          }).then(() => reject(timeoutError), reject);
           return;
         }
         reject(timeoutError);
@@ -283,6 +284,84 @@ function run(command, args, options = {}) {
       reject(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}${detail}`));
     });
   });
+}
+
+async function finishTimedOutProcessTree(
+  child,
+  { forceKillAt, killAfterMs, killChild, killTimer, useProcessGroup },
+) {
+  const graceRemainingMs =
+    forceKillAt === undefined ? killAfterMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForProcessTreeExit(child, graceRemainingMs, useProcessGroup);
+  }
+  clearTimeout(killTimer);
+  if (processTreeIsAlive(child, useProcessGroup)) {
+    killChild("SIGKILL");
+    await waitForProcessTreeExit(child, killAfterMs, useProcessGroup);
+  }
+}
+
+export function signalChildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process group can disappear between timeout and cleanup.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+  }
+  child.kill(signal);
+}
+
+function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function processTreeIsAlive(child, useProcessGroup) {
+  if (!child || typeof child.pid !== "number") {
+    return false;
+  }
+  if (!useProcessGroup) {
+    return !childHasExited(child);
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForProcessTreeExit(child, timeoutMs, useProcessGroup) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!processTreeIsAlive(child, useProcessGroup)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !processTreeIsAlive(child, useProcessGroup);
 }
 
 function appendBoundedCommandOutput(buffer, chunk, maxChars) {
@@ -317,7 +396,7 @@ async function sha256(file) {
 }
 
 function assertSha256(value) {
-  if (!/^[a-f0-9]{64}$/u.test(value)) {
+  if (!/^[a-f0-9]{64}$/iu.test(value)) {
     throw new Error(`package_sha256 must be a lowercase or uppercase 64-character SHA-256 digest`);
   }
 }
@@ -333,6 +412,8 @@ async function assertExpectedSha256(file, expected) {
   }
   return actual;
 }
+
+export const assertExpectedSha256ForTest = assertExpectedSha256;
 
 async function findSingleTarball(dir) {
   const root = path.resolve(ROOT_DIR, dir);
@@ -362,8 +443,11 @@ async function findSingleTarball(dir) {
       if (entry.isFile() && /\.t(?:ar\.)?gz$/u.test(entry.name)) {
         tarballs.push(absolute);
         if (tarballs.length > 1) {
+          const relativeTarballs = tarballs
+            .map((tarball) => path.relative(root, tarball))
+            .toSorted((a, b) => a.localeCompare(b));
           throw new Error(
-            `source=artifact requires exactly one .tgz under ${dir}; found at least 2: ${tarballs.toSorted((a, b) => a.localeCompare(b)).join(", ")}`,
+            `source=artifact requires exactly one .tgz under ${dir}; found at least 2: ${relativeTarballs.join(", ")}`,
           );
         }
       }
@@ -568,6 +652,32 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
 }
 
 export const moveNewestPackedTarballForTest = moveNewestPackedTarball;
+
+async function cleanPackedOpenClawTarballs(outputDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(outputDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      entries = [];
+    } else {
+      throw error;
+    }
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawTarballFilename(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
+      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
+  );
+}
+
+export const cleanPackedOpenClawTarballsForTest = cleanPackedOpenClawTarballs;
 
 function normalizeUrlHostname(hostname) {
   return hostname.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.+$/u, "").toLowerCase();
@@ -875,8 +985,11 @@ function validateTrustedPackageDownloadUrl(parsed, trustedSource, options = {}) 
   }
 }
 
-function createTrustedPackageAuthHeaders(trustedSource) {
+function createTrustedPackageAuthHeaders(trustedSource, parsed, initialOrigin) {
   if (!trustedSource?.auth) {
+    return undefined;
+  }
+  if (parsed.origin !== initialOrigin) {
     return undefined;
   }
   const token = process.env[TRUSTED_PACKAGE_SOURCE_TOKEN_ENV];
@@ -987,6 +1100,15 @@ function responseHeader(response, name) {
   return response.headers?.get?.(name) ?? null;
 }
 
+function createPackageDownloadTimeoutError(parsed, timeoutMs) {
+  return Object.assign(
+    new Error(`package_url download timed out after ${timeoutMs}ms: ${parsed.toString()}`),
+    {
+      code: "ETIMEDOUT",
+    },
+  );
+}
+
 async function closeResponseBody(body) {
   if (!body) {
     return;
@@ -1002,8 +1124,16 @@ async function closeResponseBody(body) {
 
 async function openFetchPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-  timeout.unref?.();
+  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, options.timeoutMs);
+    timeout.unref?.();
+  });
+  timeoutPromise.catch(() => {});
   const response = await options
     .fetchImpl(parsed, {
       headers: options.headers,
@@ -1013,12 +1143,7 @@ async function openFetchPackageDownloadResponse(parsed, options) {
     .catch((error) => {
       clearTimeout(timeout);
       if (error?.name === "AbortError") {
-        throw new Error(
-          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
+        throw Object.assign(timeoutError, { cause: error });
       }
       throw error;
     });
@@ -1026,14 +1151,23 @@ async function openFetchPackageDownloadResponse(parsed, options) {
     close: async () => closeResponseBody(response.body),
     response,
     timeout,
+    timeoutPromise,
     timeoutMs: options.timeoutMs,
   };
 }
 
 async function openHttpsPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-  timeout.unref?.();
+  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, options.timeoutMs);
+    timeout.unref?.();
+  });
+  timeoutPromise.catch(() => {});
   const lookup = createPinnedLookup(parsed.hostname, options.addresses);
   const response = await new Promise((resolve, reject) => {
     const request = httpsRequest(
@@ -1065,12 +1199,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     /** @param {unknown} error */ (error) => {
       clearTimeout(timeout);
       if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
-        throw new Error(
-          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
+        throw Object.assign(timeoutError, { cause: error });
       }
       throw error;
     },
@@ -1079,6 +1208,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     close: async () => closeResponseBody(response.body),
     response,
     timeout,
+    timeoutPromise,
     timeoutMs: options.timeoutMs,
   };
 }
@@ -1088,8 +1218,8 @@ async function openPackageDownloadResponse(url, options) {
   const timeoutMs = options.timeoutMs ?? PACKAGE_URL_DOWNLOAD_TIMEOUT_MS;
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
-  const headers = createTrustedPackageAuthHeaders(trustedSource);
   let parsed = new URL(url);
+  const initialOrigin = parsed.origin;
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
     if (trustedSource) {
       validateTrustedPackageDownloadUrl(parsed, trustedSource, { isRedirect: redirectCount > 0 });
@@ -1097,6 +1227,7 @@ async function openPackageDownloadResponse(url, options) {
       validatePackageDownloadUrl(parsed);
     }
     const addresses = await resolvePackageDownloadAddresses(parsed, lookupHost, trustedSource);
+    const headers = createTrustedPackageAuthHeaders(trustedSource, parsed, initialOrigin);
     const opened = options.fetchImpl
       ? await openFetchPackageDownloadResponse(parsed, {
           fetchImpl: options.fetchImpl,
@@ -1124,7 +1255,47 @@ async function openPackageDownloadResponse(url, options) {
   throw new Error(`package_url exceeded ${maxRedirects} redirects: ${url}`);
 }
 
-async function* limitResponseBody(body, maxBytes) {
+async function* limitWebResponseBody(body, maxBytes, timeoutPromise) {
+  let downloaded = 0;
+  const reader = body.getReader();
+  let timedOut = false;
+  let timeoutFailure;
+  const timeoutRead = timeoutPromise?.catch((error) => {
+    timedOut = true;
+    timeoutFailure = error;
+    void reader.cancel().catch(() => {});
+    throw error;
+  });
+  try {
+    for (;;) {
+      const next = reader.read();
+      const { done, value } = timeoutRead ? await Promise.race([next, timeoutRead]) : await next;
+      if (timedOut) {
+        throw toLintErrorObject(timeoutFailure, "package_url download timed out");
+      }
+      if (done) {
+        return;
+      }
+      const size = typeof value === "string" ? Buffer.byteLength(value) : value.byteLength;
+      downloaded += size;
+      if (downloaded > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
+      }
+      yield value;
+    }
+  } finally {
+    if (!timedOut) {
+      reader.releaseLock();
+    }
+  }
+}
+
+async function* limitResponseBody(body, maxBytes, timeoutPromise) {
+  if (typeof body.getReader === "function") {
+    yield* limitWebResponseBody(body, maxBytes, timeoutPromise);
+    return;
+  }
   let downloaded = 0;
   for await (const chunk of body) {
     const size = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
@@ -1138,8 +1309,12 @@ async function* limitResponseBody(body, maxBytes) {
 
 export async function downloadUrl(url, target, options = {}) {
   const maxBytes = options.maxBytes ?? PACKAGE_URL_MAX_BYTES;
-  const { close, response, timeout, timeoutMs } = await openPackageDownloadResponse(url, options);
+  const { close, response, timeout, timeoutMs, timeoutPromise } = await openPackageDownloadResponse(
+    url,
+    options,
+  );
   const tempTarget = `${target}.tmp`;
+  let output;
   try {
     if (!responseOk(response) || !response.body) {
       throw new Error(`failed to download package_url: HTTP ${responseStatus(response)}`);
@@ -1147,13 +1322,20 @@ export async function downloadUrl(url, target, options = {}) {
     const rawContentLength = responseHeader(response, "content-length");
     const contentLength =
       rawContentLength && /^\d+$/u.test(rawContentLength) ? Number(rawContentLength) : undefined;
-    if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+    if (
+      contentLength !== undefined &&
+      (!Number.isSafeInteger(contentLength) || contentLength > maxBytes)
+    ) {
       throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
     }
     await fs.rm(tempTarget, { force: true });
-    await pipeline(limitResponseBody(response.body, maxBytes), createWriteStream(tempTarget));
+    output = createWriteStream(tempTarget);
+    await pipeline(limitResponseBody(response.body, maxBytes, timeoutPromise), output);
     await fs.rename(tempTarget, target);
   } catch (error) {
+    if (error?.code === "ETIMEDOUT") {
+      throw error;
+    }
     if (error?.name === "AbortError") {
       throw new Error(`package_url download timed out after ${timeoutMs}ms: ${url}`, {
         cause: error,
@@ -1163,6 +1345,9 @@ export async function downloadUrl(url, target, options = {}) {
   } finally {
     clearTimeout(timeout);
     await close();
+    if (output && !output.closed) {
+      await once(output, "close").catch(() => {});
+    }
     await fs.rm(tempTarget, { force: true });
   }
 }
@@ -1235,6 +1420,7 @@ async function resolveCandidate(options) {
       const npmPackRunner = resolveNpmPackageCandidatePackRunner(options.packageSpec, outputDir, {
         env: process.env,
       });
+      await cleanPackedOpenClawTarballs(outputDir);
       const packOutput = await run(npmPackRunner.command, npmPackRunner.args, {
         capture: true,
         env: npmPackRunner.env,

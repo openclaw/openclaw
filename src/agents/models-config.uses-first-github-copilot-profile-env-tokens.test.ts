@@ -19,8 +19,6 @@ vi.mock("./provider-auth-aliases.js", () => ({
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => [],
-  resolveProviderEnvApiKeyCandidates: () => ({}),
-  resolveProviderEnvAuthEvidence: () => ({}),
   resolveProviderEnvAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {},

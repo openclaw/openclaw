@@ -156,6 +156,54 @@ describe("telegram live qa runtime", () => {
     expect(gateway.call).toHaveBeenCalledTimes(2);
   });
 
+  it("normalizes the Telegram QA transport ready timeout env", () => {
+    expect(testing.resolveTelegramQaReadyTimeoutMs({})).toBe(45_000);
+    expect(
+      testing.resolveTelegramQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
+      }),
+    ).toBe(180_000);
+    expect(
+      testing.resolveTelegramQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
+      }),
+    ).toBe(45_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        testing.resolveTelegramQaReadyTimeoutMs({
+          OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: value,
+        }),
+      ).toBe(45_000);
+    }
+  });
+
+  it("includes the last Telegram readiness status when the account stays unavailable", async () => {
+    const gateway = {
+      call: vi.fn().mockResolvedValue({
+        channelAccounts: {
+          telegram: [
+            {
+              accountId: "sut",
+              connected: false,
+              lastError: "Telegram getUpdates conflict",
+              restartPending: true,
+              running: true,
+            },
+          ],
+        },
+      }),
+    };
+
+    await expect(
+      testing.waitForTelegramChannelRunning(gateway as never, "sut", {
+        pollMs: 1,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow(
+      'telegram account "sut" did not become ready; last status: {"connected":false,"lastError":"Telegram getUpdates conflict","restartPending":true,"running":true}',
+    );
+  });
+
   it("normalizes the Telegram QA canary timeout env", () => {
     expect(testing.resolveTelegramQaCanaryTimeoutMs({})).toBe(30_000);
     expect(
@@ -660,6 +708,7 @@ describe("telegram live qa runtime", () => {
     expect(repeatedSteps[2]?.expectReply).toBe(true);
     expect(repeatedSteps[3]?.input).toBe("/commands@sut_bot");
     expect(repeatedSteps[3]?.expectReply).toBe(true);
+    expect(repeatedSteps[3]?.expectedTextIncludes).toEqual(["Commands (1/", "/session", "/stop"]);
     const commandsStep = requireScenario(scenarios, "telegram-commands-command").buildRun("sut_bot")
       .steps[0];
     expect(commandsStep?.expectedTextIncludes).toEqual(["Commands (1/", "/session", "/stop"]);
@@ -1149,6 +1198,9 @@ describe("telegram live qa runtime", () => {
       id: 42,
     });
     expect(timeoutSpy).toHaveBeenCalledWith(25);
+    expect(fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      capture: false,
+    });
     expect(signal).toBe(controller.signal);
     expect(signal?.aborted).toBe(false);
     controller.abort();

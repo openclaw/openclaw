@@ -276,7 +276,7 @@ describe("WhatsApp QA live runtime", () => {
       await fs.mkdir(debugDir);
       const emptyDebugView = await testing.buildPublishedWhatsAppQaRunView({
         cleanupIssues: [
-          "WhatsApp QA failed before scenario completion: private setup failure details",
+          "WhatsApp QA failed during driver session start: private setup failure details for +15550000002",
         ],
         gatewayDebugDirPath: debugDir,
         preservedGatewayDebugArtifacts: true,
@@ -287,19 +287,47 @@ describe("WhatsApp QA live runtime", () => {
             title: "WhatsApp DM canary",
             standardId: "canary",
             status: "fail",
-            details: "private setup failure details",
+            details:
+              "WhatsApp QA failed during driver session start: private setup failure details for +15550000002",
           },
         ],
       });
 
       expect(emptyDebugView.gatewayDebugDirPath).toBeUndefined();
       expect(emptyDebugView.cleanupIssues).toEqual([
-        "WhatsApp QA failed before scenario completion: " +
+        "WhatsApp QA failed during driver session start: " +
           "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
       ]);
       expect(emptyDebugView.scenarioResults[0]?.details).toBe(
-        "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
+        "WhatsApp QA failed during driver session start",
       );
+
+      const poolExhaustedView = await testing.buildPublishedWhatsAppQaRunView({
+        cleanupIssues: [
+          'WhatsApp QA failed during credential lease acquisition: Convex credential pool exhausted for kind "whatsapp" after 1800000ms. private broker detail +15550000002',
+        ],
+        gatewayDebugDirPath: debugDir,
+        preservedGatewayDebugArtifacts: false,
+        redactMetadata: true,
+        scenarioResults: [
+          {
+            id: "whatsapp-canary",
+            title: "WhatsApp DM canary",
+            standardId: "canary",
+            status: "fail",
+            details:
+              'WhatsApp QA failed during credential lease acquisition: Convex credential pool exhausted for kind "whatsapp" after 1800000ms. private broker detail +15550000002',
+          },
+        ],
+      });
+
+      expect(poolExhaustedView.cleanupIssues).toEqual([
+        'WhatsApp QA failed during credential lease acquisition: Convex credential pool exhausted for kind "whatsapp" after 1800000ms.',
+      ]);
+      expect(poolExhaustedView.scenarioResults[0]?.details).toBe(
+        'WhatsApp QA failed during credential lease acquisition: Convex credential pool exhausted for kind "whatsapp" after 1800000ms.',
+      );
+      expect(JSON.stringify(poolExhaustedView)).not.toContain("+15550000002");
 
       await fs.writeFile(path.join(debugDir, "gateway.stderr.log"), "stderr\n");
       await expect(

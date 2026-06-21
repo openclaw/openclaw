@@ -909,6 +909,84 @@ export async function removePairedDevice(
   });
 }
 
+/** Remove one approved paired-device role while preserving unrelated role tokens. */
+export async function removePairedDeviceRole(params: {
+  deviceId: string;
+  role: string;
+  baseDir?: string;
+}): Promise<{ deviceId: string; role: string; removedDevice: boolean } | null> {
+  return await withLock(async () => {
+    const state = await loadState(params.baseDir);
+    const normalizedDeviceId = normalizeDeviceId(params.deviceId);
+    const role = normalizeRole(params.role);
+    const device = state.pairedByDeviceId[normalizedDeviceId];
+    if (!device || !role || !listApprovedPairedDeviceRoles(device).includes(role)) {
+      return null;
+    }
+
+    const tokens = cloneDeviceTokens(device);
+    delete tokens[role];
+    const remainingRoles = listApprovedPairedDeviceRoles(device).filter((entry) => entry !== role);
+    if (remainingRoles.length === 0) {
+      for (const [requestId, pending] of Object.entries(state.pendingById)) {
+        if (pending.deviceId === normalizedDeviceId) {
+          delete state.pendingById[requestId];
+        }
+      }
+      delete state.pairedByDeviceId[normalizedDeviceId];
+      await persistState(state, params.baseDir, "both");
+      return { deviceId: normalizedDeviceId, role, removedDevice: true };
+    }
+
+    for (const [requestId, pending] of Object.entries(state.pendingById)) {
+      if (pending.deviceId !== normalizedDeviceId) {
+        continue;
+      }
+      const pendingRoles = resolveRequestedRoles(pending);
+      if (!pendingRoles.includes(role)) {
+        continue;
+      }
+      const nextPendingRoles = pendingRoles.filter((entry) => entry !== role);
+      if (nextPendingRoles.length === 0) {
+        delete state.pendingById[requestId];
+        continue;
+      }
+      const pendingScopes = Array.isArray(pending.scopes)
+        ? mergeScopes(
+            ...nextPendingRoles.map((entry) =>
+              preserveRoleScopedApprovalScopes(entry, pending.scopes),
+            ),
+          )
+        : undefined;
+      state.pendingById[requestId] = {
+        ...pending,
+        role: nextPendingRoles[0],
+        roles: nextPendingRoles,
+        scopes: pendingScopes,
+      };
+    }
+
+    const scopeBaseline = device.approvedScopes ?? device.scopes;
+    const preservedScopes = Array.isArray(scopeBaseline)
+      ? mergeScopes(
+          ...remainingRoles.map((entry) => preserveRoleScopedApprovalScopes(entry, scopeBaseline)),
+        )
+      : undefined;
+    const next: PairedDevice = {
+      ...device,
+      role: remainingRoles[0],
+      roles: remainingRoles,
+      ...(preservedScopes !== undefined
+        ? { scopes: preservedScopes, approvedScopes: preservedScopes }
+        : {}),
+      tokens: Object.keys(tokens).length > 0 ? tokens : undefined,
+    };
+    state.pairedByDeviceId[normalizedDeviceId] = next;
+    await persistState(state, params.baseDir, "both");
+    return { deviceId: normalizedDeviceId, role, removedDevice: false };
+  });
+}
+
 /** Update non-auth metadata for a paired device presence/status refresh. */
 export async function updatePairedDeviceMetadata(
   deviceId: string,
