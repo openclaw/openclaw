@@ -1,11 +1,11 @@
 // OpenClaw SDK tests cover package behavior.
-import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { spawn, spawnSync, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 
@@ -89,8 +89,35 @@ function runCommand(
   });
 }
 
-function signalCommandProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function signalCommandProcess(
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+  runTaskkill: typeof spawnSync = spawnSync,
+): void {
+  if (process.platform === "win32") {
+    if (typeof child.pid === "number") {
+      const args = ["/PID", String(child.pid), "/T"];
+      if (signal === "SIGKILL") {
+        args.push("/F");
+      }
+      const result = runTaskkill("taskkill", args, { stdio: "ignore", windowsHide: true });
+      if (!result.error && result.status === 0) {
+        return;
+      }
+      if (signal !== "SIGKILL") {
+        const forceResult = runTaskkill("taskkill", [...args, "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        if (!forceResult.error && forceResult.status === 0) {
+          return;
+        }
+      }
+    }
+    child.kill(signal);
+    return;
+  }
+  if (typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
@@ -258,6 +285,38 @@ describe("OpenClaw SDK package e2e", () => {
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
+  });
+
+  it("force-kills Windows package command process trees when graceful taskkill fails", () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const killMock = vi.fn();
+      const child = {
+        pid: 12345,
+        kill: killMock,
+      } as unknown as ReturnType<typeof spawn>;
+      const runTaskkill = vi
+        .fn()
+        .mockReturnValueOnce({ status: 1 })
+        .mockReturnValueOnce({ status: 0 });
+
+      signalCommandProcess(child, "SIGTERM", runTaskkill);
+
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(killMock).not.toHaveBeenCalled();
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
   });
 
   it("packs and imports from an external temp consumer", async () => {
