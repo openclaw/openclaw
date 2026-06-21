@@ -1,4 +1,8 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateImageProvidersResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 // Gateway RPC handlers for image generation provider inventory.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,18 +12,18 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 /**
  * Check if a provider has generic config (auth profile, model config, plugin config).
- * Reuses the same logic as CLI capability-cli.ts for consistency.
+ * This function only checks cfg-internal fields, does not read disk.
+ * Mirrors the pattern in src/cli/capability-cli.ts for consistency.
  */
-function providerHasGenericConfig(
-  cfg: OpenClawConfig,
-  providerId: string,
-  agentDir?: string,
-): boolean {
+function providerHasGenericConfig(cfg: OpenClawConfig, providerId: string): boolean {
   const modelsProviders = (cfg.models?.providers ?? {}) as Record<string, unknown>;
   const pluginEntries = (cfg.plugins?.entries ?? {}) as Record<string, { config?: unknown }>;
+  // Use delimiter matching to avoid prefix collision (e.g., openai vs openai-azure)
+  const matchesProvider = (key: string): boolean =>
+    key === providerId || key.startsWith(providerId + ":") || key.startsWith(providerId + "/");
   return (
     // Has auth profile
-    Object.keys(cfg.auth?.profiles ?? {}).some((key) => key.startsWith(providerId)) ||
+    Object.keys(cfg.auth?.profiles ?? {}).some(matchesProvider) ||
     // Has model config
     Boolean(modelsProviders[providerId]) ||
     // Has plugin config
@@ -62,8 +66,7 @@ export const imageHandlers: GatewayRequestHandlers = {
       const providers = listImageGenerationProviders(cfg).map((provider) => {
         // Use provider's isConfigured with agentDir, fallback to generic config check
         const isConfigured =
-          provider.isConfigured?.({ cfg, agentDir }) ??
-          providerHasGenericConfig(cfg, provider.id, agentDir);
+          provider.isConfigured?.({ cfg, agentDir }) ?? providerHasGenericConfig(cfg, provider.id);
         return {
           id: provider.id,
           label: provider.label ?? provider.id,
@@ -85,12 +88,37 @@ export const imageHandlers: GatewayRequestHandlers = {
         providers.find((p) => p.configured)?.id ??
         providers[0]?.id ??
         null;
-      respond(true, {
-        providers,
-        active: activeProvider,
-      });
+
+      const result = { providers, active: activeProvider };
+      // Validate response against protocol schema before returning
+      const validation = validateImageProvidersResult(result);
+      if (!validation.success) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_PARAMS,
+            `image.providers response failed schema validation: ${validation.error?.message ?? ""}`,
+          ),
+        );
+        return;
+      }
+      respond(true, result);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      // Classify error by type for appropriate response code
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      let code = ErrorCodes.UNAVAILABLE;
+      // Distinguish config errors from runtime errors
+      if (errorMessage.includes("config") || errorMessage.includes("Config")) {
+        code = ErrorCodes.INVALID_PARAMS;
+      } else if (errorMessage.includes("registry") || errorMessage.includes("Registry")) {
+        code = ErrorCodes.UNAVAILABLE;
+      } else {
+        code = ErrorCodes.INTERNAL_ERROR;
+      }
+      // Log detailed error internally, return generic message to client
+      console.error("[image.providers] Error:", formatForLog(err));
+      respond(false, undefined, errorShape(code, "Failed to retrieve image providers"));
     }
   },
 };

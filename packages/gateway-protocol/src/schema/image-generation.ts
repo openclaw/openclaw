@@ -88,10 +88,10 @@ export type ImageProviderCapabilityOutput =
     };
 
 export type ImageProviderCapabilities = {
-  generate?: boolean | ImageProviderCapabilitySupport;
-  edit?: boolean | ImageProviderCapabilitySupport;
-  geometry?: ImageProviderCapabilityGeometry;
-  output?: ImageProviderCapabilityOutput;
+  generate: boolean | ImageProviderCapabilitySupport;
+  edit: boolean | ImageProviderCapabilitySupport;
+  geometry: ImageProviderCapabilityGeometry;
+  output: ImageProviderCapabilityOutput;
 };
 
 export type ImageProvider = {
@@ -105,5 +105,5 @@ export type ImageProvider = {
 
 export type ImageProvidersResult = {
   providers: ImageProvider[];
-  active?: string | null;
+  active: string | null;
 };
