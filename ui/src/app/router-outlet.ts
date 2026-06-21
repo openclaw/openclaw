@@ -136,53 +136,32 @@ export function renderRouterOutlet<
   options: RouterOutletOptions<TRouteId, TLoadContext, TData> = {},
 ): unknown {
   const state = router.getState();
-  const activeMatch = state.matches[0];
-  const pendingMatch = state.pendingMatches[0];
-  const boundaryMatch =
-    pendingMatch?.status === "notFound" || pendingMatch?.status === "redirected"
-      ? pendingMatch
-      : activeMatch;
-  if (boundaryMatch?.status === "notFound") {
+  const renderedMatch = state.pendingMatches[0] ?? state.matches[0];
+  if (renderedMatch?.status === "notFound") {
     return null;
   }
-  if (boundaryMatch?.status === "redirected") {
+  if (renderedMatch?.status === "redirected") {
     return null;
   }
-  const errorMatch =
-    pendingMatch?.status === "error" || activeMatch?.status === "error"
-      ? pendingMatch?.status === "error"
-        ? pendingMatch
-        : activeMatch
-      : undefined;
   const routeId =
-    activeMatch?.routeId ??
+    renderedMatch?.routeId ??
     (state.status === "idle" || state.status === "loading" ? options.fallbackRouteId : null);
   if (!routeId) {
-    if (errorMatch?.error) {
-      return renderError(router, options.retryContext, errorMatch.error, errorMatch.routeId);
+    if (renderedMatch?.error) {
+      return renderError(router, options.retryContext, renderedMatch.error, renderedMatch.routeId);
     }
     return renderPending();
   }
 
-  const module =
-    activeMatch?.routeId === routeId
-      ? activeMatch.module
-      : pendingMatch?.routeId === routeId
-        ? pendingMatch.module
-        : undefined;
-  const renderedMatch = activeMatch?.routeId === routeId ? activeMatch : pendingMatch;
-  if (renderedMatch?.status === "pending") {
+  if (!renderedMatch?.module) {
     return renderPending();
   }
-  if (!module) {
-    return renderPending();
-  }
-  if (!isRenderableModule<TContext, TData>(module)) {
-    return errorMatch?.error
-      ? renderError(router, options.retryContext, errorMatch.error, routeId)
+  if (!isRenderableModule<TContext, TData>(renderedMatch.module)) {
+    return renderedMatch.error
+      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
       : null;
   }
-  const renderPage = () => module.render(context, renderedMatch?.data);
+  const renderPage = () => renderedMatch.module.render(context, renderedMatch.data);
   const renderedPage = () => {
     const renderContext = context as RouterRenderContext;
     return measureControlUiRender(
@@ -192,8 +171,8 @@ export function renderRouterOutlet<
       renderPage,
     );
   };
-  return errorMatch?.error
-    ? renderError(router, options.retryContext, errorMatch.error, routeId, renderedPage)
+  return renderedMatch.error
+    ? renderError(router, options.retryContext, renderedMatch.error, routeId, renderedPage)
     : renderedPage();
 }
 
