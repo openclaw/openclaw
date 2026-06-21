@@ -1,5 +1,23 @@
-import { describe, it, expect, vi } from "vitest";
+/**
+ * Tests for image.providers gateway handler.
+ */
+import { describe, expect, it, vi } from "vitest";
 import { imageHandlers } from "./image.js";
+
+const mocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+  listImageGenerationProviders: vi.fn(() => []),
+}));
+
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig:
+    mocks.getRuntimeConfig as typeof import("../../config/config.js").getRuntimeConfig,
+}));
+
+vi.mock("../../image-generation/provider-registry.js", () => ({
+  listImageGenerationProviders:
+    mocks.listImageGenerationProviders as typeof import("../../image-generation/provider-registry.js").listImageGenerationProviders,
+}));
 
 describe("imageHandlers", () => {
   // Test 1: no active provider - imageGenerationModel not configured
@@ -14,6 +32,8 @@ describe("imageHandlers", () => {
       }),
     };
 
+    mocks.listImageGenerationProviders.mockReturnValue([]);
+
     await imageHandlers["image.providers"]({
       respond: mockRespond,
       context: mockContext as never,
@@ -22,7 +42,7 @@ describe("imageHandlers", () => {
     expect(mockRespond).toHaveBeenCalledWith(true, expect.objectContaining({ active: null }));
   });
 
-  // Test 2: configured/readiness state - provider.isConfigured returns false
+  // Test 2: configured/readiness state - provider.isConfigured returns true
   it("marks provider as configured when isConfigured returns true", async () => {
     const mockRespond = vi.fn();
     const mockProvider = {
@@ -45,9 +65,7 @@ describe("imageHandlers", () => {
       }),
     };
 
-    vi.mock("../../image-generation/provider-registry.js", () => ({
-      listImageGenerationProviders: vi.fn().mockReturnValue([mockProvider]),
-    }));
+    mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
 
     await imageHandlers["image.providers"]({
       respond: mockRespond,
@@ -87,9 +105,7 @@ describe("imageHandlers", () => {
       }),
     };
 
-    vi.mock("../../image-generation/provider-registry.js", () => ({
-      listImageGenerationProviders: vi.fn().mockReturnValue([mockProvider]),
-    }));
+    mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
 
     await imageHandlers["image.providers"]({
       respond: mockRespond,
@@ -135,9 +151,7 @@ describe("imageHandlers", () => {
       }),
     };
 
-    vi.mock("../../image-generation/provider-registry.js", () => ({
-      listImageGenerationProviders: vi.fn().mockReturnValue([mockProvider]),
-    }));
+    mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
 
     await imageHandlers["image.providers"]({
       respond: mockRespond,
