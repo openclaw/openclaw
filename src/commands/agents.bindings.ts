@@ -316,10 +316,18 @@ export function parseBindingSpecs(params: {
     if (!trimmed) {
       continue;
     }
-    const [channelRaw, accountRaw] = trimmed.split(":", 2);
+    // Account ids never contain ":" (VALID_ID_RE in routing/account-id), so split fully: a third
+    // segment is a malformed spec, not an account id to silently truncate to (split(":", 2) drops it).
+    const [channelRaw, accountRaw, ...extraSegments] = trimmed.split(":");
     const channel = normalizeBindingChannelId(channelRaw, params.config);
     if (!channel) {
       errors.push(formatUnknownChannelMessage({ channel: channelRaw }));
+      continue;
+    }
+    if (extraSegments.length > 0) {
+      errors.push(
+        `Invalid binding "${trimmed}". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.`,
+      );
       continue;
     }
     let accountId: string | undefined = accountRaw?.trim();
