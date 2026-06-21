@@ -807,6 +807,7 @@ export function buildBuiltinChatCommands(
           choices: ["on", "off", "full"],
         },
       ],
+      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "trace",
