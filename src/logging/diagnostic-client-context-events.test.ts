@@ -142,6 +142,25 @@ describe("clientContext propagation onto diagnostic events", () => {
     expect(stateEntry?.clientContext).toBeUndefined();
   });
 
+  it("clears clientContext when the run completes (session idle), bounding it to the active run", () => {
+    const ref = { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" };
+    const { trusted } = capture(() => {
+      setDiagnosticSessionClientContext(ref, UPSTREAM);
+      logSessionStateChange({ ...ref, state: "processing" });
+      // Run completes: the idle event still carries the completing run's context...
+      logSessionStateChange({ ...ref, state: "idle", reason: "run_completed" });
+      // ...but a later event on the reused session (no re-seed) must not inherit it.
+      logMessageQueued({ sessionId: "s1", source: "dispatch" });
+    });
+
+    // processing + idle both attribute to the completing run.
+    const stateEntries = trusted.filter((entry) => entry.type === "session.state");
+    expect(stateEntries.map((entry) => entry.clientContext)).toEqual([UPSTREAM, UPSTREAM]);
+    // The trailing message.queued saw cleared context (bounded to the run).
+    const queued = trusted.find((entry) => entry.type === "message.queued");
+    expect(queued?.clientContext).toBeUndefined();
+  });
+
   it("omits clientContext for sessions without an upstream context", () => {
     const { publicEvents, trusted } = capture(() => {
       logSessionStateChange({

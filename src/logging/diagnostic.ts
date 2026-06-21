@@ -938,6 +938,16 @@ export function logSessionStateChange(
   } else {
     emitDiagnosticEvent(stateEvent);
   }
+  // Bound clientContext to the active run's lifetime: when the session goes idle
+  // the owning run has completed (a *replaced* run does not emit idle — see the
+  // active-handle guard in the embedded-agent-runner), so drop the context here
+  // so it cannot leak onto a later, unrelated run's lifecycle events. The idle
+  // event emitted above still carries the completing run's context; a subsequent
+  // run re-seeds via the gateway. Per-run scoping keyed off runId (rather than
+  // this session-scoped diagnostic state) is tracked as a follow-up.
+  if (params.state === "idle" && state.clientContext) {
+    state.clientContext = undefined;
+  }
   markActivity();
 }
 
