@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { definePage } from "../../router/index.ts";
@@ -7,7 +8,7 @@ import { startDebugPolling, stopDebugPolling } from "../../ui/app-polling.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { callDebugMethod, loadDebug } from "../../ui/controllers/debug.ts";
 
-type DebugRenderContext = { state: AppViewState };
+type DebugRenderContext = RouteRenderContext;
 type DebugLoadContext = { host: SettingsHost; app: SettingsAppHost };
 
 export const page = definePage({
@@ -15,7 +16,7 @@ export const page = definePage({
   path: "/debug",
   component: () =>
     import("../../ui/views/debug.ts").then((module) => ({
-      render: ({ state }: DebugRenderContext) => html`
+      render: ({ state, navigate }: DebugRenderContext) => html`
         <section class="content-header">
           <div>
             <div class="page-title">${titleForRoute("debug")}</div>
@@ -42,6 +43,7 @@ export const page = definePage({
             onCall: () => void callDebugMethod(state),
           }),
           "debug",
+          navigate,
         )}
       `,
       header: true,

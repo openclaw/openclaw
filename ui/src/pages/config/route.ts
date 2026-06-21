@@ -1,3 +1,4 @@
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
@@ -5,7 +6,7 @@ import { loadSettingsPage } from "../loaders.ts";
 import type { ConfigPageId } from "./page.ts";
 
 type ConfigLoadContext = { host: SettingsHost; app: SettingsAppHost };
-type ConfigRenderContext = { state: AppViewState };
+type ConfigRenderContext = RouteRenderContext;
 
 function configPage(id: ConfigPageId, path: string) {
   return definePage({
@@ -15,7 +16,8 @@ function configPage(id: ConfigPageId, path: string) {
     component: () =>
       import("./page.ts").then((module) => ({
         header: true,
-        render: ({ state }: ConfigRenderContext) => module.renderConfigRoute(state, id),
+        render: ({ state, navigate }: ConfigRenderContext) =>
+          module.renderConfigRoute(state, id, navigate),
       })),
   });
 }

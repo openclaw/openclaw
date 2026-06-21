@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
 import { DEFAULT_CRON_FORM } from "../../ui/app-defaults.ts";
@@ -35,7 +36,7 @@ import {
 } from "../../ui/views/cron-quick-create.ts";
 import { loadCronPage } from "../loaders.ts";
 type CronLoadContext = { host: SettingsHost; app: SettingsAppHost };
-type CronRenderContext = { state: AppViewState };
+type CronRenderContext = RouteRenderContext;
 type CronModule = typeof import("../../ui/views/cron.ts");
 
 const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
@@ -62,7 +63,11 @@ function runTask<Args extends unknown[]>(
   };
 }
 
-function renderCronPage(state: AppViewState, module: CronModule) {
+function renderCronPage(
+  state: AppViewState,
+  module: CronModule,
+  navigate: RouteRenderContext["navigate"],
+) {
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const agentSuggestions = sortLocaleStrings(
@@ -277,7 +282,7 @@ function renderCronPage(state: AppViewState, module: CronModule) {
       }),
       onNavigateToChat: (sessionKey) => {
         switchChatSession(state, sessionKey);
-        state.setRoute("chat");
+        navigate("chat");
       },
     })}
   `;
@@ -291,6 +296,6 @@ export const page = definePage({
     import("../../ui/views/cron.ts").then((module) => ({
       shell: "page" as const,
       header: true,
-      render: ({ state }: CronRenderContext) => renderCronPage(state, module),
+      render: ({ state, navigate }: CronRenderContext) => renderCronPage(state, module, navigate),
     })),
 });

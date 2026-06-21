@@ -10,7 +10,11 @@ import { t } from "../i18n/index.ts";
 import type { AppViewState } from "../ui/app-view-state.ts";
 import { icons } from "../ui/icons.ts";
 
-function renderSettingsSectionNav(state: AppViewState, currentRouteId: RouteId) {
+function renderSettingsSectionNav(
+  state: AppViewState,
+  currentRouteId: RouteId,
+  navigate: (routeId: RouteId) => void,
+) {
   if (!isSettingsNavigationRoute(currentRouteId)) {
     return nothing;
   }
@@ -35,7 +39,7 @@ function renderSettingsSectionNav(state: AppViewState, currentRouteId: RouteId) 
                 return;
               }
               event.preventDefault();
-              state.setRoute(routeId);
+              navigate(routeId);
             }}
             title=${titleForRoute(routeId)}
           >
@@ -50,10 +54,15 @@ function renderSettingsSectionNav(state: AppViewState, currentRouteId: RouteId) 
   `;
 }
 
-export function renderSettingsWorkspace(state: AppViewState, body: unknown, routeId: RouteId) {
+export function renderSettingsWorkspace(
+  state: AppViewState,
+  body: unknown,
+  routeId: RouteId,
+  navigate: (routeId: RouteId) => void,
+) {
   return html`
     <section class="settings-workspace">
-      ${renderSettingsSectionNav(state, routeId)}
+      ${renderSettingsSectionNav(state, routeId, navigate)}
       <div class="settings-workspace__body">${body}</div>
     </section>
   `;

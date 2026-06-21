@@ -1,4 +1,5 @@
 import { guard } from "lit/directives/guard.js";
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { i18n } from "../../i18n/index.ts";
 import { definePage } from "../../router/index.ts";
@@ -34,7 +35,7 @@ import { loadChatPage } from "../loaders.ts";
 import { createSessionWorkspaceProps } from "./session-workspace.ts";
 
 type ChatLoadContext = { host: SettingsHost; app: SettingsAppHost };
-type ChatRenderContext = { state: AppViewState };
+type ChatRenderContext = RouteRenderContext;
 
 function resolveChatAgentId(state: AppViewState): string {
   return normalizeAgentId(
@@ -66,7 +67,7 @@ function resolveChatAvatarUrl(state: AppViewState): string | null {
   return typeof avatar === "string" && isRenderableControlUiAvatarUrl(avatar) ? avatar : null;
 }
 
-function renderGuardedChatControls(state: AppViewState) {
+function renderGuardedChatControls(state: AppViewState, navigate: RouteRenderContext["navigate"]) {
   return guard(
     [
       state.sessionKey,
@@ -103,7 +104,7 @@ function renderGuardedChatControls(state: AppViewState) {
       state.sessionSwitchFlashKey,
       i18n.getLocale(),
     ],
-    () => renderChatControls(state),
+    () => renderChatControls(state, navigate),
   );
 }
 
@@ -124,7 +125,7 @@ export const page = definePage({
   component: () => ({
     shell: "chat" as const,
     header: true,
-    render: ({ state }: ChatRenderContext) =>
+    render: ({ state, navigate }: ChatRenderContext) =>
       renderChat({
         sessionKey: state.sessionKey,
         onSessionKeyChange: (next) => switchChatSession(state, next),
@@ -160,7 +161,7 @@ export const page = definePage({
         onDismissError: () => dismissChatError(state),
         onDismissRealtimeTalkError: () => dismissRealtimeTalkError(state),
         sessions: state.sessionsResult,
-        composerControls: renderGuardedChatControls(state),
+        composerControls: renderGuardedChatControls(state, navigate),
         sessionWorkspace: createSessionWorkspaceProps(state),
         onRefresh: () => {
           state.chatSideResult = null;
@@ -181,7 +182,7 @@ export const page = definePage({
         onCompact: () => void state.handleSendChat("/compact", { restoreDraft: true }),
         onOpenSessionCheckpoints: () => {
           state.sessionsExpandedCheckpointKey = state.sessionKey;
-          state.setRoute("sessions");
+          navigate("sessions");
           void loadSessions(state, {
             ...createChatSessionsLoadOverrides(state),
             ...scopedAgentListParamsForSession(state, state.sessionKey),
@@ -209,7 +210,7 @@ export const page = definePage({
         onAgentChange: (agentId) => switchChatSession(state, buildAgentMainSessionKey({ agentId })),
         onNavigateToAgent: () => {
           state.agentsSelectedId = state.assistantAgentId;
-          state.setRoute("agents");
+          navigate("agents");
         },
         onSessionSelect: (key) => switchChatSession(state, key),
         sidebarOpen: state.sidebarOpen,

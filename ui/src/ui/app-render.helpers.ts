@@ -159,7 +159,11 @@ const routePreloadTimers = new WeakMap<EventTarget, ReturnType<typeof setTimeout
 export function renderRouteNavItem(
   state: AppViewState,
   routeId: RouteId,
-  opts?: { activeRouteId?: RouteId; collapsed?: boolean },
+  opts?: {
+    activeRouteId?: RouteId;
+    collapsed?: boolean;
+    onNavigate?: (routeId: RouteId) => void;
+  },
 ) {
   const href = pathForRoute(routeId, state.basePath);
   const activeRouteId = opts?.activeRouteId;
@@ -231,7 +235,7 @@ export function renderRouteNavItem(
             void state.loadAssistantIdentity();
           }
         }
-        state.setRoute(routeId);
+        opts?.onNavigate?.(routeId);
       }}
       title=${titleForRoute(routeId)}
     >
@@ -339,7 +343,7 @@ function renderChatAutoScrollToggle(state: AppViewState, options: { labelled?: b
   `;
 }
 
-export function renderChatControls(state: AppViewState) {
+export function renderChatControls(state: AppViewState, onNavigate?: (routeId: RouteId) => void) {
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
   const disableThinkingToggle = state.onboarding;
@@ -398,7 +402,7 @@ export function renderChatControls(state: AppViewState) {
     >
       ${renderChatModelSelect(state)}
     </div>
-    ${renderChatQuotaPill(state)}
+    ${renderChatQuotaPill(state, onNavigate)}
     <div class="chat-settings-popover-wrapper">
       <button
         class="chat-settings-chip ${settingsOpen ? "chat-settings-chip--open" : ""}"

@@ -1,7 +1,7 @@
 // Control UI chat module implements session controls behavior.
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { pathForRoute } from "../../app-routes.ts";
+import { pathForRoute, type RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
 import {
   createChatSessionsLoadOverrides,
@@ -924,7 +924,7 @@ function renderChatSessionPickerPopover(
   `;
 }
 
-export function renderChatQuotaPill(state: AppViewState) {
+export function renderChatQuotaPill(state: AppViewState, onNavigate?: (routeId: RouteId) => void) {
   const windows = collectQuotaWindowsFromAuthStatus(
     state.modelAuthStatusResult,
     isMonitoredAuthProvider,
@@ -965,7 +965,7 @@ export function renderChatQuotaPill(state: AppViewState) {
           return;
         }
         event.preventDefault();
-        state.setRoute("usage");
+        onNavigate?.("usage");
       }}
     >
       <span class="chat-controls__quota-label">${t("tabs.usage")}</span>

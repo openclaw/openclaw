@@ -1,4 +1,5 @@
 import { html } from "lit";
+import type { RouteRenderContext } from "../../app-routes.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
@@ -37,6 +38,7 @@ export type ConfigPageId =
 type ConfigRenderContext = {
   state: AppViewState;
   pageId: ConfigPageId;
+  navigate: RouteRenderContext["navigate"];
 };
 
 const COMMUNICATION_SECTION_KEYS = [
@@ -270,7 +272,7 @@ export function extractQuickSettingsSecurity(state: AppViewState): {
   };
 }
 
-function renderConfigPage({ state, pageId }: ConfigRenderContext) {
+function renderConfigPage({ state, navigate, pageId }: ConfigRenderContext) {
   const requestUpdate = (state as AppViewState & { requestUpdate?: () => void }).requestUpdate;
   const configObject =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null) ?? {};
@@ -571,12 +573,12 @@ function renderConfigPage({ state, pageId }: ConfigRenderContext) {
           onModelChange: () => {
             state.configSettingsMode = "advanced";
             state.aiAgentsActiveSection = "models";
-            state.setRoute("ai-agents");
+            navigate("ai-agents");
           },
           setBorderRadius: (value) => state.setBorderRadius(value),
           setTextScale: (value) => state.setTextScale(value),
           onOpenCustomThemeImport: () => {
-            state.setRoute("appearance");
+            navigate("appearance");
             state.appearanceFormMode = "form";
             state.appearanceSearchQuery = "";
             state.appearanceActiveSection = "__appearance__";
@@ -609,10 +611,10 @@ function renderConfigPage({ state, pageId }: ConfigRenderContext) {
             void patchSession(state, state.sessionKey, { thinkingLevel: level }),
           onFastModeToggle: () =>
             void patchSession(state, state.sessionKey, { fastMode: !fastMode }),
-          onChannelConfigure: () => state.setRoute("channels"),
-          onManageCron: () => state.setRoute("cron"),
-          onBrowseSkills: () => state.setRoute("skills"),
-          onConfigureMcp: () => state.setRoute("mcp"),
+          onChannelConfigure: () => navigate("channels"),
+          onManageCron: () => navigate("cron"),
+          onBrowseSkills: () => navigate("skills"),
+          onConfigureMcp: () => navigate("mcp"),
           onSecurityConfigure: () => {
             state.configSettingsMode = "advanced";
             state.configActiveSection = "auth";
@@ -678,10 +680,15 @@ function renderConfigPage({ state, pageId }: ConfigRenderContext) {
         ${body}
       `,
       pageId,
+      navigate,
     )}
   `;
 }
 
-export function renderConfigRoute(state: AppViewState, pageId: ConfigPageId) {
-  return renderConfigPage({ state, pageId });
+export function renderConfigRoute(
+  state: AppViewState,
+  pageId: ConfigPageId,
+  navigate: RouteRenderContext["navigate"],
+) {
+  return renderConfigPage({ state, pageId, navigate });
 }

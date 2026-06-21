@@ -109,7 +109,7 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
     .slice(0, 5);
 }
 
-function renderSidebarSessions(state: AppViewState) {
+function renderSidebarSessions(state: AppViewState, navigate: (routeId: RouteId) => void) {
   const collapsed = state.settings.navCollapsed;
   const busy = isSidebarSessionBusy(state);
   const recent = collapsed ? [] : resolveSidebarRecentSessions(state);
@@ -133,7 +133,7 @@ function renderSidebarSessions(state: AppViewState) {
             return;
           }
           if (await createChatSession(state, { source: "user" })) {
-            state.setRoute("chat");
+            navigate("chat");
           }
         }}
       >
@@ -177,7 +177,7 @@ function renderSidebarSessions(state: AppViewState) {
                 <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
               </button>
               <div class="sidebar-recent-sessions__list">
-                ${recent.map((row) => renderSidebarRecentSession(state, row))}
+                ${recent.map((row) => renderSidebarRecentSession(state, row, navigate))}
               </div>
             </div>
           `}
@@ -185,7 +185,11 @@ function renderSidebarSessions(state: AppViewState) {
   `;
 }
 
-function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow) {
+function renderSidebarRecentSession(
+  state: AppViewState,
+  row: GatewaySessionRow,
+  navigate: (routeId: RouteId) => void,
+) {
   const active = row.key === state.sessionKey;
   const label = resolveSessionDisplayName(row.key, row);
   const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
@@ -211,7 +215,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
         if (row.key !== state.sessionKey) {
           switchChatSession(state, row.key);
         }
-        state.setRoute("chat");
+        navigate("chat");
       }}
     >
       <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
@@ -293,23 +297,31 @@ export function renderApp(state: AppViewState) {
   if (!state.connected) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
+  const context = {
+    state,
+    navigate: (routeId: RouteId) => state.setRoute(routeId),
+  };
   return routerOutlet(
     appRouter,
-    state,
+    context,
     {
       onNotFound: () =>
         void resolveAppNotFound(routeLoadContext(state as unknown as SettingsHost)).catch(
           () => undefined,
         ),
     },
-    (selection) => renderConnectedApp(state, selection),
+    (selection) => renderConnectedApp(context, selection),
   );
 }
 
 function renderConnectedApp(
-  state: AppViewState,
+  context: {
+    state: AppViewState;
+    navigate: (routeId: RouteId) => void;
+  },
   routeView: RouterOutletSelection<RouteId, AppRouteModule, unknown>,
 ) {
+  const { state, navigate } = context;
   const updatableState = state as AppViewState & { requestUpdate?: () => void };
   const requestHostUpdate =
     typeof updatableState.requestUpdate === "function"
@@ -329,7 +341,7 @@ function renderConnectedApp(
     activeRouteModule !== null &&
     "header" in activeRouteModule &&
     activeRouteModule.header === true;
-  const routedPage = renderRouterOutlet(appRouter, { state }, routeView, {
+  const routedPage = renderRouterOutlet(appRouter, context, routeView, {
     retryContext: routeLoadContext(state as unknown as SettingsHost),
   });
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
@@ -356,10 +368,10 @@ function renderConnectedApp(
         state.paletteActiveIndex = i;
       },
       onNavigate: (routeId) => {
-        state.setRoute(routeId);
+        navigate(routeId);
       },
       onSlashCommand: (cmd) => {
-        state.setRoute("chat");
+        navigate("chat");
         state.handleChatDraftChange(cmd.endsWith(" ") ? cmd : `${cmd} `);
       },
     })}
@@ -405,7 +417,7 @@ function renderConnectedApp(
               .basePath=${state.basePath}
               .agentLabel=${dashboardHeaderContext.agentLabel}
               @navigate=${(event: CustomEvent<RouteId>) => {
-                state.setRoute(event.detail);
+                navigate(event.detail);
               }}
             ></dashboard-header>
           </div>
@@ -471,7 +483,7 @@ function renderConnectedApp(
               </button>
             </div>
             <div class="sidebar-shell__body">
-              ${renderSidebarSessions(state)}
+              ${renderSidebarSessions(state, navigate)}
               <nav class="sidebar-nav">
                 ${SIDEBAR_SECTIONS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
@@ -505,6 +517,7 @@ function renderConnectedApp(
                           renderRouteNavItem(state, routeId, {
                             activeRouteId: renderedRouteId,
                             collapsed: navCollapsed,
+                            onNavigate: navigate,
                           }),
                         )}
                       </div>

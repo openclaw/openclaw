@@ -1,3 +1,4 @@
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsHost } from "../../app/app-host.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { definePage } from "../../router/index.ts";
@@ -7,7 +8,7 @@ import { updateConfigFormValue } from "../../ui/controllers/config.ts";
 import { loadChannelsPage } from "../loaders.ts";
 
 type ChannelsLoadContext = { host: SettingsHost };
-type ChannelsRenderContext = { state: AppViewState };
+type ChannelsRenderContext = RouteRenderContext;
 
 export const page = definePage({
   id: "channels",
@@ -15,7 +16,7 @@ export const page = definePage({
   loader: ({ host }: ChannelsLoadContext) => loadChannelsPage(host),
   component: () =>
     import("../../ui/views/channels.ts").then((module) => ({
-      render: ({ state }: ChannelsRenderContext) =>
+      render: ({ state, navigate }: ChannelsRenderContext) =>
         renderSettingsWorkspace(
           state,
           module.renderChannels({
@@ -53,6 +54,7 @@ export const page = definePage({
             onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
           }),
           "channels",
+          navigate,
         ),
     })),
 });

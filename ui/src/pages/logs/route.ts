@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { definePage } from "../../router/index.ts";
@@ -8,7 +9,7 @@ import { scheduleLogsScroll } from "../../ui/app-scroll.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadLogs } from "../../ui/controllers/logs.ts";
 
-type LogsRenderContext = { state: AppViewState };
+type LogsRenderContext = RouteRenderContext;
 type LogsLoadContext = { host: SettingsHost; app: SettingsAppHost };
 
 export const page = definePage({
@@ -16,7 +17,7 @@ export const page = definePage({
   path: "/logs",
   component: () =>
     import("../../ui/views/logs.ts").then((module) => ({
-      render: ({ state }: LogsRenderContext) => html`
+      render: ({ state, navigate }: LogsRenderContext) => html`
         <section class="content-header">
           <div>
             <div class="page-title">${titleForRoute("logs")}</div>
@@ -45,6 +46,7 @@ export const page = definePage({
               onScroll: (event) => state.handleLogsScroll(event),
             }),
             "logs",
+            navigate,
           )}
         </section>
       `,

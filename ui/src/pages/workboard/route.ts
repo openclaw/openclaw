@@ -1,3 +1,4 @@
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { definePage } from "../../router/index.ts";
@@ -13,7 +14,7 @@ import {
 } from "../../ui/controllers/workboard.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
 
-type WorkboardRenderContext = { state: AppViewState };
+type WorkboardRenderContext = RouteRenderContext;
 type WorkboardLoadContext = { host: SettingsHost; app: SettingsAppHost };
 
 export const page = definePage({
@@ -38,7 +39,7 @@ export const page = definePage({
   component: () =>
     import("../../ui/views/workboard.ts").then((module) => ({
       contentClass: "content--workboard",
-      render: ({ state }: WorkboardRenderContext) => {
+      render: ({ state, navigate }: WorkboardRenderContext) => {
         const requestUpdate = (state as AppViewState & { requestUpdate?: () => void })
           .requestUpdate;
         const auth =
@@ -60,7 +61,7 @@ export const page = definePage({
           sessions: state.sessionsResult?.sessions ?? [],
           onOpenSession: (sessionKey) => {
             switchChatSession(state, sessionKey);
-            state.setRoute("chat");
+            navigate("chat");
           },
           onReloadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
           onRequestUpdate: requestUpdate,

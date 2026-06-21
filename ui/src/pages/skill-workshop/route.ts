@@ -1,10 +1,11 @@
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadSkillWorkshopProposals } from "../../ui/controllers/skill-workshop.ts";
 
 type SkillWorkshopLoadContext = { app: SettingsAppHost };
-type SkillWorkshopRenderContext = { state: AppViewState };
+type SkillWorkshopRenderContext = RouteRenderContext;
 
 export const page = definePage({
   id: "skill-workshop",
@@ -13,7 +14,8 @@ export const page = definePage({
     import("./page.ts").then((module) => ({
       shell: "page" as const,
       header: true,
-      render: ({ state }: SkillWorkshopRenderContext) => module.renderSkillWorkshopPage(state),
+      render: ({ state, navigate }: SkillWorkshopRenderContext) =>
+        module.renderSkillWorkshopPage(state, navigate),
     })),
   loader: ({ app }: SkillWorkshopLoadContext) =>
     loadSkillWorkshopProposals(app).then(() => undefined),

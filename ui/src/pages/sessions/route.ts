@@ -1,3 +1,4 @@
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost } from "../../app/app-host.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { definePage } from "../../router/index.ts";
@@ -17,7 +18,7 @@ import {
 import { captureSessionToWorkboard, getWorkboardState } from "../../ui/controllers/workboard.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
 
-type SessionsRenderContext = { state: AppViewState };
+type SessionsRenderContext = RouteRenderContext;
 type SessionsLoadContext = { app: SettingsAppHost };
 
 function runTask<Args extends unknown[]>(
@@ -35,7 +36,7 @@ export const page = definePage({
     Promise.all([loadConfig(app), loadSessions(app)]).then(() => undefined),
   component: () =>
     import("../../ui/views/sessions.ts").then((module) => ({
-      render: ({ state }: SessionsRenderContext) => {
+      render: ({ state, navigate }: SessionsRenderContext) => {
         const requestUpdate = (state as AppViewState & { requestUpdate?: () => void })
           .requestUpdate;
         const workboardState = getWorkboardState(state);
@@ -172,7 +173,7 @@ export const page = definePage({
           }),
           onNavigateToChat: (sessionKey) => {
             switchChatSession(state, sessionKey);
-            state.setRoute("chat");
+            navigate("chat");
           },
           onAddToWorkboard:
             workboardEnabled && operatorCanWrite
@@ -183,7 +184,7 @@ export const page = definePage({
                     session,
                     requestUpdate,
                   });
-                  state.setRoute("workboard");
+                  navigate("workboard");
                 })
               : undefined,
           onToggleCheckpointDetails: (sessionKey) =>
@@ -192,7 +193,7 @@ export const page = definePage({
             const nextKey = await branchSessionFromCheckpoint(state, sessionKey, checkpointId);
             if (nextKey) {
               switchChatSession(state, nextKey);
-              state.setRoute("chat");
+              navigate("chat");
             }
           }),
           onRestoreCheckpoint: (sessionKey, checkpointId) =>

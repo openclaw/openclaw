@@ -1,5 +1,6 @@
 // Skill Workshop page owns its Control UI render glue.
 import { html } from "lit";
+import type { RouteRenderContext } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
 import { createChatSessionsLoadOverrides } from "../../ui/app-chat.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
@@ -102,6 +103,7 @@ async function sendSkillWorkshopRevisionRequest(
   instructions: string,
   proposal: { key: string; slug: string; origin?: { agentId?: string; sessionKey?: string } },
   proposalAgentId: string,
+  navigate: RouteRenderContext["navigate"],
 ): Promise<void> {
   if (!state.client || !state.connected) {
     throw new Error("Gateway is not connected.");
@@ -110,7 +112,7 @@ async function sendSkillWorkshopRevisionRequest(
   if (!sessionKey) {
     throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
   }
-  state.setRoute("chat");
+  navigate("chat");
   if (state.sessionKey === sessionKey) {
     await loadChatHistory(state);
   } else {
@@ -190,7 +192,10 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
   `;
 }
 
-export function renderSkillWorkshopPage(state: AppViewState) {
+export function renderSkillWorkshopPage(
+  state: AppViewState,
+  navigate: RouteRenderContext["navigate"],
+) {
   const pageClass =
     state.skillWorkshopMode === "today"
       ? "content--skill-workshop content--skill-workshop-today"
@@ -294,7 +299,7 @@ export function renderSkillWorkshopPage(state: AppViewState) {
           },
           onRevisionSubmit: (key) =>
             void requestSkillWorkshopRevision(state, key, (message, proposal, agentId) =>
-              sendSkillWorkshopRevisionRequest(state, message, proposal, agentId),
+              sendSkillWorkshopRevisionRequest(state, message, proposal, agentId, navigate),
             ),
           onPreviewFile: (key, path) => {
             state.skillWorkshopSelectedKey = key;

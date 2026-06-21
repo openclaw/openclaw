@@ -29,6 +29,7 @@ export type RouteLoadContext = {
 
 export type RouteRenderContext = {
   state: AppViewState;
+  navigate: (routeId: RouteId) => void;
 };
 
 export function routeLoadContext(host: SettingsHost): RouteLoadContext {
