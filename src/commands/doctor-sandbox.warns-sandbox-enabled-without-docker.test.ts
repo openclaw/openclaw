@@ -317,7 +317,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
   });
 
   it("maps legacy registry files to structured findings and dry-run effects", () => {
-    const file = {
+    const monolithicFile = {
       kind: "containers",
       registryPath: "/tmp/openclaw/sandbox/containers.json",
       shardedDir: "/tmp/openclaw/sandbox/containers",
@@ -326,8 +326,12 @@ describe("maybeRepairSandboxRegistryFiles", () => {
       valid: true,
       entries: 2,
     } as const;
+    const shardedFile = {
+      ...monolithicFile,
+      source: "sharded",
+    } as const;
 
-    expect(legacySandboxRegistryInspectionToHealthFinding(file)).toEqual(
+    expect(legacySandboxRegistryInspectionToHealthFinding(monolithicFile)).toEqual(
       expect.objectContaining({
         checkId: "core/doctor/sandbox/registry-files",
         severity: "warning",
@@ -335,12 +339,25 @@ describe("maybeRepairSandboxRegistryFiles", () => {
         fixHint: expect.stringContaining("openclaw doctor --fix"),
       }),
     );
-    expect(legacySandboxRegistryInspectionToRepairEffect(file)).toEqual({
+    expect(legacySandboxRegistryInspectionToRepairEffect(monolithicFile)).toEqual({
       kind: "state",
       action: "would-migrate-legacy-sandbox-registry",
       target: "/tmp/openclaw/sandbox/containers.json",
       dryRunSafe: false,
     });
+    expect(legacySandboxRegistryInspectionToHealthFinding(shardedFile)).toEqual(
+      expect.objectContaining({
+        path: "/tmp/openclaw/sandbox/containers",
+        message: expect.stringContaining(
+          "- containers sharded: /tmp/openclaw/sandbox/containers (2 entries)",
+        ),
+      }),
+    );
+    expect(legacySandboxRegistryInspectionToRepairEffect(shardedFile)).toEqual(
+      expect.objectContaining({
+        target: "/tmp/openclaw/sandbox/containers",
+      }),
+    );
   });
 
   it("maps invalid legacy registry files to quarantine effects", () => {

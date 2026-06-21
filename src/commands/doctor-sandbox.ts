@@ -361,8 +361,12 @@ export async function maybeRepairSandboxImages(
 
 function formatLegacyRegistryInspectionLine(file: LegacySandboxRegistryInspection): string {
   const status = file.valid ? `${file.entries} entr${file.entries === 1 ? "y" : "ies"}` : "invalid";
-  const sourcePath = file.source === "sharded" ? file.shardedDir : file.registryPath;
+  const sourcePath = legacySandboxRegistryInspectionSourcePath(file);
   return `- ${file.kind} ${file.source}: ${shortenHomePath(sourcePath)} (${status})`;
+}
+
+function legacySandboxRegistryInspectionSourcePath(file: LegacySandboxRegistryInspection): string {
+  return file.source === "sharded" ? file.shardedDir : file.registryPath;
 }
 
 function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigrationResult): string {
@@ -395,7 +399,7 @@ export function legacySandboxRegistryInspectionToHealthFinding(
     severity: "warning",
     message: `Legacy sandbox registry file detected.
 ${formatLegacyRegistryInspectionLine(file)}`,
-    path: file.registryPath,
+    path: legacySandboxRegistryInspectionSourcePath(file),
     fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate valid entries to SQLite.`,
   };
 }
@@ -411,7 +415,7 @@ export function legacySandboxRegistryInspectionToRepairEffect(
   return {
     kind: "state",
     action,
-    target: file.registryPath,
+    target: legacySandboxRegistryInspectionSourcePath(file),
     dryRunSafe: false,
   };
 }
