@@ -8,7 +8,7 @@ runtime runs out of tokens / hits a rate limit / needs Max-Pro.
 ```
 Telegram
   ↓
-OpenClaw gateway (openclaw.service)
+OpenClaw gateway (openclaw-gateway.service)
   ↓  primary: claude-cli / codex SUBSCRIPTION runtimes (unchanged, free)
   ↓  fallback: litellm/openclaw-auto
 LiteLLM (127.0.0.1:4000)
@@ -63,7 +63,7 @@ Claude-only agents: `claude-dev`, `claude-smart`, `trust`, `legal`, `analyst`.
 Changes take effect on the next gateway restart:
 
 ```bash
-systemctl --user restart openclaw.service
+systemctl --user restart openclaw-gateway.service
 ```
 
 ## Health monitor (alert + auto-restart)
@@ -75,11 +75,13 @@ new token, no polling conflict). Alerts fire only on transitions (up↔down), so
 no spam.
 
 Files:
+
 - `litellm-health-monitor.sh` — the check + restart + alert logic
 - `deploy/systemd/litellm-health-monitor.{service,timer}` — installed copies live
   in `~/.config/systemd/user/`
 
 Install / control:
+
 ```bash
 cp deploy/systemd/litellm-health-monitor.* ~/.config/systemd/user/
 systemctl --user daemon-reload
@@ -102,6 +104,5 @@ with `MONITOR_TARGET` if needed.
 docker compose -f docker-compose.litellm.yml down
 # restore live config from the timestamped backup if needed:
 #   cp ~/.openclaw/openclaw.json.bak-litellm-<TS> ~/.openclaw/openclaw.json
-git checkout main
-git branch -D feature/provider-gateway-litellm
+# LiteLLM merged to main (commit 1ca59c3e) — no feature branch to delete
 ```
