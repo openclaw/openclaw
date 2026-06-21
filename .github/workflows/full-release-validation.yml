@@ -8,6 +8,22 @@ on:
         required: true
         default: main
         type: string
+      policy_mode:
+        description: Release policy migration mode; strict enables authenticated release evidence
+        required: true
+        default: legacy
+        type: choice
+        options:
+          - legacy
+          - strict
+      release_selector:
+        description: Strict release selector (alpha, beta, daily, or stable); omit in legacy mode
+        required: false
+        type: string
+      external_contract_revision:
+        description: Exact openclaw/releases protected default-branch revision for strict evidence handoff
+        required: false
+        type: string
       provider:
         description: Provider lane for cross-OS onboarding and the end-to-end agent turn
         required: false
@@ -225,6 +241,176 @@ jobs:
               echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  release_policy:
+    name: Authorize strict release validation
+    needs: [resolve_target]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      strict_release: ${{ steps.ingress.outputs.strict_release }}
+      release_version: ${{ steps.verify.outputs.release_version }}
+      target_ref: ${{ steps.verify.outputs.target_ref }}
+      release_policy: ${{ steps.verify.outputs.release_policy }}
+      release_policy_sha256: ${{ steps.verify.outputs.release_policy_sha256 }}
+      verifier_run_id: ${{ steps.verify.outputs.verifier_run_id }}
+      verifier_run_attempt: ${{ steps.verify.outputs.verifier_run_attempt }}
+      verifier_artifact_name: ${{ steps.verify.outputs.verifier_artifact_name }}
+      verifier_payload_sha256: ${{ steps.verify.outputs.verifier_payload_sha256 }}
+    steps:
+      - name: Validate release policy ingress
+        id: ingress
+        env:
+          POLICY_MODE: ${{ inputs.policy_mode }}
+          RELEASE_SELECTOR: ${{ inputs.release_selector }}
+          EXTERNAL_CONTRACT_REVISION: ${{ inputs.external_contract_revision }}
+        run: |
+          set -euo pipefail
+          case "$POLICY_MODE" in
+            legacy)
+              if [[ -n "${RELEASE_SELECTOR// }" ]]; then
+                echo "release_selector must be omitted in legacy mode." >&2
+                exit 1
+              fi
+              echo "strict_release=false" >> "$GITHUB_OUTPUT"
+              ;;
+            strict)
+              case "$RELEASE_SELECTOR" in
+                alpha|beta|daily|stable) ;;
+                *)
+                  echo "Strict mode requires release_selector alpha, beta, daily, or stable." >&2
+                  exit 1
+                  ;;
+              esac
+              if [[ ! "$EXTERNAL_CONTRACT_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "Strict mode requires external_contract_revision as 40 lowercase hexadecimal characters." >&2
+                exit 1
+              fi
+              echo "strict_release=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "policy_mode must be legacy or strict." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify strict internal validation authority
+        id: verify
+        if: steps.ingress.outputs.strict_release == 'true'
+        env:
+          RELEASE_SELECTOR: ${{ inputs.release_selector }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+            echo "Strict Full Validation must validate the exact commit executing the parent workflow." >&2
+            exit 1
+          fi
+
+          canonical_url="https://github.com/openclaw/openclaw.git"
+          policy_root="$RUNNER_TEMP/openclaw-release-policy-main"
+          target_repo="$RUNNER_TEMP/openclaw-full-validation-target.git"
+          evidence_dir="$RUNNER_TEMP/openclaw-full-validation-verifier"
+          rm -rf "$policy_root" "$target_repo" "$evidence_dir"
+          git init --quiet "$policy_root"
+          git -C "$policy_root" remote add origin "$canonical_url"
+          git -C "$policy_root" fetch --quiet --no-tags --no-recurse-submodules origin \
+            +refs/heads/main:refs/remotes/origin/main
+          git -C "$policy_root" checkout --quiet --detach refs/remotes/origin/main
+          policy_sha="$(git -C "$policy_root" rev-parse HEAD^{commit})"
+
+          git init --quiet --bare "$target_repo"
+          git -C "$target_repo" fetch --quiet --no-tags --no-recurse-submodules "$canonical_url" \
+            "+${GITHUB_REF}:refs/verify/target"
+          observed_target_sha="$(git -C "$target_repo" rev-parse refs/verify/target^{commit})"
+          if [[ "$observed_target_sha" != "$TARGET_SHA" ]]; then
+            echo "Strict Full Validation target ref does not resolve to the workflow head." >&2
+            exit 1
+          fi
+          release_version="$(git -C "$target_repo" show "${observed_target_sha}:package.json" | jq -er '.version')"
+
+          verifier_input="$RUNNER_TEMP/full-validation-release-operation.json"
+          RELEASE_VERSION="$release_version" POLICY_SHA="$policy_sha" node <<'NODE' > "$verifier_input"
+          const input = {
+            schemaVersion: 1,
+            operation: "internal-validation",
+            releaseVersion: process.env.RELEASE_VERSION,
+            releaseSelector: process.env.RELEASE_SELECTOR,
+            policyMode: "strict",
+            expectedPolicySourceSha: process.env.POLICY_SHA,
+            execution: {
+              event: process.env.GITHUB_EVENT_NAME,
+              workflowPath: ".github/workflows/full-release-validation.yml",
+              executionRef: process.env.GITHUB_REF,
+              runHeadSha: process.env.GITHUB_SHA,
+              runId: process.env.GITHUB_RUN_ID,
+              runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            },
+            target: {
+              targetRef: process.env.GITHUB_REF,
+              targetSha: process.env.TARGET_SHA,
+              releaseTag: null,
+              authorizedSourceRef: process.env.GITHUB_REF,
+            },
+          };
+          process.stdout.write(`${JSON.stringify(input)}\n`);
+          NODE
+
+          mkdir -p "$evidence_dir"
+          verifier_result="$evidence_dir/release-operation-verifier-v1.json"
+          node "$policy_root/scripts/verify-release-operation.mjs" verify \
+            --contract-version 1 \
+            --policy-root "$policy_root" \
+            --input "$verifier_input" > "$verifier_result"
+
+          VERIFIER_RESULT="$verifier_result" node --input-type=module - "$policy_root" <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [policyRoot] = process.argv.slice(2);
+          const evidence = await import(
+            pathToFileURL(path.join(policyRoot, "scripts/lib/release-policy-evidence.mjs")).href
+          );
+          const verification = evidence.validateReleaseOperationResult(
+            JSON.parse(readFileSync(process.env.VERIFIER_RESULT, "utf8")),
+          );
+          const policy = evidence.validateReleasePolicy({
+            version: 1,
+            releaseVersion: verification.releaseVersion,
+            releaseClass: verification.releaseClass,
+            releaseSelector: verification.releaseSelector,
+            policyMode: verification.policyMode,
+            publishEligible: !["stable-base", "stable-patch"].includes(verification.releaseClass),
+            authorizedSourceRef: verification.target.authorizedSourceRef,
+            policySource: verification.policySource,
+          });
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_version=${policy.releaseVersion}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `target_ref=${verification.target.targetRef}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_policy=${evidence.canonicalJson(policy)}\n`);
+          appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `release_policy_sha256=${evidence.releasePolicySha256(policy)}\n`,
+          );
+          NODE
+
+          verifier_artifact_name="release-operation-verifier-v1-internal-validation-${release_version}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "verifier_run_id=$GITHUB_RUN_ID"
+            echo "verifier_run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "verifier_artifact_name=$verifier_artifact_name"
+            echo "verifier_payload_sha256=$(sha256sum "$verifier_result" | awk '{print $1}')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload strict internal validation verifier evidence
+        if: steps.ingress.outputs.strict_release == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-operation-verifier-v1-internal-validation-${{ steps.verify.outputs.release_version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-full-validation-verifier
+          if-no-files-found: error
 
   docker_runtime_assets_preflight:
     name: Verify Docker runtime image assets
@@ -520,8 +706,8 @@ jobs:
 
   release_checks:
     name: Run release/live/Docker/QA validation
-    needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    needs: [resolve_target, release_policy, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.release_policy.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
@@ -533,7 +719,7 @@ jobs:
         id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_REF: ${{ inputs.ref }}
+          TARGET_REF: ${{ needs.release_policy.outputs.strict_release == 'true' && needs.release_policy.outputs.target_ref || inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PROVIDER: ${{ inputs.provider }}
@@ -546,6 +732,11 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+          STRICT_RELEASE: ${{ needs.release_policy.outputs.strict_release }}
+          VERIFIER_RUN_ID: ${{ needs.release_policy.outputs.verifier_run_id }}
+          VERIFIER_RUN_ATTEMPT: ${{ needs.release_policy.outputs.verifier_run_attempt }}
+          VERIFIER_ARTIFACT_NAME: ${{ needs.release_policy.outputs.verifier_artifact_name }}
+          VERIFIER_PAYLOAD_SHA256: ${{ needs.release_policy.outputs.verifier_payload_sha256 }}
         run: |
           set -euo pipefail
 
@@ -762,6 +953,14 @@ jobs:
           fi
           if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
             args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
+          fi
+          if [[ "$STRICT_RELEASE" == "true" ]]; then
+            args+=(
+              -f verifier_run_id="$VERIFIER_RUN_ID"
+              -f verifier_run_attempt="$VERIFIER_RUN_ATTEMPT"
+              -f verifier_artifact_name="$VERIFIER_ARTIFACT_NAME"
+              -f verifier_payload_sha256="$VERIFIER_PAYLOAD_SHA256"
+            )
           fi
 
           dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
@@ -1014,6 +1213,7 @@ jobs:
     needs:
       [
         resolve_target,
+        release_policy,
         docker_runtime_assets_preflight,
         normal_ci,
         plugin_prerelease,
@@ -1381,6 +1581,12 @@ jobs:
           TARGET_REF: ${{ inputs.ref }}
           PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
           GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
+          POLICY_MODE: ${{ inputs.policy_mode }}
+          EXTERNAL_CONTRACT_REVISION: ${{ inputs.external_contract_revision }}
+          VERIFIER_RUN_ID: ${{ needs.release_policy.outputs.verifier_run_id }}
+          VERIFIER_RUN_ATTEMPT: ${{ needs.release_policy.outputs.verifier_run_attempt }}
+          VERIFIER_ARTIFACT_NAME: ${{ needs.release_policy.outputs.verifier_artifact_name }}
+          VERIFIER_PAYLOAD_SHA256: ${{ needs.release_policy.outputs.verifier_payload_sha256 }}
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
         run: |
           set -euo pipefail
@@ -1418,6 +1624,11 @@ jobs:
               --arg release_id "$release_id" \
               --arg release_ref "$TARGET_REF" \
               --arg package_spec "$evidence_package_spec" \
+              --arg verifier_run_id "$VERIFIER_RUN_ID" \
+              --arg verifier_run_attempt "$VERIFIER_RUN_ATTEMPT" \
+              --arg verifier_artifact_name "$VERIFIER_ARTIFACT_NAME" \
+              --arg verifier_payload_sha256 "$VERIFIER_PAYLOAD_SHA256" \
+              --arg external_contract_revision "$EXTERNAL_CONTRACT_REVISION" \
               --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions." \
               '{
                 event_type: "openclaw_full_release_validation_completed",
@@ -1426,6 +1637,11 @@ jobs:
                   release_id: $release_id,
                   release_ref: $release_ref,
                   package_spec: $package_spec,
+                  verifier_run_id: $verifier_run_id,
+                  verifier_run_attempt: $verifier_run_attempt,
+                  verifier_artifact_name: $verifier_artifact_name,
+                  verifier_payload_sha256: $verifier_payload_sha256,
+                  external_contract_revision: $external_contract_revision,
                   notes: $notes
                 }
               }'
@@ -1445,7 +1661,7 @@ jobs:
               echo "Child workflow validation remains authoritative. Backfill durable evidence from \`openclaw/releases\`:"
               echo
               echo "\`\`\`bash"
-              echo "gh workflow run openclaw-release-evidence-from-full-validation.yml --repo openclaw/releases --ref main -f full_validation_run_id=${GITHUB_RUN_ID_VALUE} -f release_id=${release_id} -f release_ref=${TARGET_REF} -f package_spec=${evidence_package_spec}"
+              echo "gh workflow run openclaw-release-evidence-from-full-validation.yml --repo openclaw/releases --ref ${EXTERNAL_CONTRACT_REVISION:-main} -f full_validation_run_id=${GITHUB_RUN_ID_VALUE} -f release_id=${release_id} -f release_ref=${TARGET_REF} -f package_spec=${evidence_package_spec} -f verifier_run_id=${VERIFIER_RUN_ID} -f verifier_run_attempt=${VERIFIER_RUN_ATTEMPT} -f verifier_artifact_name=${VERIFIER_ARTIFACT_NAME} -f verifier_payload_sha256=${VERIFIER_PAYLOAD_SHA256} -f external_contract_revision=${EXTERNAL_CONTRACT_REVISION}"
               echo "\`\`\`"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -1464,6 +1680,10 @@ jobs:
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
           PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
           PERFORMANCE_CONCLUSION: ${{ needs.performance.outputs.conclusion }}
+          STRICT_RELEASE: ${{ needs.release_policy.outputs.strict_release }}
+          RELEASE_POLICY: ${{ needs.release_policy.outputs.release_policy }}
+          RELEASE_POLICY_SHA256: ${{ needs.release_policy.outputs.release_policy_sha256 }}
+          STRICT_TARGET_REF: ${{ needs.release_policy.outputs.target_ref }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
@@ -1484,13 +1704,17 @@ jobs:
             --arg npmTelegramRunId "$NPM_TELEGRAM_RUN_ID" \
             --arg performanceRunId "$PERFORMANCE_RUN_ID" \
             --arg performanceConclusion "$PERFORMANCE_CONCLUSION" \
+            --argjson strictRelease "$STRICT_RELEASE" \
+            --argjson releasePolicy "${RELEASE_POLICY:-null}" \
+            --arg releasePolicySha256 "$RELEASE_POLICY_SHA256" \
+            --arg strictTargetRef "$STRICT_TARGET_REF" \
             '{
-              version: 2,
+              version: (if $strictRelease then 3 else 2 end),
               workflowName: $workflowName,
               runId: $runId,
               runAttempt: $runAttempt,
-              workflowRef: $workflowRef,
-              targetRef: $targetRef,
+              workflowRef: (if $strictRelease then $strictTargetRef else $workflowRef end),
+              targetRef: (if $strictRelease then $strictTargetRef else $targetRef end),
               targetSha: $targetSha,
               releaseProfile: $releaseProfile,
               rerunGroup: $rerunGroup,
@@ -1510,7 +1734,10 @@ jobs:
                   blocking: true
                 }
               }
-            }' > "${manifest_dir}/full-release-validation-manifest.json"
+            } | if $strictRelease then . + {
+              releasePolicy: $releasePolicy,
+              releasePolicySha256: $releasePolicySha256
+            } else . end' > "${manifest_dir}/full-release-validation-manifest.json"
 
       - name: Upload release validation manifest
         if: ${{ success() }}
