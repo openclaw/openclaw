@@ -516,6 +516,84 @@ describe("ensureAgentWorkspace", () => {
     await expectCompletedWithoutBootstrap(tempDir);
   });
 
+  it("does not re-seed an existing directory nested under an ancestor workspace marker", async () => {
+    // A nested git worktree or relocated agent subdir under an established workspace is
+    // inherited project content, not a new workspace, so a session/subagent run must not
+    // recreate bootstrap templates the user removed or relocated there (#83593).
+    const parent = await makeTempWorkspace("openclaw-workspace-");
+    const markerPath = path.join(parent, ...WORKSPACE_STATE_PATH_SEGMENTS);
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(
+      markerPath,
+      JSON.stringify({ version: 1, setupCompletedAt: new Date().toISOString() }),
+    );
+    // Nested dir with existing content (a git worktree) but no bootstrap files.
+    const nested = path.join(parent, "github", "project");
+    await fs.mkdir(path.join(nested, ".git"), { recursive: true });
+    await fs.writeFile(path.join(nested, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    await ensureAgentWorkspace({ dir: nested, ensureBootstrapFiles: true });
+
+    for (const name of [
+      DEFAULT_AGENTS_FILENAME,
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_TOOLS_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+      DEFAULT_HEARTBEAT_FILENAME,
+      DEFAULT_BOOTSTRAP_FILENAME,
+    ]) {
+      await expectPathMissing(path.join(nested, name));
+    }
+    await expectPathMissing(path.join(nested, ...WORKSPACE_STATE_PATH_SEGMENTS));
+  });
+
+  it("still seeds a brand-new secondary-agent directory nested under a workspace marker", async () => {
+    // Regression guard: a freshly created secondary agent whose workspace resolves under
+    // `agents.defaults.workspace` is empty (brand new), so it must still receive starter
+    // files even though an ancestor owns the workspace marker (#83593).
+    const parent = await makeTempWorkspace("openclaw-workspace-");
+    const markerPath = path.join(parent, ...WORKSPACE_STATE_PATH_SEGMENTS);
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(
+      markerPath,
+      JSON.stringify({ version: 1, setupCompletedAt: new Date().toISOString() }),
+    );
+    const nested = path.join(parent, "bravo");
+    await fs.mkdir(nested, { recursive: true });
+
+    await ensureAgentWorkspace({ dir: nested, ensureBootstrapFiles: true });
+
+    await expect(fs.access(path.join(nested, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(nested, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
+  });
+
+  it("still repairs a nested workspace that owns its marker even under an ancestor marker", async () => {
+    // A real secondary-agent workspace nested under `agents.defaults.workspace` has its OWN
+    // `.openclaw/workspace-state.json`. Even with an ancestor marker it must keep the normal
+    // seeding/repair path, so a required file removed after setup (TOOLS.md) is restored (#83593).
+    const parent = await makeTempWorkspace("openclaw-workspace-");
+    const parentMarker = path.join(parent, ...WORKSPACE_STATE_PATH_SEGMENTS);
+    await fs.mkdir(path.dirname(parentMarker), { recursive: true });
+    await fs.writeFile(
+      parentMarker,
+      JSON.stringify({ version: 1, setupCompletedAt: new Date().toISOString() }),
+    );
+    // Established nested agent workspace: own marker + existing AGENTS.md, but TOOLS.md is gone.
+    const nested = path.join(parent, "bravo");
+    const nestedMarker = path.join(nested, ...WORKSPACE_STATE_PATH_SEGMENTS);
+    await fs.mkdir(path.dirname(nestedMarker), { recursive: true });
+    await fs.writeFile(
+      nestedMarker,
+      JSON.stringify({ version: 1, setupCompletedAt: new Date().toISOString() }),
+    );
+    await fs.writeFile(path.join(nested, DEFAULT_AGENTS_FILENAME), "# agents\n");
+
+    await ensureAgentWorkspace({ dir: nested, ensureBootstrapFiles: true });
+
+    await expect(fs.access(path.join(nested, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
+  });
+
   it("skips configured optional bootstrap files without skipping required files", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 

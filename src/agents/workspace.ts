@@ -467,6 +467,23 @@ function resolveLegacyWorkspaceStatePath(dir: string): string {
   return path.join(dir, LEGACY_WORKSPACE_STATE_DIRNAME, LEGACY_WORKSPACE_STATE_FILENAME);
 }
 
+// True when `dir` sits inside an already-established OpenClaw workspace: one of its
+// ancestors owns a `.openclaw/workspace-state.json` marker. The seeding guard combines
+// this with a non-empty-content check to skip re-seeding inherited project content
+// (#83593). The walk starts at the parent so a dir's own marker never affects its seeding.
+async function hasAncestorWorkspaceMarker(dir: string): Promise<boolean> {
+  let current = path.resolve(dir);
+  let parent = path.dirname(current);
+  while (parent !== current) {
+    if (await pathExists(resolveWorkspaceStatePath(parent))) {
+      return true;
+    }
+    current = parent;
+    parent = path.dirname(current);
+  }
+  return false;
+}
+
 export function resolveWorkspaceAttestationPath(dir: string): string {
   return resolveWorkspaceAttestationPathInStateDir(dir, resolveStateDir());
 }
@@ -864,6 +881,23 @@ export async function ensureAgentWorkspace(params?: {
     if (hasContentEvidence) {
       await maybeWriteWorkspaceAttestation(attestationPath, dir);
     }
+    return { dir };
+  }
+
+  // A non-empty directory nested inside an existing OpenClaw workspace (an ancestor owns
+  // `.openclaw/workspace-state.json`) that is NOT itself a workspace (no marker of its own)
+  // is inherited project content: a nested git worktree or relocated files. Re-seeding
+  // bootstrap templates there recreates files the user removed/relocated and litters the
+  // parent workspace (#83593). Directories with their own marker keep the normal
+  // seeding/repair path, and empty dirs still seed, so real nested agent workspaces (e.g. a
+  // secondary agent under `agents.defaults.workspace`) keep their starter files and repair.
+  const nestedUnderWorkspace = await hasAncestorWorkspaceMarker(dir);
+  const ownsWorkspaceMarker = await pathExists(resolveWorkspaceStatePath(dir));
+  if (
+    nestedUnderWorkspace &&
+    !ownsWorkspaceMarker &&
+    (await hasSkipBootstrapWorkspaceContentEvidence(dir))
+  ) {
     return { dir };
   }
 
