@@ -274,7 +274,12 @@ async function handleChallenge(payload) {
       caps: ["tool-events"],
       commands: [],
       device,
-      auth: gatewayToken ? { token: gatewayToken } : undefined,
+      // The configured credential is the gateway's shared secret; send it under
+      // BOTH fields because the extension can't know whether the gateway runs
+      // token- or password-mode auth, and the gateway validates only the
+      // mode-active field (the other is ignored). Without the password field,
+      // password-mode gateways reject the side-panel handshake.
+      auth: gatewayToken ? { token: gatewayToken, password: gatewayToken } : undefined,
     },
   });
 }

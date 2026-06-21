@@ -43,7 +43,7 @@ async function save() {
   // setup there. Remote gateways still require a token.
   const isLoopback = /\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(gatewayUrl);
   if (!token && !isLoopback) {
-    setStatus("error", "Token is required for remote gateways. Find it in openclaw.json under gateway.auth.token");
+    setStatus("error", "A gateway token or password is required for remote gateways. Find it in openclaw.json under gateway.auth.token (or gateway.auth.password).");
     return;
   }
 
