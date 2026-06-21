@@ -216,7 +216,7 @@ function preserveTelegramRichHtmlTextLineBreaks(html: string): string {
       output += text;
       return;
     }
-    output += text.replace(/\n/g, "<br>");
+    output += materializeTelegramRichHtmlTextLineBreaks(text, previous, next);
   };
 
   for (const match of html.matchAll(tagPattern)) {
@@ -302,6 +302,59 @@ function shouldMaterializeTelegramRichHtmlTextLineBreaks(
     return true;
   }
   return isTelegramRichInlineLineBreakBoundary(previousTag, nextTag);
+}
+
+function materializeTelegramRichHtmlTextLineBreaks(
+  text: string,
+  previousTag: TelegramRichHtmlLineBreakTag | undefined,
+  nextTag: TelegramRichHtmlLineBreakTag | undefined,
+): string {
+  if (!/[^\s]/u.test(text)) {
+    return text.replace(/\n/g, "<br>");
+  }
+
+  const firstContentIndex = text.search(/[^\s]/u);
+  const lastContentIndex = lastNonWhitespaceIndex(text);
+  const preserveLeadingStructuralBreaks = isOpeningTelegramRichStructuralTag(previousTag);
+  const preserveTrailingStructuralBreaks = isClosingTelegramRichStructuralTag(nextTag);
+  let output = "";
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (
+      char === "\n" &&
+      !(preserveLeadingStructuralBreaks && index < firstContentIndex) &&
+      !(preserveTrailingStructuralBreaks && index > lastContentIndex)
+    ) {
+      output += "<br>";
+      continue;
+    }
+    output += char;
+  }
+
+  return output;
+}
+
+function lastNonWhitespaceIndex(text: string): number {
+  for (let index = text.length - 1; index >= 0; index -= 1) {
+    if (/[^\s]/u.test(text[index] ?? "")) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isOpeningTelegramRichStructuralTag(tag: TelegramRichHtmlLineBreakTag | undefined): boolean {
+  return Boolean(
+    tag &&
+      !tag.isClosing &&
+      !tag.isSelfClosing &&
+      TELEGRAM_RICH_LINE_BREAK_BLOCK_TAGS.has(tag.tagName),
+  );
+}
+
+function isClosingTelegramRichStructuralTag(tag: TelegramRichHtmlLineBreakTag | undefined): boolean {
+  return Boolean(tag?.isClosing && TELEGRAM_RICH_LINE_BREAK_BLOCK_TAGS.has(tag.tagName));
 }
 
 function isTelegramRichInlineLineBreakBoundary(

@@ -1078,17 +1078,29 @@ describe("sendMessageTelegram", () => {
   it("keeps pretty-printed rich table structure without break tags", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
     const html = `<table>
+  <caption>
+    Caption
+  </caption>
   <thead>
     <tr>
-      <th>Head</th>
+      <th>
+        Head
+      </th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td>one</td>
+      <td>
+        one
+      </td>
       <td>two</td>
     </tr>
   </tbody>
+  <tfoot>
+    <tr>
+      <td>foot</td>
+    </tr>
+  </tfoot>
 </table>after
 line`;
 
@@ -1100,8 +1112,17 @@ line`;
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     const richHtml = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "";
+    expect(richHtml).not.toContain("</caption><br>");
+    expect(richHtml).not.toContain("</thead><br><tbody>");
+    expect(richHtml).not.toContain("</tbody><br><tfoot>");
     expect(richHtml).not.toContain("</td><br><td>");
     expect(richHtml).not.toContain("</th><br></tr>");
+    expect(richHtml).not.toContain("<caption><br>");
+    expect(richHtml).not.toContain("<th><br>");
+    expect(richHtml).not.toContain("<td><br>");
+    expect(richHtml).not.toContain("Caption<br>");
+    expect(richHtml).not.toContain("Head<br>");
+    expect(richHtml).not.toContain("one<br>");
     expect(richHtml).toContain("</table>after<br>line");
   });
 
