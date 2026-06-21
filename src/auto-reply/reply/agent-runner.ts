@@ -2588,34 +2588,22 @@ export async function runReplyAgent(params: {
 
     return result;
   } catch (error) {
-    if (
-      replyOperation.result?.kind === "aborted" &&
-      replyOperation.result.code === "aborted_for_restart"
-    ) {
-      return returnWithQueuedFollowupDrain(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-        }),
-      );
-    }
+    // Drain/restart aborts stay silent and defer to post-restart main-session
+    // recovery, which resumes the interrupted turn (or emits its own genuine
+    // non-resumable notice). Surfacing a generic "try again" here is a false
+    // terminal: it looks like the owed work was abandoned and invites a
+    // duplicate manual retry. `aborted_for_restart` is an "aborted" result, so
+    // it falls through to the shared abort branch below.
     if (replyOperation.result?.kind === "aborted") {
       return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
     }
     if (error instanceof GatewayDrainingError) {
       replyOperation.fail("gateway_draining", error);
-      return returnWithQueuedFollowupDrain(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-        }),
-      );
+      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
     }
     if (error instanceof CommandLaneClearedError) {
       replyOperation.fail("command_lane_cleared", error);
-      return returnWithQueuedFollowupDrain(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-        }),
-      );
+      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
     }
     const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
       err: error,

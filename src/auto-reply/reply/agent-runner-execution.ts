@@ -1405,10 +1405,6 @@ export function buildContextOverflowRecoveryText(params: {
   return prefix + (heartbeatBleedHint ?? buildContextOverflowResetHint(primaryContextWindow));
 }
 
-function buildRestartLifecycleReplyText(): string {
-  return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
-}
-
 function resolveRestartLifecycleError(
   err: unknown,
 ): GatewayDrainingError | CommandLaneClearedError | undefined {
@@ -3111,13 +3107,19 @@ export async function runAgentTurnWithFallback(params: {
         !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
+      // Drain/restart aborts stay silent and defer to post-restart
+      // main-session recovery, which resumes the interrupted turn (or emits its
+      // own genuine non-resumable notice). A generic "try again" here is a
+      // false terminal that invites a duplicate manual retry. Restart abort is
+      // treated exactly like user abort for visible output; the fail()
+      // bookkeeping for drain/lane-cleared is still recorded.
       if (isReplyOperationRestartAbort(params.replyOperation)) {
         takePendingLifecycleTerminal()?.emit("end", err);
         return {
           kind: "final",
-          payload: markAgentRunFailureReplyPayload({
-            text: buildRestartLifecycleReplyText(),
-          }),
+          payload: {
+            text: SILENT_REPLY_TOKEN,
+          },
         };
       }
 
@@ -3137,9 +3139,9 @@ export async function runAgentTurnWithFallback(params: {
         params.replyOperation?.fail("gateway_draining", restartLifecycleError);
         return {
           kind: "final",
-          payload: markAgentRunFailureReplyPayload({
-            text: buildRestartLifecycleReplyText(),
-          }),
+          payload: {
+            text: SILENT_REPLY_TOKEN,
+          },
         };
       }
 
@@ -3148,9 +3150,9 @@ export async function runAgentTurnWithFallback(params: {
         params.replyOperation?.fail("command_lane_cleared", restartLifecycleError);
         return {
           kind: "final",
-          payload: markAgentRunFailureReplyPayload({
-            text: buildRestartLifecycleReplyText(),
-          }),
+          payload: {
+            text: SILENT_REPLY_TOKEN,
+          },
         };
       }
 
