@@ -1006,7 +1006,6 @@ export async function runAgentAttempt(params: {
           sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
           sessionStore: params.sessionStore,
           storePath: params.storePath,
-          runId: params.runId,
           requests,
           cfg: params.cfg,
           runResult: embeddedRunResult,
@@ -1034,7 +1033,6 @@ async function scheduleSpawnInitContinueWorkWake(params: {
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
-  runId: string;
   requests: { reason: string; delaySeconds?: number; traceparent?: string }[];
   cfg: OpenClawConfig;
   runResult: EmbeddedAgentRunResult;
@@ -1064,7 +1062,14 @@ async function scheduleSpawnInitContinueWorkWake(params: {
       ...(request.traceparent ? { traceparent: request.traceparent } : {}),
     })),
     config: continuationConfig,
-    parentRunId: params.runId,
+    // Same-session own-turn continue_work has no spawning lineage — this election
+    // is the session's OWN next turn, not a delegate child. Leaving parentRunId
+    // unset keeps it on the #990 bucket-1 never-reap path (parentRunId==null →
+    // same-session). Tagging the electing run here would make the #990 orphan-reap
+    // cull the flow on any busy-defer: a subagent's electing run is always
+    // confident-terminal by wake time, so a single main-lane-busy skip would
+    // wrongly reap it before hop-2 ever runs (#952). Chain lineage rides
+    // chainId/traceparent, not parentRunId.
     log: (message) => log.info(message),
   });
   // #986 cap-notice symmetry: surface cap-dropped elections on the subagent-init
