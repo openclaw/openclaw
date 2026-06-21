@@ -580,6 +580,90 @@ describe("codex doctor contract", () => {
     });
   });
 
+  it("preserves the agent-specific store owner for legacy session keys", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-agent-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const sessionsDir = path.join(stateDir, "agents", "research", "sessions");
+    const transcriptPath = path.join(sessionsDir, "legacy-research.jsonl");
+    const sidecarPath = `${transcriptPath}.codex-app-server.json`;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(transcriptPath, '{"type":"session","id":"legacy-research"}\n', "utf8");
+    await fs.writeFile(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "legacy-direct": {
+          sessionId: "legacy-research",
+          sessionFile: "legacy-research.jsonl",
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      sidecarPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-research",
+        sessionFile: transcriptPath,
+      }),
+      "utf8",
+    );
+    const migration = stateMigrations[0];
+    if (!migration) {
+      throw new Error("missing Codex binding migration");
+    }
+
+    await expect(
+      migration.migrateLegacyState({
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      }),
+    ).resolves.toMatchObject({
+      changes: [expect.stringContaining("Migrated 1")],
+      warnings: [],
+    });
+
+    const store = createDoctorContext(env).openPluginStateKeyedStore<StoredCodexAppServerBinding>({
+      namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+      maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(
+      store.lookup(
+        bindingStoreKey({
+          kind: "session",
+          agentId: "research",
+          sessionId: "legacy-research",
+          sessionKey: "legacy-direct",
+        }),
+      ),
+    ).resolves.toMatchObject({
+      state: "active",
+      sessionId: "legacy-research",
+      binding: { threadId: "thread-research" },
+    });
+    await expect(
+      store.lookup(
+        bindingStoreKey({
+          kind: "session",
+          agentId: "main",
+          sessionId: "legacy-research",
+          sessionKey: "legacy-direct",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.readFile(path.join(sessionsDir, "sessions.json"), "utf8").then(JSON.parse),
+    ).resolves.toMatchObject({
+      "legacy-direct": { sessionId: "legacy-research", agentHarnessId: "codex" },
+    });
+    await expect(fs.access(`${sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
   it("uses the session index when a shipped sidecar transcript is missing", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

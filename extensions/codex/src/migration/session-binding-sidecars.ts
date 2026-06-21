@@ -157,10 +157,11 @@ async function* iterateIndexedSidecars(
       if (!sessionId) {
         continue;
       }
-      const agentId = resolveSessionAgentIds({
+      const agentId = resolveLegacyBindingOwnerAgentId({
         sessionKey,
         config: params.config,
-      }).sessionAgentId;
+        storeAgentIds: surface.agentIds,
+      });
       let transcriptPath: string;
       try {
         transcriptPath = resolveSessionFilePath(sessionId, entry, {
@@ -208,6 +209,16 @@ async function collectBindingOwners(
   );
   const owners = new Map<string, Map<string, LegacyBindingOwner>>();
   const storePaths = new Set(surfaces.flatMap((surface) => [...surface.storePaths]));
+  const storeAgentIds = new Map<string, Set<string>>();
+  for (const surface of surfaces) {
+    for (const storePath of surface.storePaths) {
+      const agents = storeAgentIds.get(storePath) ?? new Set<string>();
+      for (const agentId of surface.agentIds) {
+        agents.add(agentId);
+      }
+      storeAgentIds.set(storePath, agents);
+    }
+  }
   for (const storePath of storePaths) {
     let entries: ReturnType<typeof listSessionEntries>;
     try {
@@ -221,10 +232,11 @@ async function collectBindingOwners(
       if (!sessionId) {
         continue;
       }
-      const agentId = resolveSessionAgentIds({
+      const agentId = resolveLegacyBindingOwnerAgentId({
         sessionKey,
         config: params.config,
-      }).sessionAgentId;
+        storeAgentIds: storeAgentIds.get(storePath),
+      });
       let transcriptPath: string;
       try {
         transcriptPath = await canonicalizePath(
@@ -249,6 +261,25 @@ async function collectBindingOwners(
     }
   }
   return new Map([...owners].map(([key, values]) => [key, [...values.values()]]));
+}
+
+function resolveLegacyBindingOwnerAgentId(params: {
+  sessionKey: string;
+  config: MigrationEnvironment["config"];
+  storeAgentIds?: Set<string>;
+}): string {
+  if (params.sessionKey.trim().toLowerCase().startsWith("agent:")) {
+    return resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    }).sessionAgentId;
+  }
+  const storeAgentId = params.storeAgentIds?.size === 1 ? [...params.storeAgentIds][0] : undefined;
+  return resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    ...(storeAgentId ? { agentId: storeAgentId } : {}),
+  }).sessionAgentId;
 }
 
 function copyBindingForSession(
