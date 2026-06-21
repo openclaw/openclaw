@@ -1134,7 +1134,6 @@ describe("task-registry store runtime", () => {
           sourceId: "job-cascade",
           runId: "run-cascade-cron",
           task: "Cascade cleanup test",
-          status: "running",
           deliveryStatus: "pending",
           notifyPolicy: "done_only",
         });
