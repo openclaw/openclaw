@@ -237,7 +237,7 @@ function parseArgs(argv: string[]): Args {
     } else if (arg === "--evidence-dir") {
       args.evidenceDir = next();
     } else if (arg === "--help" || arg === "-h") {
-      process.stdout.write(`Usage: node --import tsx scripts/render-maturity-docs.ts [options]
+      process.stdout.write(`Usage: node --import tsx scripts/qa/render-maturity-docs.ts [options]
 
 Options:
   --taxonomy <path>     Taxonomy YAML path (default: taxonomy.yaml)
@@ -258,8 +258,8 @@ Options:
   return args;
 }
 
-function readYaml<T>(filePath: string): T {
-  return YAML.parse(fs.readFileSync(filePath, "utf8")) as T;
+function readYaml(filePath: string): unknown {
+  return YAML.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 function assertObject(value: unknown, label: string): Record<string, unknown> {
@@ -430,9 +430,9 @@ function expectedLtsSupported(
   scoreCategory: ScoreCategory,
   taxonomyCategory: TaxonomyCategory,
 ): boolean {
-  return Boolean(
+  return (
     (scoreCategory.quality.score > 80 && scoreCategory.coverage.score > 90) ||
-    taxonomyCategory.human_lts_override === true,
+    taxonomyCategory.human_lts_override === true
   );
 }
 
@@ -653,15 +653,17 @@ function familyTitle(value: string): string {
   );
 }
 
-function markdownEscape(value: unknown): string {
+type RenderScalar = string | number | boolean | null | undefined;
+
+function markdownEscape(value: RenderScalar): string {
   return String(value ?? "").replaceAll("|", "\\|");
 }
 
-function yamlCode(value: unknown): string {
+function yamlCode(value: RenderScalar): string {
   return `\`${markdownEscape(value)}\``;
 }
 
-function htmlAttributeEscape(value: unknown): string {
+function htmlAttributeEscape(value: RenderScalar): string {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll('"', "&quot;")
@@ -1270,8 +1272,8 @@ function main(): void {
   const taxonomyPath = path.normalize(args.taxonomy);
   const scoresPath = path.normalize(args.scores);
   const outputDir = path.normalize(args.outputDir);
-  const taxonomy = readYaml<Taxonomy>(taxonomyPath);
-  const scores = readYaml<Scores>(scoresPath);
+  const taxonomy = readYaml(taxonomyPath) as Taxonomy;
+  const scores = readYaml(scoresPath) as Scores;
   validateTaxonomy(taxonomy, taxonomyPath);
   const scoreWarnings = validateScores(scores, scoresPath, taxonomy);
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);

@@ -25,7 +25,7 @@ on:
       - "docs/maturity-scorecard.md"
       - "docs/taxonomy.md"
       - "docs/taxonomy-outline.md"
-      - "scripts/render-maturity-docs.ts"
+      - "scripts/qa/render-maturity-docs.ts"
       - "package.json"
       - ".github/workflows/maturity-scorecard.yml"
   pull_request:
@@ -35,7 +35,7 @@ on:
       - "docs/maturity-scorecard.md"
       - "docs/taxonomy.md"
       - "docs/taxonomy-outline.md"
-      - "scripts/render-maturity-docs.ts"
+      - "scripts/qa/render-maturity-docs.ts"
       - "package.json"
       - ".github/workflows/maturity-scorecard.yml"
 
