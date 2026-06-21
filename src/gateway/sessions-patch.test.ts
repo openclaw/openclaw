@@ -309,6 +309,42 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBe(true);
   });
 
+  test("clears title and label when patch sets title: null", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, title: null },
+      }),
+    );
+    expect(entry.title).toBeUndefined();
+    expect(entry.label).toBeUndefined();
+  });
+
+  test("clears title and label when patch sets label: null", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, label: null },
+      }),
+    );
+    expect(entry.title).toBeUndefined();
+    expect(entry.label).toBeUndefined();
+  });
+
+  test("clears title and label when both title: null and label: null", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, title: null, label: null },
+      }),
+    );
+    expect(entry.title).toBeUndefined();
+    expect(entry.label).toBeUndefined();
+  });
+
   test("clears fastMode when patch sets null", async () => {
     const store = mainStoreEntry({ fastMode: true });
     const entry = expectPatchOk(

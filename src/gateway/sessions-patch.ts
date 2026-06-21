@@ -354,9 +354,25 @@ export async function projectSessionsPatchEntry(params: {
   }
 
   if ("title" in patch || "label" in patch) {
-    const rawTitle = patch.title !== undefined ? normalizeSessionTitleText(patch.title) : undefined;
-    const rawLabel = patch.label !== undefined ? normalizeSessionTitleText(patch.label) : undefined;
-    if (rawTitle !== undefined && rawLabel !== undefined && rawTitle !== rawLabel) {
+    const rawTitle =
+      patch.title === undefined
+        ? undefined
+        : patch.title === null
+          ? null
+          : normalizeSessionTitleText(patch.title);
+    const rawLabel =
+      patch.label === undefined
+        ? undefined
+        : patch.label === null
+          ? null
+          : normalizeSessionTitleText(patch.label);
+    if (
+      rawTitle !== undefined &&
+      rawTitle !== null &&
+      rawLabel !== undefined &&
+      rawLabel !== null &&
+      rawTitle !== rawLabel
+    ) {
       return invalid("title and label must match when both are provided");
     }
     const raw = rawTitle !== undefined ? rawTitle : rawLabel;
