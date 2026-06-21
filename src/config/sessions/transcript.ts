@@ -361,9 +361,10 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   };
 
   let result: SessionTranscriptAppendResult;
-  if (params.expectedSessionId) {
+  if (params.expectedSessionId && !params.sessionFile?.trim()) {
     result = await appendToSessionFile(entry);
   } else if (params.sessionFile?.trim()) {
+    // expectedSessionId (if provided) flows to persistSessionTranscriptTurn for mid-write rebind detection.
     result = await appendToSessionFile(entry, params.sessionFile.trim());
   } else {
     let sessionFile: string;

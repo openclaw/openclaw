@@ -561,6 +561,7 @@ async function writeUnresumableNoticeToTranscript(params: {
       sessionKey: params.sessionKey,
       storePath: params.storePath,
       sessionFile,
+      expectedSessionId: params.sessionId,
       idempotencyKey: `main-session-restart-recovery:unresumable-notice:${params.sessionId}`,
       message: {
         role: "assistant" as const,

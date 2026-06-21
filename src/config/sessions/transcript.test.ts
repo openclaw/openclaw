@@ -1026,6 +1026,34 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ).toBe(false);
   });
 
+  it("rejects after rebound even when an explicit sessionFile is provided", async () => {
+    const explicitFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "replacement-session",
+          chatType: "direct",
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedSessionId: sessionId,
+      sessionFile: explicitFile,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "late output via explicit file" }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "session-rebound",
+    });
+    expect(fs.existsSync(explicitFile)).toBe(false);
+  });
+
   it("rejects a concurrent session rebind before the assistant append", async () => {
     writeTranscriptStore();
     let releaseReset = () => {};
