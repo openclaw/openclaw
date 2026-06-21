@@ -1450,6 +1450,167 @@ describe("speech-core per-agent TTS config", () => {
     }
   });
 
+  describe("emoji filtering (FIX #95478)", () => {
+    afterEach(() => {
+      synthesizeMock.mockClear();
+    });
+
+    it("filters basic emoji from text", async () => {
+      synthesizeMock.mockResolvedValueOnce({
+        audioBuffer: Buffer.from("voice"),
+        fileExtension: ".ogg",
+        outputFormat: "ogg",
+        voiceCompatible: false,
+      });
+
+      const cfg = createTtsConfig("feishu");
+      await maybeApplyTtsToPayload({
+        payload: { text: "Hello 🌸 World 😀!" },
+        cfg,
+        channel: "feishu",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(
+        synthesizeMock.mock.calls.at(-1)?.[0],
+        "latest synthesis request",
+      );
+      const text = request.text as string;
+      expect(text).not.toContain("\u{1F338}"); // 🌸 removed
+      expect(text).not.toContain("\u{1F600}"); // 😀 removed
+      expect(text).toContain("Hello");
+      expect(text).toContain("World");
+    });
+
+    it("preserves Chinese text while removing emoji", async () => {
+      synthesizeMock.mockResolvedValueOnce({
+        audioBuffer: Buffer.from("voice"),
+        fileExtension: ".ogg",
+        outputFormat: "ogg",
+        voiceCompatible: false,
+      });
+
+      const cfg = createTtsConfig("feishu");
+      await maybeApplyTtsToPayload({
+        payload: { text: "\u{1F338}今天天气真不错，适合出去散步" },
+        cfg,
+        channel: "feishu",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(
+        synthesizeMock.mock.calls.at(-1)?.[0],
+        "latest synthesis request",
+      );
+      const text = request.text as string;
+      expect(text).toBe("今天天气真不错，适合出去散步");
+    });
+
+    it("passes plain text through unchanged", async () => {
+      synthesizeMock.mockResolvedValueOnce({
+        audioBuffer: Buffer.from("voice"),
+        fileExtension: ".ogg",
+        outputFormat: "ogg",
+        voiceCompatible: false,
+      });
+
+      const cfg = createTtsConfig("feishu");
+      await maybeApplyTtsToPayload({
+        payload: { text: "No emoji here" },
+        cfg,
+        channel: "feishu",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(
+        synthesizeMock.mock.calls.at(-1)?.[0],
+        "latest synthesis request",
+      );
+      expect(request.text).toBe("No emoji here");
+    });
+
+    it("removes ZWJ sequences like family emoji", async () => {
+      synthesizeMock.mockResolvedValueOnce({
+        audioBuffer: Buffer.from("voice"),
+        fileExtension: ".ogg",
+        outputFormat: "ogg",
+        voiceCompatible: false,
+      });
+
+      const cfg = createTtsConfig("feishu");
+      await maybeApplyTtsToPayload({
+        payload: {
+          text: "Hello \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466} World",
+        },
+        cfg,
+        channel: "feishu",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(
+        synthesizeMock.mock.calls.at(-1)?.[0],
+        "latest synthesis request",
+      );
+      // Emoji removal may leave double spaces; trim extra spaces for assertion
+      const text = (request.text as string).replace(/ +/g, " ");
+      expect(text).toBe("Hello World");
+    });
+
+    it("removes skin-tone modifiers", async () => {
+      synthesizeMock.mockResolvedValueOnce({
+        audioBuffer: Buffer.from("voice"),
+        fileExtension: ".ogg",
+        outputFormat: "ogg",
+        voiceCompatible: false,
+      });
+
+      const cfg = createTtsConfig("feishu");
+      await maybeApplyTtsToPayload({
+        payload: { text: "Thumbs \u{1F44D}\u{1F3FB} up" },
+        cfg,
+        channel: "feishu",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(
+        synthesizeMock.mock.calls.at(-1)?.[0],
+        "latest synthesis request",
+      );
+      const text = (request.text as string).replace(/ +/g, " ");
+      expect(text).toBe("Thumbs up");
+    });
+
+    it("removes flag emoji", async () => {
+      synthesizeMock.mockResolvedValueOnce({
+        audioBuffer: Buffer.from("voice"),
+        fileExtension: ".ogg",
+        outputFormat: "ogg",
+        voiceCompatible: false,
+      });
+
+      const cfg = createTtsConfig("feishu");
+      await maybeApplyTtsToPayload({
+        payload: { text: "Flags \u{1F1FA}\u{1F1F8} \u{1F1E8}\u{1F1F3} removed" },
+        cfg,
+        channel: "feishu",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(
+        synthesizeMock.mock.calls.at(-1)?.[0],
+        "latest synthesis request",
+      );
+      const text = (request.text as string).replace(/ +/g, " ");
+      expect(text).toBe("Flags removed");
+    });
+  });
+
   it("ignores prototype-pollution keys in agent TTS overrides", () => {
     const cfg = {
       messages: {

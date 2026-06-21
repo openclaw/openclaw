@@ -1932,6 +1932,20 @@ function hasLegacyFinalMediaDirective(text: string): boolean {
   return /(?:^|\n)\s*MEDIA\s*:/i.test(text);
 }
 
+/**
+ * Remove emoji characters from text before TTS synthesis.
+ * Uses Unicode property escapes for comprehensive emoji matching across
+ * multiple emoji types: Emoji_Presentation, ZWJ sequences, variation
+ * selectors, skin tone modifiers, regional indicators (flags), keycap
+ * sequences, and tag sequences.
+ */
+const EMOJI_RE =
+  /\p{Extended_Pictographic}|[\u{200D}\u{20E3}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\u{E0060}-\u{E007F}]/gu;
+
+function stripEmoji(text: string): string {
+  return text.replace(EMOJI_RE, "").trim();
+}
+
 export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
@@ -2054,7 +2068,7 @@ export async function maybeApplyTtsToPayload(params: {
     }
   }
 
-  textForAudio = stripMarkdown(textForAudio).trim();
+  textForAudio = stripEmoji(stripMarkdown(textForAudio).trim());
   if (!textForAudio) {
     return nextPayload;
   }
