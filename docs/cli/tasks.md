@@ -44,6 +44,9 @@ openclaw tasks list [--runtime <name>] [--status <name>] [--json]
 ```
 
 Lists tracked background tasks newest first.
+The list is reconciled against durable task/session truth before display, so a
+stale active worker row can appear as terminal even before maintenance writes
+the repaired state back to the ledger.
 
 ### `show`
 

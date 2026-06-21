@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  buildTaskStatusSnapshotForRelatedSessionKeyForOwner,
   findLatestTaskForRelatedSessionKeyForOwner,
   findTaskByRunIdForOwner,
   getTaskByIdForOwner,
@@ -12,6 +13,7 @@ import {
   createTaskRecord as createTaskRecordOrNull,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
+import { resetTaskRegistryMaintenanceRuntimeForTests } from "./task-registry.maintenance.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -26,6 +28,7 @@ function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]):
 
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
+  resetTaskRegistryMaintenanceRuntimeForTests();
   ORIGINAL_ENV.restore();
 });
 
@@ -153,6 +156,35 @@ describe("task owner access", () => {
           callerOwnerKey: "agent:main:main",
         }),
       ).toBeUndefined();
+    });
+  });
+
+  it("builds owner status snapshots from reconciled task/session truth", async () => {
+    await withTaskRegistryTempDir(() => {
+      const staleAt = Date.now() - 10 * 60_000;
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:missing-session",
+        runId: "owner-stale-running-run",
+        task: "Inspect worker state",
+        status: "running",
+        createdAt: staleAt,
+        startedAt: staleAt,
+        lastEventAt: staleAt,
+      });
+
+      const snapshot = buildTaskStatusSnapshotForRelatedSessionKeyForOwner({
+        relatedSessionKey: "agent:main:subagent:missing-session",
+        callerOwnerKey: "agent:main:main",
+      });
+
+      expect(snapshot.activeCount).toBe(0);
+      expect(snapshot.recentFailureCount).toBe(1);
+      expect(snapshot.focus?.taskId).toBe(task.taskId);
+      expect(snapshot.focus?.status).toBe("lost");
+      expect(snapshot.focus?.error).toBe("backing session missing");
     });
   });
 });

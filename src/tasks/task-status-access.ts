@@ -1,12 +1,17 @@
 // Filters task status visibility by requester, owner, and flow scope.
-import {
-  findTaskByRunId,
-  getTaskById,
-  listTaskRecords,
-  listTasksForAgentId,
-  listTasksForSessionKey,
-} from "./task-registry.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { reconcileInspectableTasks, reconcileTaskLookupToken } from "./task-registry.reconcile.js";
 import type { TaskRecord } from "./task-registry.types.js";
+
+function taskMatchesRelatedSessionKey(task: TaskRecord, sessionKey: string): boolean {
+  const normalized = normalizeOptionalString(sessionKey);
+  if (!normalized) {
+    return false;
+  }
+  return [task.requesterSessionKey, task.ownerKey, task.childSessionKey].some(
+    (candidate) => normalizeOptionalString(candidate) === normalized,
+  );
+}
 
 /** Returns only the session lookup fields needed by task status commands. */
 export function getTaskSessionLookupByIdForStatus(
@@ -14,7 +19,7 @@ export function getTaskSessionLookupByIdForStatus(
 ):
   | Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "runId" | "agentId" | "requesterAgentId">
   | undefined {
-  const task = getTaskById(taskId);
+  const task = reconcileInspectableTasks().find((entry) => entry.taskId === taskId);
   return task
     ? {
         requesterSessionKey: task.requesterSessionKey,
@@ -27,19 +32,22 @@ export function getTaskSessionLookupByIdForStatus(
 }
 
 export function listTasksForSessionKeyForStatus(sessionKey: string): TaskRecord[] {
-  return listTasksForSessionKey(sessionKey);
+  return reconcileInspectableTasks().filter((task) =>
+    taskMatchesRelatedSessionKey(task, sessionKey),
+  );
 }
 
 export function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: string): TaskRecord[] {
-  return listTaskRecords().filter(
+  return reconcileInspectableTasks().filter(
     (task) => task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey,
   );
 }
 
 export function listTasksForAgentIdForStatus(agentId: string): TaskRecord[] {
-  return listTasksForAgentId(agentId);
+  return reconcileInspectableTasks().filter((task) => task.agentId?.trim() === agentId.trim());
 }
 
 export function findTaskByRunIdForStatus(runId: string): TaskRecord | undefined {
-  return findTaskByRunId(runId);
+  const task = reconcileTaskLookupToken(runId);
+  return task?.runId === runId ? task : undefined;
 }

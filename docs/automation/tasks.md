@@ -31,6 +31,8 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - Completion is push-driven: detached work can notify directly or wake the
   requester session/heartbeat when it finishes, so status polling loops are
   usually the wrong shape.
+- Task status views reconcile against durable task/session truth before
+  reporting active work, so stale `running` rows do not stay active forever.
 - Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
 - Isolated cron delivery suppresses stale interim parent replies while descendant subagent work is still draining, and it prefers final descendant output when that arrives before delivery.
 - Completion notifications are delivered directly to a channel or queued for the next heartbeat.
@@ -157,6 +159,11 @@ Agent run completion is authoritative for active task records. A successful deta
   back to the child session. Gateway-backed `openclaw agent` runs also finalize
   from their run result, so completed runs do not sit active until the sweeper
   marks them `lost`.
+
+List, show, status, and audit surfaces use the same reconciliation projection.
+They may show an old active row as terminal when the durable task/session truth
+proves the worker is gone; `openclaw tasks maintenance --apply` persists that
+projection into the ledger and performs cleanup/pruning.
 
 ## Delivery and notifications
 

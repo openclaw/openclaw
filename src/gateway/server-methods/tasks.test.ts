@@ -11,6 +11,7 @@ import {
   recordTaskProgressByRunId,
   resetTaskRegistryForTests,
 } from "../../tasks/runtime-internal.js";
+import { resetTaskRegistryMaintenanceRuntimeForTests } from "../../tasks/task-registry.maintenance.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
@@ -41,6 +42,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   resetTaskRegistryForTests();
+  resetTaskRegistryMaintenanceRuntimeForTests();
   if (ORIGINAL_STATE_DIR === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -177,6 +179,43 @@ describe("tasks gateway handlers", () => {
 
     expect(payload?.task?.status).toBe("completed");
     expect(payload?.task?.title).toBe("Done task");
+  });
+
+  it("reconciles stale running subagent tasks from session truth before listing", async () => {
+    const staleAt = Date.now() - 10 * 60_000;
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:worker:subagent:missing-session",
+      runId: "run-stale-subagent",
+      task: "Inspect stale worker state",
+      status: "running",
+      deliveryStatus: "pending",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+    });
+
+    const runningView = await runTaskHandler("tasks.list", {
+      status: "running",
+      sessionKey: "agent:main:main",
+    });
+    expect(runningView.calls[0]?.[0]).toBe(true);
+    expect(runningView.payload?.tasks ?? []).toEqual([]);
+
+    const failedView = await runTaskHandler("tasks.list", {
+      status: "failed",
+      sessionKey: "agent:main:main",
+    });
+    expect(failedView.payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
+    expect(failedView.payload?.tasks?.[0]?.status).toBe("failed");
+    expect(failedView.payload?.tasks?.[0]?.error).toBe("backing session missing");
+
+    const { payload } = await getTaskPayload(task.taskId);
+    expect(payload?.task?.status).toBe("failed");
+    expect(payload?.task?.endedAt).toBeTypeOf("number");
   });
 
   it("sanitizes task text before exposing SDK summaries", async () => {

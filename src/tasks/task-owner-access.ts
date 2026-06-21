@@ -1,13 +1,11 @@
 // Normalizes task owner keys and checks requester access to task records.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  findTaskByRunId,
   getTaskById,
-  listTasksForRelatedSessionKey,
   markTaskTerminalById as markTaskTerminalRecordById,
-  resolveTaskForLookupToken,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
+import { reconcileInspectableTasks, reconcileTaskLookupToken } from "./task-registry.reconcile.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
@@ -22,7 +20,9 @@ export function getTaskByIdForOwner(params: {
   taskId: string;
   callerOwnerKey: string;
 }): TaskRecord | undefined {
-  const task = getTaskById(params.taskId);
+  const task =
+    reconcileInspectableTasks().find((entry) => entry.taskId === params.taskId) ??
+    getTaskById(params.taskId);
   return task && canOwnerAccessTask(task, params.callerOwnerKey) ? task : undefined;
 }
 
@@ -30,8 +30,10 @@ export function findTaskByRunIdForOwner(params: {
   runId: string;
   callerOwnerKey: string;
 }): TaskRecord | undefined {
-  const task = findTaskByRunId(params.runId);
-  return task && canOwnerAccessTask(task, params.callerOwnerKey) ? task : undefined;
+  const task = reconcileTaskLookupToken(params.runId);
+  return task?.runId === params.runId && canOwnerAccessTask(task, params.callerOwnerKey)
+    ? task
+    : undefined;
 }
 
 /** Update an owner-visible task's notification policy. */
@@ -79,8 +81,16 @@ export function listTasksForRelatedSessionKeyForOwner(params: {
   relatedSessionKey: string;
   callerOwnerKey: string;
 }): TaskRecord[] {
-  return listTasksForRelatedSessionKey(params.relatedSessionKey).filter((task) =>
-    canOwnerAccessTask(task, params.callerOwnerKey),
+  const relatedSessionKey = normalizeOptionalString(params.relatedSessionKey);
+  if (!relatedSessionKey) {
+    return [];
+  }
+  return reconcileInspectableTasks().filter(
+    (task) =>
+      canOwnerAccessTask(task, params.callerOwnerKey) &&
+      [task.ownerKey, task.childSessionKey].some(
+        (candidate) => normalizeOptionalString(candidate) === relatedSessionKey,
+      ),
   );
 }
 
@@ -128,6 +138,8 @@ export function resolveTaskForLookupTokenForOwner(params: {
   if (related) {
     return related;
   }
-  const raw = resolveTaskForLookupToken(params.token);
-  return raw && canOwnerAccessTask(raw, params.callerOwnerKey) ? raw : undefined;
+  const reconciled = reconcileTaskLookupToken(params.token);
+  return reconciled && canOwnerAccessTask(reconciled, params.callerOwnerKey)
+    ? reconciled
+    : undefined;
 }
