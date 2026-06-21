@@ -19,7 +19,7 @@ type RaftAccountConfig = {
 
 export type ResolvedRaftAccount = {
   accountId: string;
-  name: string | null;
+  name: string | undefined;
   enabled: boolean;
   configured: boolean;
   profile: string | null;

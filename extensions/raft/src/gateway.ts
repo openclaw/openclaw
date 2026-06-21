@@ -1,6 +1,7 @@
 // Raft gateway lifecycle owns the loopback-only wake endpoint and bridge child process.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type { EventEmitter } from "node:events";
 import {
   createServer,
   type IncomingMessage,
@@ -47,7 +48,7 @@ const WAKE_EVENT_ID_FIELDS = [
   "id",
 ] as const;
 
-type RaftBridgeProcess = Pick<ChildProcess, "kill" | "once">;
+type RaftBridgeProcess = Pick<ChildProcess, "kill"> & Pick<EventEmitter, "once">;
 
 type RaftGatewayDeps = {
   createToken?: () => string;

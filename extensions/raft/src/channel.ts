@@ -23,7 +23,7 @@ type RaftProbe = {
   cliFound: boolean;
 };
 
-export const raftPlugin: ChannelPlugin<ResolvedRaftAccount> = createChatChannelPlugin({
+export const raftPlugin: ChannelPlugin<ResolvedRaftAccount, RaftProbe> = createChatChannelPlugin({
   base: {
     id: RAFT_CHANNEL_ID,
     meta: {

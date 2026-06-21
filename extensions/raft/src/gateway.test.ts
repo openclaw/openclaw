@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
@@ -11,6 +11,15 @@ import { startRaftGatewayAccount } from "./gateway.js";
 
 class FakeBridge extends EventEmitter {
   kill = vi.fn(() => true);
+}
+
+const tempDirs = new Set<string>();
+
+function makeTempDir(prefix: string): string {
+  // openclaw-temp-dir: allow extension tests cannot import root test helpers
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tempDirs.add(dir);
+  return dir;
 }
 
 function createContext(accountId = "default") {
@@ -117,12 +126,19 @@ async function waitFor<T>(getValue: () => T | undefined): Promise<T> {
     if (value !== undefined) {
       return value;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error("Timed out waiting for value.");
 }
 
 afterEach(() => {
+  resetPluginStateStoreForTests();
+  for (const dir of tempDirs) {
+    rmSync(dir, { force: true, recursive: true });
+  }
+  tempDirs.clear();
   vi.restoreAllMocks();
 });
 
@@ -142,7 +158,9 @@ describe("Raft wake gateway", () => {
       settled = true;
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(settled).toBe(false);
     expect(spawnBridge).not.toHaveBeenCalled();
 
@@ -213,7 +231,9 @@ describe("Raft wake gateway", () => {
         body: JSON.stringify({ eventId: "wake-1", timestamp: 2 }),
       }),
     ).resolves.toMatchObject({ status: 202 });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(run).toHaveBeenCalledTimes(1);
     await expect(
       fetch(wakeEndpoint, {
@@ -311,7 +331,7 @@ describe("Raft wake gateway", () => {
   });
 
   it("persists accepted wake dedupe across restarts without crossing accounts", async () => {
-    const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-raft-wake-dedupe-"));
+    const stateDir = makeTempDir("openclaw-raft-wake-dedupe-");
     try {
       const first = createContext();
       Object.defineProperty(first.ctx, "abortSignal", { value: first.controller.signal });
@@ -403,7 +423,6 @@ describe("Raft wake gateway", () => {
       }
     } finally {
       resetPluginStateStoreForTests();
-      await rm(stateDir, { force: true, recursive: true });
     }
   });
 
