@@ -359,7 +359,6 @@ function pathnameWithoutBase(pathname: string, basePath: string): string {
 
 export function compileRoutes<TRouteId extends string, TLoadContext, TModule, TData>(
   routes: RouterOptions<TRouteId, TLoadContext, TModule, TData>["routes"],
-  defaultRouteId: TRouteId | null,
 ): CompiledRoutes<TRouteId, TLoadContext, TModule, TData> {
   const byId = new Map<TRouteId, PageDefinition<TRouteId, TLoadContext, TModule, TData>>();
   const byPath = new Map<string, TRouteId>();
@@ -393,7 +392,7 @@ export function compileRoutes<TRouteId extends string, TLoadContext, TModule, TD
     },
     routeIdFromPath(pathname, basePath = "") {
       const key = pathKey(pathnameWithoutBase(pathname, basePath));
-      return byPath.get(key) ?? (key === "/" ? defaultRouteId : null);
+      return byPath.get(key) ?? null;
     },
   };
 }

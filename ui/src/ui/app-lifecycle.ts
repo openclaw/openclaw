@@ -1,4 +1,4 @@
-import { appRouter, routeLoadContext, type RouteId } from "../app-routes.ts";
+import { appRouter, routeLoadContext, startAppRouter, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
 import { createBrowserHistory } from "../app/browser.ts";
 // Control UI module implements app lifecycle behavior.
@@ -151,7 +151,7 @@ export function handleConnected(host: LifecycleHost) {
       previous.activeRouteId === next.activeRouteId,
   );
   void Promise.resolve(
-    appRouter.start(history, host.basePath, routeLoadContext(host as unknown as SettingsHost)),
+    startAppRouter(history, host.basePath, routeLoadContext(host as unknown as SettingsHost)),
   ).catch(() => undefined);
   host.controlUiResponsivenessObserver ??= startControlUiResponsivenessObserver(
     host as unknown as Parameters<typeof startControlUiResponsivenessObserver>[0],

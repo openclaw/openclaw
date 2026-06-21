@@ -66,8 +66,7 @@ export function createRouter<
 >(
   options: RouterOptions<TRouteId, TLoadContext, TModule, TData>,
 ): Router<TRouteId, TLoadContext, TModule, TData> {
-  const defaultRouteId = options.defaultRouteId ?? null;
-  const compiled = compileRoutes(options.routes, defaultRouteId);
+  const compiled = compileRoutes(options.routes);
   const matches = createMatchStore<TRouteId, TModule, TData>();
   const loading = createRouteLoading<TRouteId, TLoadContext, TModule, TData>(
     {
@@ -338,18 +337,18 @@ export function createRouter<
   ): Promise<void> => {
     const normalized = normalizeLocation(location);
     const matched = compiled.routeIdFromPath(normalized.pathname, basePath);
-    const routeId = matched ?? defaultRouteId;
-    if (!routeId) {
+    if (!matched) {
+      cancelRun(currentRun);
+      currentRun = null;
+      matches.batch(() => {
+        matches.setActive([]);
+        matches.setPending([]);
+        matches.setLocation(normalized, null);
+        matches.setStatus("notFound");
+      });
       return;
     }
-    const canonical = locationForPath(compiled.pathForRoute(routeId, basePath));
-    const target = matched
-      ? normalized
-      : { ...canonical, search: normalized.search, hash: normalized.hash };
-    if (!matched && history) {
-      history.replace(target);
-    }
-    await navigate(routeId, context, { history, revalidate }, target);
+    await navigate(matched, context, { history, revalidate }, normalized);
   };
 
   const preloadAtLocation = (
@@ -456,17 +455,18 @@ export function createRouter<
     navigateLocation(location: RouteLocation, context: TLoadContext): Promise<void> {
       const normalized = normalizeLocation(location);
       const matched = compiled.routeIdFromPath(normalized.pathname, basePath);
-      const routeId = matched ?? defaultRouteId;
-      const target = routeId
-        ? matched
-          ? normalized
-          : {
-              ...locationForPath(compiled.pathForRoute(routeId, basePath)),
-              search: normalized.search,
-              hash: normalized.hash,
-            }
-        : normalized;
-      return routeId ? navigate(routeId, context, { history: "none" }, target) : Promise.resolve();
+      if (!matched) {
+        cancelRun(currentRun);
+        currentRun = null;
+        matches.batch(() => {
+          matches.setActive([]);
+          matches.setPending([]);
+          matches.setLocation(normalized, null);
+          matches.setStatus("notFound");
+        });
+        return Promise.resolve();
+      }
+      return navigate(matched, context, { history: "none" }, normalized);
     },
     revalidate(context: TLoadContext, routeId = matches.getActiveMatch()?.routeId): Promise<void> {
       if (!routeId) {

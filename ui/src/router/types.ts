@@ -112,7 +112,6 @@ export type RouterStateSelector<TState, TSelected> = (state: TState) => TSelecte
 
 export type RouterOptions<TRouteId extends string, TLoadContext, TModule, TData> = {
   routes: readonly PageDefinition<TRouteId, TLoadContext, TModule, TData>[];
-  defaultRouteId?: TRouteId;
   staleTime?: number;
   preloadStaleTime?: number;
   preloadGcTime?: number;
