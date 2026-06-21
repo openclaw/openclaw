@@ -386,6 +386,10 @@ export async function runSubagentAnnounceFlow(params: {
         shouldDeleteChildSession = false;
         return true;
       }
+      // Failed wake must not become a successful yield skip; keep cleanup retryable.
+      if (params.requesterPausedForYield) {
+        return false;
+      }
     }
 
     // sessions_yield: parent resume turn owns delivery via its own session output path, so skip

@@ -2819,6 +2819,61 @@ describe("subagent announce formatting", () => {
     });
   });
 
+  it("keeps yielded cleanup retryable when the settled-descendant wake fails", async () => {
+    sessionStore = {
+      "agent:main:subagent:parent": {
+        sessionId: "session-parent",
+      },
+    };
+
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (
+          sessionKey !== "agent:main:subagent:parent" ||
+          scope?.requesterRunId !== "run-parent-phase-1"
+        ) {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-a",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "result from child a",
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+
+    agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2"));
+    subagentRegistryMock.replaceSubagentRunAfterSteer.mockReturnValueOnce(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-phase-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      wakeOnDescendantSettle: true,
+      requesterPausedForYield: true,
+      roundOneReply: "waiting for children",
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(subagentRegistryMock.replaceSubagentRunAfterSteer).toHaveBeenCalled();
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
   it("does not re-wake an already woken run id", async () => {
     sessionStore = {
       "agent:main:subagent:parent": {
