@@ -512,8 +512,16 @@ function hasWikiSourceFrontmatter(frontmatter: Record<string, unknown>): boolean
 }
 
 export function isUnmanagedRawSourceSummary(page: WikiPageSummary): boolean {
+  // Sources under the canonical `sources/` directory are imported raw materials
+  // by convention, regardless of whether they carry a raw-source marker or have
+  // partial wiki frontmatter. This avoids lint noise for every file dropped
+  // into the sources directory.
+  const isInSourcesDir =
+    page.kind === "source" &&
+    (page.relativePath === "sources" || page.relativePath.startsWith("sources/"));
   return (
-    page.kind === "source" && page.unmanagedRawSourceBody === true && !page.generatedSourceBody
+    isInSourcesDir ||
+    (page.kind === "source" && page.unmanagedRawSourceBody === true && !page.generatedSourceBody)
   );
 }
 
