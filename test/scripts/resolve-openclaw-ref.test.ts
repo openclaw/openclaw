@@ -36,13 +36,15 @@ function createRemoteRepo() {
 }
 
 function runResolver(remote: string, args: string[]) {
+  const env = {
+    ...process.env,
+    OPENCLAW_REF_REMOTE: remote,
+  };
+  delete env.GITHUB_OUTPUT;
   return spawnSync("bash", [SCRIPT_PATH, ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_REF_REMOTE: remote,
-    },
+    env,
   });
 }
 
