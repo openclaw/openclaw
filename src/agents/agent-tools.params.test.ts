@@ -8,7 +8,9 @@ import {
   REQUIRED_PARAM_GROUPS,
   correctHallucinatedFileExtension,
   getToolParamsRecord,
+  normalizeFilePath,
   stripMalformedXmlArgValueSuffix,
+  stripMalformedXmlArgValueSuffixFromKeys,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 
@@ -308,5 +310,38 @@ describe("correctHallucinatedFileExtension", () => {
 
   it("leaves string without extension unchanged", () => {
     expect(correctHallucinatedFileExtension("Makefile")).toBe("Makefile");
+  });
+});
+
+describe("normalizeFilePath", () => {
+  it("chains XML suffix strip and extension correction", () => {
+    expect(normalizeFilePath("report.docodex</arg_value>>")).toBe("report.docx");
+  });
+
+  it("corrects hallucinated extension without XML suffix", () => {
+    expect(normalizeFilePath("report.docodex")).toBe("report.docx");
+  });
+
+  it("strips XML suffix without hallucinated extension", () => {
+    expect(normalizeFilePath("echo test</arg_value>>")).toBe("echo test");
+  });
+
+  it("leaves normal file path unchanged", () => {
+    expect(normalizeFilePath("/home/user/report.docx")).toBe("/home/user/report.docx");
+  });
+});
+
+describe("extension correction is NOT applied to exec params (regression)", () => {
+  it("stripMalformedXmlArgValueSuffixFromKeys does NOT correct extensions", () => {
+    // Exec tools (bash-tools.exec.ts) use this function for command/workdir
+    // parameters. It must only strip XML suffixes, never rewrite extensions.
+    // normalizeFilePathFromKeys is the separate helper that DOES correct extensions.
+    const record = {
+      command: "echo .docodex > report.txt",
+      workdir: "/tmp",
+    };
+    const result = stripMalformedXmlArgValueSuffixFromKeys(record, ["command", "workdir"]);
+    expect(result.command).toBe("echo .docodex > report.txt");
+    expect(result.workdir).toBe("/tmp");
   });
 });

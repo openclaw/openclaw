@@ -25,9 +25,9 @@ import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
-  correctHallucinatedFileExtension,
   getToolParamsRecord,
-  stripMalformedXmlArgValueSuffix,
+  normalizeFilePath,
+  normalizeFilePathFromKeys,
   stripMalformedXmlArgValueSuffixFromKeys,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
@@ -652,9 +652,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
     description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
-      const normalizedRecord = record
-        ? stripMalformedXmlArgValueSuffixFromKeys(record, ["path"])
-        : undefined;
+      const normalizedRecord = record ? normalizeFilePathFromKeys(record, ["path"]) : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
       const filePath =
         typeof normalizedRecord?.path === "string" && normalizedRecord.path.trim()
@@ -771,9 +769,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
-        const filePath = correctHallucinatedFileExtension(
-          stripMalformedXmlArgValueSuffix(rawFilePath),
-        );
+        const filePath = normalizeFilePath(rawFilePath);
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }
@@ -888,9 +884,7 @@ export function createOpenClawReadTool(
     ...base,
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
-      const normalizedRecord = record
-        ? stripMalformedXmlArgValueSuffixFromKeys(record, ["path"])
-        : undefined;
+      const normalizedRecord = record ? normalizeFilePathFromKeys(record, ["path"]) : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const result = await executeReadWithAdaptivePaging({
         base,

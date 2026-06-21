@@ -136,7 +136,17 @@ export function correctHallucinatedFileExtension(value: string): string {
   return correction ? value.slice(0, dotIndex) + correction : value;
 }
 
-/** Strip malformed XML suffixes and correct hallucinated extensions from selected string fields without mutating input. */
+/**
+ * Normalize a structured file-path parameter value.
+ * Applies XML suffix stripping and document-extension correction.
+ * This is intentionally limited to file-path params (not free-form exec text)
+ * so shell commands like `echo .docodex` are never rewritten.
+ */
+export function normalizeFilePath(value: string): string {
+  return correctHallucinatedFileExtension(stripMalformedXmlArgValueSuffix(value));
+}
+
+/** Strip malformed XML suffixes from selected string fields without mutating input. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,
   keys: readonly string[],
@@ -147,11 +157,30 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
     if (typeof value !== "string") {
       continue;
     }
-    let corrected = stripMalformedXmlArgValueSuffix(value);
-    corrected = correctHallucinatedFileExtension(corrected);
-    if (corrected !== value) {
+    const stripped = stripMalformedXmlArgValueSuffix(value);
+    if (stripped !== value) {
       normalized ??= { ...record };
-      normalized[key as keyof T] = corrected as T[keyof T];
+      normalized[key as keyof T] = stripped as T[keyof T];
+    }
+  }
+  return normalized ?? record;
+}
+
+/** Normalize file-path string fields: strip XML suffixes and correct hallucinated document extensions. */
+export function normalizeFilePathFromKeys<T extends Record<string, unknown>>(
+  record: T,
+  keys: readonly string[],
+): T {
+  let normalized: T | undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const cleaned = normalizeFilePath(value);
+    if (cleaned !== value) {
+      normalized ??= { ...record };
+      normalized[key as keyof T] = cleaned as T[keyof T];
     }
   }
   return normalized ?? record;
@@ -224,9 +253,7 @@ export function wrapToolParamValidation(
       const record = getToolParamsRecord(params);
       const pathKeys = resolveMalformedXmlArgValuePathKeys(requiredParamGroups);
       const normalizedParams =
-        record && pathKeys.length > 0
-          ? stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys)
-          : params;
+        record && pathKeys.length > 0 ? normalizeFilePathFromKeys(record, pathKeys) : params;
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
       }
