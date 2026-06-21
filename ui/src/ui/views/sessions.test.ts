@@ -454,9 +454,8 @@ describe("sessions view", () => {
 
     const keyCell = container.querySelector(".session-key-cell");
     expect(keyCell?.textContent?.trim()).toBe("📊 Data Expert (dingtalk)");
-    expect(keyCell?.getAttribute("title")).toBe(
-      "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
-    );
+    // Identity rows keep hover = visible label (friendlyKeyLabel), fallback rows show raw key
+    expect(keyCell?.getAttribute("title")).toBe("📊 Data Expert (dingtalk)");
   });
 
   it("keeps raw keys when identity data is unavailable", async () => {
