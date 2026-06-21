@@ -1,13 +1,22 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
-import {
-  AGENT_INTERNAL_EVENT_SOURCES,
-  AGENT_INTERNAL_EVENT_STATUSES,
-  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
-} from "../../../../src/agents/internal-event-contract.js";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../../../src/agents/internal-event-contract.js";
 import { DIAGNOSTIC_TRACEPARENT_PATTERN } from "../../../../src/infra/diagnostic-trace-context-pure.js";
 import { internalProtocolField } from "./internal-fields.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
+
+// AGENT_INTERNAL_EVENT_SOURCES/STATUSES were export-narrowed to module-private in
+// internal-event-contract.ts upstream (2026-06-03); mirror the value-lists locally for the
+// protocol enum, matching upstream's agent.ts. (AgentInternalEventSource/Status types remain
+// importable from the contract; only the value-consts moved private.)
+const AGENT_INTERNAL_EVENT_SOURCES = [
+  "subagent",
+  "cron",
+  "image_generation",
+  "video_generation",
+  "music_generation",
+] as const;
+const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as const;
 
 /**
  * Agent and channel-action gateway schemas.
