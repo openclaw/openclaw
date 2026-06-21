@@ -1,5 +1,5 @@
 // Qa Lab plugin module implements suite runtime agent process behavior.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -207,7 +207,20 @@ function signalQaCliProcessTree(
   child: Pick<ChildProcessWithoutNullStreams, "kill" | "pid">,
   signal: NodeJS.Signals,
 ) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+  if (process.platform === "win32") {
+    if (typeof child.pid === "number") {
+      const result = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      if (!result.error && result.status === 0) {
+        return;
+      }
+    }
+    child.kill(signal);
+    return;
+  }
+  if (typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;

@@ -619,8 +619,14 @@ export function signalCommandTree(
       args.push("/F");
     }
     const result = runTaskkill("taskkill", args, { stdio: "ignore" });
-    if (!result.error && result.status === 0) {
+    if (!result?.error && result?.status === 0) {
       return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill("taskkill", [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
     }
   }
   child.kill(signal);

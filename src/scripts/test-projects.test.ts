@@ -1020,12 +1020,12 @@ describe("test-projects args", () => {
     ).toStrictEqual([]);
   });
 
-  it("routes auth setup script changes to the focused tooling planner test", () => {
+  it("routes auth setup script changes to the focused auth monitor test", () => {
     const changedPaths = ["scripts/setup-auth-system.sh"];
 
     expect(resolveChangedTestTargetPlan(changedPaths)).toEqual({
       mode: "targets",
-      targets: ["test/scripts/test-projects.test.ts"],
+      targets: ["test/scripts/auth-monitor.test.ts"],
     });
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
@@ -1033,7 +1033,7 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/test-projects.test.ts"],
+        includePatterns: ["test/scripts/auth-monitor.test.ts"],
         watchMode: false,
       },
     ]);

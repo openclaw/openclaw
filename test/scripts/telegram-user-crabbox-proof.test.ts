@@ -378,6 +378,30 @@ setInterval(() => {}, 1000);
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+  it("force-kills Windows proof command process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalCommandTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   posixIt("lets timed-out command descendants exit during kill grace", async () => {
     const root = makeTempDir();
     const scriptPath = path.join(root, "trap-term-grace.mjs");

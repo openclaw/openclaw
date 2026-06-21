@@ -2,6 +2,7 @@
 import http from "node:http";
 import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../src/test-utils/deferred.js";
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
   registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
@@ -28,19 +29,6 @@ beforeEach(() => {
   registerManagedProxyBrowserCdpBypassMock.mockReset();
   registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
 });
-
-function createDeferred<T = void>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
   const origNoProxy = process.env.NO_PROXY;
