@@ -1594,8 +1594,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Optional Codex MCP tool approval mode for this server: "auto", "prompt", or "approve". Use only for MCP servers you intentionally trust.',
   "mcp.servers.*.codex.default_tools_approval_mode":
     "Codex-native spelling for the same per-server MCP tool approval mode. Prefer defaultToolsApprovalMode in OpenClaw config.",
+  "mcp.runtimeScope":
+    'Bundled MCP runtime ownership scope. "session" keeps one runtime per session. "shared" lets sessions with the same workspace and MCP config reuse one runtime; enable it only for single-tenant deployments where cross-session MCP client and child-process state is acceptable.',
   "mcp.sessionIdleTtlMs":
-    "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
+    "Idle TTL in milliseconds for bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
   session:
     "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",
   "session.scope":

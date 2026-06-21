@@ -1,4 +1,4 @@
-/** Session-scoped MCP runtime manager, catalog loader, and transport lifecycle. */
+/** Bundled MCP runtime manager, catalog loader, and transport lifecycle. */
 import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -482,6 +482,34 @@ function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
     return Math.floor(raw);
   }
   return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+}
+
+function resolveSessionMcpRuntimeScope(cfg?: OpenClawConfig): "session" | "shared" {
+  return cfg?.mcp?.runtimeScope === "shared" ? "shared" : "session";
+}
+
+function createSharedSessionMcpRuntimeKey(params: {
+  workspaceDir: string;
+  configFingerprint: string;
+}): string {
+  const digest = crypto
+    .createHash("sha256")
+    .update(params.workspaceDir)
+    .update("\0")
+    .update(params.configFingerprint)
+    .digest("hex")
+    .slice(0, 24);
+  return `__mcp_shared__:${digest}`;
+}
+
+function mergeSessionMcpRuntimeIdleTtlMs(previous: number | undefined, next: number): number {
+  if (previous === undefined) {
+    return next;
+  }
+  if (previous === 0 || next === 0) {
+    return 0;
+  }
+  return Math.max(previous, next);
 }
 
 export function createSessionMcpRuntime(params: {
@@ -982,7 +1010,9 @@ function createSessionMcpRuntimeManager(
     idleSweepIntervalMs?: number;
   } = {},
 ): SessionMcpRuntimeManager {
-  const runtimesBySessionId = new Map<string, SessionMcpRuntime>();
+  const runtimesByRuntimeKey = new Map<string, SessionMcpRuntime>();
+  const runtimeKeyBySessionId = new Map<string, string>();
+  const sessionIdsByRuntimeKey = new Map<string, Set<string>>();
   const sessionIdBySessionKey = new Map<string, string>();
   const idleTtlMsBySessionId = new Map<string, number>();
   const createRuntime = opts.createRuntime ?? createSessionMcpRuntime;
@@ -995,6 +1025,7 @@ function createSessionMcpRuntimeManager(
       configFingerprint: string;
     }
   >();
+  const disposedRuntimes = new WeakSet<SessionMcpRuntime>();
   const idleSweepIntervalMs = opts.idleSweepIntervalMs ?? SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS;
   let idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   let idleSweepInFlight: Promise<void> | undefined;
@@ -1007,24 +1038,99 @@ function createSessionMcpRuntimeManager(
     }
   };
 
+  const disposeRuntimeOnce = async (runtime: SessionMcpRuntime | undefined) => {
+    if (!runtime || disposedRuntimes.has(runtime)) {
+      return;
+    }
+    disposedRuntimes.add(runtime);
+    await runtime.dispose();
+  };
+
+  const resolveRuntimeIdleTtlMs = (runtimeKey: string): number => {
+    let merged: number | undefined;
+    for (const sessionId of sessionIdsByRuntimeKey.get(runtimeKey) ?? []) {
+      merged = mergeSessionMcpRuntimeIdleTtlMs(
+        merged,
+        idleTtlMsBySessionId.get(sessionId) ?? DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS,
+      );
+    }
+    return merged ?? DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+  };
+
+  const attachSessionToRuntimeKey = (sessionId: string, runtimeKey: string, idleTtlMs: number) => {
+    runtimeKeyBySessionId.set(sessionId, runtimeKey);
+    idleTtlMsBySessionId.set(sessionId, idleTtlMs);
+    const sessionIds = sessionIdsByRuntimeKey.get(runtimeKey) ?? new Set<string>();
+    sessionIds.add(sessionId);
+    sessionIdsByRuntimeKey.set(runtimeKey, sessionIds);
+  };
+
+  const detachSessionFromRuntimeKey = async (
+    sessionId: string,
+    runtimeKey: string,
+    opts: { disposeIfUnreferenced: boolean },
+  ) => {
+    runtimeKeyBySessionId.delete(sessionId);
+    idleTtlMsBySessionId.delete(sessionId);
+    forgetSessionKeysForSessionId(sessionId);
+    const sessionIds = sessionIdsByRuntimeKey.get(runtimeKey);
+    sessionIds?.delete(sessionId);
+    if (sessionIds && sessionIds.size > 0) {
+      return;
+    }
+    sessionIdsByRuntimeKey.delete(runtimeKey);
+    if (opts.disposeIfUnreferenced) {
+      await disposeRuntimeKey(runtimeKey);
+    }
+  };
+
+  const detachAllSessionsForRuntimeKey = (runtimeKey: string) => {
+    for (const sessionId of sessionIdsByRuntimeKey.get(runtimeKey) ?? []) {
+      runtimeKeyBySessionId.delete(sessionId);
+      idleTtlMsBySessionId.delete(sessionId);
+      forgetSessionKeysForSessionId(sessionId);
+    }
+    sessionIdsByRuntimeKey.delete(runtimeKey);
+  };
+
+  const disposeRuntimeKey = async (runtimeKey: string) => {
+    const inFlight = createInFlight.get(runtimeKey);
+    createInFlight.delete(runtimeKey);
+    const runtime = runtimesByRuntimeKey.get(runtimeKey);
+    runtimesByRuntimeKey.delete(runtimeKey);
+    const lateRuntime = inFlight ? await inFlight.promise.catch(() => undefined) : undefined;
+    await Promise.allSettled([disposeRuntimeOnce(runtime), disposeRuntimeOnce(lateRuntime)]);
+  };
+
+  const resolveRuntimeKey = (params: {
+    scope: "session" | "shared";
+    sessionId: string;
+    workspaceDir: string;
+    configFingerprint: string;
+  }): string =>
+    params.scope === "shared"
+      ? createSharedSessionMcpRuntimeKey({
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint,
+        })
+      : params.sessionId;
+
   const sweepIdleRuntimes = async (): Promise<number> => {
     const nowMs = now();
-    const expired: SessionMcpRuntime[] = [];
-    for (const [sessionId, runtime] of runtimesBySessionId.entries()) {
-      const idleTtlMs =
-        idleTtlMsBySessionId.get(sessionId) ?? DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+    const expired: Array<{ runtimeKey: string; runtime: SessionMcpRuntime }> = [];
+    for (const [runtimeKey, runtime] of runtimesByRuntimeKey.entries()) {
+      const idleTtlMs = resolveRuntimeIdleTtlMs(runtimeKey);
       if (idleTtlMs <= 0 || (runtime.activeLeases ?? 0) > 0) {
         continue;
       }
       if (nowMs - runtime.lastUsedAt < idleTtlMs) {
         continue;
       }
-      runtimesBySessionId.delete(sessionId);
-      idleTtlMsBySessionId.delete(sessionId);
-      forgetSessionKeysForSessionId(sessionId);
-      expired.push(runtime);
+      runtimesByRuntimeKey.delete(runtimeKey);
+      detachAllSessionsForRuntimeKey(runtimeKey);
+      expired.push({ runtimeKey, runtime });
     }
-    await Promise.allSettled(expired.map((runtime) => runtime.dispose()));
+    await Promise.allSettled(expired.map(({ runtime }) => disposeRuntimeOnce(runtime)));
     return expired.length;
   };
 
@@ -1061,7 +1167,20 @@ function createSessionMcpRuntimeManager(
   return {
     async getOrCreate(params) {
       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
-      if (runtimesBySessionId.has(params.sessionId)) {
+      const { fingerprint: nextFingerprint } = loadSessionMcpConfig({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        logDiagnostics: false,
+      });
+      const scope = resolveSessionMcpRuntimeScope(params.cfg);
+      const runtimeKey = resolveRuntimeKey({
+        scope,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: nextFingerprint,
+      });
+      const previousRuntimeKey = runtimeKeyBySessionId.get(params.sessionId);
+      if (previousRuntimeKey === runtimeKey) {
         idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
       }
       await sweepIdleRuntimes();
@@ -1071,62 +1190,85 @@ function createSessionMcpRuntimeManager(
       if (params.sessionKey) {
         sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
-      const { fingerprint: nextFingerprint } = loadSessionMcpConfig({
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        logDiagnostics: false,
-      });
-      const existing = runtimesBySessionId.get(params.sessionId);
+      if (previousRuntimeKey && previousRuntimeKey !== runtimeKey) {
+        await detachSessionFromRuntimeKey(params.sessionId, previousRuntimeKey, {
+          disposeIfUnreferenced: true,
+        });
+      }
+      attachSessionToRuntimeKey(params.sessionId, runtimeKey, idleTtlMs);
+
+      const existing = runtimesByRuntimeKey.get(runtimeKey);
       if (existing) {
         if (
           existing.workspaceDir !== params.workspaceDir ||
           existing.configFingerprint !== nextFingerprint
         ) {
-          runtimesBySessionId.delete(params.sessionId);
-          await existing.dispose();
+          detachAllSessionsForRuntimeKey(runtimeKey);
+          await disposeRuntimeKey(runtimeKey);
+          attachSessionToRuntimeKey(params.sessionId, runtimeKey, idleTtlMs);
         } else {
           existing.markUsed();
-          idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
           return existing;
         }
       }
-      const inFlight = createInFlight.get(params.sessionId);
+      const inFlight = createInFlight.get(runtimeKey);
       if (inFlight) {
         if (
           inFlight.workspaceDir === params.workspaceDir &&
           inFlight.configFingerprint === nextFingerprint
         ) {
-          return inFlight.promise;
+          try {
+            return await inFlight.promise;
+          } catch (error) {
+            await detachSessionFromRuntimeKey(params.sessionId, runtimeKey, {
+              disposeIfUnreferenced: false,
+            });
+            throw error;
+          }
         }
-        createInFlight.delete(params.sessionId);
-        const staleRuntime = await inFlight.promise.catch(() => undefined);
-        runtimesBySessionId.delete(params.sessionId);
-        idleTtlMsBySessionId.delete(params.sessionId);
-        await staleRuntime?.dispose();
+        detachAllSessionsForRuntimeKey(runtimeKey);
+        await disposeRuntimeKey(runtimeKey);
+        attachSessionToRuntimeKey(params.sessionId, runtimeKey, idleTtlMs);
       }
-      const created = Promise.resolve(
-        createRuntime({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          workspaceDir: params.workspaceDir,
-          cfg: params.cfg,
-          configFingerprint: nextFingerprint,
-        }),
-      ).then((runtime) => {
-        runtime.markUsed();
-        runtimesBySessionId.set(params.sessionId, runtime);
-        idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
-        return runtime;
-      });
-      createInFlight.set(params.sessionId, {
+      const runtimeSessionId = scope === "shared" ? runtimeKey : params.sessionId;
+      const created = Promise.resolve()
+        .then(() =>
+          createRuntime({
+            sessionId: runtimeSessionId,
+            ...(scope === "session" && params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            workspaceDir: params.workspaceDir,
+            cfg: params.cfg,
+            configFingerprint: nextFingerprint,
+          }),
+        )
+        .then(async (runtime) => {
+          runtime.markUsed();
+          if (
+            createInFlight.get(runtimeKey)?.promise === created &&
+            sessionIdsByRuntimeKey.has(runtimeKey)
+          ) {
+            runtimesByRuntimeKey.set(runtimeKey, runtime);
+          } else {
+            await disposeRuntimeOnce(runtime);
+          }
+          return runtime;
+        });
+      createInFlight.set(runtimeKey, {
         promise: created,
         workspaceDir: params.workspaceDir,
         configFingerprint: nextFingerprint,
       });
       try {
         return await created;
+      } catch (error) {
+        await detachSessionFromRuntimeKey(params.sessionId, runtimeKey, {
+          disposeIfUnreferenced: false,
+        });
+        throw error;
       } finally {
-        createInFlight.delete(params.sessionId);
+        if (createInFlight.get(runtimeKey)?.promise === created) {
+          createInFlight.delete(runtimeKey);
+        }
       }
     },
     bindSessionKey(sessionKey, sessionId) {
@@ -1140,30 +1282,32 @@ function createSessionMcpRuntimeManager(
       const sessionId =
         params.sessionId ??
         (params.sessionKey ? sessionIdBySessionKey.get(params.sessionKey) : undefined);
-      return sessionId ? runtimesBySessionId.get(sessionId) : undefined;
+      if (!sessionId) {
+        return undefined;
+      }
+      const runtimeKey = runtimeKeyBySessionId.get(sessionId) ?? sessionId;
+      return runtimesByRuntimeKey.get(runtimeKey);
     },
     async disposeSession(sessionId) {
-      const inFlight = createInFlight.get(sessionId);
-      createInFlight.delete(sessionId);
-      let runtime = runtimesBySessionId.get(sessionId);
-      if (!runtime && inFlight) {
-        runtime = await inFlight.promise.catch(() => undefined);
-      }
-      runtimesBySessionId.delete(sessionId);
-      idleTtlMsBySessionId.delete(sessionId);
-      if (!runtime) {
+      const runtimeKey =
+        runtimeKeyBySessionId.get(sessionId) ??
+        (runtimesByRuntimeKey.has(sessionId) || createInFlight.has(sessionId)
+          ? sessionId
+          : undefined);
+      if (!runtimeKey) {
         forgetSessionKeysForSessionId(sessionId);
         return;
       }
-      forgetSessionKeysForSessionId(sessionId);
-      await runtime.dispose();
+      await detachSessionFromRuntimeKey(sessionId, runtimeKey, { disposeIfUnreferenced: true });
     },
     async disposeAll() {
       clearIdleSweepTimer();
       const inFlightRuntimes = Array.from(createInFlight.values());
       createInFlight.clear();
-      const runtimes = Array.from(runtimesBySessionId.values());
-      runtimesBySessionId.clear();
+      const runtimes = Array.from(runtimesByRuntimeKey.values());
+      runtimesByRuntimeKey.clear();
+      runtimeKeyBySessionId.clear();
+      sessionIdsByRuntimeKey.clear();
       sessionIdBySessionKey.clear();
       idleTtlMsBySessionId.clear();
       const lateRuntimes = await Promise.all(
@@ -1175,11 +1319,11 @@ function createSessionMcpRuntimeManager(
           allRuntimes.add(runtime);
         }
       }
-      await Promise.allSettled(Array.from(allRuntimes, (runtime) => runtime.dispose()));
+      await Promise.allSettled(Array.from(allRuntimes, (runtime) => disposeRuntimeOnce(runtime)));
     },
     sweepIdleRuntimes,
     listSessionIds() {
-      return Array.from(runtimesBySessionId.keys());
+      return Array.from(runtimeKeyBySessionId.keys());
     },
   };
 }
