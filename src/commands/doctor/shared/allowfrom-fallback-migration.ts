@@ -105,7 +105,13 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 
 function generatedSchemaAllowsGroupAllowFrom(channelName: string, path: SchemaPath): boolean {
   const schema = findGeneratedChannelConfigSchema(channelName);
-  return !schema || schemaAllowsConfigPath(schema, path);
+  if (!schema) {
+    // External channel plugins (e.g. ClawMail email) aren't in the bundled generated
+    // metadata, so core can't verify their schema accepts groupAllowFrom. Fail closed:
+    // writing it into a schema that forbids it breaks gateway startup on upgrade.
+    return false;
+  }
+  return schemaAllowsConfigPath(schema, path);
 }
 
 function migrateRecord(params: {

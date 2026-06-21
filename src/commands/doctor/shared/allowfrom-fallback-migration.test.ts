@@ -130,4 +130,21 @@ describe("doctor group allowFrom fallback migration", () => {
 
     expect(maybeRepairGroupAllowFromFallback(cfg)).toEqual({ config: cfg, changes: [] });
   });
+
+  it("skips external channels whose config schema core cannot verify", () => {
+    // email is provided by an external plugin (ClawMail) and is absent from the bundled
+    // generated metadata; injecting groupAllowFrom there breaks gateway startup on upgrade.
+    const cfg = {
+      channels: {
+        email: {
+          allowFrom: ["*"],
+          accounts: {
+            default: { allowFrom: ["*"] },
+          },
+        },
+      },
+    };
+
+    expect(maybeRepairGroupAllowFromFallback(cfg)).toEqual({ config: cfg, changes: [] });
+  });
 });
