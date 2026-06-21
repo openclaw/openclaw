@@ -136,6 +136,9 @@ const OpenAIResponsesCompatSchema = Type.Object({
   supportsTemperature: Type.Optional(Type.Boolean()),
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+  supportsReasoningEffort: Type.Optional(Type.Boolean()),
+  supportedReasoningEfforts: Type.Optional(Type.Array(Type.String())),
+  reasoningEffortMap: Type.Optional(Type.Record(Type.String(), Type.String())),
 });
 
 const AnthropicMessagesCompatSchema = Type.Object({
