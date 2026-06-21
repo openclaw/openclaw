@@ -45,7 +45,7 @@ export async function runDoctorLintCli(
   opts: DoctorLintCliOptions,
 ): Promise<number> {
   const sevMin =
-    opts.severityMin === undefined ? "info" : parseHealthFindingSeverity(opts.severityMin);
+    opts.severityMin === undefined ? "warning" : parseHealthFindingSeverity(opts.severityMin);
   if (sevMin === null) {
     throw new Error("Invalid --severity-min value. Expected one of: info, warning, error.");
   }

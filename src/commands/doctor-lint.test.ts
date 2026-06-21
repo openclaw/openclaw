@@ -254,9 +254,49 @@ describe("runDoctorLintCli", () => {
         onlyIds: ["core/doctor/final-config-validation", "plugin/example/lint"],
       });
 
+      expect(exitCode).toBe(0);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload.ok).toBe(true);
+      expect(payload.checksRun).toBe(2);
+      expect(payload.findings).toEqual([]);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it("fails informational findings when severity-min is explicit", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "plugin/example/lint",
+      kind: "plugin",
+      description: "example plugin lint check",
+      async detect() {
+        return [
+          {
+            checkId: "plugin/example/lint",
+            severity: "info",
+            message: "plugin finding",
+          },
+        ];
+      },
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        severityMin: "info",
+        onlyIds: ["plugin/example/lint"],
+      });
+
       expect(exitCode).toBe(1);
       const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload.checksRun).toBe(2);
+      expect(payload.ok).toBe(false);
       expect(payload.findings).toEqual([
         {
           checkId: "plugin/example/lint",
