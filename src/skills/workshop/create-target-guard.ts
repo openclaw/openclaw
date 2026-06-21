@@ -65,7 +65,7 @@ function collectExistingWorkspaceSkillRefs(params: {
       refs.add(formatWorkspaceSkillRef(workspaceDir, skillDir));
     }
   }
-  return [...refs].sort((a, b) => a.localeCompare(b));
+  return [...refs].toSorted((a, b) => a.localeCompare(b));
 }
 
 function contentReferencesExistingSkillDir(
