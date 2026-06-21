@@ -1,4 +1,5 @@
 // Opencode tests cover index plugin behavior.
+import { readFileSync } from "node:fs";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerProviderPlugin,
@@ -221,6 +222,24 @@ describe("opencode provider plugin", () => {
     );
     expect(manifestQwen.api).toBe("anthropic-messages");
     expect(manifestQwen.baseUrl).toBe("https://opencode.ai/zen");
+  });
+
+  it("keeps documented OpenCode Zen example models resolvable", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const docs = readFileSync("docs/providers/opencode.md", "utf8");
+    const exampleRow = docs.match(/^\| Example models\s+\| (?<examples>.+) \|$/m);
+    if (!exampleRow?.groups?.examples) {
+      throw new Error("expected OpenCode Zen example model row");
+    }
+
+    const exampleModelRefs = [...exampleRow.groups.examples.matchAll(/`opencode\/(.*?)`/g)].map(
+      (match) => match[1],
+    );
+    expect(exampleModelRefs.length).toBeGreaterThan(0);
+
+    for (const modelId of exampleModelRefs) {
+      expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({ id: modelId });
+    }
   });
 
   it("keeps every OpenCode Zen row within the required cost contract", async () => {

@@ -92,10 +92,10 @@ as one OpenCode setup.
 
 ### Zen
 
-| Property         | Value                                                                   |
-| ---------------- | ----------------------------------------------------------------------- |
-| Runtime provider | `opencode`                                                              |
-| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3-pro` |
+| Property         | Value                                                                     |
+| ---------------- | ------------------------------------------------------------------------- |
+| Runtime provider | `opencode`                                                                |
+| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3.1-pro` |
 
 ### Go
 
