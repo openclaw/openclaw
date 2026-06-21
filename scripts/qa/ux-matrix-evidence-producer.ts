@@ -53,10 +53,14 @@ Options:
 
 function readOptionValue(argv: readonly string[], index: number, arg: string) {
   const value = argv[index + 1] ?? "";
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${arg} requires a value`);
   }
   return value;
+}
+
+function isHelpRequest(argv: readonly string[]) {
+  return argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h");
 }
 
 function parseOptions(argv: readonly string[]): ProducerOptions {
@@ -698,7 +702,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   (async () => {
     const cliArgs = process.argv.slice(2);
-    if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+    if (isHelpRequest(cliArgs)) {
       console.log(usage());
       return;
     }

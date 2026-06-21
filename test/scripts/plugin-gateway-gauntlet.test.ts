@@ -132,8 +132,29 @@ describe("plugin gateway gauntlet helpers", () => {
   });
 
   it("rejects valued flags followed by another option", () => {
-    for (const flag of ["--repo-root", "--output-dir", "--plugin", "--qa-scenario"]) {
-      expect(() => parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+    for (const flag of [
+      "--repo-root",
+      "--output-dir",
+      "--plugin",
+      "--shard-total",
+      "--shard-index",
+      "--limit",
+      "--qa-scenario",
+      "--qa-plugin-chunk-size",
+      "--cpu-core-warn",
+      "--hot-wall-warn-ms",
+      "--max-rss-warn-mb",
+      "--wall-anomaly-multiplier",
+      "--rss-anomaly-multiplier",
+      "--qa-cpu-regression-multiplier",
+      "--qa-wall-regression-multiplier",
+      "--command-timeout-ms",
+      "--build-timeout-ms",
+      "--qa-timeout-ms",
+    ]) {
+      for (const value of ["--skip-qa", "-h"]) {
+        expect(() => parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
     }
   });
 

@@ -103,13 +103,16 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("rejects missing timings limits without a Node stack trace", () => {
-    const result = runHelper("scripts/docker-e2e-timings.mjs", "summary.json", "--limit");
+    for (const limit of [undefined, "-h"]) {
+      const args = ["scripts/docker-e2e-timings.mjs", "summary.json", "--limit"];
+      const result = runHelper(...(limit === undefined ? args : [...args, limit]));
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("--limit requires a value");
-    expect(result.stderr).not.toContain("Error:");
-    expect(result.stderr).not.toContain("at file:");
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("--limit requires a value");
+      expect(result.stderr).not.toContain("Error:");
+      expect(result.stderr).not.toContain("at file:");
+    }
   });
 
   it("prints rerun help without detecting the GitHub repository", () => {
@@ -256,9 +259,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(combinedCommand).toContain(
         "docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test'",
       );
-      expect(combinedCommand).toContain(
-        "published_upgrade_survivor_baselines='openclaw@2026.5.3'",
-      );
+      expect(combinedCommand).toContain("published_upgrade_survivor_baselines='openclaw@2026.5.3'");
       expect(combinedCommand).toContain(
         "published_upgrade_survivor_scenarios='plugin-dependency-cleanup'",
       );
@@ -267,9 +268,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(result.stdout).toContain(
         "docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test'",
       );
-      expect(result.stdout).toContain(
-        "published_upgrade_survivor_baselines='openclaw@2026.5.3'",
-      );
+      expect(result.stdout).toContain("published_upgrade_survivor_baselines='openclaw@2026.5.3'");
       expect(result.stdout).toContain(
         "published_upgrade_survivor_scenarios='plugin-dependency-cleanup'",
       );
@@ -369,9 +368,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(result.stderr).toBe("");
       const combinedCommand = result.stdout.match(/Combined GitHub rerun:\n([^\n]+)/u)?.[1] ?? "";
       expect(combinedCommand).toContain("--ref 'release/2026.6'");
-      expect(combinedCommand).toContain(
-        "published_upgrade_survivor_baselines='openclaw@2026.5.3'",
-      );
+      expect(combinedCommand).toContain("published_upgrade_survivor_baselines='openclaw@2026.5.3'");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

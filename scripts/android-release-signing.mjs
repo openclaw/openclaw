@@ -49,22 +49,22 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--mode") {
-      options.mode = argv[index + 1] || "";
+      options.mode = readOptionValue(argv, index, arg);
       index += 1;
     } else if (arg === "--manifest") {
-      options.manifestPath = path.resolve(argv[index + 1] || "");
+      options.manifestPath = path.resolve(readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg === "--workspace") {
-      options.workspace = path.resolve(argv[index + 1] || "");
+      options.workspace = path.resolve(readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg === "--materialized-dir") {
-      options.materializedDir = path.resolve(argv[index + 1] || "");
+      options.materializedDir = path.resolve(readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg === "--keystore") {
-      options.keystorePath = path.resolve(argv[index + 1] || "");
+      options.keystorePath = path.resolve(readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg === "--properties") {
-      options.propertiesPath = path.resolve(argv[index + 1] || "");
+      options.propertiesPath = path.resolve(readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg === "-h" || arg === "--help") {
       usage();
@@ -79,6 +79,14 @@ function parseArgs(argv) {
   }
 
   return options;
+}
+
+function readOptionValue(argv, index, option) {
+  const value = argv[index + 1] ?? "";
+  if (!value || value.startsWith("-")) {
+    throw new Error(`Missing value for ${option}.`);
+  }
+  return value;
 }
 
 function requireString(value, key) {

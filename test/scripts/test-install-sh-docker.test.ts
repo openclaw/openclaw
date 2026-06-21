@@ -1,6 +1,6 @@
 // Test Install Sh Docker tests cover test install sh docker script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -320,6 +320,62 @@ describe("test-install-sh-docker", () => {
     expect(nonrootDockerfile).toContain("USER app");
     expect(nonrootDockerfile).toContain("WORKDIR /home/app");
     expect(nonrootDockerfile).toContain("NPM_CONFIG_UPDATE_NOTIFIER=false");
+  });
+
+  it("keeps shared install helpers parsing and verifying installed CLI versions", () => {
+    const root = tempDirs.make("openclaw-install-helper-");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, "openclaw"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'case "${1:-}" in',
+        "  --version)",
+        "    printf 'OpenClaw v2026.6.21-beta.1\\r\\n'",
+        "    ;;",
+        "  --help)",
+        "    printf 'usage\\n'",
+        "    ;;",
+        "  *)",
+        "    exit 2",
+        "    ;;",
+        "esac",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "source scripts/docker/install-sh-common/cli-verify.sh",
+          "printf 'parsed=%s\\n' \"$(extract_openclaw_semver 'OpenClaw v2026.6.21-beta.1+build.7')\"",
+          "verify_installed_cli openclaw 2026.6.21-beta.1",
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: root,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("parsed=2026.6.21-beta.1+build.7");
+    expect(result.stdout).toContain(
+      "cli=openclaw installed=2026.6.21-beta.1 expected=2026.6.21-beta.1",
+    );
+    expect(result.stdout).toContain("==> Sanity: CLI runs");
   });
 
   it("can reuse dist from the already-built root Docker smoke image", () => {

@@ -52,6 +52,20 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expectNoNodeStack(result.stderr);
   });
 
+  it("reports short flag values without treating them as help", () => {
+    const artifactBaseResult = runCli("--artifact-base", "-h");
+    const repoRootResult = runCli("--artifact-base", "/tmp/openclaw-ux-test", "--repo-root", "-h");
+
+    expect(artifactBaseResult.status).toBe(1);
+    expect(artifactBaseResult.stdout).toBe("");
+    expect(artifactBaseResult.stderr.trim()).toBe("--artifact-base requires a value");
+    expectNoNodeStack(artifactBaseResult.stderr);
+    expect(repoRootResult.status).toBe(1);
+    expect(repoRootResult.stdout).toBe("");
+    expect(repoRootResult.stderr.trim()).toBe("--repo-root requires a value");
+    expectNoNodeStack(repoRootResult.stderr);
+  });
+
   it("sanitizes local checkout paths from generated evidence artifacts", () => {
     const artifactBase = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ux-evidence-test-"));
     const fakeRepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ux-repo-test-"));

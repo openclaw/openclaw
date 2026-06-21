@@ -7,7 +7,7 @@ import path from "node:path";
  */
 function readReportOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`Expected ${optionName} <value>.`);
   }
   return value;
