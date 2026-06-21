@@ -65,6 +65,7 @@ const MarkdownConfigSchema = z
 
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
+const CardFooterSchema = z.string().optional();
 
 // Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
 // for incremental text display with a "Thinking..." placeholder
@@ -198,6 +199,7 @@ const FeishuSharedConfigShape = {
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
+  cardFooter: CardFooterSchema,
   streaming: StreamingModeSchema,
   tools: FeishuToolsConfigSchema,
   actions: ChannelActionsSchema,
