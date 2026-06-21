@@ -19,6 +19,7 @@ import {
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
+  messageTimestampMs,
   maybeResetToolStream,
   persistedCurrentToolStreamIds,
   prunePersistedToolStreamMessages,
@@ -31,6 +32,7 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "../control-ui-performance.ts";
+import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -51,6 +53,8 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
+
+export { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -241,18 +245,6 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
-function messageTimestampMs(message: unknown): number | null {
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-  const timestamp = (message as { timestamp?: unknown; ts?: unknown }).timestamp;
-  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
-    return timestamp;
-  }
-  const ts = (message as { timestamp?: unknown; ts?: unknown }).ts;
-  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
-}
-
 function historyHasSameOrNewerDisplayMessage(
   historyMessages: unknown[],
   signature: string,
@@ -373,14 +365,6 @@ function isUnknownGatewayMethodError(err: unknown, method: string): err is Gatew
     err.gatewayCode === "INVALID_REQUEST" &&
     err.message.includes(`unknown method: ${method}`)
   );
-}
-
-export function isGatewayMethodAdvertised(state: ChatState, method: string): boolean | null {
-  const methods = state.hello?.features?.methods;
-  if (!Array.isArray(methods)) {
-    return null;
-  }
-  return methods.includes(method);
 }
 
 function resolveStartupRetryDelayMs(err: GatewayRequestError): number {

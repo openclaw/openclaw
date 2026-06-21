@@ -19,6 +19,7 @@ import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -98,7 +99,8 @@ type RunTuiOptions = TuiOptions & {
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export function resolveCodexCliBin(): string | null {
   try {
-    const lookupCmd = process.platform === "win32" ? "where" : "which";
+    const lookupCmd =
+      process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
     // `where` on Windows can return multiple lines; take the first match.
     const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
     return raw.split(/\r?\n/)[0] || null;

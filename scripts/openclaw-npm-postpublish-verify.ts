@@ -35,7 +35,7 @@ import {
 } from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
   version?: string;
@@ -98,6 +98,41 @@ export type PublishedInstallScenario = {
   installSpecs: string[];
   expectedVersion: string;
 };
+
+export type OpenClawNpmPostpublishVerifyArgs =
+  | {
+      help: false;
+      version: string;
+    }
+  | {
+      help: true;
+      version: "";
+    };
+
+export function openClawNpmPostpublishVerifyUsage(): string {
+  return "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>";
+}
+
+export function parseOpenClawNpmPostpublishVerifyArgs(
+  argv: readonly string[],
+): OpenClawNpmPostpublishVerifyArgs {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const version = args[0]?.trim() ?? "";
+  if (version === "--help" || version === "-h") {
+    return { help: true, version: "" };
+  }
+  if (!version) {
+    throw new Error(openClawNpmPostpublishVerifyUsage());
+  }
+  if (version.startsWith("-")) {
+    throw new Error(`Unknown openclaw npm postpublish verifier option: ${version}`);
+  }
+  const extraArg = args[1]?.trim();
+  if (extraArg) {
+    throw new Error(`Unexpected openclaw npm postpublish verifier argument: ${extraArg}`);
+  }
+  return { help: false, version };
+}
 
 export function buildPublishedInstallScenarios(version: string): PublishedInstallScenario[] {
   const parsed = parseReleaseVersion(version);
@@ -818,7 +853,7 @@ export function resolveInstalledBinaryCommandInvocation(
   const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
   if (platform === "win32") {
     return {
-      command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      command: params.comSpec ?? resolveWindowsCmdExePath(),
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
       windowsVerbatimArguments: true,
     };
@@ -1147,14 +1182,14 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
   }
 }
 
-async function main(): Promise<void> {
-  const version = process.argv[2]?.trim();
-  if (!version) {
-    throw new Error(
-      "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>",
-    );
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseOpenClawNpmPostpublishVerifyArgs(argv);
+  if (args.help) {
+    console.log(openClawNpmPostpublishVerifyUsage());
+    return;
   }
 
+  const { version } = args;
   const scenarios = buildPublishedInstallScenarios(version);
   await verifyPublishedRegistryProvenance(version);
   for (const scenario of scenarios) {

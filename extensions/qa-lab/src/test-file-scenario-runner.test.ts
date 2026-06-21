@@ -2,11 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import { readQaScenarioById, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import {
+  qaTestFileScenarioRunnerTesting,
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
 } from "./test-file-scenario-runner.js";
@@ -425,6 +426,47 @@ describe("qa test file scenario runner", () => {
     } finally {
       if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
+
+  it("force-kills Windows scenario command trees when graceful taskkill fails", () => {
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.WINDIR;
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ status: 1 })
+      .mockReturnValueOnce({ status: 0 });
+
+    try {
+      expect(
+        qaTestFileScenarioRunnerTesting.killQaScenarioWindowsProcessTree(
+          12345,
+          "SIGTERM",
+          runTaskkill,
+        ),
+      ).toBe(true);
+      const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/pid", "12345", "/T"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/pid", "12345", "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } finally {
+      if (originalSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = originalSystemRoot;
+      }
+      if (originalWindir === undefined) {
+        delete process.env.WINDIR;
+      } else {
+        process.env.WINDIR = originalWindir;
       }
     }
   });

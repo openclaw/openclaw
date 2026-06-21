@@ -19,7 +19,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
+import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
@@ -119,7 +119,7 @@ function spawnInvocation(command, commandArgs, env, platform) {
   const extension = extname(command).toLowerCase();
   if (platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
     return {
-      command: env.ComSpec ?? "cmd.exe",
+      command: resolveWindowsCmdExePath(env),
       args: ["/d", "/s", "/c", buildBatchCommandLine(command, commandArgs)],
       windowsVerbatimArguments: true,
     };
@@ -166,6 +166,102 @@ const shellInlineCommandOptionsWithNextValue = new Set([
   "-o",
   "--init-file",
   "--rcfile",
+]);
+const nodeOptionsWithNextValueBeforeScript = new Set([
+  "--allow-fs-read",
+  "--allow-fs-write",
+  "--conditions",
+  "--cpu-prof-dir",
+  "--cpu-prof-interval",
+  "--cpu-prof-name",
+  "--debug-port",
+  "--diagnostic-dir",
+  "--disable-proto",
+  "--disable-warning",
+  "--dns-result-order",
+  "--env-file",
+  "--env-file-if-exists",
+  "--experimental-config-file",
+  "--experimental-loader",
+  "--experimental-test-isolation",
+  "--heap-prof-dir",
+  "--heap-prof-interval",
+  "--heap-prof-name",
+  "--heapsnapshot-near-heap-limit",
+  "--heapsnapshot-signal",
+  "--icu-data-dir",
+  "--import",
+  "--inspect-port",
+  "--inspect-publish-uid",
+  "--initial-old-space-size",
+  "--localstorage-file",
+  "--loader",
+  "--max-http-header-size",
+  "--max-old-space-size",
+  "--max-old-space-size-percentage",
+  "--max-semi-space-size",
+  "--network-family-autoselection-attempt-timeout",
+  "--openssl-config",
+  "--redirect-warnings",
+  "--report-dir",
+  "--report-directory",
+  "--report-filename",
+  "--report-signal",
+  "--require",
+  "--secure-heap",
+  "--secure-heap-min",
+  "--snapshot-blob",
+  "--test-concurrency",
+  "--test-coverage-branches",
+  "--test-coverage-exclude",
+  "--test-coverage-functions",
+  "--test-coverage-include",
+  "--test-coverage-lines",
+  "--test-global-setup",
+  "--test-isolation",
+  "--test-name-pattern",
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-rerun-failures",
+  "--test-shard",
+  "--test-skip-pattern",
+  "--test-timeout",
+  "--title",
+  "--tls-cipher-list",
+  "--tls-keylog",
+  "--trace-event-categories",
+  "--trace-event-file-pattern",
+  "--trace-require-module",
+  "--unhandled-rejections",
+  "--use-largepages",
+  "--v8-pool-size",
+  "--watch-kill-signal",
+  "--watch-path",
+  "-C",
+  "-r",
+]);
+const nodeOptionsWithoutScript = new Set([
+  "--build-sea",
+  "--build-snapshot",
+  "--build-snapshot-config",
+  "--check",
+  "--completion-bash",
+  "--eval",
+  "--experimental-sea-config",
+  "--help",
+  "--input-type",
+  "--interactive",
+  "--print",
+  "--prof-process",
+  "--run",
+  "--v8-options",
+  "--version",
+  "-c",
+  "-e",
+  "-h",
+  "-i",
+  "-p",
+  "-v",
 ]);
 
 function escapeBatchCommand(command) {
@@ -919,8 +1015,54 @@ function isChangedGateWords(wordsInput) {
   return (
     (words[0] === "pnpm" && words[1] === "check:changed") ||
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
-    (words[0] === "node" && (words[1] ?? "").endsWith("scripts/check-changed.mjs"))
+    nodeScriptWord(words)?.endsWith("scripts/check-changed.mjs")
   );
+}
+
+function nodeScriptWord(words) {
+  if (shellWordBasename(words[0]) !== "node") {
+    return "";
+  }
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (!word) {
+      return "";
+    }
+    if (word === "--") {
+      return words[index + 1] ?? "";
+    }
+    if (nodeOptionsWithoutScript.has(word) || nodeOptionsWithoutScriptPrefix(word)) {
+      return "";
+    }
+    const valueMode = nodeOptionValueModeBeforeScript(word);
+    if (valueMode === "next") {
+      index += 1;
+      continue;
+    }
+    if (valueMode === "inline") {
+      continue;
+    }
+    if (word.startsWith("-") && word !== "-") {
+      continue;
+    }
+    return word;
+  }
+  return "";
+}
+
+function nodeOptionsWithoutScriptPrefix(word) {
+  return word.startsWith("--eval=") || word.startsWith("--print=");
+}
+
+function nodeOptionValueModeBeforeScript(word) {
+  if (nodeOptionsWithNextValueBeforeScript.has(word)) {
+    return "next";
+  }
+  const equalsIndex = word.indexOf("=");
+  if (equalsIndex > 0 && nodeOptionsWithNextValueBeforeScript.has(word.slice(0, equalsIndex))) {
+    return "inline";
+  }
+  return "";
 }
 
 function shellInlineCommand(words) {

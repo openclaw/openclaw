@@ -1369,6 +1369,67 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     );
   });
 
+  it("bootstraps Corepack for AWS macOS node option changed-gate commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--",
+        "node",
+        "--max-old-space-size",
+        "4096",
+        "--env-file-if-exists",
+        ".env",
+        "--unhandled-rejections",
+        "strict",
+        "--trace-warnings",
+        "--import=tsx",
+        "scripts/check-changed.mjs",
+      ],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expectGroupedShellCommand(
+      remoteCommand,
+      `openclaw_crabbox_env ${remoteChangedGateEnvPrefix} node --max-old-space-size 4096 --env-file-if-exists .env --unhandled-rejections strict --trace-warnings --import=tsx scripts/check-changed.mjs`,
+    );
+  });
+
+  it("does not treat node script arguments as changed-gate commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--",
+        "node",
+        "--trace-warnings",
+        "scripts/other.mjs",
+        "scripts/check-changed.mjs",
+      ],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    expectGroupedShellCommand(
+      remoteCommand,
+      "node --trace-warnings scripts/other.mjs scripts/check-changed.mjs",
+    );
+  });
+
   it("preserves shell commands when bootstrapping raw AWS macOS JavaScript commands", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
@@ -1485,10 +1546,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   });
 
   it("bootstraps Corepack for AWS macOS script-stdin env shebangs with option values", () => {
-    const script = [
-      "#!/usr/bin/env -C /tmp -u OPENCLAW_FAKE_VAR pnpm",
-      "--version",
-    ].join("\n");
+    const script = ["#!/usr/bin/env -C /tmp -u OPENCLAW_FAKE_VAR pnpm", "--version"].join("\n");
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
@@ -2626,7 +2684,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
 
   it("preserves sparse changed-gate Git bootstrap for timeout-wrapped shell commands", () => {
     const shellScript =
-      "/usr/bin/time -v timeout 1200s node scripts/check-changed.mjs --base origin/main --head HEAD";
+      "/usr/bin/time -v timeout 1200s node --max-old-space-size=4096 scripts/check-changed.mjs --base origin/main --head HEAD";
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--shell", "--", shellScript],

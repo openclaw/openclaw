@@ -49,6 +49,46 @@ DMG_APP_POS="${DMG_APP_POS:-125 160}"
 DMG_APPS_POS="${DMG_APPS_POS:-375 160}"
 DMG_EXTRA_SECTORS="${DMG_EXTRA_SECTORS:-2048}"
 
+require_integer_list() {
+  local name="$1"
+  local raw="$2"
+  local expected_count="$3"
+  local values=()
+  local value
+
+  if [[ "$raw" == *$'\n'* || "$raw" == *$'\r'* ]]; then
+    echo "Error: $name must be a single line of integer values: '$raw'" >&2
+    exit 1
+  fi
+
+  read -r -a values <<< "$raw"
+  if [[ "${#values[@]}" -ne "$expected_count" ]]; then
+    echo "Error: $name must contain $expected_count integer value(s): '$raw'" >&2
+    exit 1
+  fi
+
+  for value in "${values[@]}"; do
+    if [[ ! "$value" =~ ^-?[0-9]+$ ]]; then
+      echo "Error: $name must contain only integer values: '$raw'" >&2
+      exit 1
+    fi
+  done
+}
+
+require_positive_integer() {
+  local name="$1"
+  local raw="$2"
+  if [[ ! "$raw" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: $name must be a positive integer: '$raw'" >&2
+    exit 1
+  fi
+}
+
+require_integer_list DMG_WINDOW_BOUNDS "$DMG_WINDOW_BOUNDS" 4
+require_integer_list DMG_APP_POS "$DMG_APP_POS" 2
+require_integer_list DMG_APPS_POS "$DMG_APPS_POS" 2
+require_positive_integer DMG_ICON_SIZE "$DMG_ICON_SIZE"
+
 to_applescript_list4() {
   local raw="$1"
   echo "$raw" | awk '{ printf "%s, %s, %s, %s", $1, $2, $3, $4 }'
@@ -90,6 +130,23 @@ cleanup_dmg() {
   rm -rf "$DMG_TEMP" 2>/dev/null || true
 }
 trap cleanup_dmg EXIT
+
+detach_dmg() {
+  local attempt
+  for attempt in {1..15}; do
+    if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
+      MOUNTED=0
+      return
+    fi
+    if (( attempt >= 3 )) && hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
+      MOUNTED=0
+      return
+    fi
+    # Finder can retain the just-closed volume briefly on macOS runners.
+    sleep 2
+  done
+  return 1
+}
 
 mkdir -p "$DMG_SOURCE" "$MOUNT_POINT"
 cp -R "$APP_PATH" "$DMG_SOURCE/"
@@ -161,20 +218,7 @@ end tell
 EOF
 fi
 
-for i in {1..5}; do
-  if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
-    MOUNTED=0
-    break
-  fi
-  if [[ "$i" == "3" ]]; then
-    if hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
-      MOUNTED=0
-      break
-    fi
-  fi
-  sleep 2
-done
-if [[ "$MOUNTED" == "1" ]]; then
+if ! detach_dmg; then
   echo "Error: Failed to detach DMG mount: $MOUNT_POINT" >&2
   exit 1
 fi

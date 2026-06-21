@@ -31,6 +31,11 @@ import {
 } from "../utils/usage-format.js";
 import { formatErrorMessage } from "./errors.js";
 import { replaceFileAtomic } from "./replace-file.js";
+import {
+  addCostUsageTotals as addTotals,
+  cloneCostUsageTotals as cloneTotals,
+  createEmptyCostUsageTotals as emptyTotals,
+} from "./session-cost-usage-totals.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -68,20 +73,6 @@ export type {
   SessionToolUsage,
   UsageCacheStatus,
 } from "./session-cost-usage.types.js";
-
-const emptyTotals = (): CostUsageTotals => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-});
 
 // Bump when the *meaning* of cached totals changes (not just their inputs), so durable
 // caches written by older builds are rebuilt instead of served stale. Bumped to 4:
@@ -169,34 +160,6 @@ type UsageCostCacheLockReadResult =
   | { state: "missing" }
   | { state: "valid"; lock: UsageCostCacheLock }
   | { state: "malformed"; mtimeMs: number };
-
-const cloneTotals = (totals: CostUsageTotals): CostUsageTotals => ({
-  input: totals.input,
-  output: totals.output,
-  cacheRead: totals.cacheRead,
-  cacheWrite: totals.cacheWrite,
-  totalTokens: totals.totalTokens,
-  totalCost: totals.totalCost,
-  inputCost: totals.inputCost,
-  outputCost: totals.outputCost,
-  cacheReadCost: totals.cacheReadCost,
-  cacheWriteCost: totals.cacheWriteCost,
-  missingCostEntries: totals.missingCostEntries,
-});
-
-const addTotals = (target: CostUsageTotals, source: CostUsageTotals): void => {
-  target.input += source.input;
-  target.output += source.output;
-  target.cacheRead += source.cacheRead;
-  target.cacheWrite += source.cacheWrite;
-  target.totalTokens += source.totalTokens;
-  target.totalCost += source.totalCost;
-  target.inputCost += source.inputCost;
-  target.outputCost += source.outputCost;
-  target.cacheReadCost += source.cacheReadCost;
-  target.cacheWriteCost += source.cacheWriteCost;
-  target.missingCostEntries += source.missingCostEntries;
-};
 
 function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
   return resolveModelCostConfigFingerprint(config);

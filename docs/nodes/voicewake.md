@@ -15,15 +15,18 @@ OpenClaw treats **wake words as a single global list** owned by the **Gateway**.
 
 ## Storage (Gateway host)
 
-Wake words are stored on the gateway machine at:
+Wake words and routing rules are stored in the gateway state database:
 
-- `~/.openclaw/settings/voicewake.json`
+- `~/.openclaw/state/openclaw.sqlite`
 
-Shape:
+The active tables are:
 
-```json
-{ "triggers": ["openclaw", "claude", "computer"], "updatedAtMs": 1730000000000 }
-```
+- `voicewake_triggers`
+- `voicewake_routing_config`
+- `voicewake_routing_routes`
+
+Legacy `settings/voicewake.json` and `settings/voicewake-routing.json` files are
+doctor migration inputs only; runtime reads and writes the SQLite tables.
 
 ## Protocol
 

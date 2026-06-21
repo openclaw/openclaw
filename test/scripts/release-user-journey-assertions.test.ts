@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runReleaseUserJourneyAssertion } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
+import { withEnvAsync } from "../../src/test-utils/env.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
@@ -38,25 +39,6 @@ function runAssertion(
     killSignal: "SIGKILL",
     timeout: options.timeoutMs,
   });
-}
-
-async function withEnv<T>(env: Record<string, string>, callback: () => Promise<T>): Promise<T> {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
-    process.env[key] = value;
-  }
-  try {
-    return await callback();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
 }
 
 async function waitUntil(matches: () => boolean, label: string): Promise<void> {
@@ -301,7 +283,7 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
-        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
+        withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
           runReleaseUserJourneyAssertion("wait-clickclack-socket", [
             `http://127.0.0.1:${server.port}`,
             "1",
@@ -327,7 +309,7 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
-        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
+        withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
           runReleaseUserJourneyAssertion("post-clickclack-inbound", [
             `http://127.0.0.1:${server.port}`,
             "hello",
@@ -351,7 +333,7 @@ describe("release user journey assertions", () => {
     try {
       const startedAt = Date.now();
       await expect(
-        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100" }, () =>
+        withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100" }, () =>
           runReleaseUserJourneyAssertion("wait-clickclack-socket", [
             `http://127.0.0.1:${server.port}`,
             "1",
@@ -374,7 +356,7 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
-        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100ms" }, () =>
+        withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100ms" }, () =>
           runReleaseUserJourneyAssertion("wait-clickclack-socket", [
             `http://127.0.0.1:${server.port}`,
             "1",
@@ -396,14 +378,14 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
-        withEnv({ HOME: home }, () =>
+        withEnvAsync({ HOME: home }, () =>
           runReleaseUserJourneyAssertion("wait-clickclack-socket", ["http://127.0.0.1:9", "1e3"]),
         ),
       ).rejects.toThrow(
         'ClickClack websocket timeout seconds must be a positive integer. Got: "1e3"',
       );
       await expect(
-        withEnv({ HOME: home }, () =>
+        withEnvAsync({ HOME: home }, () =>
           runReleaseUserJourneyAssertion("wait-clickclack-reply", [
             statePath,
             "OPENCLAW_E2E_OK",
@@ -428,7 +410,7 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
-        withEnv(
+        withEnvAsync(
           {
             HOME: home,
             OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES: "16",
@@ -456,7 +438,7 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
-        withEnv(
+        withEnvAsync(
           {
             HOME: home,
             OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "25",
@@ -486,7 +468,7 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
-        withEnv(
+        withEnvAsync(
           {
             HOME: home,
             OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES: "16bytes",

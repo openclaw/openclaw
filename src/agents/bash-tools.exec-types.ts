@@ -72,6 +72,7 @@ export type ExecToolDefaults = {
   currentChannelId?: string;
   currentThreadTs?: string;
   accountId?: string;
+  approvalReviewerDeviceId?: string;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;

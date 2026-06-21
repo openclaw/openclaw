@@ -6,7 +6,6 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { normalizeCredentialPayloadForKind } from "../../qa/convex-credential-broker/convex/payload-validation.js";
 import { fetchJsonWithTimeout, runCommand } from "./telegram-user-credential-io.ts";
 import { expandHome, writePrivateJson } from "./telegram-user-credential-paths.ts";
 
@@ -18,6 +17,9 @@ const DEFAULT_BOT_CREDENTIALS_FILE =
 const DEFAULT_CONVEX_ENV_FILE = "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
+const TELEGRAM_CHAT_ID_RE = /^-?\d+$/u;
+const TELEGRAM_USER_ID_RE = /^\d+$/u;
 const DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS = 4096;
 const COMMAND_TIMEOUT_MS = optionalPositiveInteger(
@@ -175,8 +177,83 @@ function optionalPositiveInteger(value: string | undefined, fallback: number, la
   return parsed;
 }
 
+function throwCredentialPayloadError(message: string): never {
+  throw new Error(message);
+}
+
+function requireTelegramUserPayloadString(payload: Record<string, unknown>, key: string): string {
+  const raw = payload[key];
+  if (typeof raw !== "string") {
+    throwCredentialPayloadError(
+      `Credential payload for kind "${TELEGRAM_USER_QA_CREDENTIAL_KIND}" must include "${key}" as a string.`,
+    );
+  }
+  const value = raw.trim();
+  if (!value) {
+    throwCredentialPayloadError(
+      `Credential payload for kind "${TELEGRAM_USER_QA_CREDENTIAL_KIND}" must include a non-empty "${key}" value.`,
+    );
+  }
+  return value;
+}
+
 function parseTelegramUserQaCredentialPayload(payload: Record<string, unknown>): JsonObject {
-  return normalizeCredentialPayloadForKind(TELEGRAM_USER_QA_CREDENTIAL_KIND, payload);
+  const groupId = requireTelegramUserPayloadString(payload, "groupId");
+  if (!TELEGRAM_CHAT_ID_RE.test(groupId)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include a numeric "groupId" string.',
+    );
+  }
+  const testerUserId = requireTelegramUserPayloadString(payload, "testerUserId");
+  if (!TELEGRAM_USER_ID_RE.test(testerUserId)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include a numeric "testerUserId" string.',
+    );
+  }
+  const telegramApiId = requireTelegramUserPayloadString(payload, "telegramApiId");
+  if (!TELEGRAM_USER_ID_RE.test(telegramApiId)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include a numeric "telegramApiId" string.',
+    );
+  }
+  const tdlibArchiveSha256 = requireTelegramUserPayloadString(
+    payload,
+    "tdlibArchiveSha256",
+  ).toLowerCase();
+  const desktopTdataArchiveSha256 = requireTelegramUserPayloadString(
+    payload,
+    "desktopTdataArchiveSha256",
+  ).toLowerCase();
+  if (!SHA256_HEX_RE.test(tdlibArchiveSha256)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include "tdlibArchiveSha256" as a SHA-256 hex string.',
+    );
+  }
+  if (!SHA256_HEX_RE.test(desktopTdataArchiveSha256)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include "desktopTdataArchiveSha256" as a SHA-256 hex string.',
+    );
+  }
+
+  return {
+    groupId,
+    sutToken: requireTelegramUserPayloadString(payload, "sutToken"),
+    testerUserId,
+    testerUsername: requireTelegramUserPayloadString(payload, "testerUsername"),
+    telegramApiId,
+    telegramApiHash: requireTelegramUserPayloadString(payload, "telegramApiHash"),
+    tdlibDatabaseEncryptionKey: requireTelegramUserPayloadString(
+      payload,
+      "tdlibDatabaseEncryptionKey",
+    ),
+    tdlibArchiveBase64: requireTelegramUserPayloadString(payload, "tdlibArchiveBase64"),
+    tdlibArchiveSha256,
+    desktopTdataArchiveBase64: requireTelegramUserPayloadString(
+      payload,
+      "desktopTdataArchiveBase64",
+    ),
+    desktopTdataArchiveSha256,
+  };
 }
 
 async function fileSha256(pathValue: string) {

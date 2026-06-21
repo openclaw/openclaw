@@ -7,7 +7,7 @@ import {
 } from "../auto-reply/reply/dispatcher-registry.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getTotalQueueSize, resetCommandQueueStateForTest } from "../process/command-queue.js";
-import { createDeferred } from "./test-helpers.deferred.js";
+import { createDeferred } from "../test-utils/deferred.js";
 
 async function flushMicrotasks(count = 10): Promise<void> {
   for (let i = 0; i < count; i += 1) {

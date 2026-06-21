@@ -22,8 +22,8 @@ import {
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
-  awaitAgentHarnessAgentEndHook,
-  runAgentHarnessAgentEndHook,
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
@@ -66,6 +66,7 @@ import {
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
   renderCodexSkillsCollaborationInstructions,
+  resolveCodexDeliveryHintPreservedInputRange,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import {
@@ -368,7 +369,7 @@ function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
   return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
 }
 
-type CodexAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
+type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
 
 function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean {
   return !params.messageChannel && !params.messageProvider;
@@ -378,11 +379,15 @@ async function runCodexAgentEndHook(
   params: EmbeddedRunAttemptParams,
   hookParams: CodexAgentEndHookParams,
 ): Promise<void> {
+  const sideEffectParams = {
+    ...hookParams,
+    ctx: { ...hookParams.ctx, config: params.config },
+  };
   if (shouldAwaitCodexAgentEndHook(params)) {
-    await awaitAgentHarnessAgentEndHook(hookParams);
+    await awaitAgentEndSideEffects(sideEffectParams);
     return;
   }
-  runAgentHarnessAgentEndHook(hookParams);
+  runAgentEndSideEffects(sideEffectParams);
 }
 
 export async function runCodexAppServerAttempt(
@@ -1020,33 +1025,119 @@ export async function runCodexAppServerAttempt(
       developerInstructions,
       messages: codexModelInputHistoryMessages,
       ctx: hookContext,
+      ...("beforeAgentStartResult" in params
+        ? { beforeAgentStartResult: params.beforeAgentStartResult }
+        : {}),
     });
-  const resolveShiftedPromptContextRange = (
+  const resolveShiftedPromptInputRange = (
     prompt: string,
+    promptInputRange: { start: number; end: number } | undefined,
     turnPromptText: string,
   ): CodexProjectedContextRange | undefined => {
-    if (!promptContextRange || !prompt.endsWith(promptText) || !turnPromptText.endsWith(prompt)) {
+    if (
+      !promptInputRange ||
+      promptInputRange.start < 0 ||
+      promptInputRange.end < promptInputRange.start ||
+      promptInputRange.end > prompt.length ||
+      !turnPromptText.endsWith(prompt)
+    ) {
       return undefined;
     }
-    const promptTextOffset = prompt.length - promptText.length;
-    const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;
+    const turnPromptOffset = turnPromptText.length - prompt.length;
     return {
+      start: turnPromptOffset + promptInputRange.start,
+      end: turnPromptOffset + promptInputRange.end,
+    };
+  };
+  const resolveShiftedPromptContextRange = (
+    prompt: string,
+    promptInputRange: { start: number; end: number } | undefined,
+    turnPromptText: string,
+  ):
+    | {
+        contextRange: CodexProjectedContextRange;
+        requestRange: CodexProjectedContextRange;
+      }
+    | undefined => {
+    // promptInputRange ends before hook appendContext. Measure from the
+    // immutable projected prompt instead of the hook-expanded prompt so that
+    // the suffix remains available for bounded fitting as newer context.
+    const promptTextInputOffset = promptInputRange
+      ? promptInputRange.end - promptText.length
+      : undefined;
+    if (
+      !promptContextRange ||
+      !promptInputRange ||
+      promptTextInputOffset === undefined ||
+      promptInputRange.start < 0 ||
+      promptInputRange.end < promptInputRange.start ||
+      promptInputRange.end > prompt.length ||
+      promptTextInputOffset < promptInputRange.start ||
+      prompt.slice(promptTextInputOffset, promptInputRange.end) !== promptText ||
+      !turnPromptText.endsWith(prompt)
+    ) {
+      return undefined;
+    }
+    // A hook can append the full projected prompt as newer transient context.
+    // Fit that suffix so truncation retains its latest context rather than the
+    // earlier input span. The exact input range still covers prepend-only hooks.
+    const promptTextOffset = prompt.endsWith(promptText)
+      ? prompt.length - promptText.length
+      : promptTextInputOffset;
+    if (promptTextOffset < 0) {
+      return undefined;
+    }
+    const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;
+    const contextRange = {
       start: turnPromptOffset + promptContextRange.start,
       end: turnPromptOffset + promptContextRange.end,
     };
+    return {
+      contextRange,
+      requestRange: {
+        start: contextRange.end,
+        end: turnPromptOffset + promptText.length,
+      },
+    };
   };
   let promptBuild = await buildPromptFromCurrentInputs();
-  const decorateCodexTurnPromptText = (prompt: string) => {
-    const turnPromptText = prependCodexOpenClawPromptContext(prompt, openClawPromptContext, {
-      preservePromptWithoutContext:
-        params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron",
-    });
+  const decorateCodexTurnPromptText = (promptBuildResult: {
+    prompt: string;
+    promptInputRange?: { start: number; end: number };
+  }) => {
+    const turnPromptText = prependCodexOpenClawPromptContext(
+      promptBuildResult.prompt,
+      openClawPromptContext,
+      {
+        preservePromptWithoutContext:
+          params.bootstrapContextMode === "lightweight" &&
+          params.bootstrapContextRunKind === "cron",
+      },
+    );
+    const projectedRanges = resolveShiftedPromptContextRange(
+      promptBuildResult.prompt,
+      promptBuildResult.promptInputRange,
+      turnPromptText,
+    );
+    const preservedRange =
+      resolveShiftedPromptInputRange(
+        promptBuildResult.prompt,
+        promptBuildResult.promptInputRange,
+        turnPromptText,
+      ) ??
+      resolveCodexDeliveryHintPreservedInputRange({
+        prompt: promptBuildResult.prompt,
+        promptInputRange: promptBuildResult.promptInputRange,
+        decoratedPrompt: turnPromptText,
+      });
     return fitCodexProjectedContextForTurnStart({
       promptText: turnPromptText,
-      contextRange: resolveShiftedPromptContextRange(prompt, turnPromptText),
+      contextRange: projectedRanges?.contextRange,
+      requestRange: projectedRanges?.requestRange,
+      preservedRange,
     });
   };
-  let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
@@ -1062,7 +1153,7 @@ export async function runCodexAppServerAttempt(
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async () => {
     promptBuild = await buildPromptFromCurrentInputs();
-    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
   };
   const rebuildCodexTurnPromptTextFromCurrentProjection = async () => {
     const nextPromptBuild = await buildPromptFromCurrentInputs();
@@ -1071,8 +1162,9 @@ export async function runCodexAppServerAttempt(
     promptBuild = {
       ...promptBuild,
       prompt: nextPromptBuild.prompt,
+      promptInputRange: nextPromptBuild.promptInputRange,
     };
-    codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild.prompt);
+    codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild);
   };
   const selectNewerVisibleHistoryAfterBinding = (binding: CodexAppServerThreadBinding) => {
     const bindingUpdatedAt = Date.parse(binding.updatedAt);
