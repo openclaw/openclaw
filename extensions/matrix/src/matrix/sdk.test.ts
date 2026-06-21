@@ -242,7 +242,7 @@ type MatrixJsClientStub = {
   sendTyping: ReturnType<typeof vi.fn>;
   getRoom: ReturnType<typeof vi.fn>;
   getRooms: ReturnType<typeof vi.fn>;
-  getCrypto: ReturnType<typeof vi.fn>;
+  getCrypto: ReturnType<typeof vi.fn<() => unknown>>;
   decryptEventIfNeeded: ReturnType<typeof vi.fn>;
   relations: ReturnType<typeof vi.fn>;
 };
