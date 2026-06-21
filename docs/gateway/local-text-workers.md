@@ -120,7 +120,14 @@ a tool removed by `tools.profile`):
     defaults: {
       model: { primary: "anthropic/claude-sonnet-4-6" },
       subagents: {
-        model: "lmstudio/my-local-model",
+        // Object form keeps the cloud safety net: list fallbacks explicitly. A bare
+        // string model (e.g. "lmstudio/my-local-model") opts out of the global
+        // agents.defaults.model.fallbacks and resolves to no fallbacks, so the worker
+        // would have no cloud backup if the local box is down.
+        model: {
+          primary: "lmstudio/my-local-model",
+          fallbacks: ["anthropic/claude-sonnet-4-6"],
+        },
         runTimeoutSeconds: 900, // 0 = no timeout
       },
     },
