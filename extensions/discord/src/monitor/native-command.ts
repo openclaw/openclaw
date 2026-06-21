@@ -334,6 +334,21 @@ async function dispatchDiscordCommandInteraction(params: {
       threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
       enforceConfiguredBindingReadiness: !shouldBypassConfiguredAcpEnsure(commandName),
     }));
+  const rejectUnavailableConfiguredBinding = async (): Promise<boolean> => {
+    const routeState = await getNativeRouteState();
+    if (!routeState.bindingReadiness || routeState.bindingReadiness.ok) {
+      return false;
+    }
+    const configuredBinding = routeState.configuredBinding;
+    if (!configuredBinding) {
+      return false;
+    }
+    logVerbose(
+      `discord native command: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${routeState.bindingReadiness.error}`,
+    );
+    await respond("Configured ACP binding is unavailable right now. Please try again.");
+    return true;
+  };
   const canBypassConfiguredAcpGuildGuards = async () => {
     if (!interaction.guild || !shouldBypassConfiguredAcpGuildGuards(commandName)) {
       return false;
@@ -478,6 +493,9 @@ async function dispatchDiscordCommandInteraction(params: {
     commandArgs,
   });
   if (pickerCommandContext) {
+    if (await rejectUnavailableConfiguredBinding()) {
+      return { accepted: false };
+    }
     await replyWithDiscordModelPickerProviders({
       interaction,
       cfg,
@@ -625,15 +643,8 @@ async function dispatchDiscordCommandInteraction(params: {
 
   const interactionId = interaction.rawData.id;
   const routeState = await getNativeRouteState();
-  if (routeState.bindingReadiness && !routeState.bindingReadiness.ok) {
-    const configuredBinding = routeState.configuredBinding;
-    if (configuredBinding) {
-      logVerbose(
-        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${routeState.bindingReadiness.error}`,
-      );
-      await respond("Configured ACP binding is unavailable right now. Please try again.");
-      return { accepted: false };
-    }
+  if (await rejectUnavailableConfiguredBinding()) {
+    return { accepted: false };
   }
   const boundSessionKey = routeState.boundSessionKey;
   const effectiveRoute = routeState.effectiveRoute;

@@ -102,6 +102,7 @@ import {
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
+import { buildBrowseProvidersButton } from "./model-buttons.js";
 import { sanitizeTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
@@ -1188,6 +1189,19 @@ export const registerTelegramNativeCommands = ({
           }
           if (rows.length > 0 && allChoicesFitCallbackData) {
             const replyMarkup = buildInlineKeyboard(rows);
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(chatId, title, {
+                  ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+                  ...threadParams,
+                }),
+            });
+            return;
+          }
+          if (commandDefinition.key === "model" && !allChoicesFitCallbackData) {
+            const replyMarkup = buildInlineKeyboard(buildBrowseProvidersButton());
             await withTelegramApiErrorLogging({
               operation: "sendMessage",
               runtime,

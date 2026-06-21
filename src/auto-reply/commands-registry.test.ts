@@ -887,6 +887,33 @@ describe("commands registry args", () => {
     ]);
   });
 
+  it("preserves long configured model values in /model arg menus", () => {
+    const command = requireNativeCommand("model");
+    const longModel = "nousresearch/hermes-3-llama-3.1-405b:extended";
+
+    const menu = requireCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              models: [
+                { id: "short-model", name: "Short Model" },
+                { id: longModel, name: "Hermes 405B Extended" },
+              ],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(menu.choices).toContainEqual({
+      label: "openrouter/Hermes 405B Extended",
+      value: `openrouter/${longModel}`,
+    });
+  });
+
   it("keeps bare /model status dispatch when no configured model choices exist", () => {
     const command = requireNativeCommand("model");
 

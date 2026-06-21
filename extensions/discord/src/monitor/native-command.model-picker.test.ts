@@ -31,7 +31,10 @@ import {
   replyWithDiscordModelPickerProviders,
   type DispatchDiscordCommandInteraction,
 } from "./native-command-ui.js";
-import { createDiscordNativeCommand } from "./native-command.js";
+import {
+  createDiscordNativeCommand,
+  testing as discordNativeCommandTesting,
+} from "./native-command.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
 type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0]["ctx"];
@@ -480,6 +483,100 @@ describe("Discord model picker interactions", () => {
     const payload = JSON.stringify(firstMockArg(interaction.followUp, "interaction.followUp"));
     expect(payload).toContain("gpt-5.5");
     expect(payload).not.toContain("Choose a model for /model.");
+  });
+
+  it("checks configured ACP binding readiness before opening bare /model picker", async () => {
+    const context = createModelPickerContext();
+    const cfg = {
+      ...context.cfg,
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {},
+            "anthropic/claude-sonnet-4-5": {},
+          },
+        },
+      },
+      bindings: [
+        {
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "direct", id: "owner" },
+          },
+          acp: { mode: "persistent" },
+        },
+      ],
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+          },
+          anthropic: {
+            models: [{ id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const loadSpy = vi.spyOn(modelPickerModule, "loadDiscordModelPickerData");
+    const routeSpy = vi.fn<
+      typeof nativeCommandRouteModule.resolveDiscordNativeInteractionRouteState
+    >(
+      async () =>
+        ({
+          route: {
+            agentId: "main",
+            channel: "discord",
+            accountId: "default",
+            sessionKey: "agent:main:main",
+            mainSessionKey: "agent:main:main",
+            lastRoutePolicy: "session",
+            matchedBy: "binding.channel",
+          },
+          effectiveRoute: {
+            agentId: "codex",
+            channel: "discord",
+            accountId: "default",
+            sessionKey: "agent:codex:acp:binding:discord:default:dm",
+            mainSessionKey: "agent:codex:main",
+            lastRoutePolicy: "session",
+            matchedBy: "binding.channel",
+          },
+          boundSessionKey: "agent:codex:acp:binding:discord:default:dm",
+          configuredRoute: null,
+          configuredBinding: {
+            record: {
+              conversation: {
+                conversationId: "owner",
+              },
+            },
+            statefulTarget: {
+              agentId: "codex",
+            },
+          },
+          bindingReadiness: { ok: false, error: "missing configured binding" },
+        }) as never,
+    );
+    const previousRouteState =
+      discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(routeSpy);
+    const command = createNativeModelCommand(cfg);
+    const interaction = createInteraction({ userId: "owner" });
+
+    try {
+      await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction);
+    } finally {
+      discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(previousRouteState);
+    }
+
+    expect(firstMockArg(routeSpy, "resolve route state")).toMatchObject({
+      enforceConfiguredBindingReadiness: true,
+    });
+    expect(loadSpy).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: "Configured ACP binding is unavailable right now. Please try again.",
+      ephemeral: true,
+    });
   });
 
   it("requires submit click before routing selected model through /model pipeline", async () => {

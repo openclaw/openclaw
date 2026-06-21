@@ -412,7 +412,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
   });
 
-  it("keeps bare /model reachable when configured model callbacks exceed Telegram limits", async () => {
+  it("falls back to model browse controls when configured model callbacks exceed Telegram limits", async () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
     const longModel = "nousresearch/hermes-3-llama-3.1-405b:extended";
     const params = createNativeCommandTestParams(
@@ -442,10 +442,14 @@ describe("registerTelegramNativeCommands", () => {
     const dispatch = params.telegramDeps?.dispatchReplyWithBufferedBlockDispatcher as
       | { mock: { calls: Array<Array<{ ctx?: Record<string, unknown> }>> } }
       | undefined;
-    const dispatchCtx = dispatch?.mock.calls.at(0)?.[0]?.ctx;
+    const replyMarkup = (firstCall(sendMessage)[2] as { reply_markup?: unknown } | undefined)
+      ?.reply_markup as TelegramInlineKeyboardReplyMarkup | undefined;
+    const callbackData = collectCallbackData(replyMarkup);
 
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(dispatchCtx?.CommandBody).toBe("/model");
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstCall(sendMessage)[1]).toBe("Choose a model for /model.");
+    expect(callbackData).toEqual(["mdl_prov"]);
+    expect(dispatch?.mock.calls).toHaveLength(0);
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
