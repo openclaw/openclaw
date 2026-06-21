@@ -35,6 +35,15 @@ const workspaceSkills = [
   { name: "nested-skill", relativeDir: "group/nested-skill" },
 ] satisfies WorkspaceSkillFixture[];
 
+function escapePromptLocation(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
 describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
   it.each([
     ["inline code", "Change `skills/foo/SKILL.md`.", "skills/foo/"],
@@ -106,6 +115,25 @@ describe("assertCreateProposalDoesNotPatchExistingSkills", () => {
         process.env.HOME = previousHome;
       }
     }
+  });
+
+  it("rejects XML-escaped prompted absolute existing workspace skill refs", async () => {
+    const homeDir = await tempDirs.make("openclaw-skill-workshop-create-target-xml-");
+    const workspaceDir = path.join(homeDir, "A&B", `owner's "workspace"`);
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "foo"),
+      name: "foo",
+      description: "Existing Foo skill",
+      body: "# Foo\n\nExisting workflow.\n",
+    });
+    const absoluteSkillFile = path.join(workspaceDir, "skills", "foo", "SKILL.md");
+
+    expect(() =>
+      assertCreateProposalDoesNotPatchExistingSkills({
+        workspaceDir,
+        content: `<location>${escapePromptLocation(absoluteSkillFile)}</location>`,
+      }),
+    ).toThrow("action=create cannot propose changes to existing workspace skills: skills/foo/");
   });
 
   it("rejects existing project agent skill refs", async () => {

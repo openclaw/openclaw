@@ -137,7 +137,16 @@ function ensureTrailingSlash(value: string): string {
 }
 
 function normalizePathText(content: string): string {
-  return content.replace(/\\/g, "/");
+  return decodePromptXmlEntities(content).replace(/\\/g, "/");
+}
+
+function decodePromptXmlEntities(content: string): string {
+  return content
+    .replaceAll("&apos;", "'")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&gt;", ">")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&amp;", "&");
 }
 
 function toPortablePath(filePath: string): string {
