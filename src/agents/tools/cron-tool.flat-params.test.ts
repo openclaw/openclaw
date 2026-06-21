@@ -207,27 +207,26 @@ describe("cron tool flat-params", () => {
     });
 
     const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      job?: {
-        name?: string;
-        schedule?: unknown;
-        sessionTarget?: string;
-        payload?: unknown;
-        enabled?: boolean;
-      };
+      name?: string;
+      schedule?: unknown;
+      sessionTarget?: string;
+      payload?: unknown;
+      enabled?: boolean;
     }>();
     expect(method).toBe("cron.add");
-    expect(params.job?.name).toBe("test job");
-    expect(params.job?.schedule).toEqual({
+    expect(params.name).toBe("test job");
+    expect(params.schedule).toEqual({
       kind: "cron",
       expr: "0 * * * *",
       tz: "UTC",
+      staggerMs: 300000,
     });
-    expect(params.job?.sessionTarget).toBe("isolated");
-    expect(params.job?.payload).toEqual({
+    expect(params.sessionTarget).toBe("isolated");
+    expect(params.payload).toEqual({
       kind: "agentTurn",
       message: "test message",
     });
-    expect(params.job?.enabled).toBe(true);
+    expect(params.enabled).toBe(true);
   });
 
   it("trims trailing whitespace from flat params (Issue #95407)", async () => {

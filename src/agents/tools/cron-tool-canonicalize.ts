@@ -86,17 +86,24 @@ function moveDefinedField(params: {
 }
 
 /**
- * Trims whitespace from object keys to handle malformed model outputs.
+ * Trims whitespace from known cron keys to handle malformed model outputs.
  * Some small/local models (e.g. qwen35b via llamacpp) emit JSON with trailing
  * whitespace in object keys (e.g. `"schedule "` instead of `"schedule"`).
- * See: https://github.com/openclaw/openclaw/issues/95407
+ * Only trims recognized cron keys to avoid silent field overwrites or
+ * prototype-sensitive assignments. See: https://github.com/openclaw/openclaw/issues/95407
  */
-function trimObjectKeys(value: Record<string, unknown>): Record<string, unknown> {
+function trimKnownCronKeys(value: Record<string, unknown>): Record<string, unknown> {
   const trimmed: Record<string, unknown> = {};
-  for (const key of Object.keys(value)) {
-    const clean = key.trim();
-    if (clean.length > 0) {
-      trimmed[clean] = value[key];
+  for (const [key, entry] of Object.entries(value)) {
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key)) {
+      trimmed[key] = entry;
+      continue;
+    }
+    const cleanKey = key.trim();
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(cleanKey)) {
+      trimmed[cleanKey] = entry;
+    } else {
+      trimmed[key] = entry;
     }
   }
   return trimmed;
@@ -264,15 +271,10 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
 export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
-  // Trim whitespace from keys to handle malformed model outputs
-  // Some small/local models emit keys with trailing spaces (e.g. "schedule ")
-  const trimmedValue = trimObjectKeys(value);
-  const unwrapped = isRecord(trimmedValue.data)
-    ? trimmedValue.data
-    : isRecord(trimmedValue.job)
-      ? trimmedValue.job
-      : trimmedValue;
-  const next = { ...unwrapped };
+  // Unwrap data/job wrappers first, then trim whitespace from known keys
+  // to handle malformed model outputs (e.g. "schedule " instead of "schedule")
+  const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
+  const next = trimKnownCronKeys({ ...unwrapped });
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);
@@ -299,9 +301,9 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   found: boolean;
   value: Record<string, unknown>;
 } {
-  // Trim whitespace from keys to handle malformed model outputs
+  // Trim whitespace from known keys to handle malformed model outputs
   // Some small/local models emit keys with trailing spaces (e.g. "schedule ")
-  const trimmedParams = trimObjectKeys(params);
+  const trimmedParams = trimKnownCronKeys(params);
   const value: Record<string, unknown> = {};
   let found = false;
   for (const key of Object.keys(trimmedParams)) {
