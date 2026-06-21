@@ -106,6 +106,7 @@ internal enum class SettingsRoute {
   Profile,
   Voice,
   Agents,
+  ProvidersModels,
   Approvals,
   CronJobs,
   Usage,
@@ -136,6 +137,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Profile -> ProfileSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Voice -> VoiceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Agents -> AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.ProvidersModels -> ProvidersModelsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Approvals -> ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)

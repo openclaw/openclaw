@@ -538,8 +538,7 @@ class ChatController internal constructor(
     }
   }
 
-  private fun parseEventSessionEntry(payload: JsonObject): ChatSessionEntry? =
-    payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
+  private fun parseEventSessionEntry(payload: JsonObject): ChatSessionEntry? = payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
 
   private fun handleAgentEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
@@ -747,9 +746,16 @@ class ChatController internal constructor(
   ): ChatSessionEntry? {
     if (obj == null) return null
     val key =
-      obj["key"].asStringOrNull()?.trim().orEmpty()
-        .ifEmpty { obj["sessionKey"].asStringOrNull()?.trim().orEmpty() }
-        .ifEmpty { fallbackKey?.trim().orEmpty() }
+      obj["key"]
+        .asStringOrNull()
+        ?.trim()
+        .orEmpty()
+        .ifEmpty {
+          obj["sessionKey"]
+            .asStringOrNull()
+            ?.trim()
+            .orEmpty()
+        }.ifEmpty { fallbackKey?.trim().orEmpty() }
     if (key.isEmpty()) return null
     return ChatSessionEntry(
       key = key,
