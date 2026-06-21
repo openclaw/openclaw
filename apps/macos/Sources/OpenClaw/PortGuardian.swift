@@ -384,6 +384,14 @@ actor PortGuardian {
             }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
+            // Recognize JS runtime processes (node/bun/tsx) running the gateway
+            // via dist/index.js or from an openclaw checkout directory.
+            let jsRuntimes = ["node", "bun", "tsx"]
+            if jsRuntimes.contains { cmd.contains($0) },
+               full.contains("dist/index.js gateway") || full.contains("openclaw/dist")
+            {
+                return true
+            }
             return false
         case .unconfigured:
             return false
