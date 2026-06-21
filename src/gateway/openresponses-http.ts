@@ -1043,15 +1043,29 @@ export async function handleOpenResponsesHttpRequest(
 
       const text = evt.data?.text;
       const replace = evt.data?.replace === true;
+      const hadAssistantDelta = sawAssistantDelta;
       if (replace && typeof text === "string") {
         accumulatedText = text;
-        if (!toolChoiceConstraint) {
-          sawAssistantDelta = true;
-        }
       }
 
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
+        if (
+          replace &&
+          typeof text === "string" &&
+          text &&
+          !toolChoiceConstraint &&
+          !hadAssistantDelta
+        ) {
+          sawAssistantDelta = true;
+          writeSseEvent(res, {
+            type: "response.output_text.delta",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            delta: text,
+          });
+        }
         return;
       }
 
