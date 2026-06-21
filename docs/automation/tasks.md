@@ -16,6 +16,8 @@ Background tasks track work that runs **outside your main conversation session**
 
 Tasks do **not** replace sessions, cron jobs, or heartbeats - they are the **activity ledger** that records what detached work happened, when, and whether it succeeded.
 
+For durable multi-step planning, PR ownership, dependency graphs, and next actions, use [Work tracking](/automation/work-tracking). That Beads-backed work graph is the source of truth for long-horizon coordination; task records stay focused on runtime execution and delivery evidence.
+
 <Note>
 Not every agent run creates a task. Heartbeat turns and normal interactive chat do not. All cron executions, ACP spawns, subagent spawns, and CLI agent commands do.
 </Note>

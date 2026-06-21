@@ -44,6 +44,13 @@ vi.mock("./register.status-health-sessions.js", () => ({
   },
 }));
 
+vi.mock("./register.work.js", () => ({
+  registerWorkCommands: (program: Command) => {
+    const work = program.command("work");
+    work.command("ready");
+  },
+}));
+
 vi.mock("./register.crestodian.js", () => ({
   registerCrestodianCommand: (program: Command) => {
     program.command("crestodian");
@@ -95,6 +102,7 @@ describe("command-registry", () => {
     expect(names).toContain("sessions");
     expect(names).toContain("commitments");
     expect(names).toContain("tasks");
+    expect(names).toContain("work");
     expect(names).not.toContain("agent");
     expect(names).not.toContain("crestodian");
     expect(names).not.toContain("status");
@@ -171,6 +179,7 @@ describe("command-registry", () => {
     expect(names).toContain("sessions");
     expect(names).toContain("commitments");
     expect(names).toContain("tasks");
+    expect(names).toContain("work");
   });
 
   it("can eagerly register the status/session command group repeatedly for completion", async () => {
@@ -185,6 +194,14 @@ describe("command-registry", () => {
       names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
     expect(countName("commitments")).toBe(1);
     expect(countName("tasks")).toBe(1);
+  });
+
+  it("registers the Beads work command group independently", async () => {
+    const program = createProgram();
+    await expect(registerCoreCliByName(program, testProgramContext, "work")).resolves.toBe(true);
+
+    expect(namesOf(program)).toEqual(["work"]);
+    expect(program.commands[0]?.commands.map((command) => command.name())).toEqual(["ready"]);
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

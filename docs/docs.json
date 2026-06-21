@@ -1285,6 +1285,7 @@
                   "automation/index",
                   "automation/cron-jobs",
                   "automation/tasks",
+                  "automation/work-tracking",
                   "automation/taskflow",
                   "automation/standing-orders",
                   "automation/hooks"
@@ -1692,7 +1693,8 @@
                       "cli/models",
                       "cli/sessions",
                       "cli/system",
-                      "cli/tasks"
+                      "cli/tasks",
+                      "cli/work"
                     ]
                   },
                   {

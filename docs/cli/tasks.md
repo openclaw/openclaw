@@ -10,6 +10,7 @@ Inspect durable background tasks and Task Flow state. With no subcommand,
 `openclaw tasks` is equivalent to `openclaw tasks list`.
 
 See [Background Tasks](/automation/tasks) for the lifecycle and delivery model.
+For durable planning and dependency coordination, use [`openclaw work`](/cli/work), which delegates to Beads instead of the task ledger.
 
 ## Usage
 
