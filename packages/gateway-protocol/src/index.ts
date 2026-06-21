@@ -482,19 +482,8 @@ import {
 import {
   // Image generation provider schema (Finding 5 & 6)
   ImageProvidersResultSchema,
-  ImageProviderSchema,
-  ImageProviderCapabilitiesSchema,
-  ImageProviderEditCapabilitySchema,
-  ImageProviderGeometryCapabilitySchema,
-  ImageProviderModeCapabilitySchema,
-  ImageProviderOutputCapabilitySchema,
   type ImageProvidersResult,
   type ImageProvider,
-  type ImageProviderCapabilities,
-  type ImageProviderEditCapability,
-  type ImageProviderGeometryCapability,
-  type ImageProviderModeCapability,
-  type ImageProviderOutputCapability,
 } from "./schema/image-generation.js";
 
 /** Normalized validation error shape exposed by every protocol validator. */
@@ -729,6 +718,7 @@ export const validateWizardStartParams = lazyCompile<WizardStartParams>(WizardSt
 export const validateImageProvidersResult = lazyCompile<ImageProvidersResult>(
   ImageProvidersResultSchema,
 );
+export type { ImageProvidersResult, ImageProvider };
 export const validateWizardNextParams = lazyCompile<WizardNextParams>(WizardNextParamsSchema);
 export const validateWizardCancelParams = lazyCompile<WizardCancelParams>(WizardCancelParamsSchema);
 export const validateWizardStatusParams = lazyCompile<WizardStatusParams>(WizardStatusParamsSchema);
