@@ -661,6 +661,67 @@ describe("createTelegramDraftStream", () => {
     expect(richMessage?.html).not.toContain("paragraph 500");
   });
 
+  it("auto-detects rich content when richMessagesAutoDetect is enabled", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessagesAutoDetect: true });
+
+    // Rich content (HTML table) → use sendRichMessage
+    stream.updatePreview({
+      text: "Plan",
+      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).not.toHaveBeenCalled();
+
+    // Edit path also routes to richMessage.editMessageText
+    stream.updatePreview({
+      text: "Plan updated",
+      richMessage: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-route plain text when richMessagesAutoDetect is enabled", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessagesAutoDetect: true });
+
+    // Plain text → use sendMessage (HTML parse mode)
+    stream.update("Just a regular reply with no tables or tags.");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
+
+    stream.update("Still plain text, nothing rich here.");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.raw.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-route when richMessagesAutoDetect is unset/false (default off)", async () => {
+    const api = createMockDraftApi();
+    // No richMessages, no richMessagesAutoDetect → plain text only
+    const stream = createDraftStream(api, {});
+
+    stream.updatePreview({
+      text: "Plan",
+      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+    });
+    await stream.flush();
+
+    // The renderText produced a richMessage, but resolveUseRich respects only
+    // richMessages + richMessagesAutoDetect opts. Without opt-in, even if
+    // dispatcher hands us richMessage in preview, we fall back to plain.
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("clamps rendered previews to the text-message limit", async () => {
     const api = createMockDraftApi();
     const text = `# Long\n\n${"rich line\n".repeat(600)}`;

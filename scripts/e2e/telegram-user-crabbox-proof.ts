@@ -1070,7 +1070,7 @@ function telegramResultObject(value: unknown, label: string): JsonObject {
   return value as JsonObject;
 }
 
-function writeSutConfig(params: {
+export function writeSutConfig(params: {
   gatewayPort: number;
   groupId: string;
   mockPort: number;
@@ -1116,6 +1116,13 @@ function writeSutConfig(params: {
           },
         },
         replyToMode: "first",
+        // Mantis desktop proof expects the new opt-in to route detected rich content
+        // (HTML tables, pipe tables, details, checklists, math) through sendRichMessage.
+        // Without these flags, the SUT bot falls back to plain sendMessage and the
+        // raw markup is shipped as text — which is exactly what the proof capture
+        // compares against the rich-rendered baseline.
+        richMessages: true,
+        richMessagesAutoDetect: true,
       },
     },
     gateway: { auth: { mode: "none" }, bind: "loopback", mode: "local", port: params.gatewayPort },

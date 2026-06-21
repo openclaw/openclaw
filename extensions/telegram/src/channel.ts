@@ -785,7 +785,15 @@ export const telegramPlugin = createChatChannelPlugin({
         });
         const capabilities = inlineButtonsScope === "off" ? [] : ["inlineButtons"];
         const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-        if (mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true) {
+        const telegramAccountConfig = mergeTelegramAccountConfig(cfg, selectedAccountId);
+        // Advertise richText capability when either the explicit opt-in or the
+        // auto-detect opt-in is set. Auto-detect can still route at send time
+        // even when the model never explicitly opts in, so the capability hint
+        // helps the model understand the transport is rich-capable.
+        if (
+          telegramAccountConfig.richMessages === true ||
+          telegramAccountConfig.richMessagesAutoDetect === true
+        ) {
           capabilities.push("richText");
         }
         return capabilities;

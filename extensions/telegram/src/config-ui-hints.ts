@@ -66,6 +66,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Rich Messages",
     help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
+  richMessagesAutoDetect: {
+    label: "Telegram Rich Messages Auto-Detect",
+    help: "When enabled, outbound messages containing rich elements (HTML tags like <table>, <details>, <summary>, <checklist>, <math>, <figure>, <figcaption>, or markdown pipe-table syntax) are routed to sendRichMessage even if richMessages is not explicitly enabled. Default: false. This is a per-account opt-in and does not change the default off, client-compatibility behavior for other accounts.",
+  },
   "streaming.block.enabled": {
     label: "Telegram Block Streaming Enabled",
     help: 'Enable chunked block-style Telegram preview delivery when channels.telegram.streaming.mode="block".',

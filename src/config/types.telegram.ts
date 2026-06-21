@@ -174,6 +174,15 @@ export type TelegramAccountConfig = {
    * Default: false.
    */
   richMessages?: boolean;
+  /**
+   * Auto-route outbound messages that contain rich elements
+   * (<table>, <details>, <summary>, <checklist>, <math>, <figure>, <figcaption>,
+   * or markdown pipe-table syntax) to sendRichMessage, even when
+   * `richMessages` is not explicitly enabled.
+   * Default: false. Opt in to opt out of the default off, client-compatibility
+   * behavior; does not affect the existing `richMessages: true` opt-in path.
+   */
+  richMessagesAutoDetect?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: TelegramPreviewStreamingConfig;
   mediaMaxMb?: number;

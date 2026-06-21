@@ -119,6 +119,10 @@ type TelegramSendOpts = {
   buttons?: TelegramInlineButtons;
   /** Send image as document to avoid Telegram compression. Defaults to false. */
   forceDocument?: boolean;
+  /** Explicit rich-message opt-in override; when set, supersedes account config. */
+  richMessages?: boolean;
+  /** Explicit auto-detect override; when set, supersedes account config. */
+  richMessagesAutoDetect?: boolean;
 };
 
 type TelegramSendResult = {
@@ -687,7 +691,11 @@ export async function sendMessageTelegram(
   });
 
   const textMode = opts.textMode ?? "markdown";
-  const useRichMessages = account.config.richMessages === true;
+  const useRichMessages =
+    opts.richMessages === true ||
+    account.config.richMessages === true ||
+    (opts.richMessagesAutoDetect === true && detectTelegramRichContent(text)) ||
+    (account.config.richMessagesAutoDetect === true && detectTelegramRichContent(text));
   const tableMode =
     opts.tableMode ??
     resolveMarkdownTableMode({
@@ -1464,6 +1472,10 @@ type TelegramEditOpts = {
   buttons?: TelegramInlineButtons;
   /** Use Telegram's media-caption edit endpoint, or fall back to it when text edits target media. */
   editMode?: "text" | "caption" | "auto";
+  /** Explicit rich-message opt-in override; when set, supersedes account config. */
+  richMessages?: boolean;
+  /** Explicit auto-detect override; when set, supersedes account config. */
+  richMessagesAutoDetect?: boolean;
   /** Resolved runtime config from the command or gateway boundary. */
   cfg: OpenClawConfig;
 };
@@ -1561,7 +1573,11 @@ export async function editMessageTelegram(
   ) => requestWithDiag(fn, label, shouldLog ? { shouldLog } : undefined);
 
   const textMode = opts.textMode ?? "markdown";
-  const useRichMessages = account.config.richMessages === true;
+  const useRichMessages =
+    opts.richMessages === true ||
+    account.config.richMessages === true ||
+    (opts.richMessagesAutoDetect === true && detectTelegramRichContent(text)) ||
+    (account.config.richMessagesAutoDetect === true && detectTelegramRichContent(text));
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -1991,4 +2007,24 @@ export async function createForumTopicTelegram(
     name: result.name ?? trimmedName,
     chatId: normalizedChatId,
   };
+}
+
+/**
+ * Detect whether a Telegram outbound message contains rich content that
+ * benefits from Bot API 10.1 native rendering (tables, checklists, details,
+ * math, custom emoji, etc.). The caller is responsible for having rendered
+ * Markdown to HTML; this helper only inspects surface-level tags and the
+ * pipe-table syntax commonly produced by the markdown IR.
+ */
+const TELEGRAM_RICH_TAG_PATTERN = /<(table|details|summary|checklist|math|figure|figcaption)\b/i;
+const MARKDOWN_PIPE_TABLE_PATTERN = /(?:^|\n)\|[^\n]*\|[^\n]*\n\|[\s:|-]+\|/;
+
+export function detectTelegramRichContent(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  if (TELEGRAM_RICH_TAG_PATTERN.test(text)) {
+    return true;
+  }
+  return MARKDOWN_PIPE_TABLE_PATTERN.test(text);
 }

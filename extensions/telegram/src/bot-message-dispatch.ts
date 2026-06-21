@@ -130,6 +130,7 @@ import {
   TELEGRAM_RICH_TEXT_LIMIT,
 } from "./rich-message.js";
 import { editMessageTelegram } from "./send.js";
+import { detectTelegramRichContent } from "./send.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import {
@@ -907,8 +908,11 @@ export const dispatchTelegramMessage = async ({
     accountId: route.accountId,
     supportsBlockTables: telegramCfg.richMessages === true,
   });
-  const renderStreamText = (text: string): TelegramDraftPreview =>
-    telegramCfg.richMessages === true
+  const renderStreamText = (text: string): TelegramDraftPreview => {
+    const useRich =
+      telegramCfg.richMessages === true ||
+      (telegramCfg.richMessagesAutoDetect === true && detectTelegramRichContent(text));
+    return useRich
       ? {
           text,
           richMessage: buildTelegramRichMarkdown(text, {
@@ -920,6 +924,7 @@ export const dispatchTelegramMessage = async ({
           text: renderTelegramHtmlText(text, { tableMode }),
           parseMode: "HTML",
         };
+  };
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
@@ -1004,6 +1009,7 @@ export const dispatchTelegramMessage = async ({
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
           richMessages: telegramCfg.richMessages,
+          richMessagesAutoDetect: telegramCfg.richMessagesAutoDetect === true,
           minInitialChars: draftMinInitialChars,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
@@ -1528,6 +1534,7 @@ export const dispatchTelegramMessage = async ({
     tableMode,
     chunkMode,
     richMessages: telegramCfg.richMessages,
+    richMessagesAutoDetect: telegramCfg.richMessagesAutoDetect === true,
     linkPreview: telegramCfg.linkPreview,
     replyQuoteMessageId,
     replyQuoteText,

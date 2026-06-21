@@ -7,6 +7,7 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
+import { detectTelegramRichContent } from "./send.js";
 import {
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
@@ -175,6 +176,7 @@ export function createTelegramDraftStream(params: {
   thread?: TelegramThreadSpec | null;
   replyToMessageId?: number;
   richMessages?: boolean;
+  richMessagesAutoDetect?: boolean;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
@@ -185,8 +187,28 @@ export function createTelegramDraftStream(params: {
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
-  const richMessages = params.richMessages === true;
-  const transportLimit = richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_STREAM_MAX_CHARS;
+  const richMessagesOptIn = params.richMessages === true;
+  const richMessagesAutoDetectOptIn = params.richMessagesAutoDetect === true;
+  // resolveUseRich is called with the current preview text so the auto-detect opt-in
+  // can re-evaluate rich routing for every chunk (HTML table / details / checklist /
+  // markdown pipe-table all gate the rich transport on a per-chunk detect).
+  const resolveUseRich = (preview: TelegramDraftPreview | undefined): boolean => {
+    if (richMessagesOptIn) {
+      return true;
+    }
+    if (!richMessagesAutoDetectOptIn) {
+      return false;
+    }
+    if (!preview) {
+      return false;
+    }
+    const text = preview.text ?? preview.richMessage?.html ?? "";
+    return detectTelegramRichContent(text);
+  };
+  // Initial transport limit uses the explicit richMessages opt-in only; auto-detect
+  // defers to per-chunk resolveUseRich() once the first preview has real text.
+  const initialUseRich = richMessagesOptIn;
+  const transportLimit = initialUseRich ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_STREAM_MAX_CHARS;
   const maxChars = Math.min(params.maxChars ?? transportLimit, transportLimit);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
@@ -232,7 +254,7 @@ export function createTelegramDraftStream(params: {
     sendGeneration: number;
   };
   const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
-    if (richMessages) {
+    if (resolveUseRich(preview)) {
       return await getTelegramRichRawApi(params.api).sendRichMessage({
         chat_id: chatId,
         rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
@@ -263,7 +285,7 @@ export function createTelegramDraftStream(params: {
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
-      if (richMessages) {
+      if (resolveUseRich(preview)) {
         await getTelegramRichRawApi(params.api).editMessageText({
           chat_id: chatId,
           message_id: streamMessageId,
@@ -347,8 +369,10 @@ export function createTelegramDraftStream(params: {
       deliveredTextOffset === 0 && lastRequestedPreview?.text === trimmed
         ? lastRequestedPreview
         : renderTelegramDraftPreview(currentText, params.renderText);
-    const renderedText = resolveTelegramDraftRenderedText(rendered, richMessages).trimEnd();
-    const renderedPayloadLength = richMessages
+    const transportPreview = normalizeTelegramDraftTransportPreview(rendered);
+    const renderedText = transportPreview.text.trimEnd();
+    const useRichForRendered = resolveUseRich(rendered);
+    const renderedPayloadLength = useRichForRenderedstream/main
       ? telegramDraftRichPayloadLength(rendered)
       : renderedText.length;
     const renderedPreview = { ...rendered, text: renderedText };
@@ -361,7 +385,7 @@ export function createTelegramDraftStream(params: {
         currentText,
         maxChars,
         params.renderText,
-        richMessages,
+        useRichForRendered,
       );
       if (!streamState.final) {
         if (chunkLength > 0) {
