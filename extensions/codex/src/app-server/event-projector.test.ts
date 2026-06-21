@@ -390,13 +390,13 @@ describe("CodexAppServerEventProjector", () => {
     expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
       { text: "coordination ", delta: "coordination " },
       { text: "coordination draft", delta: "draft" },
-      { text: "final ", delta: "final ", replace: true },
+      { text: "final ", delta: "", replace: true },
       { text: "final answer", delta: "answer" },
     ]);
     expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
       { stream: "assistant", data: { text: "coordination ", delta: "coordination " } },
       { stream: "assistant", data: { text: "coordination draft", delta: "draft" } },
-      { stream: "assistant", data: { text: "final ", delta: "final ", replace: true } },
+      { stream: "assistant", data: { text: "final ", delta: "", replace: true } },
       { stream: "assistant", data: { text: "final answer", delta: "answer" } },
     ]);
   });
@@ -1108,7 +1108,7 @@ describe("CodexAppServerEventProjector", () => {
       },
       {
         text: "release fixes first. please drop affected PRs, failing checks, and blockers here.",
-        delta: "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+        delta: "",
         replace: true,
       },
     ]);

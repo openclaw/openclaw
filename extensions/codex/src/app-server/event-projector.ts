@@ -529,7 +529,7 @@ export class CodexAppServerEventProjector {
       this.streamedPartialAssistantItemId = itemId;
       const streamPayload = {
         text,
-        delta,
+        delta: replace ? "" : delta,
         ...(replace ? { replace: true as const } : {}),
       };
       this.emitAgentEvent({
@@ -541,8 +541,8 @@ export class CodexAppServerEventProjector {
     // Stream non-commentary assistant deltas as partial replies and assistant
     // agent events so live surfaces (TUI, WebChat) render incremental answer
     // text via gateway emitChatDelta. When Codex switches to a new non-commentary
-    // item, mark the first delta with replace so append-oriented onPartialReply
-    // consumers do not concatenate superseded coordination text.
+    // item, mark replace:true with an empty delta so live merge and append-oriented
+    // partial consumers reset to the new cumulative text instead of concatenating.
   }
 
   private async handleReasoningDelta(
