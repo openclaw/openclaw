@@ -88,12 +88,16 @@ function isTelegramHtmlParseError(err: unknown): boolean {
   return TELEGRAM_PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
+function telegramRichHtmlToParseModeHtml(html: string): string {
+  return html.replace(/<br\s*\/?>/giu, "\n");
+}
+
 function normalizeTelegramDraftTransportPreview(
   preview: TelegramDraftPreview,
 ): TelegramDraftTransportPreview {
   if (preview.richMessage?.html) {
     return {
-      text: preview.richMessage.html,
+      text: telegramRichHtmlToParseModeHtml(preview.richMessage.html),
       parseMode: "HTML",
       plainText: preview.text,
     };

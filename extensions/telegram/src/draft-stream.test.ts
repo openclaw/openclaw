@@ -615,7 +615,7 @@ describe("createTelegramDraftStream", () => {
     });
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b><br><b>🛠️ Exec</b>", {
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
       parse_mode: "HTML",
     });
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
@@ -632,7 +632,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).toHaveBeenCalledWith(
       123,
       17,
-      "<b>Shelling</b><br><b>🛠️ Exec</b><br><b>Update</b> <code>Checking files</code>",
+      "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>Update</b> <code>Checking files</code>",
       { parse_mode: "HTML" },
     );
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
