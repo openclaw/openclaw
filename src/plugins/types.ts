@@ -2203,10 +2203,17 @@ export type OpenClawPluginNodeHostCommand = {
   dangerous?: boolean;
   handle: (paramsJSON?: string | null) => Promise<string>;
   /**
-   * Optional hook run once when the node-host process starts, after the
-   * node->gateway event emitter is registered. Use it to start long-lived
-   * node-anchored services (e.g. the browser extension bridge) so they are up
-   * before the first command dial. Must be idempotent and self-guarding.
+   * Optional hook run once when the node-host process starts. Use it to start
+   * long-lived node-anchored services (e.g. the browser extension bridge) so
+   * they are up before the first command dial. Must be idempotent and
+   * self-guarding.
+   *
+   * Deliberate PUBLIC plugin API. The privileged node->gateway event emitter
+   * (which originates node-attributed agent turns) is INTENTIONALLY NOT on this
+   * ctx -- it is delivered out-of-band only to the bundled browser bridge, gated
+   * on the registry plugin's trusted bundled origin + identity in
+   * runRegisteredNodeHostStartupHooks. The public ctx carries only `nodeId`, so
+   * a config-loaded plugin's hook cannot originate node-attributed turns.
    */
   onNodeHostStart?: (ctx: {
     /** This node-host's id, surfaced on the bridge /whoami so the extension treats it as node-hosted. */

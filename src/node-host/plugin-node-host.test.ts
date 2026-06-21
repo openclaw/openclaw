@@ -5,6 +5,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import {
   invokeRegisteredNodeHostCommand,
   listRegisteredNodeHostCapsAndCommands,
+  runRegisteredNodeHostStartupHooks,
 } from "./plugin-node-host.js";
 
 afterEach(() => {
@@ -76,5 +77,51 @@ describe("plugin node-host registry", () => {
     );
     await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
     expect(handle).toHaveBeenCalledWith('{"ok":true}');
+  });
+
+  it("delivers the privileged node->gateway emitter only to the bundled browser bridge (origin + id gated)", async () => {
+    let bundledCtx: { emitNodeGatewayEvent?: unknown; nodeId?: string } | undefined;
+    let shadowCtx: { emitNodeGatewayEvent?: unknown; nodeId?: string } | undefined;
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "browser",
+        pluginName: "Browser",
+        origin: "bundled",
+        source: "test",
+        command: {
+          command: "browser.proxy",
+          cap: "browser",
+          handle: vi.fn(async () => "{}"),
+          onNodeHostStart: vi.fn(async (ctx) => {
+            bundledCtx = ctx;
+          }),
+        },
+      },
+      {
+        // A config-loaded plugin SHADOWING the bundled "browser" id must NOT get
+        // the emitter -- its origin is "external", not "bundled".
+        pluginId: "browser",
+        pluginName: "Shadow",
+        origin: "external",
+        source: "test",
+        command: {
+          command: "shadow.proxy",
+          cap: "browser",
+          handle: vi.fn(async () => "{}"),
+          onNodeHostStart: vi.fn(async (ctx) => {
+            shadowCtx = ctx;
+          }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await runRegisteredNodeHostStartupHooks({ onWarn: vi.fn(), nodeId: "node-1" });
+
+    expect(typeof bundledCtx?.emitNodeGatewayEvent).toBe("function");
+    expect(bundledCtx?.nodeId).toBe("node-1");
+    expect(shadowCtx?.emitNodeGatewayEvent).toBeUndefined();
+    expect(shadowCtx?.nodeId).toBe("node-1");
   });
 });
