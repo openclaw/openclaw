@@ -6,8 +6,6 @@ type SharedIniFileLoader = {
   loadSharedConfigFiles(init?: { ignoreCache?: boolean }): Promise<unknown>;
 };
 
-let sharedIniFileLoaderForTest: SharedIniFileLoader | null | undefined;
-
 function hasStaticAwsCredentialEnv(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY);
 }
@@ -21,12 +19,6 @@ export function shouldRefreshAwsSharedConfigCacheForBedrock(env: NodeJS.ProcessE
 }
 
 async function loadSharedIniFileLoader(): Promise<SharedIniFileLoader> {
-  if (sharedIniFileLoaderForTest !== undefined) {
-    if (!sharedIniFileLoaderForTest) {
-      throw new Error("AWS shared INI file loader unavailable");
-    }
-    return sharedIniFileLoaderForTest;
-  }
   return (await import("@smithy/shared-ini-file-loader")) as SharedIniFileLoader;
 }
 
@@ -39,11 +31,4 @@ export async function refreshAwsSharedConfigCacheForBedrock(
   }
   const loader = await loadSharedIniFileLoader();
   await loader.loadSharedConfigFiles({ ignoreCache: true });
-}
-
-/** Override the shared INI loader for Bedrock credential-refresh tests. */
-export function setAwsSharedIniFileLoaderForTest(
-  loader: SharedIniFileLoader | null | undefined,
-): void {
-  sharedIniFileLoaderForTest = loader;
 }

@@ -632,19 +632,20 @@ describe("channel-streaming", () => {
     if (!recoveredItemLine || !recoveredCommandLine) {
       throw new Error("expected recovered command progress lines");
     }
-    expect(
-      mergeChannelProgressDraftLine([recoveredItemLine], recoveredCommandLine, {
-        maxLines: 4,
-      }),
-    ).toMatchObject([
+    const recoveredUpdated = mergeChannelProgressDraftLine(
+      [recoveredItemLine],
+      recoveredCommandLine,
+      { maxLines: 4 },
+    );
+    expect(recoveredUpdated).toMatchObject([
       {
         id: "command-2",
         kind: "command-output",
-        detail: "install dependencies failed",
         status: "completed",
-        text: "🛠️ install dependencies failed",
+        text: "🛠️ Bash",
       },
     ]);
+    expect(recoveredUpdated[0]).not.toHaveProperty("detail");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

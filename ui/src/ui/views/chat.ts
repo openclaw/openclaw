@@ -669,8 +669,6 @@ export function resetChatViewState() {
   composerDraftMirrors.clear();
 }
 
-export const cleanupChatModuleState = resetChatViewState;
-
 function resolveChatHistoryRenderCap(messageCount: number): number {
   return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
 }

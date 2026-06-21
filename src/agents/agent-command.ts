@@ -892,6 +892,7 @@ async function agentCommandInternal(
   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
+  let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
 
@@ -2190,7 +2191,10 @@ async function agentCommandInternal(
         transcriptPersistenceRunner === "embedded" ||
         (transcriptPersistenceRunner === undefined &&
           Boolean(result.meta.finalAssistantVisibleText?.trim()));
-      if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
+      if (
+        !sessionReboundDuringRun &&
+        (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
+      ) {
         let persistedCliTurnTranscript = false;
         try {
           const transcriptSessionEntry: SessionEntry | undefined = suppressVisibleSessionEffects
@@ -2204,7 +2208,7 @@ async function agentCommandInternal(
                 sessionFile: effectiveSessionFile,
               }
             : sessionEntry;
-          sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
+          const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
             body,
             transcriptBody,
             result,
@@ -2219,10 +2223,12 @@ async function agentCommandInternal(
             config: cfg,
             embeddedAssistantGapFill,
           });
+          sessionEntry = transcriptResult.sessionEntry;
+          sessionReboundDuringRun = transcriptResult.kind === "session-rebound";
           if (suppressVisibleSessionEffects) {
             sessionEntry = prepared.sessionEntry;
           }
-          persistedCliTurnTranscript = true;
+          persistedCliTurnTranscript = transcriptResult.kind === "persisted";
         } catch (error) {
           log.warn(
             `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -2264,6 +2270,7 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         !suppressVisibleSessionEffects &&
+        !sessionReboundDuringRun &&
         payloads.length > 0 &&
         !isSubagentSessionKey(sessionKey)
       ) {
@@ -2340,7 +2347,8 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         !isSubagentSessionKey(sessionKey) &&
-        !suppressVisibleSessionEffects
+        !suppressVisibleSessionEffects &&
+        !sessionReboundDuringRun
       ) {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         const noPendingTextForThisRun =
@@ -2372,7 +2380,12 @@ async function agentCommandInternal(
       throw error;
     }
   } finally {
-    if (trackedRestartRecoveryDeliveryContext && sessionStore && sessionKey) {
+    if (
+      !sessionReboundDuringRun &&
+      trackedRestartRecoveryDeliveryContext &&
+      sessionStore &&
+      sessionKey
+    ) {
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryContext && entry.restartRecoveryDeliveryRunId === runId) {

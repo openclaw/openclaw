@@ -403,6 +403,7 @@ export function normalizeRootLogLevelArgv(
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
   const args = argv.slice(2);
+  let value: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === FLAG_TERMINATOR) {
@@ -410,14 +411,22 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
     }
     if (arg === name) {
       const next = args[i + 1];
-      return isValueToken(next) ? next : null;
+      if (!isValueToken(next)) {
+        return null;
+      }
+      value = next;
+      i += 1;
+      continue;
     }
     if (arg.startsWith(`${name}=`)) {
-      const value = arg.slice(name.length + 1);
-      return value ? value : null;
+      const assigned = arg.slice(name.length + 1);
+      if (!assigned) {
+        return null;
+      }
+      value = assigned;
     }
   }
-  return undefined;
+  return value;
 }
 
 export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
@@ -435,11 +444,9 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
   if (raw === null || raw === undefined) {
     return raw;
   }
-  return parsePositiveInt(raw);
-}
-
-export function getCommandPath(argv: string[], depth = 2): string[] {
-  return getCommandPathInternal(argv, depth, { skipRootOptions: false });
+  // Keep absent distinct from present-but-invalid so route-first callers can
+  // defer invalid input to Commander instead of silently applying defaults.
+  return parsePositiveInt(raw) ?? null;
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {

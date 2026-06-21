@@ -32,6 +32,10 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+function isTelegramRichLinkHref(href: string): boolean {
+  return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
+}
+
 /**
  * File extensions that share TLDs and commonly appear in code/documentation.
  * These are wrapped in <code> tags to prevent Telegram from generating
@@ -49,6 +53,11 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
     return null;
   }
   if (link.start === link.end) {
+    return null;
+  }
+  // Telegram rich links reject local or relative hrefs; keep the label visible
+  // instead of letting one unsupported link drop the whole message.
+  if (!isTelegramRichLinkHref(href)) {
     return null;
   }
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
@@ -704,7 +713,7 @@ export function renderTelegramHtmlText(
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
-    return escapeUnsupportedTelegramHtml(text);
+    return escapeUnsupportedTelegramHtmlWithTableFallback(text);
   }
   // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
@@ -716,6 +725,44 @@ export function sanitizeTelegramRichHtml(html: string): string {
       escapeUnsupportedTelegramHtml(html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
     ),
   );
+}
+
+function escapeUnsupportedTelegramHtmlWithTableFallback(html: string): string {
+  return escapeUnsupportedTelegramHtml(
+    normalizeTelegramLegacyHtmlTables(html),
+    TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
+  );
+}
+
+function isInsideTelegramHtmlCodeContext(html: string, offset: number): boolean {
+  let codeDepth = 0;
+  let preDepth = 0;
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null && match.index < offset) {
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    if (tagName !== "code" && tagName !== "pre") {
+      continue;
+    }
+    const isClosing = match[1] === "</";
+    if (tagName === "code") {
+      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+    } else {
+      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    }
+  }
+  return codeDepth > 0 || preDepth > 0;
+}
+
+function normalizeTelegramLegacyHtmlTables(html: string): string {
+  TELEGRAM_RICH_HTML_TABLE_PATTERN.lastIndex = 0;
+  return html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml, offset: number) => {
+    if (isInsideTelegramHtmlCodeContext(html, offset)) {
+      return tableHtml;
+    }
+    const rows = parseTelegramRichHtmlTableRows(tableHtml);
+    return rows.length ? renderTelegramRichHtmlRawTableFallback(tableHtml, rows) : tableHtml;
+  });
 }
 
 export function limitTelegramRichHtmlNesting(html: string, maxDepth: number): string {
@@ -1070,11 +1117,30 @@ function findTelegramHtmlEntityEnd(text: string, start: number): number {
   return text[index] === ";" ? index : -1;
 }
 
+// Never return a split index that lands between a UTF-16 surrogate pair, or
+// both chunks would carry a lone surrogate that re-encodes to U+FFFD. If the
+// pair starts the segment, keep it whole so chunking still advances.
+function clampToSurrogateBoundary(text: string, index: number): number {
+  const high = text.charCodeAt(index - 1);
+  const low = text.charCodeAt(index);
+  const splitsPair =
+    index > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+  if (!splitsPair) {
+    return index;
+  }
+  return index > 1 ? index - 1 : index + 1;
+}
+
 function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
   if (text.length <= maxLength) {
     return text.length;
   }
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
+  const splitIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
+  return clampToSurrogateBoundary(text, splitIndex);
+}
+
+function findTelegramHtmlEntitySafeSplitIndex(text: string, normalizedMaxLength: number): number {
   const lastAmpersand = text.lastIndexOf("&", normalizedMaxLength - 1);
   if (lastAmpersand === -1) {
     return normalizedMaxLength;

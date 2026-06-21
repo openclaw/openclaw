@@ -86,6 +86,7 @@ describe("scripts/test-live", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-test-live-signal-"));
     const fakePnpmPath = join(root, "pnpm");
     const childPidPath = join(root, "child.pid");
+    const descendantPidPath = join(root, "descendant.pid");
     const signaledPath = join(root, "signaled");
 
     writeFakePnpm(fakePnpmPath);
@@ -93,17 +94,22 @@ describe("scripts/test-live", () => {
       env: {
         ...process.env,
         OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+        OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
         OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
         npm_execpath: fakePnpmPath,
       },
       stdio: "ignore",
     });
     let childPid = 0;
+    let descendantPid = 0;
 
     try {
       await waitFor(() => fileExists(childPidPath), 5_000);
+      await waitFor(() => fileExists(descendantPidPath), 5_000);
       childPid = Number(readFileSync(childPidPath, "utf8"));
+      descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
       expect(Number.isInteger(childPid)).toBe(true);
+      expect(Number.isInteger(descendantPid)).toBe(true);
 
       expect(runner.pid).toBeGreaterThan(0);
       process.kill(runner.pid!, "SIGTERM");
@@ -113,12 +119,16 @@ describe("scripts/test-live", () => {
       await waitFor(() => fileExists(signaledPath), 5_000);
       expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
       await waitFor(() => !isProcessAlive(childPid), 5_000);
+      await waitFor(() => !isProcessAlive(descendantPid), 5_000);
     } finally {
       if (runner.pid && isProcessAlive(runner.pid)) {
         process.kill(runner.pid, "SIGKILL");
       }
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
+      }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
       }
       rmSync(root, { force: true, recursive: true });
     }
@@ -158,7 +168,15 @@ function writeFakePnpm(filePath: string): void {
     filePath,
     [
       "#!/usr/bin/env node",
+      'const { spawn } = require("node:child_process");',
       'const fs = require("node:fs");',
+      "if (process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH) {",
+      "  const child = spawn(process.execPath, [",
+      '    "-e",',
+      "    \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\",",
+      "  ], { stdio: 'ignore' });",
+      "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
+      "}",
       "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
       'process.on("SIGTERM", () => {',
       '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',

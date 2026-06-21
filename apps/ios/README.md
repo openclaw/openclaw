@@ -101,6 +101,7 @@ Release-owner secrets:
 
 - App Store Connect API auth uses Keychain for private key material plus non-secret `apps/ios/fastlane/.env` variables.
 - The encrypted signing repo password lives outside this repo in the release-owner vault and is exposed locally as `MATCH_PASSWORD`.
+- The share sheet requires the Apple Developer App Group in `apps/ios/Config/AppStoreSigning.json` to be associated with both the app and share-extension bundle IDs before App Store profiles are regenerated.
 - Apple Distribution private keys, certificates, provisioning profiles, and decrypted signing sync output stay under `apps/ios/build/` or Keychain and are gitignored.
 - Rotating release signing means refreshing Fastlane `match` assets and pushing a fresh encrypted sync state.
 
@@ -155,7 +156,8 @@ This should create `apps/ios/fastlane/.env` with non-secret App Store Connect va
    - `ai.openclawfoundation.app.share`
    - `ai.openclawfoundation.app.activitywidget`
    - `ai.openclawfoundation.app.watchkitapp`
-   - `ai.openclawfoundation.app.watchkitapp.extension`
+
+   The main app and share extension must both be associated with the App Group pinned in `apps/ios/Config/AppStoreSigning.json`.
 
    Use `pnpm ios:release:signing:setup` for the initial portal setup, then `MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted Fastlane match assets to the shared private repo.
 

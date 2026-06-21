@@ -110,20 +110,45 @@ type CliOptions = {
   stateDir: string | null;
 };
 
-function parseFlagValue(flag: string): string | undefined {
-  const index = process.argv.indexOf(flag);
+const BOOLEAN_FLAGS = new Set(["--help"]);
+const VALUE_FLAGS = new Set(["--output", "--profile", "--state-dir"]);
+
+class CliUsageError extends Error {
+  override name = "CliUsageError";
+}
+
+function parseFlagValue(flag: string, argv: string[]): string | undefined {
+  const index = argv.indexOf(flag);
   if (index === -1) {
     return undefined;
   }
-  const value = process.argv[index + 1];
+  const value = argv[index + 1];
   if (!value || value.startsWith("--")) {
-    throw new Error(`${flag} requires a value`);
+    throw new CliUsageError(`${flag} requires a value`);
   }
   return value;
 }
 
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
+function hasFlag(flag: string, argv = process.argv.slice(2)): boolean {
+  return argv.includes(flag);
+}
+
+function validateArgs(argv: string[]): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CliUsageError(`${arg} requires a value`);
+      }
+      index += 1;
+      continue;
+    }
+    throw new CliUsageError(`Unknown argument: ${arg}`);
+  }
 }
 
 function parseProfile(raw: string | undefined): ProfileId {
@@ -133,14 +158,17 @@ function parseProfile(raw: string | undefined): ProfileId {
   if (raw === "smoke" || raw === "default" || raw === "large") {
     return raw;
   }
-  throw new Error(`--profile must be one of smoke, default, large; got ${JSON.stringify(raw)}`);
+  throw new CliUsageError(
+    `--profile must be one of smoke, default, large; got ${JSON.stringify(raw)}`,
+  );
 }
 
-function parseOptions(): CliOptions {
+function parseOptions(argv = process.argv.slice(2)): CliOptions {
+  validateArgs(argv);
   return {
-    output: parseFlagValue("--output") ?? null,
-    profile: parseProfile(parseFlagValue("--profile")),
-    stateDir: parseFlagValue("--state-dir") ?? null,
+    output: parseFlagValue("--output", argv) ?? null,
+    profile: parseProfile(parseFlagValue("--profile", argv)),
+    stateDir: parseFlagValue("--state-dir", argv) ?? null,
   };
 }
 
@@ -535,11 +563,13 @@ function printProofLines(report: BenchmarkReport): void {
 }
 
 function main(): void {
-  if (hasFlag("--help")) {
+  const argv = process.argv.slice(2);
+  validateArgs(argv);
+  if (hasFlag("--help", argv)) {
     printUsage();
     return;
   }
-  const options = parseOptions();
+  const options = parseOptions(argv);
   const config = applyScale(PROFILES[options.profile]);
   const stateDir =
     options.stateDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-perf-"));
@@ -626,5 +656,13 @@ function main(): void {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main();
+  try {
+    main();
+  } catch (error) {
+    if (error instanceof CliUsageError) {
+      console.error(`error: ${error.message}`);
+      process.exit(2);
+    }
+    throw error;
+  }
 }

@@ -250,7 +250,6 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       }
       expect(mediaStreamHandler["handleUpgrade"]).toBeTypeOf("function");
       expect(mediaStreamHandler["sendAudio"]).toBeTypeOf("function");
-      expect(mediaStreamHandler["closeAll"]).toBeTypeOf("function");
     } finally {
       await server.stop();
     }

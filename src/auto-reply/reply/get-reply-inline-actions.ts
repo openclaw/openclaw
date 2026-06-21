@@ -130,7 +130,7 @@ function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefin
 }
 
 /** Result of attempting to handle an inbound message as an inline action. */
-export type InlineActionResult =
+type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
       kind: "continue";

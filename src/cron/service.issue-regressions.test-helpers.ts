@@ -10,7 +10,6 @@ import {
   createRunningCronServiceState,
   createDeferred,
   topOfHourOffsetMs,
-  writeCronJobs,
   writeCronStoreSnapshot,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { CronService } from "./service.js";
@@ -29,7 +28,6 @@ export {
   createDeferred,
   noopLogger,
   topOfHourOffsetMs,
-  writeCronJobs,
   writeCronStoreSnapshot,
 };
 

@@ -744,6 +744,10 @@ function hasStreamingResponseBody(
   );
 }
 
+async function cancelUnreadMarketplaceResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 function parseMarketplaceContentLength(raw: string): number {
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) {
@@ -837,6 +841,11 @@ async function streamMarketplaceResponseToFile(params: {
       await writeMarketplaceChunk(fileHandle, value);
       total = nextTotal;
     }
+  } catch (error) {
+    if (typeof reader.cancel === "function") {
+      await reader.cancel().catch(() => undefined);
+    }
+    throw error;
   } finally {
     await fileHandle.close().catch(() => undefined);
     try {
@@ -871,6 +880,7 @@ async function downloadUrlToTempFile(
     });
     try {
       if (!response.ok) {
+        await cancelUnreadMarketplaceResponseBody(response);
         return {
           ok: false,
           error: formatMarketplaceDownloadError(url, `HTTP ${response.status}`),
@@ -884,6 +894,7 @@ async function downloadUrlToTempFile(
       }
       // Fail closed unless we can stream and enforce the archive size bound incrementally.
       if (!hasStreamingResponseBody(response)) {
+        await cancelUnreadMarketplaceResponseBody(response);
         return {
           ok: false,
           error: formatMarketplaceDownloadError(url, "streaming response body unavailable"),
@@ -892,8 +903,15 @@ async function downloadUrlToTempFile(
 
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
-        const size = parseMarketplaceContentLength(contentLength);
+        let size: number;
+        try {
+          size = parseMarketplaceContentLength(contentLength);
+        } catch (error) {
+          await cancelUnreadMarketplaceResponseBody(response);
+          throw error;
+        }
         if (size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
+          await cancelUnreadMarketplaceResponseBody(response);
           throw new Error(
             `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
           );

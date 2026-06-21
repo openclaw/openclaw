@@ -197,18 +197,6 @@ export async function readRestartSentinel(
   }
 }
 
-export async function consumeRestartSentinel(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<RestartSentinel | null> {
-  const filePath = resolveRestartSentinelPath(env);
-  const parsed = await readRestartSentinel(env);
-  if (!parsed) {
-    return null;
-  }
-  await removeRestartSentinelFile(filePath);
-  return parsed;
-}
-
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
   const message = payload.message?.trim();
   if (message && (!payload.stats || payload.kind === "config-auto-recovery")) {

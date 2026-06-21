@@ -6,9 +6,16 @@ require "supply/client"
 
 default_platform(:android)
 
+ANDROID_FASTLANE_ROOT = File.expand_path(__dir__, Dir.pwd)
 DEFAULT_PLAY_PACKAGE_NAME = "ai.openclaw.app"
 DEFAULT_PLAY_TRACK = "internal"
 DEFAULT_PLAY_RELEASE_STATUS = "completed"
+ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES = [
+  "OPENCLAW_ANDROID_STORE_FILE",
+  "OPENCLAW_ANDROID_STORE_PASSWORD",
+  "OPENCLAW_ANDROID_KEY_ALIAS",
+  "OPENCLAW_ANDROID_KEY_PASSWORD"
+].freeze
 
 def load_env_file(path)
   return unless File.exist?(path)
@@ -29,11 +36,19 @@ def env_present?(value)
 end
 
 def android_root
-  File.expand_path("..", __dir__)
+  File.expand_path("..", ANDROID_FASTLANE_ROOT)
 end
 
 def repo_root
   File.expand_path("../..", android_root)
+end
+
+def android_release_signing_script
+  File.join(repo_root, "scripts", "android-release-signing.mjs")
+end
+
+def android_release_signing_materialized_properties_path
+  File.join(android_root, "build", "release-signing", "gradle.properties")
 end
 
 def shell_join(args)
@@ -133,25 +148,30 @@ def sync_android_versioning!
 end
 
 def android_release_notes_path
-  File.join(__dir__, "metadata", "android", "en-US", "release_notes.txt")
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android", "en-US", "release_notes.txt")
+end
+
+def validate_android_release_notes!
+  release_notes_path = android_release_notes_path
+  UI.user_error!("Missing Android release notes at #{release_notes_path}. Run `pnpm android:version:sync`.") unless File.exist?(release_notes_path)
+  UI.user_error!("Android release notes at #{release_notes_path} are empty.") unless env_present?(File.read(release_notes_path))
 end
 
 def android_changelog_path(version_code)
-  File.join(__dir__, "metadata", "android", "en-US", "changelogs", "#{version_code}.txt")
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android", "en-US", "changelogs", "#{version_code}.txt")
 end
 
 def sync_android_changelog!(version_code)
-  release_notes_path = android_release_notes_path
-  UI.user_error!("Missing Android release notes at #{release_notes_path}.") unless File.exist?(release_notes_path)
+  validate_android_release_notes!
 
   changelog_path = android_changelog_path(version_code)
   FileUtils.mkdir_p(File.dirname(changelog_path))
-  File.write(changelog_path, File.read(release_notes_path))
+  File.write(changelog_path, File.read(android_release_notes_path))
   changelog_path
 end
 
 def play_metadata_path
-  File.join(__dir__, "metadata", "android")
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android")
 end
 
 def play_screenshot_paths
@@ -176,6 +196,69 @@ end
 
 def capture_android_screenshots!
   sh(shell_join(["bash", File.join(repo_root, "scripts", "android-screenshots.sh")]))
+end
+
+def read_android_release_signing_properties!(path)
+  UI.user_error!("Missing materialized Android release signing properties at #{path}.") unless File.exist?(path)
+
+  properties = {}
+  File.foreach(path) do |line|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#")
+
+    key, value = stripped.split("=", 2)
+    next if key.nil? || key.empty? || value.nil?
+
+    properties[key] = value.strip
+  end
+
+  missing = ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES.reject { |key| env_present?(properties[key]) }
+  UI.user_error!("Materialized Android release signing properties are missing: #{missing.join(', ')}.") unless missing.empty?
+
+  properties
+end
+
+def export_android_release_signing_properties!(path)
+  read_android_release_signing_properties!(path).each do |key, value|
+    ENV["ORG_GRADLE_PROJECT_#{key}"] = value
+  end
+end
+
+def sync_android_release_signing!
+  sh(shell_join(["node", android_release_signing_script, "--mode", "sync-pull"]))
+  export_android_release_signing_properties!(android_release_signing_materialized_properties_path)
+end
+
+def prepare_android_release_signing!
+  if env_present?(ENV["MATCH_PASSWORD"])
+    sync_android_release_signing!
+  elsif File.exist?(android_release_signing_materialized_properties_path)
+    export_android_release_signing_properties!(android_release_signing_materialized_properties_path)
+  end
+end
+
+def validate_android_release_signing!
+  Dir.chdir(android_root) do
+    sh(shell_join(["./gradlew", ":app:bundlePlayRelease", "--dry-run"]))
+  end
+end
+
+def print_android_release_plan!(version_metadata)
+  UI.message("Android Play release plan:")
+  UI.message("  package: #{play_package_name}")
+  UI.message("  track: #{play_track}")
+  UI.message("  release_status: #{play_release_status}")
+  UI.message("  validate_only: #{play_validate_only?}")
+  UI.message("  versionName: #{version_metadata.fetch(:version)}")
+  UI.message("  versionCode: #{version_metadata.fetch(:version_code)}")
+end
+
+def validate_android_release_preflight!(version_metadata)
+  validate_play_auth!
+  prepare_android_release_signing!
+  validate_android_release_signing!
+  validate_android_release_notes!
+  print_android_release_plan!(version_metadata)
 end
 
 def upload_play_store_metadata!(version_metadata)
@@ -221,13 +304,45 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
   )
 end
 
-load_env_file(File.join(__dir__, ".env"))
+load_env_file(File.join(ANDROID_FASTLANE_ROOT, ".env"))
 
 platform :android do
   desc "Validate Google Play API credentials"
   lane :auth_check do
     validate_play_auth!
     UI.success("Google Play API credentials are valid.")
+  end
+
+  desc "Print the Android release signing plan"
+  lane :signing_plan do
+    sh(shell_join(["node", android_release_signing_script, "--mode", "plan"]))
+  end
+
+  desc "Pull encrypted Android release signing assets and validate Gradle release signing"
+  lane :signing_check do
+    sync_android_release_signing!
+    validate_android_release_signing!
+    UI.success("Android release signing assets are available locally.")
+  end
+
+  desc "Pull encrypted Android release signing assets from the shared signing repo"
+  lane :signing_sync_pull do
+    sync_android_release_signing!
+    UI.success("Pulled Android release signing assets.")
+  end
+
+  desc "Create or refresh encrypted Android release signing assets in the shared signing repo"
+  lane :signing_sync_push do
+    sh(shell_join(["node", android_release_signing_script, "--mode", "sync-push"]))
+    UI.success("Pushed Android release signing assets.")
+  end
+
+  desc "Validate Android Play release auth, signing, versioning, and release notes"
+  lane :release_preflight do
+    sync_android_versioning!
+    version_metadata = read_android_version_metadata
+    validate_android_release_preflight!(version_metadata)
+    UI.success("Android Play release preflight passed for #{version_metadata[:version]} (#{version_metadata[:version_code]}).")
   end
 
   desc "Upload Google Play metadata, changelog, and optional screenshots"
@@ -242,6 +357,7 @@ platform :android do
   desc "Build signed Android release artifacts locally without uploading"
   lane :play_store_archive do
     sync_android_versioning!
+    prepare_android_release_signing!
     build_release_artifacts!
   end
 
@@ -260,9 +376,9 @@ platform :android do
 
   desc "Upload Android metadata, archive release artifacts, then upload the Play AAB"
   lane :release_upload do
-    auth_check
     sync_android_versioning!
     version_metadata = read_android_version_metadata
+    validate_android_release_preflight!(version_metadata)
     screenshots
     ENV["SUPPLY_UPLOAD_METADATA"] = "1"
     ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"

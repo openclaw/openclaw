@@ -42,6 +42,7 @@ const attemptExecutionMocks = vi.hoisted(() => ({
   emitAcpPromptSubmitted: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
   persistAcpTurnTranscript: vi.fn(async ({ sessionEntry }: { sessionEntry?: unknown }) => ({
+    kind: "persisted",
     sessionEntry,
     saveOutcome: "saved",
   })),

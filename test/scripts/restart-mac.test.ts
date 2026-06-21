@@ -132,6 +132,37 @@ function runCanonicalizeAppBundle(appBundle: string) {
   };
 }
 
+function runRestartArgParser(...args: string[]) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
+  tempRoots.push(root);
+
+  const script = readFileSync(restartScriptPath, "utf8");
+  const parserBlock = script.slice(
+    script.indexOf('for arg in "$@"; do'),
+    script.indexOf('if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]'),
+  );
+  const harnessPath = join(root, "arg-parser-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "WAIT_FOR_LOCK=0",
+      "NO_SIGN=0",
+      "SIGN=0",
+      "AUTO_DETECT_SIGNING=1",
+      "ATTACH_ONLY=1",
+      'log() { printf "%s\\n" "$*"; }',
+      'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
+      parserBlock,
+      'printf "wait=%s no_sign=%s sign=%s attach_only=%s\\n" "$WAIT_FOR_LOCK" "$NO_SIGN" "$SIGN" "$ATTACH_ONLY"',
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+
+  return spawnSync("bash", [harnessPath, ...args], { encoding: "utf8" });
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
@@ -139,6 +170,22 @@ afterEach(() => {
 });
 
 describe("scripts/restart-mac.sh", () => {
+  it("rejects unknown restart options before side effects", () => {
+    const result = runRestartArgParser("--wat");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("ERROR: Unknown restart option: --wat");
+  });
+
+  it("parses restart mode flags before side effects", () => {
+    const result = runRestartArgParser("--wait", "--no-sign", "--no-attach-only");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("wait=1 no_sign=1 sign=0 attach_only=0");
+    expect(result.stderr).toBe("");
+  });
+
   it("fails the gateway verification when lsof finds no listener", () => {
     const result = runGatewayPortCheck("#!/usr/bin/env bash\nexit 1\n");
 

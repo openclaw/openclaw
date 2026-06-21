@@ -82,10 +82,6 @@ function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): bo
   return Boolean(configuredLabel && label === configuredLabel);
 }
 
-export function isOpenClawUpdateLaunchdLabel(label: unknown): label is string {
-  return normalizeOpenClawUpdateLaunchdLabel(label) !== null;
-}
-
 function resolveCurrentOpenClawUpdateLaunchdJobLabel(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
@@ -339,15 +335,6 @@ export async function findStaleOpenClawUpdateLaunchdJobs(
   );
 }
 
-export async function removeOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
-  const normalizedLabel = normalizeOpenClawUpdateLaunchdLabel(label);
-  if (process.platform !== "darwin" || !normalizedLabel) {
-    return false;
-  }
-  const result = await execLaunchctl(["remove", assertValidLaunchAgentLabel(normalizedLabel)]);
-  return result.code === 0;
-}
-
 export async function disableOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
   const normalizedLabel = normalizeOpenClawUpdateLaunchdLabel(label);
   if (process.platform !== "darwin" || !normalizedLabel) {
@@ -550,15 +537,6 @@ export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<
   const label = resolveLaunchAgentLabel({ env: args.env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   return res.code === 0;
-}
-
-export async function isLaunchAgentListed(args: GatewayServiceEnvArgs): Promise<boolean> {
-  const label = resolveLaunchAgentLabel({ env: args.env });
-  const res = await execLaunchctl(["list"]);
-  if (res.code !== 0) {
-    return false;
-  }
-  return res.stdout.split(/\r?\n/).some((line) => line.trim().split(/\s+/).at(-1) === label);
 }
 
 export async function launchAgentPlistExists(env: GatewayServiceEnv): Promise<boolean> {

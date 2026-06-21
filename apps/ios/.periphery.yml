@@ -12,7 +12,7 @@ report_include:
   - Sources/**
   - ShareExtension/**
   - ActivityWidget/**
-  - WatchExtension/Sources/**
+  - WatchApp/Sources/**
 build_arguments:
   - -destination
   - generic/platform=iOS Simulator

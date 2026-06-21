@@ -27,6 +27,12 @@ const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 function isOfflineModeEnabled(): boolean {
   const value = process.env.OPENCLAW_OFFLINE;
   if (!value) {
@@ -137,6 +143,7 @@ async function getLatestVersion(repo: string): Promise<string> {
 
   try {
     if (!response.ok) {
+      await cancelUnreadResponseBody(response);
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
@@ -158,6 +165,7 @@ async function downloadFile(url: string, dest: string): Promise<void> {
 
   try {
     if (!response.ok) {
+      await cancelUnreadResponseBody(response);
       throw new Error(`Failed to download: ${response.status}`);
     }
 

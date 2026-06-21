@@ -15,6 +15,17 @@ type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   originRank: number;
 };
 
+type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
+
+export type ChannelDmPolicyMetadata = {
+  id: string;
+  dmAllowFromMode?: ChannelDmAllowFromMode;
+};
+
+type ChannelDmPolicyMetadataRecord = ChannelDmPolicyMetadata & {
+  originRank: number;
+};
+
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   // Lower ranks are closer to the operator and should override farther bundled/global metadata.
   config: 0,
@@ -120,4 +131,48 @@ export function collectChannelSchemaMetadata(
     ({ schemaPluginId: _schemaPluginId, schemaPluginOrigin: _schemaPluginOrigin, ...entry }) =>
       entry,
   );
+}
+
+/** Collects channel DM policy metadata without importing doctor/runtime command modules. */
+export function collectChannelDmPolicyMetadata(
+  registry: PluginManifestRegistry,
+): ChannelDmPolicyMetadata[] {
+  const byChannelId = new Map<string, ChannelDmPolicyMetadataRecord>();
+
+  const put = (
+    channelId: string | undefined,
+    originRank: number,
+    dmAllowFromMode?: ChannelDmAllowFromMode,
+  ): void => {
+    const id = channelId?.trim();
+    if (!id) {
+      return;
+    }
+    const current = byChannelId.get(id);
+    if (current && current.originRank < originRank) {
+      return;
+    }
+    byChannelId.set(id, {
+      id,
+      ...(dmAllowFromMode ? { dmAllowFromMode } : {}),
+      originRank,
+    });
+  };
+
+  for (const record of registry.plugins) {
+    const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+    const packageChannelId = record.packageChannel?.id?.trim();
+    const dmAllowFromMode = record.packageChannel?.doctorCapabilities?.dmAllowFromMode;
+    for (const channelId of record.channels) {
+      put(channelId, originRank, channelId === packageChannelId ? dmAllowFromMode : undefined);
+    }
+    put(packageChannelId, originRank, dmAllowFromMode);
+    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
+      put(channelId, originRank, channelId === packageChannelId ? dmAllowFromMode : undefined);
+    }
+  }
+
+  return [...byChannelId.values()]
+    .toSorted((left, right) => left.id.localeCompare(right.id))
+    .map(({ originRank: _originRank, ...entry }) => entry);
 }

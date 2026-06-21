@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 
 const ORIGINAL_BUILD_PRIVATE_QA = process.env.OPENCLAW_BUILD_PRIVATE_QA;
@@ -29,10 +30,10 @@ function restoreEnv(
 ): void {
   // Tests mutate private QA env gates; restore exact process state after each.
   if (value == null) {
-    delete process.env[name];
+    deleteTestEnvValue(name);
     return;
   }
-  process.env[name] = value;
+  setTestEnvValue(name, value);
 }
 
 function makeProviderRuntimeConfig(runtime: string): OpenClawConfig {
@@ -56,8 +57,8 @@ afterEach(() => {
 
 describe("resolveModelRuntimePolicy", () => {
   it("ignores the QA force-runtime override when the private QA gate is unset", () => {
-    delete process.env.OPENCLAW_BUILD_PRIVATE_QA;
-    process.env.OPENCLAW_QA_FORCE_RUNTIME = "openclaw";
+    deleteTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA");
+    setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
 
     expect(
       resolveModelRuntimePolicy({
@@ -74,8 +75,8 @@ describe("resolveModelRuntimePolicy", () => {
   it("respects the QA force-runtime override when the private QA gate is set", () => {
     // The force-runtime override is intentionally gated to private QA builds so
     // normal users cannot accidentally change model runtime selection via env.
-    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
-    process.env.OPENCLAW_QA_FORCE_RUNTIME = "openclaw";
+    setTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
 
     expect(
       resolveModelRuntimePolicy({
@@ -90,8 +91,8 @@ describe("resolveModelRuntimePolicy", () => {
   });
 
   it("ignores invalid QA force-runtime values even when the private QA gate is set", () => {
-    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
-    process.env.OPENCLAW_QA_FORCE_RUNTIME = "bogus";
+    setTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "bogus");
 
     expect(
       resolveModelRuntimePolicy({

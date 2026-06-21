@@ -127,13 +127,22 @@ type PersistTextTurnTranscriptParams = {
   };
 };
 
-type PersistTextTurnTranscriptResult = {
-  sessionEntry: SessionEntry | undefined;
-  appendedMessages: number;
-  skipReason?: "empty_turn" | "no_transcript_write";
-};
+type PersistTextTurnTranscriptResult =
+  | {
+      kind: "persisted";
+      sessionEntry: SessionEntry | undefined;
+      appendedMessages: number;
+      skipReason?: "empty_turn" | "no_transcript_write";
+    }
+  | {
+      kind: "session-rebound";
+      sessionEntry: undefined;
+      appendedMessages: 0;
+      skipReason: "session_rebound";
+    };
 
 export type AcpTurnTranscriptPersistResult = {
+  kind: PersistTextTurnTranscriptResult["kind"];
   sessionEntry: SessionEntry | undefined;
   saveOutcome: "saved" | "skipped";
   saveSkipReason?: string;
@@ -187,6 +196,10 @@ function resolveHarnessAuthProfileSelection(params: {
       authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
       authProfileMode: profileAuth.mode,
     };
+  }
+
+  if (!params.allowHarnessAuthProfileForwarding) {
+    return { authProfileProvider: params.authProfileProvider };
   }
 
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
@@ -302,6 +315,7 @@ async function persistTextTurnTranscript(
   const replyText = params.finalText;
   if (!params.userMessage && !promptText && !replyText) {
     return {
+      kind: "persisted",
       sessionEntry: params.sessionEntry,
       appendedMessages: 0,
       skipReason: "empty_turn",
@@ -372,9 +386,19 @@ async function persistTextTurnTranscript(
       publishWhen: "always",
       touchSessionEntry: true,
       updateMode: "file-only",
+      ...(params.sessionStore && params.storePath ? { expectedSessionId: params.sessionId } : {}),
     },
   );
+  if (turn.rejectedReason === "session-rebound") {
+    return {
+      kind: "session-rebound",
+      sessionEntry: undefined,
+      appendedMessages: 0,
+      skipReason: "session_rebound",
+    };
+  }
   return {
+    kind: "persisted",
     sessionEntry: turn.sessionEntry,
     appendedMessages: turn.appendedCount,
     ...(turn.appendedCount > 0 ? {} : { skipReason: "no_transcript_write" }),
@@ -422,6 +446,7 @@ export async function persistAcpTurnTranscript(params: {
     },
   });
   return {
+    kind: result.kind,
     sessionEntry: result.sessionEntry,
     ...(result.appendedMessages > 0
       ? { saveOutcome: "saved" as const }
@@ -447,7 +472,7 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
-}): Promise<SessionEntry | undefined> {
+}): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
@@ -475,7 +500,7 @@ export async function persistCliTurnTranscript(params: {
       usage: params.result.meta.agentMeta?.usage,
     },
   });
-  return result.sessionEntry;
+  return result;
 }
 
 export function runAgentAttempt(params: {
@@ -1004,9 +1029,6 @@ export function emitAcpLifecycleError(params: {
     },
   });
 }
-
-/** @deprecated use formatAcpErrorChain from src/acp/runtime/errors.ts */
-export const formatAcpLifecycleError = formatAcpErrorChain;
 
 export function emitAcpAssistantDelta(params: { runId: string; text: string; delta: string }) {
   emitAgentEvent({

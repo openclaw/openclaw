@@ -155,14 +155,22 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
+  const sessionEntry =
+    typeof entry?.sessionId === "string"
+      ? {
+          sessionId: entry.sessionId,
+          ...(typeof entry.sessionFile === "string" ? { sessionFile: entry.sessionFile } : {}),
+        }
+      : undefined;
 
   const localMessages =
     sessionId && storePath
       ? await rt.readSessionMessagesAsync(
           {
             agentId: sessionAgentId,
-            sessionFile: entry?.sessionFile as string | undefined,
+            sessionEntry,
             sessionId,
+            sessionKey,
             storePath,
           },
           {

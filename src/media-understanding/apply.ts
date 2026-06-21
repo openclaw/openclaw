@@ -5,6 +5,12 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import {
+  extractMediaUserText,
+  formatAudioTranscripts,
+  formatMediaUnderstandingBody,
+} from "../../packages/media-understanding-common/src/format.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -12,7 +18,6 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
-import type { ActiveMediaModel } from "./active-model.types.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -20,11 +25,6 @@ import {
   type FileExtractionLimits,
   resolveFileExtractionLimits,
 } from "./file-extraction-limits.js";
-import {
-  extractMediaUserText,
-  formatAudioTranscripts,
-  formatMediaUnderstandingBody,
-} from "./format.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
   buildProviderRegistry,

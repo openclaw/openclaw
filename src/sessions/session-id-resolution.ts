@@ -15,7 +15,7 @@ type NormalizedSessionIdMatch = {
   isStructural: boolean;
 };
 
-export type SessionIdMatchSelection =
+type SessionIdMatchSelection =
   | { kind: "none" }
   | { kind: "ambiguous"; sessionKeys: string[] }
   | { kind: "selected"; sessionKey: string };
