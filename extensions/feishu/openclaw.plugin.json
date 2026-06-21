@@ -169,6 +169,7 @@
             "type": "string",
             "enum": ["auto", "raw", "card"]
           },
+          "cardFooter": { "type": "string" },
           "streaming": { "type": "boolean" },
           "blockStreaming": { "type": "boolean" },
           "replyInThread": {
@@ -206,6 +207,7 @@
         "type": "string",
         "enum": ["auto", "raw", "card"]
       },
+      "cardFooter": { "type": "string" },
       "streaming": { "type": "boolean" },
       "blockStreaming": { "type": "boolean" },
       "replyInThread": {

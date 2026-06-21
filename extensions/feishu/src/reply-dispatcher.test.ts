@@ -1593,6 +1593,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       config: {
         renderMode: "card",
         streaming: true,
+        cardFooter: "OpenClaw main footer",
       },
     });
 
@@ -1605,6 +1606,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expectStreamingStartOptions(0, {
       header: undefined,
+      note: "OpenClaw main footer",
+    });
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("streamed card", {
+      note: "OpenClaw main footer",
     });
 
     resolveFeishuAccountMock.mockReturnValue({
@@ -1615,6 +1620,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       config: {
         renderMode: "card",
         streaming: false,
+        cardFooter: "OpenClaw main footer",
       },
     });
 
@@ -1626,6 +1632,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expectLastMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
       header: undefined,
+      note: "OpenClaw main footer",
     });
   });
 

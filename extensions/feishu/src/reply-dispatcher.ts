@@ -114,12 +114,20 @@ function resolveCardHeader(
   };
 }
 
+function normalizeCardFooter(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() || undefined : undefined;
+}
+
 /** Build a card note footer from agent identity and model context. */
 function resolveCardNote(
   agentId: string,
   identity: OutboundIdentity | undefined,
   prefixCtx: { model?: string; provider?: string },
+  configuredFooter?: string,
 ): string {
+  if (configuredFooter) {
+    return configuredFooter;
+  }
   const name = identity?.name?.trim() || agentId;
   const parts: string[] = [`Agent: ${name}`];
   if (prefixCtx.model) {
@@ -182,6 +190,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     sendReplyToMessageId !== rootId;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
+  const configuredCardFooter = normalizeCardFooter(account.config?.cardFooter);
 
   let typingState: TypingIndicatorState | null = null;
   const { typingCallbacks } = createChannelMessageReplyPipeline({
@@ -390,7 +399,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       );
       try {
         const cardHeader = resolveCardHeader(agentId, identity);
-        const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        const cardNote = resolveCardNote(
+          agentId,
+          identity,
+          prefixContext.prefixContext,
+          configuredCardFooter,
+        );
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
@@ -434,7 +448,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streaming?.isActive()) {
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
-        const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        const finalNote = resolveCardNote(
+          agentId,
+          identity,
+          prefixContext.prefixContext,
+          configuredCardFooter,
+        );
         const contentVisible = await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
@@ -752,7 +771,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
           if (useCard) {
             const cardHeader = resolveCardHeader(agentId, identity);
-            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+            const cardNote = resolveCardNote(
+              agentId,
+              identity,
+              prefixContext.prefixContext,
+              configuredCardFooter,
+            );
             await sendChunkedTextReply({
               text,
               useCard: true,

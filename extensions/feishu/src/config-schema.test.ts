@@ -221,6 +221,20 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.accounts?.main?.blockStreaming).toBe(false);
   });
 
+  it("accepts top-level and account-level card footer config", () => {
+    const result = FeishuConfigSchema.parse({
+      cardFooter: "OpenClaw",
+      accounts: {
+        main: {
+          cardFooter: "Main agent",
+        },
+      },
+    });
+
+    expect(result.cardFooter).toBe("OpenClaw");
+    expect(result.accounts?.main?.cardFooter).toBe("Main agent");
+  });
+
   it("accepts account-level optimization flags", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {

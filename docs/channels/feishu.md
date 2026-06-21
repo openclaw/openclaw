@@ -286,6 +286,10 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
 
 Set `streaming: false` to send the complete reply in one message. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
 
+Set `cardFooter` to customize the gray note shown at the bottom of Feishu/Lark
+agent cards. The setting applies to both streaming cards and complete card
+replies; account-level `cardFooter` overrides the top-level value.
+
 ### Quota optimization
 
 Reduce the number of Feishu/Lark API calls with two optional flags:
@@ -569,6 +573,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                           | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                       | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                      | `feishu`                             |
+| `channels.feishu.accounts.<id>.cardFooter`               | Per-account card footer note                                                     | inherited                            |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                         | `messages.tts`                       |
 | `channels.feishu.dmPolicy`                               | DM policy                                                                        | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                      | -                                    |
@@ -584,6 +589,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.textChunkLimit`                         | Message chunk size                                                               | `2000`                               |
 | `channels.feishu.mediaMaxMb`                             | Media size limit                                                                 | `30`                                 |
 | `channels.feishu.streaming`                              | Streaming card output                                                            | `true`                               |
+| `channels.feishu.cardFooter`                             | Card footer note                                                                 | agent/model/provider                 |
 | `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                  | `false`                              |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                            | `true`                               |
 | `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                     | `true`                               |
