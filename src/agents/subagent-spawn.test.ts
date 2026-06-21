@@ -313,7 +313,10 @@ describe("spawnSubagentDirect seam flow", () => {
     );
     const agentRequest = gatewayRequest("agent");
     const agentParams = requireRecord(agentRequest.params);
+    expect(agentRequest.scopes).toEqual(["operator.admin"]);
     expect(agentParams.sessionKey).toBe(childSessionKey);
+    expect(agentParams.provider).toBe("openai");
+    expect(agentParams.model).toBe("gpt-5.4");
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
@@ -347,6 +350,54 @@ describe("spawnSubagentDirect seam flow", () => {
       }),
       expect.objectContaining({
         timeoutMs: expect.any(Number),
+      }),
+    );
+    const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+      ([method]) => method === "agent",
+    );
+    const agentParams = requireRecord(agentDispatch?.[1]);
+    const agentOptions = requireRecord(agentDispatch?.[2]);
+    expect(agentParams.provider).toBeUndefined();
+    expect(agentParams.model).toBeUndefined();
+    expect(agentOptions.allowInternalModelOverride).toBe(false);
+    expect(agentOptions.forceSyntheticClient).toBeUndefined();
+  });
+
+  it("authorizes in-process spawned agent model overrides", async () => {
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        return { runId: "run-in-process-model" };
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn with explicit model override",
+        model: "anthropic/claude-haiku-4-5",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.modelApplied).toBe(true);
+    expect(result.runId).toBe("run-in-process-model");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.dispatchGatewayMethodInProcessMock).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        model: "claude-haiku-4-5",
+        provider: "anthropic",
+        sessionKey: result.childSessionKey,
+      }),
+      expect.objectContaining({
+        allowInternalModelOverride: true,
+        forceSyntheticClient: undefined,
+        syntheticScopes: undefined,
       }),
     );
   });

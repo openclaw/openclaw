@@ -803,6 +803,40 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
   });
 
+  test("preserves scoped client metadata while granting internal model override", async () => {
+    const scope = {
+      context: createTestContext("scoped-internal-model-override"),
+      client: {
+        connect: {
+          scopes: ["operator.write"],
+        },
+        internal: {
+          agentRunTracking: "plugin_subagent",
+          pluginRuntimeOwnerId: "memory-core",
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      serverPluginsModule.dispatchGatewayMethodInProcessRaw(
+        "agent",
+        {
+          message: "hello",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+        },
+        { allowInternalModelOverride: true },
+      ),
+    );
+
+    const internal = getLastDispatchedClientInternal();
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(internal.allowModelOverride).toBe(true);
+    expect(internal.agentRunTracking).toBe("plugin_subagent");
+    expect(internal.pluginRuntimeOwnerId).toBe("memory-core");
+  });
+
   test("uses one timeout budget across accepted and final in-process responses", async () => {
     vi.useFakeTimers();
     try {

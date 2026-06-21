@@ -240,6 +240,7 @@ async function updateSubagentSessionStore(
 
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
+  options?: { allowInternalModelOverride?: boolean },
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
   // (sessions.patch / sessions.delete → admin, agent → write).  When each call
@@ -249,8 +250,15 @@ async function callSubagentGateway(
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
   // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope.
-  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  // "agent" -> write) keep their least-privilege scope unless an explicit
+  // provider/model override needs gateway authorization outside in-process dispatch.
+  const needsOutOfProcessModelOverrideAuth =
+    options?.allowInternalModelOverride === true && !subagentSpawnDeps.hasInProcessGatewayContext();
+  const scopes =
+    params.scopes ??
+    (isAdminOnlyMethod(params.method) || needsOutOfProcessModelOverrideAuth
+      ? [ADMIN_SCOPE]
+      : undefined);
   const request = {
     ...params,
     ...(scopes != null ? { scopes } : {}),
@@ -268,6 +276,9 @@ async function callSubagentGateway(
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
+        ...(options?.allowInternalModelOverride === true
+          ? { allowInternalModelOverride: true }
+          : {}),
         ...(scopes != null ? { forceSyntheticClient: true } : {}),
         timeoutMs: request.timeoutMs,
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
@@ -1556,43 +1567,56 @@ export async function spawnSubagentDirect(
   const shouldAnnounceCompletion = deliverInitialChildRunDirectly
     ? false
     : expectsCompletionMessage;
+  const gatewayModelOverride = splitModelRef(resolvedModel);
+  const forwardGatewayModelOverride = Boolean(modelOverride?.trim() && gatewayModelOverride.model);
   try {
     const {
       spawnedBy: _spawnedBy,
       workspaceDir: _workspaceDir,
       ...publicSpawnedMetadata
     } = spawnedMetadata;
-    const response = await callSubagentGateway({
-      method: "agent",
-      params: {
-        message: childTaskMessage,
-        sessionKey: childSessionKey,
-        channel: childSessionOrigin?.channel,
-        to: childSessionOrigin?.to ?? undefined,
-        accountId: childSessionOrigin?.accountId ?? undefined,
-        threadId:
-          childSessionOrigin?.threadId != null
-            ? stringifyRouteThreadId(childSessionOrigin.threadId)
-            : undefined,
-        idempotencyKey: childIdem,
-        deliver: deliverInitialChildRunDirectly,
-        lane: AGENT_LANE_SUBAGENT,
-        disableMessageTool: true,
-        cleanupBundleMcpOnRunEnd: spawnMode !== "session",
-        extraSystemPrompt: childSystemPrompt,
-        thinking: thinkingOverride,
-        timeout: runTimeoutSeconds,
-        label: label || undefined,
-        ...(bootstrapContextMode
-          ? {
-              bootstrapContextMode,
-              bootstrapContextRunKind: "default" as const,
-            }
-          : {}),
-        ...publicSpawnedMetadata,
+    const response = await callSubagentGateway(
+      {
+        method: "agent",
+        params: {
+          message: childTaskMessage,
+          sessionKey: childSessionKey,
+          ...(forwardGatewayModelOverride && gatewayModelOverride.provider
+            ? { provider: gatewayModelOverride.provider }
+            : {}),
+          ...(forwardGatewayModelOverride && gatewayModelOverride.model
+            ? { model: gatewayModelOverride.model }
+            : {}),
+          channel: childSessionOrigin?.channel,
+          to: childSessionOrigin?.to ?? undefined,
+          accountId: childSessionOrigin?.accountId ?? undefined,
+          threadId:
+            childSessionOrigin?.threadId != null
+              ? stringifyRouteThreadId(childSessionOrigin.threadId)
+              : undefined,
+          idempotencyKey: childIdem,
+          deliver: deliverInitialChildRunDirectly,
+          lane: AGENT_LANE_SUBAGENT,
+          disableMessageTool: true,
+          cleanupBundleMcpOnRunEnd: spawnMode !== "session",
+          extraSystemPrompt: childSystemPrompt,
+          thinking: thinkingOverride,
+          timeout: runTimeoutSeconds,
+          label: label || undefined,
+          ...(bootstrapContextMode
+            ? {
+                bootstrapContextMode,
+                bootstrapContextRunKind: "default" as const,
+              }
+            : {}),
+          ...publicSpawnedMetadata,
+        },
+        timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
       },
-      timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-    });
+      {
+        allowInternalModelOverride: forwardGatewayModelOverride,
+      },
+    );
     const runId = readGatewayRunId(response);
     if (runId) {
       childRunId = runId;
