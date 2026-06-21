@@ -13,11 +13,11 @@ import {
   type CoreHealthCheckDeps,
 } from "./doctor-core-checks.js";
 import { clearHealthChecksForTest } from "./health-check-registry.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type { HealthCheck, HealthFinding, HealthRepairEffect } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async () => []),
-  detectExtraGatewayServiceIssues: vi.fn(async () => []),
+  detectExtraGatewayServiceIssues: vi.fn(async (): Promise<readonly { label: string }[]> => []),
   extraGatewayServiceToHealthFinding: vi.fn(
     (service: { label: string }): HealthFinding => ({
       checkId: "core/doctor/gateway-services/extra",
@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
       message: service.label,
     }),
   ),
-  extraGatewayServiceToRepairEffects: vi.fn(() => []),
+  extraGatewayServiceToRepairEffects: vi.fn((): readonly HealthRepairEffect[] => []),
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
