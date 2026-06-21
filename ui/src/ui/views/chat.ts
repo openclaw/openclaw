@@ -616,8 +616,8 @@ function markComposerInputIntent(): void {
   vs.composerInputVersion += 1;
 }
 
-function clearPendingClearedSubmittedDraft(key: string): void {
-  if (vs.pendingClearedSubmittedDraft?.key === key) {
+function clearPendingClearedSubmittedDraft(key?: string): void {
+  if (!key || vs.pendingClearedSubmittedDraft?.key === key) {
     vs.pendingClearedSubmittedDraft = null;
   }
 }
@@ -633,12 +633,12 @@ function suppressStaleSubmittedDraftReplay(
   draftMirror: ComposerDraftMirror,
 ): boolean {
   const pending = vs.pendingClearedSubmittedDraft;
-  if (!pending || pending.key !== composerDraftMirrorKey(props)) {
+  if (!pending) {
     return false;
   }
   const hostDraft = props.getDraft?.();
   if (
-    hostDraft !== "" ||
+    typeof hostDraft !== "string" ||
     target.value !== pending.value ||
     pending.inputVersion !== vs.composerInputVersion ||
     isExplicitComposerInsertion(event)
@@ -2499,7 +2499,7 @@ export function renderChat(props: ChatProps) {
     if (suppressStaleSubmittedDraftReplay(props, target, e, draftMirror)) {
       return;
     }
-    clearPendingClearedSubmittedDraft(composerDraftMirrorKey(props));
+    clearPendingClearedSubmittedDraft();
     syncComposerValue(target);
   };
   const handleCompositionEnd = (e: CompositionEvent) => {
