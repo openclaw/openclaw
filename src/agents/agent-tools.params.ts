@@ -1,8 +1,11 @@
 /**
  * Shared validation for model-supplied tool parameters.
  * Converts malformed file-tool arguments into retryable errors and fixes the
- * specific XML suffix corruption and model-hallucinated document extensions
- * seen in path arguments.
+ * specific XML suffix corruption seen in path arguments.
+ *
+ * Hallucinated document-extension correction is applied separately at the
+ * file-tool path boundary (not in the shared XML cleanup helper) so that
+ * shell-command and mutation paths are not silently retargeted.
  */
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
@@ -127,7 +130,7 @@ export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
-/** Correct model-hallucinated document extensions in a file path (e.g. .docodex → .docx). */
+/** Correct a model-hallucinated document extension in a file path (e.g. .docodex → .docx). */
 export function correctHallucinatedFileExtension(value: string): string {
   const dotIndex = value.lastIndexOf(".");
   if (dotIndex === -1) {
@@ -138,7 +141,17 @@ export function correctHallucinatedFileExtension(value: string): string {
   return correction ? value.slice(0, dotIndex) + correction : value;
 }
 
-/** Normalize path string fields: strip malformed XML suffixes and correct hallucinated document extensions. */
+/** Detect whether a file path ends with a known hallucinated document extension. */
+export function hasHallucinatedFileExtension(value: string): boolean {
+  const dotIndex = value.lastIndexOf(".");
+  if (dotIndex === -1) {
+    return false;
+  }
+  const ext = value.slice(dotIndex).toLowerCase();
+  return HALLUCINATED_EXTENSION_MAP.has(ext);
+}
+
+/** Strip malformed XML suffixes from selected string fields without mutating input. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,
   keys: readonly string[],
@@ -149,14 +162,64 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
     if (typeof value !== "string") {
       continue;
     }
-    let corrected = stripMalformedXmlArgValueSuffix(value);
-    corrected = correctHallucinatedFileExtension(corrected);
+    const stripped = stripMalformedXmlArgValueSuffix(value);
+    if (stripped !== value) {
+      normalized ??= { ...record };
+      normalized[key as keyof T] = stripped as T[keyof T];
+    }
+  }
+  return normalized ?? record;
+}
+
+/**
+ * Correct hallucinated document extensions on file-tool path keys (read-only).
+ * Only applies to "path" keys — does not touch shell-command or other fields.
+ * Used for read tools where silent correction is safe (no filesystem mutation).
+ */
+export function correctHallucinatedFileExtensionFromKeys<T extends Record<string, unknown>>(
+  record: T,
+  keys: readonly string[],
+): T {
+  let normalized: T | undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const corrected = correctHallucinatedFileExtension(value);
     if (corrected !== value) {
       normalized ??= { ...record };
       normalized[key as keyof T] = corrected as T[keyof T];
     }
   }
   return normalized ?? record;
+}
+
+/**
+ * Reject hallucinated document extensions on file-tool path keys (write/edit).
+ * Instead of silently correcting, throws a retryable error so the model
+ * retries with the correct extension — preventing accidental mutation of
+ * a different file than intended.
+ */
+export function rejectHallucinatedFileExtensionFromKeys(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  toolName: string,
+): void {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    // Strip XML suffix first so we check the clean extension
+    const cleaned = stripMalformedXmlArgValueSuffix(value);
+    if (hasHallucinatedFileExtension(cleaned)) {
+      const correction = correctHallucinatedFileExtension(cleaned);
+      throw parameterValidationError(
+        `${toolName} parameter "${key}" has a hallucinated file extension "${cleaned.slice(cleaned.lastIndexOf("."))}". Did you mean "${correction.slice(correction.lastIndexOf("."))}"? Path: ${correction}`,
+      );
+    }
+  }
 }
 
 function resolveMalformedXmlArgValuePathKeys(
@@ -171,6 +234,15 @@ function resolveMalformedXmlArgValuePathKeys(
     }
   }
   return [...keys];
+}
+
+/** Return true when the required param groups indicate a read-only tool. */
+function isReadOnlyTool(requiredParamGroups?: readonly RequiredParamGroup[]): boolean {
+  if (!requiredParamGroups || requiredParamGroups.length !== 1) {
+    return false;
+  }
+  const keys = requiredParamGroups[0]!.keys;
+  return keys.length === 1 && keys[0] === "path" && requiredParamGroups[0]!.label === "path";
 }
 
 /** Throw actionable retry guidance when required tool params are missing. */
@@ -225,10 +297,27 @@ export function wrapToolParamValidation(
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
       const pathKeys = resolveMalformedXmlArgValuePathKeys(requiredParamGroups);
-      const normalizedParams =
+      // Step 1: Strip malformed XML suffixes (shared cleanup — safe for all tools)
+      let normalizedParams: unknown =
         record && pathKeys.length > 0
           ? stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys)
           : params;
+
+      // Step 2: Handle hallucinated document extensions at the file-tool path boundary
+      if (record && pathKeys.length > 0) {
+        const normalizedRecord = getToolParamsRecord(normalizedParams);
+        if (normalizedRecord) {
+          if (isReadOnlyTool(requiredParamGroups)) {
+            // Read tools: silently correct (safe — no filesystem mutation)
+            normalizedParams = correctHallucinatedFileExtensionFromKeys(normalizedRecord, pathKeys);
+          } else {
+            // Write/edit/memory-flush tools: reject hallucinated extensions
+            // to prevent silent retargeting of mutation paths
+            rejectHallucinatedFileExtensionFromKeys(normalizedRecord, pathKeys, tool.name);
+          }
+        }
+      }
+
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
       }

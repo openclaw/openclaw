@@ -26,7 +26,9 @@ import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
   correctHallucinatedFileExtension,
+  correctHallucinatedFileExtensionFromKeys,
   getToolParamsRecord,
+  rejectHallucinatedFileExtensionFromKeys,
   stripMalformedXmlArgValueSuffix,
   stripMalformedXmlArgValueSuffixFromKeys,
   wrapToolParamValidation,
@@ -655,6 +657,9 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
       const normalizedRecord = record
         ? stripMalformedXmlArgValueSuffixFromKeys(record, ["path"])
         : undefined;
+      if (normalizedRecord) {
+        rejectHallucinatedFileExtensionFromKeys(normalizedRecord, ["path"], tool.name);
+      }
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
       const filePath =
         typeof normalizedRecord?.path === "string" && normalizedRecord.path.trim()
@@ -886,8 +891,11 @@ export function createOpenClawReadTool(
     ...base,
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
-      const normalizedRecord = record
+      const xmlNormalized = record
         ? stripMalformedXmlArgValueSuffixFromKeys(record, ["path"])
+        : undefined;
+      const normalizedRecord = xmlNormalized
+        ? correctHallucinatedFileExtensionFromKeys(xmlNormalized, ["path"])
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const result = await executeReadWithAdaptivePaging({
