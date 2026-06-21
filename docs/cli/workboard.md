@@ -22,7 +22,7 @@ openclaw gateway restart
 ## Usage
 
 ```bash
-openclaw workboard list [--board <id>] [--status <status>] [--json]
+openclaw workboard list [--board <id>] [--status <status>] [--include-archived] [--json]
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
 openclaw workboard dispatch [--url <url>] [--token <token>] [--timeout <ms>] [--json]
@@ -48,13 +48,21 @@ Text output is compact:
 
 Columns are id prefix, status, priority, board id, optional agent id, and title.
 
+Archived cards are hidden from text output by default. Use `--include-archived` to
+restore the full listing.
+
 Flags:
 
-| Flag                | Purpose                                  |
-| ------------------- | ---------------------------------------- |
-| `--board <id>`      | Limit results to one board namespace     |
-| `--status <status>` | Limit results to one Workboard status    |
-| `--json`            | Print the full card list as machine JSON |
+| Flag                    | Purpose                                    |
+| ----------------------- | ------------------------------------------ |
+| `--board <id>`          | Limit results to one board namespace       |
+| `--status <status>`     | Limit results to one Workboard status      |
+| `--include-archived`    | Include archived cards in text output      |
+| `--json`                | Print the full card list as machine JSON   |
+
+`--json` output always returns all cards regardless of archive state, preserving
+backward compatibility for scripts and automation that consume the machine JSON
+contract.
 
 ## `create`
 
