@@ -360,6 +360,7 @@ private fun OverviewScreen(
   val statusText by viewModel.statusText.collectAsState()
   val models by viewModel.modelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
+  val execApprovals by viewModel.execApprovals.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
@@ -367,10 +368,11 @@ private fun OverviewScreen(
   val agents by viewModel.gatewayAgents.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
+  val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
   val attentionRows =
     homeAttentionRows(
       isConnected = isConnected,
-      pendingApprovals = pendingToolCalls.size,
+      pendingApprovals = pendingApprovalsCount,
       channelsSummary = channelsSummary,
       nodesDevicesSummary = nodesDevicesSummary,
       readyProviderCount = readyProviderCount,
@@ -390,7 +392,7 @@ private fun OverviewScreen(
       isConnected = isConnected,
       hasAttention = attentionRows.isNotEmpty(),
       nodesDevicesSummary = nodesDevicesSummary,
-      pendingApprovals = pendingToolCalls.size,
+      pendingApprovals = pendingApprovalsCount,
       sessionCount = sessions.size,
     )
 
@@ -402,6 +404,7 @@ private fun OverviewScreen(
       viewModel.refreshCronJobs()
       viewModel.refreshNodesDevices()
       viewModel.refreshChannels()
+      viewModel.refreshExecApprovals()
     }
   }
 
@@ -1364,6 +1367,7 @@ private fun SettingsShellScreen(
   val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val agents by viewModel.gatewayAgents.collectAsState()
+  val execApprovals by viewModel.execApprovals.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
   val usageSummary by viewModel.usageSummary.collectAsState()
@@ -1373,6 +1377,7 @@ private fun SettingsShellScreen(
   val dreamingSummary by viewModel.dreamingSummary.collectAsState()
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
   val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
+  val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -1384,6 +1389,7 @@ private fun SettingsShellScreen(
       viewModel.refreshNodesDevices()
       viewModel.refreshChannels()
       viewModel.refreshDreaming()
+      viewModel.refreshExecApprovals()
     }
   }
 
@@ -1430,7 +1436,7 @@ private fun SettingsShellScreen(
             status = if (isConnected) readyProviderCount > 0 else false,
             route = SettingsRoute.ProvidersModels,
           ),
-          SettingsRow("Approvals", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, status = approvalsStatus(pendingToolCalls.size), route = SettingsRoute.Approvals),
+          SettingsRow("Approvals", approvalsSummary(pendingApprovalsCount), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
           SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
           SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
           SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
