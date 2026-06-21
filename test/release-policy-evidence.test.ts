@@ -125,6 +125,21 @@ describe("release policy", () => {
       }),
     ).toThrow("unknown field");
   });
+
+  it("accepts publishable strict stable policy for downstream artifact readers", () => {
+    const policy = {
+      ...dailyPolicy(),
+      releaseVersion: "2026.6.33",
+      releaseClass: "stable-base",
+      releaseSelector: "stable",
+      authorizedSourceRef: "refs/heads/stable/2026.6.33",
+      policySource: {
+        ...dailyPolicy().policySource,
+        blobs: { ...dailyPolicy().policySource.blobs, stableLinesSha256: digest("9") },
+      },
+    };
+    expect(validateReleasePolicy(policy)).toEqual(policy);
+  });
 });
 
 describe("artifact contracts", () => {
