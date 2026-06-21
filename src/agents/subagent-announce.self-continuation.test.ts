@@ -54,7 +54,7 @@ vi.mock("../auto-reply/continuation-delegate-store.js", () => ({
 }));
 
 const deliverSubagentAnnouncementMock = vi.hoisted(() =>
-  vi.fn(async () => ({ delivered: true, path: "direct" as const })),
+  vi.fn(async (_announcement: unknown) => ({ delivered: true, path: "direct" as const })),
 );
 vi.mock("./subagent-announce-delivery.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
