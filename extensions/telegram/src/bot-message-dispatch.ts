@@ -2131,10 +2131,6 @@ export const dispatchTelegramMessage = async ({
                           continue;
                         }
                         if (streamMode === "progress" && answerLane.stream) {
-                          // Progress-mode streams render tool status in the
-                          // live draft. Do not also emit text-only tool output
-                          // as answer text, or simple commands duplicate and
-                          // restart the progress draft.
                           continue;
                         }
                         await prepareAnswerLaneForToolProgress();
