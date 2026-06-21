@@ -690,6 +690,74 @@ async function createStateSqliteBackupPlan(params: {
   return { snapshots, discoveredSourcePaths: discovery.discoveredSourcePaths };
 }
 
+const STALE_SWEEP_GRACE_MS = 60 * 60 * 1000;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function sweepStaleBackupArtifacts(params: {
+  outputPath: string;
+  tempRoot: string;
+}): Promise<void> {
+  await Promise.all([
+    sweepStaleBackupStagingDirs(params.tempRoot),
+    sweepStaleBackupArchiveTemps(params.outputPath),
+  ]);
+}
+
+async function sweepStaleBackupStagingDirs(tempRoot: string): Promise<void> {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(tempRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("openclaw-backup-"))
+      .map((entry) => removeStalePath(path.join(tempRoot, entry.name))),
+  );
+}
+
+async function sweepStaleBackupArchiveTemps(outputPath: string): Promise<void> {
+  const outputDir = path.dirname(outputPath);
+  const outputBaseName = path.basename(outputPath);
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(outputDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && isBackupArchiveTempName(entry.name, outputBaseName))
+      .map((entry) => removeStalePath(path.join(outputDir, entry.name))),
+  );
+}
+
+async function removeStalePath(targetPath: string): Promise<void> {
+  let stat: import("node:fs").Stats;
+  try {
+    stat = await fs.stat(targetPath);
+  } catch {
+    return;
+  }
+  if (Date.now() - stat.mtimeMs < STALE_SWEEP_GRACE_MS) {
+    return;
+  }
+  await fs.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
+}
+
+function isBackupArchiveTempName(name: string, outputBaseName: string): boolean {
+  const prefix = `${outputBaseName}.`;
+  const suffix = ".tmp";
+  if (!name.startsWith(prefix) || !name.endsWith(suffix)) {
+    return false;
+  }
+  return UUID_RE.test(name.slice(prefix.length, -suffix.length));
+}
+
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
@@ -748,6 +816,7 @@ export async function createBackupArchive(
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
   await fs.mkdir(tempRoot, { recursive: true });
+  await sweepStaleBackupArtifacts({ outputPath, tempRoot });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);

@@ -1,9 +1,10 @@
 // Covers backup archive creation and verification filtering.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -18,6 +19,7 @@ import {
   buildExtensionsNodeModulesFilter,
   createBackupArchive,
   formatBackupCreateSummary,
+  sweepStaleBackupArtifacts,
   type BackupCreateResult,
 } from "./backup-create.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -1202,5 +1204,86 @@ describe("createBackupArchive", () => {
         }
       },
     );
+  });
+});
+
+describe("sweepStaleBackupArtifacts", () => {
+  let testRoot: string;
+  let outputDir: string;
+  let outputPath: string;
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sweep-test-"));
+    outputDir = path.join(testRoot, "backups");
+    outputPath = path.join(outputDir, "backup.tar.gz");
+    tempRoot = path.join(testRoot, "staging-root");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.mkdir(tempRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(testRoot, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  it("removes stale openclaw-backup-* directories from the selected temp root", async () => {
+    const staleDir = path.join(tempRoot, "openclaw-backup-abc123");
+    await fs.mkdir(staleDir);
+    await fs.writeFile(path.join(staleDir, "manifest.json"), "{}");
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+    await fs.utimes(staleDir, new Date(twoHoursAgo), new Date(twoHoursAgo));
+
+    const entries = await fs.readdir(tempRoot, { withFileTypes: true });
+    expect(entries.some((e) => e.name === "openclaw-backup-abc123")).toBe(true);
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    const after = await fs.readdir(tempRoot);
+    expect(after).not.toContain("openclaw-backup-abc123");
+  });
+
+  it("removes stale temp archive files next to the output path", async () => {
+    const uuid = randomUUID();
+    const tempFile = path.join(outputDir, `backup.tar.gz.${uuid}.tmp`);
+    await fs.writeFile(tempFile, "data");
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+    await fs.utimes(tempFile, new Date(twoHoursAgo), new Date(twoHoursAgo));
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    const after = await fs.readdir(outputDir);
+    expect(after).not.toContain(`backup.tar.gz.${uuid}.tmp`);
+  });
+
+  it("preserves recent artifacts within grace window", async () => {
+    const recentDir = path.join(tempRoot, "openclaw-backup-recent");
+    await fs.mkdir(recentDir);
+    await fs.writeFile(path.join(recentDir, "data"), "x");
+
+    const uuid = randomUUID();
+    const recentFile = path.join(outputDir, `backup.tar.gz.${uuid}.tmp`);
+    await fs.writeFile(recentFile, "data");
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    expect(await fs.readdir(tempRoot)).toContain("openclaw-backup-recent");
+    expect(await fs.readdir(outputDir)).toContain(`backup.tar.gz.${uuid}.tmp`);
+  });
+
+  it("ignores unrelated files and uuid temp files that do not match the output basename", async () => {
+    const uuid = randomUUID();
+    const unrelatedArchiveTemp = path.join(outputDir, `other-backup.tar.gz.${uuid}.tmp`);
+    await fs.writeFile(path.join(outputDir, "unrelated.txt"), "keep me");
+    await fs.writeFile(unrelatedArchiveTemp, "keep me");
+    await fs.mkdir(path.join(tempRoot, "some-other-dir"));
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+    await fs.utimes(unrelatedArchiveTemp, new Date(twoHoursAgo), new Date(twoHoursAgo));
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    expect(await fs.readdir(outputDir)).toEqual(
+      expect.arrayContaining(["unrelated.txt", `other-backup.tar.gz.${uuid}.tmp`]),
+    );
+    expect(await fs.readdir(tempRoot)).toContain("some-other-dir");
   });
 });
