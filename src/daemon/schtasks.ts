@@ -923,11 +923,27 @@ async function restartStartupEntry(
   return { outcome: "completed" };
 }
 
+const CALLER_OWNED_SERVICE_IDENTITY_KEYS = [
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_WINDOWS_TASK_NAME",
+] as const;
+
 function resolveScheduledTaskRenderEnv(
   env: GatewayServiceEnv,
   environment: GatewayServiceEnv | undefined,
 ): GatewayServiceEnv {
-  return environment ? { ...env, ...environment } : env;
+  if (!environment) {
+    return env;
+  }
+  const merged = { ...env, ...environment };
+  for (const key of CALLER_OWNED_SERVICE_IDENTITY_KEYS) {
+    const value = env[key]?.trim();
+    if (value) {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
 
 async function writeScheduledTaskScript({

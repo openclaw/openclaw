@@ -75,13 +75,13 @@ describe("installScheduledTask", () => {
     });
   }
 
-  function expectInitialTaskQueries(): void {
+  function expectInitialTaskQueries(taskName = "OpenClaw Gateway"): void {
     expect(schtasksCalls[0]).toEqual(["/Query"]);
-    expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+    expect(schtasksCalls[1]).toEqual(["/Query", "/TN", taskName]);
   }
 
-  function expectTaskRunCall(index: number): void {
-    expect(schtasksCalls[index]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+  function expectTaskRunCall(index: number, taskName = "OpenClaw Gateway"): void {
+    expect(schtasksCalls[index]).toEqual(["/Run", "/TN", taskName]);
   }
 
   it("writes quoted set assignments and escapes metacharacters", async () => {
@@ -251,6 +251,7 @@ describe("installScheduledTask", () => {
         HOME: env.USERPROFILE,
         USERDOMAIN: "WORKSTATION",
         USERNAME: "alice",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Custom Gateway",
       };
       const gatewayEnv = buildServiceEnvironment({
         env: callerEnv,
@@ -260,6 +261,7 @@ describe("installScheduledTask", () => {
 
       expect(callerEnv.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
       expect(gatewayEnv.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
+      expect(gatewayEnv.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
 
       const { scriptPath } = await installScheduledTask({
         env: callerEnv,
@@ -274,7 +276,7 @@ describe("installScheduledTask", () => {
         "/Create",
         "/F",
         "/TN",
-        "OpenClaw Gateway",
+        "OpenClaw Custom Gateway",
         "/XML",
       ]);
       expect(schtasksCalls[2]?.slice(6)).toEqual(["/RU", "WORKSTATION\\alice", "/NP"]);
@@ -282,7 +284,7 @@ describe("installScheduledTask", () => {
       expect(captured?.xml).toContain("gateway.vbs</Command>");
       expect(launcher).toContain("WScript.Shell");
       expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
-      expectTaskRunCall(3);
+      expectTaskRunCall(3, "OpenClaw Custom Gateway");
     });
   });
 
