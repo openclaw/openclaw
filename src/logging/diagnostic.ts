@@ -698,7 +698,7 @@ export function logMessageQueued(params: {
     source: params.source,
     queueDepth: state.queueDepth,
   };
-  // clientContext rides the trusted privateData channel (onTrustedDiagnosticEvent),
+  // clientContext rides the trusted privateData channel (onTrustedInternalDiagnosticEvent),
   // never the public payload — keeps the event's public contract unchanged.
   if (state.clientContext) {
     emitInternalDiagnosticEventWithPrivateData(queuedEvent, {
@@ -929,7 +929,7 @@ export function logSessionStateChange(
     reason: params.reason,
     queueDepth: state.queueDepth,
   };
-  // clientContext rides the trusted privateData channel (onTrustedDiagnosticEvent),
+  // clientContext rides the trusted privateData channel (onTrustedInternalDiagnosticEvent),
   // never the public payload — keeps the event's public contract unchanged.
   if (state.clientContext) {
     emitInternalDiagnosticEventWithPrivateData(stateEvent, {
