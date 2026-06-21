@@ -52,6 +52,14 @@ type CapabilityContractKey =
 
 type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number] extends { provider: infer T } ? T : never;
+type CapabilityProviderEntryForKey<K extends CapabilityProviderRegistryKey> =
+  PluginRegistry[K][number];
+type ReadableCapabilityProviderEntry<K extends CapabilityProviderRegistryKey> = {
+  entry: CapabilityProviderEntryForKey<K>;
+  provider: CapabilityProviderForKey<K> & { id?: unknown; aliases?: unknown };
+  id?: string;
+  aliases: readonly unknown[];
+};
 type CapabilityProviderEntries = PluginRegistry[CapabilityProviderRegistryKey];
 type CapabilityPluginResolution = {
   runtimePluginIds: string[];
@@ -223,15 +231,61 @@ function findProviderById<K extends CapabilityProviderRegistryKey>(
   entries: PluginRegistry[K],
   providerId: string,
 ): CapabilityProviderForKey<K> | undefined {
-  const providerEntries = entries as unknown as Array<{
-    provider: CapabilityProviderForKey<K> & { id?: unknown };
-  }>;
-  for (const entry of providerEntries) {
-    if (entry.provider.id === providerId) {
-      return entry.provider;
+  for (const entry of entries) {
+    const readable = readCapabilityProviderEntry(entry);
+    if (readable?.id === providerId) {
+      return readable.provider;
     }
   }
   return undefined;
+}
+
+function readCapabilityProviderEntry<K extends CapabilityProviderRegistryKey>(
+  entry: CapabilityProviderEntryForKey<K>,
+): ReadableCapabilityProviderEntry<K> | null {
+  try {
+    const provider = (entry as { provider?: unknown }).provider;
+    if (!provider || typeof provider !== "object") {
+      return null;
+    }
+    const providerRecord = provider as CapabilityProviderForKey<K> & {
+      id?: unknown;
+      aliases?: unknown;
+    };
+    let id: unknown;
+    try {
+      id = providerRecord.id;
+    } catch {
+      return null;
+    }
+    let aliases: unknown;
+    try {
+      aliases = providerRecord.aliases;
+    } catch {
+      aliases = undefined;
+    }
+    return {
+      entry,
+      provider: providerRecord,
+      ...(typeof id === "string" ? { id } : {}),
+      aliases: Array.isArray(aliases) ? aliases : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function listReadableCapabilityProviders<K extends CapabilityProviderRegistryKey>(
+  entries: PluginRegistry[K],
+): CapabilityProviderForKey<K>[] {
+  const providers: CapabilityProviderForKey<K>[] = [];
+  for (const entry of entries) {
+    const readable = readCapabilityProviderEntry(entry);
+    if (readable) {
+      providers.push(readable.provider);
+    }
+  }
+  return providers;
 }
 
 function mergeCapabilityProviders<K extends CapabilityProviderRegistryKey>(
@@ -242,13 +296,16 @@ function mergeCapabilityProviders<K extends CapabilityProviderRegistryKey>(
   const unnamed: CapabilityProviderForKey<K>[] = [];
   const addEntries = (entries: PluginRegistry[K]) => {
     for (const entry of entries) {
-      const provider = entry.provider as CapabilityProviderForKey<K> & { id?: string };
-      if (!provider.id) {
-        unnamed.push(provider);
+      const readable = readCapabilityProviderEntry(entry);
+      if (!readable) {
         continue;
       }
-      if (!merged.has(provider.id)) {
-        merged.set(provider.id, provider);
+      if (!readable.id) {
+        unnamed.push(readable.provider);
+        continue;
+      }
+      if (!merged.has(readable.id)) {
+        merged.set(readable.id, readable.provider);
       }
     }
   };
@@ -266,13 +323,16 @@ function mergeCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>
   const unnamed: Array<PluginRegistry[K][number]> = [];
   const addEntries = (entries: PluginRegistry[K]) => {
     for (const entry of entries) {
-      const provider = entry.provider as { id?: string };
-      if (!provider.id) {
-        unnamed.push(entry);
+      const readable = readCapabilityProviderEntry(entry);
+      if (!readable) {
         continue;
       }
-      if (!merged.has(provider.id)) {
-        merged.set(provider.id, entry);
+      if (!readable.id) {
+        unnamed.push(readable.entry);
+        continue;
+      }
+      if (!merged.has(readable.id)) {
+        merged.set(readable.id, readable.entry);
       }
     }
   };
@@ -394,16 +454,17 @@ function shouldScopeCapabilityLoadToRequestedProviders(
 }
 
 function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
-  for (const entry of entries as Array<{ provider: { id?: unknown; aliases?: unknown } }>) {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string") {
-      requested.delete(provider.id.toLowerCase());
+  for (const entry of entries as PluginRegistry[CapabilityProviderRegistryKey]) {
+    const readable = readCapabilityProviderEntry(entry);
+    if (!readable) {
+      continue;
     }
-    if (Array.isArray(provider.aliases)) {
-      for (const alias of provider.aliases) {
-        if (typeof alias === "string") {
-          requested.delete(alias.toLowerCase());
-        }
+    if (readable.id) {
+      requested.delete(readable.id.toLowerCase());
+    }
+    for (const alias of readable.aliases) {
+      if (typeof alias === "string") {
+        requested.delete(alias.toLowerCase());
       }
     }
   }
@@ -426,16 +487,16 @@ function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderReg
     return [] as unknown as PluginRegistry[K];
   }
   return params.entries.filter((entry) => {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string" && params.requested.has(provider.id.toLowerCase())) {
+    const readable = readCapabilityProviderEntry(entry);
+    if (!readable) {
+      return false;
+    }
+    if (readable.id && params.requested.has(readable.id.toLowerCase())) {
       return true;
     }
-    if (Array.isArray(provider.aliases)) {
-      return provider.aliases.some(
-        (alias) => typeof alias === "string" && params.requested.has(alias.toLowerCase()),
-      );
-    }
-    return false;
+    return readable.aliases.some(
+      (alias) => typeof alias === "string" && params.requested.has(alias.toLowerCase()),
+    );
   }) as PluginRegistry[K];
 }
 
@@ -606,12 +667,12 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       : undefined;
   if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
     if (!missingRequestedProviders && !shouldMergeManifestProvidersWhenActive(params.key)) {
-      return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+      return listReadableCapabilityProviders(activeProviders);
     }
     if (missingRequestedProviders) {
       removeActiveProviderIds(missingRequestedProviders, activeProviders);
       if (missingRequestedProviders.size === 0) {
-        return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+        return listReadableCapabilityProviders(activeProviders);
       }
     }
   }

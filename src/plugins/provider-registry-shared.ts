@@ -20,13 +20,24 @@ export function buildCapabilityProviderMaps<T extends { id: string; aliases?: re
   const aliases = new Map<string, T>();
 
   for (const provider of providers) {
-    const id = normalizeId(provider.id);
+    let id: string | undefined;
+    let rawAliases: readonly string[] | undefined;
+    try {
+      id = normalizeId(provider.id);
+    } catch {
+      continue;
+    }
+    try {
+      rawAliases = provider.aliases;
+    } catch {
+      rawAliases = undefined;
+    }
     if (!id) {
       continue;
     }
     canonical.set(id, provider);
     aliases.set(id, provider);
-    for (const alias of provider.aliases ?? []) {
+    for (const alias of rawAliases ?? []) {
       const normalizedAlias = normalizeId(alias);
       if (normalizedAlias) {
         aliases.set(normalizedAlias, provider);

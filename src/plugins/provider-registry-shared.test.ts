@@ -19,4 +19,30 @@ describe("provider registry shared", () => {
     expect(aliases.get("ms")?.id).toBe("Microsoft");
     expect(aliases.get("openai")?.id).toBe("OpenAI");
   });
+
+  it("skips providers with unreadable ids", () => {
+    const broken = Object.defineProperty({ aliases: ["bad"] }, "id", {
+      get() {
+        throw new Error("provider id exploded");
+      },
+    });
+
+    const { canonical, aliases } = buildCapabilityProviderMaps([broken as never, { id: "OpenAI" }]);
+
+    expect([...canonical.keys()]).toEqual(["openai"]);
+    expect([...aliases.keys()]).toEqual(["openai"]);
+  });
+
+  it("keeps canonical providers when aliases are unreadable", () => {
+    const provider = Object.defineProperty({ id: "OpenAI" }, "aliases", {
+      get() {
+        throw new Error("provider aliases exploded");
+      },
+    });
+
+    const { canonical, aliases } = buildCapabilityProviderMaps([provider as never]);
+
+    expect([...canonical.keys()]).toEqual(["openai"]);
+    expect([...aliases.keys()]).toEqual(["openai"]);
+  });
 });
