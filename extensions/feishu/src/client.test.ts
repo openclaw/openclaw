@@ -143,13 +143,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type HttpInstanceLike = {
+  request: (options: Record<string, unknown>) => Promise<unknown>;
   get: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
   post: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
 };
 
 function requireHttpInstance(value: unknown): HttpInstanceLike {
-  if (isRecord(value) && typeof value.get === "function" && typeof value.post === "function") {
+  if (
+    isRecord(value) &&
+    typeof value.request === "function" &&
+    typeof value.get === "function" &&
+    typeof value.post === "function"
+  ) {
     return {
+      request: value.request as HttpInstanceLike["request"],
       get: value.get as HttpInstanceLike["get"],
       post: value.post as HttpInstanceLike["post"],
     };
@@ -332,6 +339,40 @@ describe("createFeishuClient HTTP timeout", () => {
 
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", {
       timeout: 5_000,
+    });
+  });
+
+  it("normalizes Feishu SDK multipart uploads to explicit FormData", async () => {
+    createFeishuClient({
+      appId: "app_upload",
+      appSecret: "secret_upload", // pragma: allowlist secret
+      accountId: "multipart-upload",
+    });
+
+    const httpInstance = readLastClientHttpInstance();
+
+    await httpInstance.request({
+      url: "https://open.feishu.cn/open-apis/im/v1/files",
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data", Authorization: "Bearer token" },
+      data: {
+        file_type: "stream",
+        file_name: "tiny.txt",
+        file: Buffer.from("tiny"),
+      },
+    });
+
+    const delegated = readCallOptions(mockBaseHttpInstance);
+    expect(delegated.timeout).toBe(FEISHU_HTTP_TIMEOUT_MS);
+    expect(delegated.headers).toEqual({
+      "Content-Type": "multipart/form-data",
+      Authorization: "Bearer token",
+    });
+    expect(delegated.data).toBeInstanceOf(FormData);
+    expect(delegated.data).not.toEqual({
+      file_type: "stream",
+      file_name: "tiny.txt",
+      file: Buffer.from("tiny"),
     });
   });
 
