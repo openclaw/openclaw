@@ -3,6 +3,7 @@ import { clampThinkingLevel, getSupportedThinkingLevels } from "./model-utils.js
 import type { Model } from "./types.js";
 
 type TestOpenAICompletionsModel = Model<"openai-completions">;
+type TestOpenAIResponsesModel = Model<"openai-responses">;
 
 const baseModel = {
   id: "codex-lb-2455/gpt-5.5",
@@ -21,6 +22,11 @@ const baseModel = {
   contextWindow: 128_000,
   maxTokens: 16_384,
 } satisfies TestOpenAICompletionsModel;
+
+const baseResponsesModel = {
+  ...baseModel,
+  api: "openai-responses",
+} satisfies TestOpenAIResponsesModel;
 
 function makeModel(
   thinkingLevelMap: Model["thinkingLevelMap"],
@@ -131,6 +137,43 @@ describe("model thinking levels", () => {
     ]);
     expect(clampThinkingLevel(model, "xhigh")).toBe("xhigh");
     expect(clampThinkingLevel(model, "max")).toBe("xhigh");
+  });
+
+  it("exposes xhigh for OpenAI Responses models when compat maps it to a provider-supported effort", () => {
+    const model = {
+      ...baseResponsesModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        reasoningEffortMap: {
+          xhigh: "high",
+        },
+      },
+    } satisfies TestOpenAIResponsesModel;
+
+    expect(getSupportedThinkingLevels(model)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(clampThinkingLevel(model, "xhigh")).toBe("xhigh");
+    expect(clampThinkingLevel(model, "max")).toBe("xhigh");
+  });
+
+  it("respects OpenAI Responses explicit compat reasoning effort disablement", () => {
+    const model = {
+      ...baseResponsesModel,
+      compat: {
+        supportsReasoningEffort: false,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+      },
+    } satisfies TestOpenAIResponsesModel;
+
+    expect(getSupportedThinkingLevels(model)).toEqual(["off", "minimal", "low", "medium", "high"]);
+    expect(clampThinkingLevel(model, "xhigh")).toBe("high");
   });
 
   it("keeps map-only compat aliases out of visible thinking levels", () => {

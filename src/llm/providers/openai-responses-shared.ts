@@ -28,6 +28,7 @@ import type {
   Context,
   ImageContent,
   Model,
+  OpenAIResponsesCompat,
   SimpleStreamOptions,
   StopReason,
   StreamOptions,
@@ -195,6 +196,31 @@ type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperatu
   reasoningEffort?: ResponsesReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
 };
+
+type ResponsesReasoningCompat = Pick<
+  OpenAIResponsesCompat,
+  "reasoningEffortMap" | "supportsReasoningEffort"
+>;
+
+function getResponsesReasoningCompat<TApi extends Api>(
+  model: Model<TApi>,
+): ResponsesReasoningCompat | undefined {
+  return model.api === "openai-responses"
+    ? (model.compat as ResponsesReasoningCompat | undefined)
+    : undefined;
+}
+
+function resolveResponsesApiReasoningEffort<TApi extends Api>(
+  model: Model<TApi>,
+  reasoningEffort: ResponsesReasoningEffort,
+): string {
+  const compat = getResponsesReasoningCompat(model);
+  return (
+    model.thinkingLevelMap?.[reasoningEffort] ??
+    compat?.reasoningEffortMap?.[reasoningEffort] ??
+    reasoningEffort
+  );
+}
 
 // =============================================================================
 // Message conversion
@@ -442,6 +468,10 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: SimpleStreamOptions["reasoning"] | undefined,
 ): ResponsesReasoningEffort | undefined {
+  const compat = getResponsesReasoningCompat(model);
+  if (compat?.supportsReasoningEffort === false) {
+    return undefined;
+  }
   const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;
   if (!clampedReasoning || clampedReasoning === "off") {
     return undefined;
@@ -475,9 +505,14 @@ export function applyCommonResponsesParams<TApi extends Api>(
     return;
   }
 
+  const reasoningCompat = getResponsesReasoningCompat(model);
+  if (reasoningCompat?.supportsReasoningEffort === false) {
+    return;
+  }
+
   if (options?.reasoningEffort || options?.reasoningSummary) {
     const effort = options?.reasoningEffort
-      ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
+      ? resolveResponsesApiReasoningEffort(model, options.reasoningEffort)
       : "medium";
     params.reasoning = {
       effort: effort as NonNullable<typeof params.reasoning>["effort"],

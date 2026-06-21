@@ -3,7 +3,14 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
 } from "@openclaw/llm-core";
-import type { Api, Model, ModelThinkingLevel, OpenAICompletionsCompat, Usage } from "./types.js";
+import type {
+  Api,
+  Model,
+  ModelThinkingLevel,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+  Usage,
+} from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
@@ -37,14 +44,15 @@ function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
 
 function getCompatReasoningEffortConfig<TApi extends Api>(
   model: Model<TApi>,
-): OpenAICompletionsCompat | undefined {
-  return model.api === "openai-completions"
-    ? (model.compat as OpenAICompletionsCompat | undefined)
-    : undefined;
+): OpenAICompletionsCompat | OpenAIResponsesCompat | undefined {
+  if (model.api === "openai-completions" || model.api === "openai-responses") {
+    return model.compat as OpenAICompletionsCompat | OpenAIResponsesCompat | undefined;
+  }
+  return undefined;
 }
 
 function getCompatSupportedReasoningEfforts(
-  compat: OpenAICompletionsCompat | undefined,
+  compat: OpenAICompletionsCompat | OpenAIResponsesCompat | undefined,
 ): Set<string> {
   if (!Array.isArray(compat?.supportedReasoningEfforts)) {
     return new Set();

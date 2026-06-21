@@ -237,6 +237,73 @@ describe("convertResponsesTools", () => {
   });
 });
 
+describe("OpenAI Responses reasoning params", () => {
+  it("maps compat reasoning efforts before sending request params", () => {
+    const params = {} as Parameters<typeof applyCommonResponsesParams>[0];
+    applyCommonResponsesParams(
+      params,
+      {
+        ...nativeOpenAIModel,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+          reasoningEffortMap: {
+            xhigh: "high",
+          },
+        },
+      },
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { reasoningEffort: "xhigh" },
+    );
+
+    expect(params.reasoning).toMatchObject({ effort: "high", summary: "auto" });
+    expect(params.include).toEqual(["reasoning.encrypted_content"]);
+  });
+
+  it("keeps thinkingLevelMap precedence over compat reasoning effort maps", () => {
+    const params = {} as Parameters<typeof applyCommonResponsesParams>[0];
+    applyCommonResponsesParams(
+      params,
+      {
+        ...nativeOpenAIModel,
+        thinkingLevelMap: {
+          xhigh: "provider-xhigh",
+        },
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["provider-xhigh", "high"],
+          reasoningEffortMap: {
+            xhigh: "high",
+          },
+        },
+      },
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { reasoningEffort: "xhigh" },
+    );
+
+    expect(params.reasoning).toMatchObject({ effort: "provider-xhigh", summary: "auto" });
+  });
+
+  it("omits reasoning params when compat disables Responses reasoning efforts", () => {
+    const params = {} as Parameters<typeof applyCommonResponsesParams>[0];
+    applyCommonResponsesParams(
+      params,
+      {
+        ...nativeOpenAIModel,
+        compat: {
+          supportsReasoningEffort: false,
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        },
+      },
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { reasoningEffort: "xhigh" },
+    );
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+});
+
 describe("convertResponsesMessages", () => {
   const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
 

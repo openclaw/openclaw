@@ -45,6 +45,9 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
   return {
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
     supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+    supportsReasoningEffort: model.compat?.supportsReasoningEffort ?? true,
+    supportedReasoningEfforts: model.compat?.supportedReasoningEfforts ?? [],
+    reasoningEffortMap: model.compat?.reasoningEffortMap ?? {},
   };
 }
 
