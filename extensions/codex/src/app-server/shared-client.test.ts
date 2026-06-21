@@ -1,6 +1,7 @@
 // Codex tests cover shared client plugin behavior.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
+import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { CodexAppServerClient, MIN_CODEX_APP_SERVER_VERSION } from "./client.js";
 import { codexAppServerStartOptionsKey } from "./config.js";
 import { createClientHarness } from "./test-support.js";
@@ -420,7 +421,7 @@ describe("shared Codex app-server client", () => {
           token: "first-token",
         },
       },
-    };
+    } satisfies AuthProfileStore;
     const secondAuthProfileStore = {
       version: 1,
       profiles: {
@@ -430,7 +431,7 @@ describe("shared Codex app-server client", () => {
           token: "second-token",
         },
       },
-    };
+    } satisfies AuthProfileStore;
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockReturnValue("openai:shared-scoped");
 
     const firstClientPromise = getSharedCodexAppServerClient({
