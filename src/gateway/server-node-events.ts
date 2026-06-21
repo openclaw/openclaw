@@ -593,8 +593,13 @@ export const handleNodeEvent = async (
         );
       }
 
+      // Thread the AUTHENTICATED hosting node through this run (run-scoped, not a
+      // session-global map) so the tool resolver applies gateway.tools.byNode for
+      // it. Restriction-only; the nodeId comes from the node's authenticated
+      // connection, so a client cannot forge it.
       dispatchNodeAgentCommand(ctx, nodeId, {
         runId: sessionId,
+        hostingNodeId: nodeId,
         message,
         images,
         imageOrder,

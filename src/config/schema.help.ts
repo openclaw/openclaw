@@ -98,6 +98,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool allowlist when you want a narrow set of tools available at runtime. Use this for locked-down environments where tool scope must be tightly controlled.",
   "gateway.tools.deny":
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
+  "gateway.tools.byNode":
+    "Per-node tool restriction keyed by the AUTHENTICATED node id that hosts a turn (a node-originated agent.request). RESTRICTION-ONLY: a node's allow/deny narrows the toolset for the turns that node drives and can never escalate it. The node id comes from the node's cryptographically-paired connection, so a client cannot forge it. An explicitly-present (even empty) allow is FAIL-CLOSED (empty allow => no tools); an absent allow means 'no allow restriction'. Discover a node's id from its bridge /whoami response or `openclaw nodes list`. Example: confine a node that hosts a browser to browser + memory tools.",
+  "gateway.tools.byNode.*":
+    "Allow/deny policy for one authenticated node id. `allow` = the only tools that node's turns may use (empty array = no tools, fail-closed); `deny` = tools removed from that node's turns. Restriction-only; never grants a tool the base policy denies.",
   "gateway.handshakeTimeoutMs":
     "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
   "gateway.channelHealthCheckMinutes":

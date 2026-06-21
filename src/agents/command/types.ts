@@ -84,6 +84,11 @@ export type AgentCommandOpts = {
   messageChannel?: string;
   /** Tool-policy/output surface context. Defaults to messageChannel. */
   messageProvider?: string;
+  /**
+   * Authenticated node hosting this run, for node-originated agent.request turns.
+   * Threaded run-scoped to gate the turn's tools via gateway.tools.byNode.
+   */
+  hostingNodeId?: string;
   /** Delivery channel. */
   channel?: string;
   /** Account ID for multi-account channel routing. */

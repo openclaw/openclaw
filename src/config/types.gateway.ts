@@ -459,6 +459,18 @@ export type GatewayToolsConfig = {
   deny?: string[];
   /** Tools to explicitly allow (removes from default deny list). */
   allow?: string[];
+  /**
+   * Per-node tool restrictions, keyed by the **authenticated** node id that hosts
+   * a turn. When an agent turn is driven through a node (a node-originated
+   * `agent.request`), the entry's `allow`/`deny` for that node are applied as a
+   * RESTRICTION on top of the existing policy — they can only reduce the available
+   * tools, never escalate. Because the node id comes from the node's authenticated
+   * (cryptographically paired) connection, a client cannot forge it, so this is a
+   * sound basis for *enforcing* a reduced toolset (e.g. confining a browser
+   * extension routed through a node to browser + memory tools). An explicitly
+   * present-but-empty `allow` means "no tools" (fail-closed).
+   */
+  byNode?: Record<string, { allow?: string[]; deny?: string[] }>;
 };
 
 export type GatewayConfig = {

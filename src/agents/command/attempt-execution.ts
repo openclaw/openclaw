@@ -751,6 +751,7 @@ export function runAgentAttempt(params: {
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
     trigger: "user",
+    hostingNodeId: params.opts.hostingNodeId,
     messageChannel: params.messageChannel,
     messageProvider: params.opts.messageProvider ?? params.messageChannel,
     agentAccountId: params.runContext.accountId,

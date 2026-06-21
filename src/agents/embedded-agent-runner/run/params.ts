@@ -44,6 +44,13 @@ export type CurrentInboundPromptContext = {
 export type RunEmbeddedAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /**
+   * Authenticated node hosting this run, set for node-originated agent.request
+   * turns. Carried run-scoped (not a session-global lookup) so the tool resolver
+   * gates this turn's tools via gateway.tools.byNode without bleeding the policy
+   * onto later or concurrent turns for the same session.
+   */
+  hostingNodeId?: string;
   /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */

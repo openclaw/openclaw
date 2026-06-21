@@ -14,6 +14,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveNodeScopedToolPolicy } from "../gateway/node-tool-policy.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
@@ -452,6 +453,11 @@ export function createOpenClawCodingTools(options?: {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /**
+   * Authenticated node hosting this run (node-originated agent.request turns).
+   * Run-scoped; gates this turn's tools via gateway.tools.byNode.
+   */
+  hostingNodeId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
@@ -933,7 +939,16 @@ export function createOpenClawCodingTools(options?: {
     subagentPolicy,
     inheritedToolPolicy,
   ]);
-  const inheritedToolDenylist = [...pluginToolDenylist];
+  // Per-node tool restriction (gateway.tools.byNode), keyed off the AUTHENTICATED
+  // node hosting this turn. A node-originated agent.request turn runs through this
+  // in-process builder (not resolveGatewayScopedTools), so the restriction must be
+  // enforced here too; the shared helper keeps both paths identical. Restriction-
+  // only: it can narrow the toolset, never escalate.
+  const { nodeAllow, nodeDeny } = resolveNodeScopedToolPolicy(
+    options?.hostingNodeId,
+    options?.config,
+  );
+  const inheritedToolDenylist = [...pluginToolDenylist, ...nodeDeny];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
@@ -952,7 +967,10 @@ export function createOpenClawCodingTools(options?: {
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
   ];
   const shouldInheritEffectiveToolAllowlist =
-    toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
+    toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy) ||
+    // A byNode allow list narrows the surface too, so spawned subagents must
+    // inherit the narrowed allowlist.
+    (nodeAllow !== undefined && nodeAllow.length > 0);
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
   const shouldCaptureCronCreatorToolAllowlist = toolPolicyInheritanceSources.some(
     (policy) => hasRestrictiveAllowPolicy(policy) || hasExplicitDenyPolicy(policy),
@@ -1191,13 +1209,27 @@ export function createOpenClawCodingTools(options?: {
       toolDenylist: pluginToolDenylist,
     }),
   });
+  // Apply the per-node restriction after the full policy pipeline and before the
+  // inherited-allowlist capture, so it can only narrow and spawned subagents
+  // inherit the narrowed surface. Mirrors resolveGatewayScopedTools: an explicit
+  // (even empty) nodeAllow is fail-CLOSED; an absent nodeAllow means no allow gate.
+  const nodeDenySet = nodeDeny.length > 0 ? new Set(nodeDeny) : undefined;
+  const nodeAllowSet = nodeAllow ? new Set(nodeAllow) : undefined;
+  const nodeScopedTools =
+    nodeDenySet || nodeAllowSet
+      ? subagentFiltered.filter(
+          (tool) =>
+            !(nodeDenySet?.has(tool.name) ?? false) &&
+            (nodeAllowSet ? nodeAllowSet.has(tool.name) : true),
+        )
+      : subagentFiltered;
   if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, nodeScopedTools);
   }
   if (shouldCaptureCronCreatorToolAllowlist) {
     replaceWithEffectiveCronCreatorToolAllowlist(
       cronCreatorToolAllowlist,
-      subagentFiltered,
+      nodeScopedTools,
       (tool) => getPluginToolMeta(tool),
     );
   }
@@ -1205,7 +1237,7 @@ export function createOpenClawCodingTools(options?: {
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
-  const normalized = subagentFiltered.map((tool) =>
+  const normalized = nodeScopedTools.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
