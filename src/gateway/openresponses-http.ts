@@ -1041,6 +1041,15 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
+      const text = evt.data?.text;
+      const replace = evt.data?.replace === true;
+      if (replace && typeof text === "string") {
+        accumulatedText = text;
+        if (!toolChoiceConstraint) {
+          sawAssistantDelta = true;
+        }
+      }
+
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
