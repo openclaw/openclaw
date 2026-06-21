@@ -40,10 +40,11 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
   val id = obj["id"].asStringOrNull()?.trim().orEmpty()
   if (id.isEmpty()) return null
   val request = obj["request"].asObjectOrNull()
+  val commandText = gatewayExecApprovalListCommandText(obj, request)
   return GatewayExecApprovalSummary(
     id = id,
-    commandText = gatewayExecApprovalListCommandText(obj),
-    commandPreview = gatewayExecApprovalListCommandPreview(obj),
+    commandText = commandText,
+    commandPreview = gatewayExecApprovalListCommandPreview(obj, request, commandText),
     allowedDecisions = emptyList(),
     host =
       request
@@ -96,21 +97,34 @@ internal fun parseGatewayExecApprovalDetail(
   )
 }
 
-private fun gatewayExecApprovalListCommandText(obj: JsonObject): String =
+private fun gatewayExecApprovalListCommandText(obj: JsonObject, request: JsonObject?): String =
   obj["commandText"]
     .asStringOrNull()
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
+    ?: request
+      ?.get("command")
+      .asStringOrNull()
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
     ?: "Command request"
 
-private fun gatewayExecApprovalListCommandPreview(obj: JsonObject): String? {
-  val text = gatewayExecApprovalListCommandText(obj)
+private fun gatewayExecApprovalListCommandPreview(
+  obj: JsonObject,
+  request: JsonObject?,
+  commandText: String,
+): String? {
   val preview =
     obj["commandPreview"]
       .asStringOrNull()
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
-  return preview?.takeIf { it != text }
+      ?: request
+        ?.get("commandPreview")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+  return preview?.takeIf { it != commandText }
 }
 
 private fun gatewayExecApprovalAllowedDecisions(request: JsonObject?): List<String> {

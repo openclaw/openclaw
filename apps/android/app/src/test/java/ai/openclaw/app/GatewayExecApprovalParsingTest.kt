@@ -18,14 +18,14 @@ class GatewayExecApprovalParsingTest {
         [
           {
             "id": "approval-2",
-            "commandText": "Sanitized command",
-            "commandPreview": "Sanitized preview",
             "createdAtMs": 20,
             "expiresAtMs": 120,
             "request": {
               "host": "node",
               "nodeId": "node-1",
               "agentId": "agent-1",
+              "command": "Sanitized command",
+              "commandPreview": "Sanitized preview",
               "systemRunPlan": {
                 "commandText": "/bin/sh -lc 'echo secret'",
                 "commandPreview": "echo secret"
@@ -40,6 +40,7 @@ class GatewayExecApprovalParsingTest {
             "request": {
               "host": "gateway",
               "command": "pnpm test --token secret",
+              "commandPreview": "pnpm test",
               "unavailableDecisions": ["allow-always"]
             }
           }
@@ -49,8 +50,8 @@ class GatewayExecApprovalParsingTest {
       )
 
     assertEquals(listOf("approval-1", "approval-2"), rows.map { it.id })
-    assertEquals("Command request", rows[0].commandText)
-    assertNull(rows[0].commandPreview)
+    assertEquals("pnpm test --token secret", rows[0].commandText)
+    assertEquals("pnpm test", rows[0].commandPreview)
     assertEquals(emptyList<String>(), rows[0].allowedDecisions)
     assertEquals("Sanitized command", rows[1].commandText)
     assertEquals("Sanitized preview", rows[1].commandPreview)
