@@ -313,6 +313,7 @@ export type SessionCreateParams = {
   parentSessionKey?: string;
   task?: string;
   message?: string;
+  adoptDashboard?: boolean;
 };
 
 /** Parameters for sending a message to an existing session. */

@@ -249,6 +249,7 @@ export const SessionsCreateParamsSchema = Type.Object(
     emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
+    adoptDashboard: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
