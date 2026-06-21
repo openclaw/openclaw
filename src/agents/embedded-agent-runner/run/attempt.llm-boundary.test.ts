@@ -762,4 +762,66 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
     expect(session.agent.transformContext).toBe(originalTransform);
   });
+
+  it("inbound system-event label appears only in runtime-context message, not the model-facing user turn", () => {
+    // Regression for #95323: before_prompt_build hooks (e.g. active-memory) set
+    // hasPromptBuildContext=true, which previously left the drained system-event prefix in
+    // modelPromptText even after it was extracted to runtimeContext. After the fix,
+    // resolveRuntimeContextPromptParts strips it, so the label reaches the model exactly once.
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+
+    // Message A: runtime-context custom message carries the extracted system event.
+    const runtimeContextMessage = {
+      role: "custom",
+      customType: "openclaw.runtime-context",
+      content: [
+        "OpenClaw runtime context for the immediately preceding user message.",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        systemEvent,
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+      display: false,
+      timestamp: 1,
+    };
+
+    // Message B: model-facing user turn after the fix — hook prependContext present,
+    // system-event prefix absent (resolveRuntimeContextPromptParts stripped it).
+    const modelFacingUserMessage = {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: [
+            'Conversation info (untrusted metadata):\n```json\n{"channel":"slack"}\n```',
+            'Sender (untrusted metadata):\n```json\n{"name":"Alice"}\n```',
+            "Active memory context from before_prompt_build hook",
+            "Hello, what can you do?",
+          ].join("\n\n"),
+        },
+      ],
+      timestamp: 2,
+    };
+
+    const messages = insertRuntimeContextMessageForPrompt({
+      message: runtimeContextMessage as Parameters<
+        typeof insertRuntimeContextMessageForPrompt
+      >[0]["message"],
+      messages: [modelFacingUserMessage] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    });
+    const normalized = normalizeMessagesForLlmBoundary(messages) as unknown as Array<
+      Record<string, unknown>
+    >;
+
+    const userTurn = normalized.find((m) => m.role === "user");
+    const contextMsg = normalized.find(
+      (m) => m.role === "custom" && m.customType === "openclaw.runtime-context",
+    );
+
+    // System event is present in Message A (runtime-context).
+    expect(contextMsg?.content).toContain(systemEvent);
+    // System event is absent from Message B (model-facing user turn).
+    expect(String(userTurn?.content)).not.toContain(systemEvent);
+  });
 });

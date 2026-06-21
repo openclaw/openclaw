@@ -99,6 +99,47 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("strips system-event prefix from modelPrompt when hooks add prepend context", () => {
+    // Regression: before_prompt_build hooks that add prependContext set hasPromptBuildContext=true,
+    // causing modelPrompt=effectivePrompt (with system-event prefix). Without this fix the event
+    // appeared in both runtimeContext (Message A) and modelPrompt (Message B). #95323
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello, what can you do?";
+    const prependContext = "Hook injected context";
+    const queuedBody = [systemEvent, "", userText].join("\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: queuedBody,
+        transcriptPrompt: userText,
+        modelPrompt: [prependContext, "", queuedBody].join("\n"),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [prependContext, "", userText].join("\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("strips system-event prefix from modelPrompt when hooks add append context", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const appendContext = "Hook tail context";
+    const queuedBody = [systemEvent, "", userText].join("\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: queuedBody,
+        transcriptPrompt: userText,
+        modelPrompt: [queuedBody, "", appendContext].join("\n"),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, "", appendContext].join("\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
   it("does not extract no-transcript delimiter text", () => {
     const effectivePrompt = [
       "visible ask",
