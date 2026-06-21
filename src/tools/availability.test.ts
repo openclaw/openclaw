@@ -255,4 +255,19 @@ describe("evaluateToolAvailability", () => {
       }).map((entry) => entry.reason),
     ).toEqual(["unsupported-signal"]);
   });
+
+  it("rejects self-referential availability without infinite recursion", () => {
+    // Plugin-authored availability can contain a cycle; it must be reported as
+    // unsupported rather than overflowing the stack during shape validation.
+    const cyclic: { allOf: unknown[] } = { allOf: [] };
+    cyclic.allOf.push(cyclic);
+    const descriptor = {
+      ...baseDescriptor,
+      availability: cyclic,
+    } as unknown as ToolDescriptor;
+
+    expect(evaluateToolAvailability({ descriptor }).map((entry) => entry.reason)).toEqual([
+      "unsupported-signal",
+    ]);
+  });
 });

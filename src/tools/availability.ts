@@ -88,10 +88,16 @@ function isValidSignalShape(obj: Record<string, unknown>): boolean {
   }
 }
 
-function hasAvailabilityExpressionShape(value: unknown): boolean {
+function hasAvailabilityExpressionShape(value: unknown, seen: WeakSet<object>): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
+  // Plugin-authored availability can be self-referential. A cycle is malformed,
+  // not a valid expression; treat it as such instead of recursing forever.
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
   const obj = value as Record<string, unknown>;
   if ("kind" in obj) {
     return isValidSignalShape(obj);
@@ -101,21 +107,21 @@ function hasAvailabilityExpressionShape(value: unknown): boolean {
     if (!Array.isArray(allOf)) {
       return false;
     }
-    return allOf.every((entry) => hasAvailabilityExpressionShape(entry));
+    return allOf.every((entry) => hasAvailabilityExpressionShape(entry, seen));
   }
   if ("anyOf" in obj) {
     const anyOf = obj.anyOf;
     if (!Array.isArray(anyOf)) {
       return false;
     }
-    return anyOf.every((entry) => hasAvailabilityExpressionShape(entry));
+    return anyOf.every((entry) => hasAvailabilityExpressionShape(entry, seen));
   }
   return false;
 }
 
 /** Narrow unknown values to planner availability expressions before descriptor capture. */
 export function isToolAvailabilityExpression(value: unknown): value is ToolAvailabilityExpression {
-  return hasAvailabilityExpressionShape(value);
+  return hasAvailabilityExpressionShape(value, new WeakSet());
 }
 
 function diagnostic(
@@ -242,7 +248,7 @@ export function evaluateToolAvailability(params: {
 }): readonly ToolAvailabilityDiagnostic[] {
   const context = params.context ?? {};
   const availability = params.descriptor.availability ?? { kind: "always" };
-  if (!hasAvailabilityExpressionShape(availability)) {
+  if (!hasAvailabilityExpressionShape(availability, new WeakSet())) {
     return [
       {
         reason: "unsupported-signal",
