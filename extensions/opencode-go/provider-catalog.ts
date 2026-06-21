@@ -28,7 +28,7 @@ type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
   api: NonNullable<ModelDefinitionConfig["api"]>;
   baseUrl: string;
-  input: Array<"text" | "image" | "video">;
+  input: Array<"text" | "image">;
 };
 
 const OPENCODE_GO_MODELS = (
@@ -186,7 +186,7 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
-      input: ["text", "image", "video"],
+      input: ["text", "image"],
       cost: {
         input: 0.95,
         output: 4,

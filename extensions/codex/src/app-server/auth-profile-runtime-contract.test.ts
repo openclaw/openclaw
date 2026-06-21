@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  abortAgentHarnessRun,
+  abortAndDrainAgentHarnessRun,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
@@ -65,6 +65,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
   web_search: "disabled",
 });
+const APP_SERVER_START_WAIT = { interval: 1, timeout: 5_000 } as const;
 
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
@@ -174,7 +175,7 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
     seenAgentDirs,
     async waitForMethod(method: string) {
       await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain(method), {
-        interval: 1,
+        ...APP_SERVER_START_WAIT,
       });
     },
     async completeTurn() {
@@ -200,7 +201,13 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    abortAgentHarnessRun(AUTH_PROFILE_RUNTIME_CONTRACT.sessionId);
+    await abortAndDrainAgentHarnessRun({
+      sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
+      sessionKey: AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
+      settleMs: 1_000,
+      forceClear: true,
+      reason: "test_cleanup",
+    });
     resetCodexAppServerClientFactoryForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -218,7 +225,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         expect(harness.seenAuthProfileIds).toEqual([
           AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
         ]),
-      { interval: 1 },
+      APP_SERVER_START_WAIT,
     );
     expect(harness.seenAgentDirs).toEqual([tmpDir]);
     await harness.waitForMethod("turn/start");
@@ -244,7 +251,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         expect(harness.seenAuthProfileIds).toEqual([
           AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
         ]),
-      { interval: 1 },
+      APP_SERVER_START_WAIT,
     );
     await harness.waitForMethod("turn/start");
     await harness.completeTurn();
@@ -269,7 +276,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         expect(harness.seenAuthProfileIds).toEqual([
           AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
         ]),
-      { interval: 1 },
+      APP_SERVER_START_WAIT,
     );
     await harness.waitForMethod("turn/start");
     await harness.completeTurn();
