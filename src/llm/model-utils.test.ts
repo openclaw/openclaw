@@ -109,6 +109,30 @@ describe("model thinking levels", () => {
     expect(clampThinkingLevel(model, "max")).toBe("xhigh");
   });
 
+  it("exposes xhigh when compat maps it to a provider-supported effort", () => {
+    const model = {
+      ...baseModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        reasoningEffortMap: {
+          xhigh: "high",
+        },
+      },
+    } satisfies TestOpenAICompletionsModel;
+
+    expect(getSupportedThinkingLevels(model)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(clampThinkingLevel(model, "xhigh")).toBe("xhigh");
+    expect(clampThinkingLevel(model, "max")).toBe("xhigh");
+  });
+
   it("keeps map-only compat aliases out of visible thinking levels", () => {
     const model = {
       ...baseModel,
