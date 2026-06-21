@@ -346,6 +346,37 @@ describe("zai provider plugin", () => {
     expect(capturedPayload?.thinking).toEqual({ type: "disabled" });
   });
 
+  it("keeps minimal thinking enabled for binary GLM models", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "zai",
+      modelId: "glm-5.1",
+      extraParams: {},
+      thinkingLevel: "minimal",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "zai",
+        id: "glm-5.1",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedPayload).not.toHaveProperty("thinking");
+  });
+
   it("maps GLM-5.2 thinking levels to Z.AI reasoning effort", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const baseStreamFn: StreamFn = (model, _context, options) => {

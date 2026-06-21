@@ -125,7 +125,7 @@ function shouldPreserveZaiThinking(extraParams?: Record<string, unknown>): boole
 }
 
 function isDisabledThinkingLevel(thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"]) {
-  return thinkingLevel === "off" || thinkingLevel === "minimal";
+  return thinkingLevel === "off";
 }
 
 function isGlm52ModelId(modelId?: string | null): boolean {
