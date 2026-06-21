@@ -20,11 +20,7 @@ if (!Number.isFinite(maxBodyBytes) || maxBodyBytes <= 0) {
 }
 
 async function cancelReader(reader) {
-  try {
-    await reader.cancel();
-  } catch {
-    return;
-  }
+  await reader.cancel().catch(() => undefined);
 }
 
 async function readResponseChunk(reader, timeoutPromise, markCanceled) {
