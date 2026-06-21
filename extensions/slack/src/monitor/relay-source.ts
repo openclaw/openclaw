@@ -8,7 +8,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import WebSocket, { type RawData } from "ws";
+import WebSocket, { type ClientOptions, type RawData } from "ws";
 import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackMessageHandler } from "./message-handler.js";
@@ -33,6 +33,7 @@ type RelayConnectionState = {
 };
 
 const SLACK_RELAY_ROUTE_KINDS = new Set(["user_group", "thread_affinity", "channel_default"]);
+export const SLACK_RELAY_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 export type SlackRelayRoute = {
   kind: "user_group" | "thread_affinity" | "channel_default";
@@ -104,12 +105,7 @@ function openRelayWebSocket(
   }
   return new Promise((resolve, reject) => {
     const url = buildRelayWebSocketUrl(config);
-    const ws = new WebSocket(url, {
-      headers: {
-        Authorization: `Bearer ${config.authToken}`,
-      },
-      handshakeTimeout: 30_000,
-    });
+    const ws = new WebSocket(url, buildRelayWebSocketOptions(config.authToken));
     const bufferedMessages: RawData[] = [];
     const onEarlyMessage = (data: RawData) => bufferedMessages.push(data);
     const detachBuffer = () => ws.off("message", onEarlyMessage);
@@ -247,9 +243,21 @@ async function handleRelayFrame(params: {
   await params.handleSlackMessage(event.message, {
     source: "message",
     wasMentioned: true,
+    awaitDispatch: true,
     ...(params.relayState.identity ? { relayIdentity: params.relayState.identity } : {}),
   });
   sendRelayAck(params.ws, event.deliveryId);
+}
+
+export function buildRelayWebSocketOptions(authToken: string): ClientOptions {
+  return {
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+    },
+    handshakeTimeout: 30_000,
+    maxPayload: SLACK_RELAY_MAX_PAYLOAD_BYTES,
+    perMessageDeflate: false,
+  };
 }
 
 export function buildRelayWebSocketUrl(config: SlackRelaySourceConfig): string {

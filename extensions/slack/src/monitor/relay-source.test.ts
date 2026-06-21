@@ -3,8 +3,10 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
+  buildRelayWebSocketOptions,
   buildRelayWebSocketUrl,
   monitorSlackRelaySource,
+  SLACK_RELAY_MAX_PAYLOAD_BYTES,
   type SlackRelayIdentity,
 } from "./relay-source.js";
 
@@ -42,6 +44,12 @@ describe("Slack relay source", () => {
         gatewayId: "pash",
       }),
     ).toThrow("must include its websocket path");
+
+    expect(buildRelayWebSocketOptions("secret")).toMatchObject({
+      headers: { Authorization: "Bearer secret" },
+      maxPayload: SLACK_RELAY_MAX_PAYLOAD_BYTES,
+      perMessageDeflate: false,
+    });
   });
 
   it("applies hello identity, dispatches a routed event, and acknowledges its delivery", async () => {
@@ -51,6 +59,8 @@ describe("Slack relay source", () => {
     });
     const port = (server.address() as AddressInfo).port;
     const ack = deferred<Record<string, unknown>>();
+    const dispatchStarted = deferred<void>();
+    const dispatchDone = deferred<void>();
     const receivedAcks: Array<Record<string, unknown>> = [];
     const requestHeaders = deferred<{ authorization?: string; url?: string }>();
     server.once("connection", (socket, request) => {
@@ -120,6 +130,8 @@ describe("Slack relay source", () => {
       if (event.text === "fail-handler") {
         throw new Error("handler failed");
       }
+      dispatchStarted.resolve();
+      await dispatchDone.promise;
     });
     const runtimeError = vi.fn();
     const identities: Array<SlackRelayIdentity | undefined> = [];
@@ -141,6 +153,9 @@ describe("Slack relay source", () => {
       authorization: "Bearer relay-secret",
       url: "/gateway/ws?gateway_id=pash",
     });
+    await dispatchStarted.promise;
+    expect(receivedAcks).toEqual([]);
+    dispatchDone.resolve();
     await expect(ack.promise).resolves.toEqual({
       type: "ack",
       delivery_id: "delivery-1",
@@ -152,6 +167,7 @@ describe("Slack relay source", () => {
       {
         source: "message",
         wasMentioned: true,
+        awaitDispatch: true,
         relayIdentity: {
           username: "Nik Team Claw",
           iconUrl: "https://example.com/nik.png",
