@@ -1377,7 +1377,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
-      healthCheckIds: ["core/doctor/workspace-status"],
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({

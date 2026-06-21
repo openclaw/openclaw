@@ -97,9 +97,13 @@ export function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = (name) => {
+    const readValue = (name, readOptions = {}) => {
       const value = argv[(index += 1)];
-      if (value === undefined) {
+      if (
+        value === undefined ||
+        (!readOptions.allowEmpty && value === "") ||
+        value.startsWith("-")
+      ) {
         throw new Error(`${name} requires a value`);
       }
       return value;
@@ -115,17 +119,17 @@ export function parseArgs(argv) {
     } else if (arg === "--output-name") {
       options.outputName = readValue(arg);
     } else if (arg === "--package-sha256") {
-      options.packageSha256 = readValue(arg).toLowerCase();
+      options.packageSha256 = readValue(arg, { allowEmpty: true }).toLowerCase();
     } else if (arg === "--package-ref") {
-      options.packageRef = readValue(arg);
+      options.packageRef = readValue(arg, { allowEmpty: true });
     } else if (arg === "--package-spec") {
-      options.packageSpec = readValue(arg);
+      options.packageSpec = readValue(arg, { allowEmpty: true });
     } else if (arg === "--package-url") {
-      options.packageUrl = readValue(arg);
+      options.packageUrl = readValue(arg, { allowEmpty: true });
     } else if (arg === "--source") {
       options.source = readValue(arg);
     } else if (arg === "--trusted-source-id") {
-      options.trustedSourceId = readValue(arg);
+      options.trustedSourceId = readValue(arg, { allowEmpty: true });
     } else if (arg === "--trusted-source-policy") {
       options.trustedSourcePolicy = readValue(arg);
     } else if (arg === "--help" || arg === "-h") {

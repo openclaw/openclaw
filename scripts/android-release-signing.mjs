@@ -83,7 +83,7 @@ function parseArgs(argv) {
 
 function readOptionValue(argv, index, option) {
   const value = argv[index + 1] ?? "";
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`Missing value for ${option}.`);
   }
   return value;
