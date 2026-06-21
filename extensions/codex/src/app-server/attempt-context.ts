@@ -516,12 +516,14 @@ function readNonEmptyString(value: unknown): string | undefined {
  */
 export function buildCodexOpenClawPromptContext(params: {
   params: EmbeddedRunAttemptParams;
+  continuityRestoreContext?: string;
   workspacePromptContext?: string;
 }): string | undefined {
   if (!shouldInjectCodexOpenClawPromptContext(params.params)) {
     return undefined;
   }
   const sections = [
+    params.continuityRestoreContext?.trim(),
     params.workspacePromptContext?.trim()
       ? ["## OpenClaw Workspace Context", "", params.workspacePromptContext.trim()].join("\n")
       : undefined,

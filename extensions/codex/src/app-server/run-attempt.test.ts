@@ -3226,6 +3226,23 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStartParams.input?.[0]?.text).toBe(exactPrompt);
   });
 
+  it("prepends cron interleave restore context before workspace prompt context", () => {
+    const params = createParams(path.join(tempDir, "session.jsonl"), tempDir);
+    params.messageProvider = "bluebubbles";
+
+    const context = buildCodexOpenClawPromptContext({
+      params,
+      continuityRestoreContext: "## Cron Interleave Continuity Guard\n\nRestore first.",
+      workspacePromptContext: "Workspace second.",
+    });
+
+    expect(context).toContain("## Cron Interleave Continuity Guard");
+    expect(context).toContain("## OpenClaw Workspace Context");
+    expect(context?.indexOf("## Cron Interleave Continuity Guard")).toBeLessThan(
+      context?.indexOf("## OpenClaw Workspace Context") ?? -1,
+    );
+  });
+
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
     const onToolResult = vi.fn();
     const sessionFile = path.join(tempDir, "session.jsonl");

@@ -30,6 +30,7 @@ import {
   setActiveEmbeddedRun,
   supportsModelTools,
   runAgentCleanupStep,
+  type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type NativeHookRelayEvent,
@@ -388,6 +389,197 @@ async function runCodexAgentEndHook(
     return;
   }
   runAgentEndSideEffects(sideEffectParams);
+}
+
+async function buildCronInterleaveContinuityRestoreContext(params: {
+  params: EmbeddedRunAttemptParams;
+  historyMessages: AgentMessage[];
+  effectiveWorkspace: string;
+}): Promise<string | undefined> {
+  if (params.params.bootstrapContextRunKind === "cron") {
+    return undefined;
+  }
+  if (params.params.messageProvider?.trim().toLowerCase() !== "bluebubbles") {
+    return undefined;
+  }
+
+  const latestUserIndex = findLastHistoryIndex(
+    params.historyMessages,
+    (message) => message?.role === "user",
+  );
+  const latestCronIndex = findLastHistoryIndex(
+    params.historyMessages,
+    isCronDirectDeliveryMirrorMessage,
+  );
+  if (latestCronIndex === -1 || latestCronIndex < latestUserIndex) {
+    return undefined;
+  }
+
+  const cronMessages = params.historyMessages
+    .slice(latestCronIndex)
+    .filter(isCronDirectDeliveryMirrorMessage)
+    .slice(-3);
+  const restoreSections = (
+    await Promise.all([
+      readRestoreFileSection(
+        "SAVEPOINTS.md",
+        resolveUserPath("~/.openclaw/workspace/SAVEPOINTS.md"),
+        12_000,
+      ),
+      readLatestRestoreFileSection(
+        "OpenClaw daily memory",
+        resolveUserPath("~/.openclaw/workspace/memory"),
+        8_000,
+      ),
+      readLatestRestoreFileSection(
+        "Project daily memory",
+        path.join(params.effectiveWorkspace, "memory"),
+        8_000,
+      ),
+      readRestoreFileSection(
+        "Project MEMORY.md",
+        path.join(params.effectiveWorkspace, "MEMORY.md"),
+        8_000,
+      ),
+    ])
+  ).filter((section): section is string => Boolean(section?.trim()));
+
+  return [
+    "## Cron Interleave Continuity Guard",
+    "",
+    "A BlueBubbles cron delivery was mirrored into this direct chat after the last human turn. Treat it as an external notification from a separate yes/no cron process, not as conversational continuity or the assistant's current reasoning state.",
+    "",
+    "Before answering, exit cron-mode: use the restored continuity below plus the non-cron conversation context. Do not infer ongoing plans, agreements, or memory from the cron notification alone.",
+    "",
+    "Recent interleaved cron delivery:",
+    "",
+    ...cronMessages.map(
+      (message) =>
+        `- ${truncateRestoreText(extractPlainMessageText(message).replace(/\s+/g, " ").trim(), 1_200)}`,
+    ),
+    "",
+    ...restoreSections,
+  ]
+    .join("\n")
+    .trim();
+}
+
+function findLastHistoryIndex(
+  messages: AgentMessage[],
+  predicate: (message: AgentMessage, index: number) => boolean,
+): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (predicate(messages[i], i)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function isCronDirectDeliveryMirrorMessage(message: AgentMessage): boolean {
+  const record = message as unknown as Record<string, unknown>;
+  return (
+    typeof record.idempotencyKey === "string" &&
+    record.idempotencyKey.startsWith("cron-direct-delivery:")
+  );
+}
+
+async function readRestoreFileSection(
+  label: string,
+  filePath: string,
+  maxChars: number,
+): Promise<string | undefined> {
+  try {
+    if (!(await pathExists(filePath))) {
+      return undefined;
+    }
+    const content = await fs.readFile(filePath, "utf8");
+    const trimmed = content.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    return [`### ${label}`, "", truncateRestoreText(trimmed, maxChars)].join("\n");
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLatestRestoreFileSection(
+  label: string,
+  dirPath: string,
+  maxChars: number,
+): Promise<string | undefined> {
+  try {
+    if (!(await pathExists(dirPath))) {
+      return undefined;
+    }
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    const candidates: Array<{ filePath: string; mtimeMs: number }> = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) {
+        continue;
+      }
+      const filePath = path.join(dirPath, entry.name);
+      try {
+        const stat = await fs.stat(filePath);
+        candidates.push({ filePath, mtimeMs: stat.mtimeMs });
+      } catch {
+        // Ignore unreadable memory candidates; this is best-effort restore context.
+      }
+    }
+    const latest = candidates.toSorted((left, right) => right.mtimeMs - left.mtimeMs)[0];
+    if (!latest) {
+      return undefined;
+    }
+    return readRestoreFileSection(
+      `${label}: ${path.basename(latest.filePath)}`,
+      latest.filePath,
+      maxChars,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function truncateRestoreText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxChars - 80)).trimEnd()}\n\n[older restore context truncated]`;
+}
+
+function extractPlainMessageText(message: AgentMessage): string {
+  const record = message as unknown as Record<string, unknown>;
+  if (typeof record.content === "string") {
+    return record.content;
+  }
+  if (!Array.isArray(record.content)) {
+    return "";
+  }
+  return record.content
+    .flatMap((part) => {
+      if (!part || typeof part !== "object") {
+        return [];
+      }
+      const partRecord = part as Record<string, unknown>;
+      if (typeof partRecord.text === "string") {
+        return [partRecord.text];
+      }
+      if (typeof partRecord.content === "string") {
+        return [partRecord.content];
+      }
+      const args = partRecord.arguments;
+      if (
+        args &&
+        typeof args === "object" &&
+        "message" in args &&
+        typeof (args as Record<string, unknown>).message === "string"
+      ) {
+        return [(args as Record<string, unknown>).message as string];
+      }
+      return [];
+    })
+    .join("\n");
 }
 
 export async function runCodexAppServerAttempt(
@@ -888,6 +1080,11 @@ export async function runCodexAppServerAttempt(
     sessionAgentId,
     memoryToolNames,
   });
+  const continuityRestoreContext = await buildCronInterleaveContinuityRestoreContext({
+    params,
+    historyMessages,
+    effectiveWorkspace,
+  });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(params, {
       dynamicTools: toolBridge.availableSpecs,
@@ -896,6 +1093,7 @@ export async function runCodexAppServerAttempt(
   );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
+    continuityRestoreContext,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
   });
   const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
