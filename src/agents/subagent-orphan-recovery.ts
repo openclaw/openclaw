@@ -256,8 +256,11 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         // Age out stale runs so long-downtime orphans are retired instead
         // of being resurrected past the staleness window.
+        // Increment `failed` (not `skipped`) so scheduleOrphanRecovery retries
+        // when finalization yields zero-update or throws; otherwise a stale
+        // active run can be left without retry-visible accounting.
         if (isStaleUnendedSubagentRun(runRecord, now)) {
-          result.skipped++;
+          result.failed++;
           result.failedRuns.push({
             runId,
             childSessionKey,
