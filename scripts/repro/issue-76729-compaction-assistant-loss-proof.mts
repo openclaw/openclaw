@@ -73,7 +73,7 @@ console.log("=== VERIFICATION ===");
 console.log("Role sequence:", JSON.stringify(roles));
 console.log("compactionSummary → assistant (no gap):", roles[0] === "compactionSummary" && roles[1] === "assistant");
 console.log("BEFORE fix shows:      [compactionSummary, user, assistant, ...]  ← missing assistant");
-console.log("AFTER  fix shows:     ", JSON.stringify(roles));
+console.log("AFTER  fix shows:", JSON.stringify(roles));
 console.log();
 
 // Cleanup
