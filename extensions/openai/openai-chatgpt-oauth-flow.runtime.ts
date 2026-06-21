@@ -176,6 +176,8 @@ async function postTokenForm(
     timeoutMs,
     signal: options.signal,
     auditContext: "openai-chatgpt-oauth-token",
+    proxy: "env",
+    dangerouslyAllowEnvProxyWithoutPinnedDns: true,
   });
   try {
     const responseBody = await response.arrayBuffer();
