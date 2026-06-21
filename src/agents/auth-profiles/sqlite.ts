@@ -170,6 +170,9 @@ function readAuthProfileStoreCellOutcomeReadOnly(pathname: string): AuthProfileS
     return { kind: "unreadable", error };
   }
   try {
+    // Keep parity with the plain read-only auth helper so transient writer locks
+    // do not turn a readable store into an uncacheable auth fingerprint.
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const kysely = getAuthProfileKysely(db);
     const row = executeSqliteQueryTakeFirstSync(
       db,
