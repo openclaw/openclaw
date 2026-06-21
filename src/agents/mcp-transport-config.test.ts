@@ -1,13 +1,17 @@
 // Verifies MCP transport config normalization and startup-safety filtering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logWarn } from "../logger.js";
-import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
+import {
+  resetDroppedMcpEnvWarningsForTests,
+  resolveMcpTransportConfig,
+} from "./mcp-transport-config.js";
 
 vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
 
 describe("resolveMcpTransportConfig", () => {
   beforeEach(() => {
     vi.mocked(logWarn).mockClear();
+    resetDroppedMcpEnvWarningsForTests();
   });
 
   it("resolves stdio config with connection timeout", () => {
@@ -124,6 +128,32 @@ describe("resolveMcpTransportConfig", () => {
       requestTimeoutMs: 60_000,
       supportsParallelToolCalls: false,
     });
+  });
+
+  it("warns once per server and env key across repeated resolutions", () => {
+    // Transport resolution runs on every status, probe, and spawn; a saved
+    // blocked key must not flood the gateway journal with repeated warnings.
+    const server = {
+      command: "node",
+      env: {
+        SAFE_VALUE: "ok",
+        NODE_OPTIONS: "--require=./evil.js",
+      },
+    };
+    const warning =
+      'bundle-mcp: server "probe": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.';
+
+    resolveMcpTransportConfig("probe", server);
+    resolveMcpTransportConfig("probe", server);
+    resolveMcpTransportConfig("probe", server);
+
+    expect(vi.mocked(logWarn).mock.calls.filter((call) => call[0] === warning)).toHaveLength(1);
+
+    resolveMcpTransportConfig("other", server);
+
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: server "other": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
+    );
   });
 
   it("sanitizes config-controlled names in stdio env warnings", () => {
