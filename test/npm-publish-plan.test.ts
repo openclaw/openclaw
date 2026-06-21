@@ -1,11 +1,52 @@
 // npm publish plan tests validate package publish planning rules.
 import { describe, expect, it } from "vitest";
 import {
+  compareReleaseVersions,
   collectReleaseVersionFloorErrors,
+  parseReleaseVersion,
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   shouldRequireNpmDistTagMirrorAuth,
 } from "../scripts/lib/npm-publish-plan.mjs";
+
+describe("release version compatibility", () => {
+  it.each([
+    ["2026.7.1-alpha.2", "alpha"],
+    ["2026.7.1-beta.2", "beta"],
+    ["2026.7.32", "daily"],
+    ["2026.7.33", "stable-base"],
+    ["2026.7.34", "stable-patch"],
+    ["2026.7.34-2", "historical-correction"],
+  ] as const)("adds releaseClass to %s as %s without changing channel", (version, releaseClass) => {
+    expect(parseReleaseVersion(version)).toMatchObject({
+      version,
+      channel: releaseClass === "alpha" ? "alpha" : releaseClass === "beta" ? "beta" : "stable",
+      releaseClass,
+    });
+  });
+
+  it("keeps numeric cross-month ordering", () => {
+    expect(compareReleaseVersions("2026.6.34", "2026.7.1")).toBe(-1);
+  });
+
+  it("keeps legacy publish plans unchanged across the daily/stable boundary", () => {
+    expect(resolveNpmPublishPlan("2026.7.32")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: ["beta"],
+    });
+    expect(resolveNpmPublishPlan("2026.7.33")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: ["beta"],
+    });
+    expect(resolveNpmPublishPlan("2026.7.34")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: ["beta"],
+    });
+  });
+});
 
 describe("collectReleaseVersionFloorErrors", () => {
   it("blocks June 2026 stable and beta release trains below the published beta floor", () => {

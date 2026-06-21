@@ -13,6 +13,7 @@ export const JUNE_2026_PATCH_FLOOR = 5;
  * @property {string} version
  * @property {string} baseVersion
  * @property {"stable" | "alpha" | "beta"} channel
+ * @property {"alpha" | "beta" | "daily" | "stable-base" | "stable-patch" | "historical-correction"} releaseClass
  * @property {number} year
  * @property {number} month
  * @property {number} patch
@@ -37,6 +38,17 @@ export const JUNE_2026_PATCH_FLOOR = 5;
 /**
  * @typedef {"--dry-run" | "--publish"} NpmPublishMode
  */
+
+/**
+ * @param {number} patch
+ * @returns {"daily" | "stable-base" | "stable-patch"}
+ */
+function classifyFinalPatch(patch) {
+  if (patch < 33) {
+    return "daily";
+  }
+  return patch === 33 ? "stable-base" : "stable-patch";
+}
 
 /**
  * @param {string} version
@@ -72,6 +84,8 @@ function parseVersionParts(version, groups, channel) {
     version,
     baseVersion: `${year}.${month}.${patch}`,
     channel,
+    releaseClass:
+      channel === "alpha" ? "alpha" : channel === "beta" ? "beta" : classifyFinalPatch(patch),
     year,
     month,
     patch,
@@ -129,6 +143,7 @@ export function parseReleaseVersion(version) {
     return {
       ...parsedCorrection,
       correctionNumber,
+      releaseClass: "historical-correction",
     };
   }
 

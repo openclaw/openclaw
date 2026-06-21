@@ -36,6 +36,13 @@ export type ParsedReleaseVersion = {
   version: string;
   baseVersion: string;
   channel: "stable" | "alpha" | "beta";
+  releaseClass:
+    | "alpha"
+    | "beta"
+    | "daily"
+    | "stable-base"
+    | "stable-patch"
+    | "historical-correction";
   year: number;
   month: number;
   patch: number;
