@@ -25,7 +25,6 @@ import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
-  correctHallucinatedFileExtension,
   correctHallucinatedFileExtensionFromKeys,
   getToolParamsRecord,
   rejectHallucinatedFileExtensionFromKeys,
@@ -776,7 +775,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
-        const filePath = correctHallucinatedFileExtension(stripMalformedXmlArgValueSuffix(rawFilePath));
+        const filePath = stripMalformedXmlArgValueSuffix(rawFilePath);
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }
