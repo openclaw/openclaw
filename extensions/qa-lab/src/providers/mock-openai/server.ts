@@ -1351,7 +1351,10 @@ function buildAssistantText(
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
   if (/qa private final reply warning check/i.test(prompt)) {
-    return "QA-STRANDED-85714 is present in this private final reply and I am not calling the message tool. This second sentence makes the omitted delivery substantive enough for the warning check.";
+    return [
+      "QA-STRANDED-85714 confirms this is a substantive private final reply that intentionally stays outside the message tool path for the warning check.",
+      "The response is long enough to exercise message_tool_only private-final detection while remaining private to the agent transcript.",
+    ].join(" ");
   }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
