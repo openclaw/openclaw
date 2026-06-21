@@ -624,7 +624,7 @@ async function resolveOpenClawCommand(runner, args, env, options = {}) {
   };
 }
 
-function parseJsonOutput(stdout) {
+export function parseJsonOutput(stdout) {
   const trimmed = stdout.trim();
   if (!trimmed) {
     throw new Error("command produced no JSON output");
@@ -757,6 +757,9 @@ function extractBalancedJsonObjects(text) {
     if (text[index] !== "{") {
       continue;
     }
+    if (!isJsonObjectRecordStart(text, index)) {
+      continue;
+    }
     const end = findBalancedJsonObjectEnd(text, index);
     if (end > index) {
       candidates.push(text.slice(index, end + 1));
@@ -764,6 +767,17 @@ function extractBalancedJsonObjects(text) {
     }
   }
   return candidates;
+}
+
+function isJsonObjectRecordStart(text, index) {
+  if (index === 0) {
+    return true;
+  }
+  let cursor = index - 1;
+  while (cursor >= 0 && (text[cursor] === " " || text[cursor] === "\t")) {
+    cursor -= 1;
+  }
+  return cursor < 0 || text[cursor] === "\n" || text[cursor] === "\r";
 }
 
 function findBalancedJsonObjectEnd(text, startIndex) {

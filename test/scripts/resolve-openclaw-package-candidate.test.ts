@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
+  assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
   cleanPackedOpenClawTarballsForTest,
   downloadUrl,
@@ -669,6 +670,56 @@ describe("resolve-openclaw-package-candidate", () => {
     ).rejects.toThrow("is not allowed by trusted package source enterprise-artifactory");
   });
 
+  it("does not forward trusted package auth headers to redirect hosts", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    const previousToken = process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN;
+    process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN = "token-123";
+    const trustedSource = {
+      allowPrivateNetwork: true,
+      auth: { type: "bearer" },
+      hosts: ["packages.internal"],
+      id: "enterprise-artifactory",
+      pathPrefixes: ["/artifactory/openclaw/"],
+      ports: [8443],
+      redirectHosts: ["packages.internal", "mirror.internal"],
+    };
+    const requestHeaders: Array<Record<string, string> | undefined> = [];
+
+    try {
+      await downloadUrl("https://packages.internal:8443/artifactory/openclaw/openclaw.tgz", target, {
+        fetchImpl: async (_url: URL, init?: RequestInit) => {
+          requestHeaders.push(init?.headers as Record<string, string> | undefined);
+          if (requestHeaders.length === 1) {
+            return new Response(null, {
+              headers: {
+                location: "https://mirror.internal:8443/artifactory/openclaw/openclaw.tgz",
+              },
+              status: 302,
+            });
+          }
+          return new Response(new Uint8Array([4, 5, 6]), {
+            headers: { "content-length": "3" },
+            status: 200,
+          });
+        },
+        lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+        maxBytes: 3,
+        trustedSource,
+      });
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN;
+      } else {
+        process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN = previousToken;
+      }
+    }
+
+    expect(requestHeaders).toEqual([{ authorization: "Bearer token-123" }, undefined]);
+    await expect(readFile(target)).resolves.toEqual(Buffer.from([4, 5, 6]));
+  });
+
   it("validates redirects for package_url downloads", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
@@ -970,6 +1021,16 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
+  it("accepts uppercase package artifact SHA-256 metadata", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-sha-"));
+    tempDirs.push(dir);
+    const file = path.join(dir, "openclaw.tgz");
+    await writeFile(file, "openclaw package bytes");
+    const digest = "ae0b98d18c80dbf9447fa48560a139195595db2d337ad33421ca2183b0dd3e99";
+
+    await expect(assertExpectedSha256ForTest(file, digest.toUpperCase())).resolves.toBe(digest);
+  });
+
   it("rejects source artifact scans that exceed the filesystem entry limit", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-scan-"));
     tempDirs.push(dir);
@@ -990,9 +1051,14 @@ describe("resolve-openclaw-package-candidate", () => {
     await writeFile(path.join(dir, "openclaw-a.tgz"), "a");
     await writeFile(path.join(dir, "nested.tar.gz"), "b");
 
-    await expect(findSingleTarballForTest(dir)).rejects.toThrow(
-      "source=artifact requires exactly one .tgz",
-    );
+    const error = await findSingleTarballForTest(dir).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("source=artifact requires exactly one .tgz");
+    expect(message).toContain("nested.tar.gz");
+    expect(message).toContain("openclaw-a.tgz");
+    expect(message).not.toContain(path.join(dir, "nested.tar.gz"));
+    expect(message).not.toContain(path.join(dir, "openclaw-a.tgz"));
   });
 
   it("reads the source SHA from packed npm build metadata", async () => {

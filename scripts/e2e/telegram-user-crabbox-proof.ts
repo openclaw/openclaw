@@ -1930,6 +1930,40 @@ function writeSession(pathname: string, session: SessionFile) {
   fs.chmodSync(pathname, 0o600);
 }
 
+const FULL_ARTIFACT_JSON_NAMES = new Set([
+  "probe.json",
+  "status.json",
+  "telegram-user-crabbox-proof-summary.json",
+  "telegram-user-crabbox-session-summary.json",
+]);
+const FULL_ARTIFACT_FILE_EXTENSIONS = new Set([".gif", ".log", ".md", ".mp4", ".png"]);
+const TIMESTAMPED_PROBE_ARTIFACT_JSON = /^probe-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/u;
+
+function isFullArtifactJsonName(name: string) {
+  return FULL_ARTIFACT_JSON_NAMES.has(name) || TIMESTAMPED_PROBE_ARTIFACT_JSON.test(name);
+}
+
+export function stageFullSessionArtifacts(outputDir: string) {
+  const publishDir = path.join(outputDir, "publish-full-artifacts");
+  fs.rmSync(publishDir, { force: true, recursive: true });
+  fs.mkdirSync(publishDir, { recursive: true });
+
+  for (const entry of fs.readdirSync(outputDir, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const extension = path.extname(entry.name);
+    const isPublishableArtifact =
+      FULL_ARTIFACT_FILE_EXTENSIONS.has(extension) || isFullArtifactJsonName(entry.name);
+    if (!isPublishableArtifact) {
+      continue;
+    }
+    fs.copyFileSync(path.join(outputDir, entry.name), path.join(publishDir, entry.name));
+  }
+
+  return publishDir;
+}
+
 function readSession(root: string, opts: Options, outputDir: string) {
   const pathname = sessionPath(root, opts, outputDir);
   if (!fs.existsSync(pathname)) {
@@ -2462,7 +2496,7 @@ async function publishSessionArtifacts(root: string, opts: Options, outputDir: s
   );
   const publishGifPath = fs.existsSync(croppedMotionGifPath) ? croppedMotionGifPath : motionGifPath;
   const publishDir = opts.publishFullArtifacts
-    ? session.outputDir
+    ? stageFullSessionArtifacts(session.outputDir)
     : path.join(session.outputDir, "publish-gif-only");
   if (!opts.publishFullArtifacts) {
     if (!fs.existsSync(publishGifPath)) {

@@ -43,6 +43,7 @@ import {
   listKitchenSinkAuthorizationRpcProbeNames,
   listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
+  parseJsonOutput,
   parseGatewayCliRequestFailure,
   readPositiveInt,
   readBoundedResponseText,
@@ -913,6 +914,18 @@ await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
 });
 
 describe("kitchen-sink RPC payload unwrapping", () => {
+  it("parses the final JSON record without accepting inline diagnostic objects", () => {
+    const parsed = parseJsonOutput(
+      [
+        'debug: ignored inline diagnostic {"ok":false,"result":{"stale":true}}',
+        JSON.stringify({ ok: true, result: { current: true } }, null, 2),
+        'warning: ignored trailing diagnostic {"ok":false,"result":{"stale":true}}',
+      ].join("\n"),
+    );
+
+    expect(parsed).toEqual({ ok: true, result: { current: true } });
+  });
+
   it("preserves explicit nullish JSON-RPC result fields", () => {
     expect(unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
     expect(unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();

@@ -880,6 +880,7 @@ describe("test-projects args", () => {
           "test/helpers/temp-dir.test.ts",
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
+          "test/scripts/check-package-dist-imports.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/ios-configure-signing.test.ts",
           "test/scripts/ios-pin-version.test.ts",

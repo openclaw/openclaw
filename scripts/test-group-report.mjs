@@ -292,6 +292,7 @@ export function spawnText(command, args, options) {
     const relayParentSignal = (signal) => {
       const handler = () => {
         signalChild(signal);
+        signalChild("SIGKILL");
         cleanupParentSignalHandlers();
         process.kill(process.pid, signal);
       };

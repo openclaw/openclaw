@@ -190,12 +190,76 @@ function parseJsonOutput(stdout) {
   if (!text) {
     throw new Error("expected JSON output, got empty stdout");
   }
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  if (first < 0 || last < first) {
+  const parsed = parseJsonObjectsFromMixedOutput(text).at(-1);
+  if (parsed === undefined) {
     throw new Error(`expected JSON object output, got: ${scrub(text.slice(0, 500))}`);
   }
-  return JSON.parse(text.slice(first, last + 1));
+  return parsed;
+}
+
+function isJsonRecordStart(text, index) {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const char = text[cursor];
+    if (char === "\n" || char === "\r") {
+      return true;
+    }
+    if (char !== " " && char !== "\t") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseJsonObjectsFromMixedOutput(text) {
+  const objects = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (start === -1) {
+      if (char === "{" && isJsonRecordStart(text, index)) {
+        start = index;
+        depth = 1;
+        inString = false;
+        escaped = false;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char !== "}") {
+      continue;
+    }
+
+    depth -= 1;
+    if (depth === 0) {
+      try {
+        objects.push(JSON.parse(text.slice(start, index + 1)));
+      } catch {}
+      start = -1;
+    }
+  }
+  return objects;
 }
 
 function resolveOpenClawRunner() {
@@ -1700,7 +1764,7 @@ async function p12OpenAiLiveProof() {
   return "OpenAI model auth probe consumed API key through plugin-managed auth-profile SecretRef";
 }
 
-async function runPtySecretsConfigurePreset(envCtx) {
+async function runPtySecretsConfigurePreset(envCtx, options = {}) {
   const { spawn } = await import("@lydell/node-pty");
   const command = await resolveOpenClawCommand(
     ["secrets", "configure", "--providers-only", "--apply", "--yes", "--allow-exec", "--json"],
@@ -1715,16 +1779,39 @@ async function runPtySecretsConfigurePreset(envCtx) {
   });
   const output = createOutputCapture("secrets configure stdout");
   let phase = "providers-menu";
+  const keyTimers = new Set();
+  const clearKeyTimers = () => {
+    for (const keyTimer of keyTimers) {
+      clearTimeout(keyTimer);
+    }
+    keyTimers.clear();
+  };
   const sendKeys = (keys) => {
     keys.forEach((key, index) => {
-      setTimeout(() => child.write(key), index * 80);
+      const keyTimer = setTimeout(() => {
+        keyTimers.delete(keyTimer);
+        child.write(key);
+      }, index * 80);
+      keyTimers.add(keyTimer);
     });
   };
   return await new Promise((resolve, reject) => {
+    let timedOut = false;
+    let forceKillAt;
+    let forceKillTimer;
+    const timeoutMs = options.timeoutMs ?? 60000;
+    const timeoutKillGraceMs = options.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS;
     const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`secrets configure preset timed out: ${scrub(output.text())}`));
-    }, 60000);
+      timedOut = true;
+      signalPtyProcessTree(child, "SIGHUP");
+      forceKillAt = Date.now() + timeoutKillGraceMs;
+      forceKillTimer = setTimeout(() => {
+        forceKillTimer = undefined;
+        forceKillAt = undefined;
+        signalPtyProcessTree(child, "SIGKILL");
+      }, timeoutKillGraceMs);
+      forceKillTimer.unref?.();
+    }, timeoutMs);
     child.onData((data) => {
       output.append(data);
       const outputText = output.text();
@@ -1746,6 +1833,20 @@ async function runPtySecretsConfigurePreset(envCtx) {
     });
     child.onExit(({ exitCode }) => {
       clearTimeout(timer);
+      clearKeyTimers();
+      if (timedOut) {
+        void finishTimedOutPtyProcessTree(child, {
+          forceKillAt,
+          forceKillTimer,
+          timeoutKillGraceMs,
+        }).finally(() =>
+          reject(new Error(`secrets configure preset timed out: ${scrub(output.text())}`)),
+        );
+        return;
+      }
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
       if (exitCode !== 0) {
         reject(new Error(`secrets configure preset failed (${exitCode}): ${scrub(output.text())}`));
         return;
@@ -1753,6 +1854,57 @@ async function runPtySecretsConfigurePreset(envCtx) {
       resolve(output.text());
     });
   });
+}
+
+async function finishTimedOutPtyProcessTree(
+  child,
+  { forceKillAt, forceKillTimer, timeoutKillGraceMs },
+) {
+  const graceRemainingMs =
+    forceKillAt === undefined ? timeoutKillGraceMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForPtyProcessTreeExit(child, graceRemainingMs);
+  }
+  if (forceKillTimer) {
+    clearTimeout(forceKillTimer);
+  }
+  if (ptyProcessTreeIsAlive(child)) {
+    signalPtyProcessTree(child, "SIGKILL");
+  }
+  await waitForPtyProcessTreeExit(child, timeoutKillGraceMs);
+}
+
+function ptyProcessTreeIsAlive(child) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForPtyProcessTreeExit(child, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!ptyProcessTreeIsAlive(child)) {
+      return true;
+    }
+    await delay(50);
+  }
+  return !ptyProcessTreeIsAlive(child);
+}
+
+function signalPtyProcessTree(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  child.kill(signal);
 }
 
 async function p13SecretsConfigurePreset() {
@@ -1968,6 +2120,7 @@ export {
   cleanupEnv,
   expectGatewayStartupFails,
   gatewayCall,
+  parseJsonOutput,
   runPtySecretsConfigurePreset,
   runWithProof,
   runCommand,
