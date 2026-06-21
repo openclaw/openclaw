@@ -548,8 +548,8 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
   );
   expect(configuredOnly.ok).toBe(true);
-  expect(configuredOnly.payload?.sessions.map((session) => session.key).sort()).toEqual(
-    ["agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7", "agent:main:main"].sort(),
+  expect(configuredOnly.payload?.sessions.map((session) => session.key).toSorted()).toEqual(
+    ["agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7", "agent:main:main"].toSorted(),
   );
 
   const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
@@ -644,9 +644,13 @@ test("sessions.list with no agentId surfaces cross-agent child-spawned subagent 
     },
   );
   expect(cross.ok).toBe(true);
-  const crossKeys = (cross.payload?.sessions ?? []).map((session) => session.key).sort();
+  const crossKeys = (cross.payload?.sessions ?? []).map((session) => session.key).toSorted();
   expect(crossKeys).toEqual(
-    ["agent:main:main", "agent:orchestrator:subagent:review-1", "agent:orchestrator:worker"].sort(),
+    [
+      "agent:main:main",
+      "agent:orchestrator:subagent:review-1",
+      "agent:orchestrator:worker",
+    ].toSorted(),
   );
 });
 

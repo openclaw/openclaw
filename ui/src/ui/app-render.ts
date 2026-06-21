@@ -541,15 +541,25 @@ export function resolveSidebarRecentSessions(state: AppViewState): GatewaySessio
   const allAgents = state.sessionsAllAgents;
   return (state.sessionsResult?.sessions ?? [])
     .filter((row) => {
-      if (row.archived) return false;
+      if (row.archived) {
+        return false;
+      }
       if (row.kind === "global" || row.kind === "unknown" || row.kind === "cron") {
         return false;
       }
-      if (isCronSessionKey(row.key)) return false;
+      if (isCronSessionKey(row.key)) {
+        return false;
+      }
       // allAgents: surface cross-agent child-spawned rows in the sidebar too.
-      if (allAgents) return true;
-      if (isSubagentSessionKey(row.key)) return false;
-      if (row.spawnedBy) return false;
+      if (allAgents) {
+        return true;
+      }
+      if (isSubagentSessionKey(row.key)) {
+        return false;
+      }
+      if (row.spawnedBy) {
+        return false;
+      }
       if (shouldFilterByAgent && !isSidebarSessionForSelectedAgent(state, row, selectedAgentId)) {
         return false;
       }
