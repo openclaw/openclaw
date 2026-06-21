@@ -66,6 +66,15 @@ type SpawnTextParentSignalState = {
   done: boolean;
   signal: NodeJS.Signals | null;
 };
+type KillableChild = {
+  kill(signal: NodeJS.Signals): boolean;
+  pid?: number;
+};
+type RunTaskkill = (
+  command: string,
+  args: string[],
+  options: { stdio: "ignore" },
+) => { error?: unknown; status?: number | null } | undefined;
 
 const activeSpawnTextParentSignals = new Set<SpawnTextParentSignalState>();
 
@@ -76,6 +85,65 @@ function maybeReraiseSpawnTextParentSignal(signal: NodeJS.Signals): void {
     }
   }
   process.kill(process.pid, signal);
+}
+
+function signalWindowsProcessTree(
+  pid: number,
+  signal: NodeJS.Signals,
+  runTaskkill: RunTaskkill = spawnSync,
+): boolean {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(
+  pid: number,
+  signal: NodeJS.Signals,
+  runTaskkill: RunTaskkill = spawnSync,
+): boolean {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+function signalCliStartupMetadataProcessTree(
+  child: KillableChild,
+  signal: NodeJS.Signals,
+  {
+    appendDiagnostic = () => {},
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  }: {
+    appendDiagnostic?: (message: string) => void;
+    platform?: NodeJS.Platform;
+    runTaskkill?: RunTaskkill;
+    useProcessGroup?: boolean;
+  } = {},
+): void {
+  if (useProcessGroup && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        appendDiagnostic(
+          `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
+  }
+  child.kill(signal);
 }
 
 function resolveRootHelpBundleIdentity(
@@ -338,17 +406,12 @@ async function spawnText(
       parentSignalHandlers.length = 0;
     };
     const signalChild = (signal: NodeJS.Signals) => {
-      if (useProcessGroup && typeof child.pid === "number") {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-            stderr += `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`;
-          }
-        }
-      }
-      child.kill(signal);
+      signalCliStartupMetadataProcessTree(child, signal, {
+        appendDiagnostic: (message) => {
+          stderr += message;
+        },
+        useProcessGroup,
+      });
     };
     const relayParentSignal = (signal: NodeJS.Signals) => {
       const handler = () => {
@@ -843,6 +906,7 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
 
 export const testing = {
   mapWithConcurrency,
+  signalCliStartupMetadataProcessTree,
   spawnText,
 };
 
