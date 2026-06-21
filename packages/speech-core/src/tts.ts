@@ -1184,6 +1184,17 @@ function resolveReadySpeechProvider(params: {
   };
 }
 
+const EMOJI_RE = /(?:\p{Extended_Pictographic}(?:\uFE0F|\u200D|\p{Extended_Pictographic}|\p{Emoji_Modifier})*)+/gu;
+
+function stripEmojisForSpeech(text: string): string {
+  return text
+    .replace(EMOJI_RE, " ")
+    .replace(/\s+([?!.,:;])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ *\n */g, "\n")
+    .trim();
+}
+
 async function prepareSpeechSynthesis(params: {
   provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
   text: string;
@@ -1199,15 +1210,17 @@ async function prepareSpeechSynthesis(params: {
   providerConfig: SpeechProviderConfig;
   providerOverrides?: SpeechProviderOverrides;
 }> {
+  const emojiStripped = stripEmojisForSpeech(params.text);
+  const inputText = emojiStripped.length > 0 ? emojiStripped : params.text;
   if (!params.provider.prepareSynthesis) {
     return {
-      text: params.text,
+      text: inputText,
       providerConfig: params.providerConfig,
       providerOverrides: params.providerOverrides,
     };
   }
   const prepared = await params.provider.prepareSynthesis({
-    text: params.text,
+    text: inputText,
     cfg: params.cfg,
     providerConfig: params.providerConfig,
     providerOverrides: params.providerOverrides,
@@ -1217,7 +1230,7 @@ async function prepareSpeechSynthesis(params: {
     timeoutMs: params.timeoutMs,
   });
   return {
-    text: prepared?.text ?? params.text,
+    text: prepared?.text ?? inputText,
     providerConfig: prepared?.providerConfig
       ? { ...params.providerConfig, ...prepared.providerConfig }
       : params.providerConfig,

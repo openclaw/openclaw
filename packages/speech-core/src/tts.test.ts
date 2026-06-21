@@ -1479,4 +1479,50 @@ describe("speech-core per-agent TTS config", () => {
     expect(resolved.rawConfig?.providers?.openai).toEqual({ voice: "nova" });
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
+
+  it("strips emoji characters before sending text to the speech provider", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-emoji-strip-test");
+    installSpeechProviders([createMockSpeechProvider("mock")]);
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "Hello 🌸 world 🎉! This is great ✨." },
+        cfg,
+        channel: "telegram",
+        kind: "final",
+      });
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireFirstSynthesisRequest("emoji strip request");
+      expect(request.text).toBe("Hello world! This is great.");
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("strips complex emoji sequences with ZWJ and modifiers", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-emoji-complex-test");
+    installSpeechProviders([createMockSpeechProvider("mock")]);
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "Test 👨‍👩‍👧‍👦 family 👋🏽 wave 🏳️‍🌈 flag end." },
+        cfg,
+        channel: "telegram",
+        kind: "final",
+      });
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireFirstSynthesisRequest("emoji complex request");
+      expect(request.text).toBe("Test family wave flag end.");
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
 });
