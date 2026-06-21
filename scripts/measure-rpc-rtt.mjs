@@ -309,6 +309,12 @@ export function signalGatewayProcess(
     if (!result?.error && result?.status === 0) {
       return true;
     }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill("taskkill", [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return true;
+      }
+    }
   }
   try {
     return child.kill(signal);

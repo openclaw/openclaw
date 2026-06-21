@@ -583,6 +583,13 @@ function signalWindowsProcessTree(pid, signal, runTaskkill = childProcess.spawnS
   return !result?.error && result?.status === 0;
 }
 
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = childProcess.spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
 export function signalProcessGroup(
   child,
   signal,
@@ -599,7 +606,7 @@ export function signalProcessGroup(
     } catch {}
   }
   if (platform === "win32" && typeof child.pid === "number") {
-    if (signalWindowsProcessTree(child.pid, signal, runTaskkill)) {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
       return;
     }
   }
@@ -1352,7 +1359,7 @@ export function signalGateway(child, signal, killProcess = defaultKillProcess, o
     }
   }
   if (platform === "win32" && typeof child.pid === "number") {
-    if (signalWindowsProcessTree(child.pid, signal, runTaskkill)) {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
       return true;
     }
   }

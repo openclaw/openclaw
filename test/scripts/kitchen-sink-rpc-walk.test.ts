@@ -313,6 +313,34 @@ describe("kitchen-sink RPC gateway teardown", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+  it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const killProcess = vi.fn();
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    expect(
+      signalGateway(child, "SIGTERM", killProcess, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   posixIt("does not trust an exited wrapper while the gateway process group is alive", async () => {
     const child = Object.assign(new EventEmitter(), {
       exitCode: 0,
@@ -681,6 +709,30 @@ setInterval(() => {}, 1000);
     signalProcessGroup(child, "SIGKILL", {
       platform: "win32",
       runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows command process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalProcessGroup(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
     });
     expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
       stdio: "ignore",

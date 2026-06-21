@@ -367,6 +367,36 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+  it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      pid: 12345,
+      signalCode: null,
+    });
+    const kill = vi.fn(() => true);
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    expect(
+      signalGatewayProcess(child, "SIGTERM", kill, {
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).toBe(true);
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(kill).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("treats missing gateway process groups as already exited", () => {
     const child = Object.assign(new EventEmitter(), {
       exitCode: null,
