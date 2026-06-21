@@ -101,8 +101,8 @@ function callData<T>(
 async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
   const originalHome = process.env.HOME;
   return await withTempDir("openclaw-feishu-media-", async (tempHome) => {
+    process.env.HOME = tempHome;
     try {
-      process.env.HOME = tempHome;
       return await run();
     } finally {
       if (originalHome === undefined) {

@@ -65,7 +65,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
   web_search: "disabled",
 });
-const APP_SERVER_START_WAIT = { interval: 1, timeout: 5_000 } as const;
+const APP_SERVER_START_WAIT = { interval: 10, timeout: 5_000 } as const;
 
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;

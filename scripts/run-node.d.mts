@@ -52,6 +52,7 @@ export function runNodeMain(params?: {
   cwd?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  signalProcess?: (pid: number, signal: NodeJS.Signals | 0) => void;
   runRuntimePostBuild?: (params?: {
     cwd?: string;
     env?: Record<string, string | undefined>;
