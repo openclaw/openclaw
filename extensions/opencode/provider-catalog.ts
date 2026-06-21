@@ -20,15 +20,107 @@ const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
 
-const MODEL_COSTS: Record<
-  string,
-  { input: number; output: number; cacheRead: number; cacheWrite: number }
-> = {
+const FREE_COST: ModelDefinitionConfig["cost"] = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
+  "big-pickle": FREE_COST,
   "claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+  "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
   "claude-opus-4-1": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-sonnet-4": {
+    input: 3,
+    output: 15,
+    cacheRead: 0.3,
+    cacheWrite: 3.75,
+    tieredPricing: [
+      { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, range: [0, 200_000] },
+      { input: 6, output: 22.5, cacheRead: 0.6, cacheWrite: 7.5, range: [200_000] },
+    ],
+  },
+  "claude-sonnet-4-5": {
+    input: 3,
+    output: 15,
+    cacheRead: 0.3,
+    cacheWrite: 3.75,
+    tieredPricing: [
+      { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, range: [0, 200_000] },
+      { input: 6, output: 22.5, cacheRead: 0.6, cacheWrite: 7.5, range: [200_000] },
+    ],
+  },
+  "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+  "deepseek-v4-flash-free": FREE_COST,
+  "deepseek-v4-pro": { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+  "gemini-3.1-pro": {
+    input: 2,
+    output: 12,
+    cacheRead: 0.2,
+    cacheWrite: 0,
+    tieredPricing: [
+      { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0, range: [0, 200_000] },
+      { input: 4, output: 18, cacheRead: 0.4, cacheWrite: 0, range: [200_000] },
+    ],
+  },
+  "gemini-3.5-flash": { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 },
+  "glm-5": { input: 1, output: 3.2, cacheRead: 0.2, cacheWrite: 0 },
+  "glm-5.1": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+  "gpt-5": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5-codex": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5-nano": { input: 0.05, output: 0.4, cacheRead: 0.005, cacheWrite: 0 },
+  "gpt-5.1": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5.1-codex": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5.1-codex-max": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+  "gpt-5.1-codex-mini": { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+  "gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.2-codex": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.3-codex": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.3-codex-spark": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.4": {
+    input: 2.5,
+    output: 15,
+    cacheRead: 0.25,
+    cacheWrite: 0,
+    tieredPricing: [
+      { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0, range: [0, 272_000] },
+      { input: 5, output: 22.5, cacheRead: 0.5, cacheWrite: 0, range: [272_000] },
+    ],
+  },
   "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+  "gpt-5.4-nano": { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
+  "gpt-5.4-pro": { input: 30, output: 180, cacheRead: 30, cacheWrite: 0 },
+  "gpt-5.5": {
+    input: 5,
+    output: 30,
+    cacheRead: 0.5,
+    cacheWrite: 0,
+    tieredPricing: [
+      { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0, range: [0, 272_000] },
+      { input: 10, output: 45, cacheRead: 1, cacheWrite: 0, range: [272_000] },
+    ],
+  },
+  "gpt-5.5-pro": { input: 30, output: 180, cacheRead: 30, cacheWrite: 0 },
+  "grok-build-0.1": { input: 1, output: 2, cacheRead: 0.2, cacheWrite: 0 },
+  "kimi-k2.5": { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
+  "kimi-k2.6": { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
+  "mimo-v2.5-free": FREE_COST,
+  "minimax-m2.5": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
   "minimax-m2.7": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+  "minimax-m3-free": FREE_COST,
+  "nemotron-3-ultra-free": FREE_COST,
+  "north-mini-code-free": FREE_COST,
+  "qwen3.5-plus": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
+  "qwen3.6-plus": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 },
+  "qwen3.6-plus-free": FREE_COST,
 };
 
 const MODEL_NAMES: Record<string, string> = {
@@ -181,10 +273,17 @@ function resolveOpencodeZenTransport(modelId: string): OpencodeZenTransport {
   return { api: "openai-completions", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL };
 }
 
+function resolveModelCost(modelId: string): ModelDefinitionConfig["cost"] {
+  const cost = MODEL_COSTS[modelId];
+  if (!cost) {
+    throw new Error(`missing OpenCode Zen cost metadata for ${modelId}`);
+  }
+  return cost;
+}
+
 function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
   const normalizedModelId = modelId.trim().toLowerCase();
   const transport = resolveOpencodeZenTransport(normalizedModelId);
-  const cost = MODEL_COSTS[normalizedModelId];
   return normalizeModelCompat({
     id: normalizedModelId,
     name: formatModelName(normalizedModelId),
@@ -193,7 +292,7 @@ function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
     baseUrl: transport.baseUrl,
     reasoning: true,
     input: supportsImageInput(normalizedModelId) ? ["text", "image"] : ["text"],
-    ...(cost ? { cost } : {}),
+    cost: resolveModelCost(normalizedModelId),
     contextWindow: resolveContextWindow(normalizedModelId),
     maxTokens: resolveMaxTokens(normalizedModelId),
     compat: {

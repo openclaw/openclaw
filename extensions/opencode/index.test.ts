@@ -223,18 +223,35 @@ describe("opencode provider plugin", () => {
     expect(manifestQwen.baseUrl).toBe("https://opencode.ai/zen");
   });
 
-  it("omits unverified OpenCode Zen costs instead of publishing default zeroes", async () => {
+  it("keeps every OpenCode Zen row within the required cost contract", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-
-    const unverifiedCostModel = requireRecord(
-      provider.resolveDynamicModel?.({ modelId: "claude-opus-4-5" } as never),
-      "unverified cost model",
+    const manifestProvider = requireRecord(
+      manifest.modelCatalog.providers.opencode,
+      "manifest provider",
     );
-    expect(unverifiedCostModel.cost).toBeUndefined();
+    const manifestModels = manifestProvider.models;
+    if (!Array.isArray(manifestModels)) {
+      throw new Error("expected manifest opencode models");
+    }
+
+    for (const manifestModel of manifestModels) {
+      const manifestModelRecord = requireRecord(manifestModel, "manifest model");
+      const modelId = manifestModelRecord.id;
+      if (typeof modelId !== "string") {
+        throw new Error("expected manifest model id");
+      }
+      requireRecord(manifestModelRecord.cost, `manifest cost ${modelId}`);
+      const runtimeModel = requireRecord(
+        provider.resolveDynamicModel?.({ modelId } as never),
+        `runtime model ${modelId}`,
+      );
+      requireRecord(runtimeModel.cost, `runtime cost ${modelId}`);
+    }
 
     const verifiedCostExamples = new Map([
       ["claude-fable-5", { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }],
       ["claude-opus-4-8", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
+      ["claude-opus-4-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-1", { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
       ["gpt-5.4-mini", { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }],
       ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 }],
@@ -246,25 +263,6 @@ describe("opencode provider plugin", () => {
         `verified cost model ${modelId}`,
       );
       expect(verifiedCostModel.cost).toEqual(expectedCost);
-    }
-
-    const manifestProvider = requireRecord(
-      manifest.modelCatalog.providers.opencode,
-      "manifest provider",
-    );
-    const manifestModels = manifestProvider.models;
-    if (!Array.isArray(manifestModels)) {
-      throw new Error("expected manifest opencode models");
-    }
-    const manifestUnverifiedCostModel = requireRecord(
-      manifestModels.find(
-        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-5",
-      ),
-      "manifest unverified cost model",
-    );
-    expect(manifestUnverifiedCostModel.cost).toBeUndefined();
-
-    for (const [modelId, expectedCost] of verifiedCostExamples) {
       const manifestVerifiedCostModel = requireRecord(
         manifestModels.find((model) => requireRecord(model, "manifest model").id === modelId),
         `manifest verified cost model ${modelId}`,
