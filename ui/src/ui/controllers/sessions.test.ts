@@ -52,7 +52,6 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
     sessionsShowArchived: false,
-    sessionsAllAgents: false,
     sessionsExpandedCheckpointKey: null,
     sessionsCheckpointItemsByKey: {},
     sessionsCheckpointLoadingKey: null,
@@ -624,11 +623,10 @@ describe("loadSessions", () => {
     expect(state.sessionsResult?.count).toBe(2);
   });
 
-  it("always respects an explicit agentId override even when sessionsAllAgents state is true (#95295)", async () => {
+  it("always respects an explicit agentId override (#95295)", async () => {
     // Issue #95295 P1 finding: explicit scoped refreshes must not be silently
-    // widened by the cross-agent toggle. When the caller passes an `agentId`
-    // override, the request must scope to that agent regardless of the sidebar
-    // toggle state.
+    // widened by the cross-agent sidebar scope. When the caller passes an
+    // `agentId` override, the request must scope to that agent.
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`unexpected method: ${method}`);
@@ -641,7 +639,7 @@ describe("loadSessions", () => {
         sessions: [],
       };
     });
-    const state = createState(request, { sessionsAllAgents: true });
+    const state = createState(request);
 
     await loadSessions(state, { agentId: "main" });
 
@@ -653,10 +651,11 @@ describe("loadSessions", () => {
     });
   });
 
-  it("queries every configured agent when no agentId override is supplied (#95295)", async () => {
+  it("omits agentId when no override is supplied so cross-agent child rows surface (#95295)", async () => {
     // Cross-agent visibility path: omitting agentId while keeping
-    // configuredAgentsOnly: true lets the combined loader pull every configured
-    // agent's store and filterSessionEntries skips its strict per-agent match.
+    // configuredAgentsOnly: true lets the combined loader pull every on-disk
+    // store (configured + discovered) and `filterSessionStoreToConfiguredAgents`
+    // keeps rows that belong to a configured agent or whose parent does.
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`unexpected method: ${method}`);

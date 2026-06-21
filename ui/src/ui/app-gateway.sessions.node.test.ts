@@ -38,6 +38,37 @@ vi.mock("./app-chat.ts", () => ({
     const [, agentId] = target.sessionKey.split(":");
     return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
   },
+  // Cross-agent visibility (issue #95295): the helper drops the agentId
+  // scope filter when the sidebar scope control is on. Tests below cover
+  // both branches.
+  sidebarRecentSessionsListParamsForSession: (
+    host: { sidebarRecentSessionsAllAgents?: boolean; assistantAgentId?: string | null },
+    sessionKey: string,
+  ) => {
+    if (host.sidebarRecentSessionsAllAgents === true) {
+      return {};
+    }
+    const [, agentId] = sessionKey.split(":");
+    if (sessionKey.startsWith("agent:") && agentId) {
+      return { agentId };
+    }
+    return sessionKey === "global" && host.assistantAgentId
+      ? { agentId: host.assistantAgentId }
+      : {};
+  },
+  sidebarRecentSessionsListParamsForRefreshTarget: (
+    host: { sidebarRecentSessionsAllAgents?: boolean; assistantAgentId?: string | null },
+    target: { sessionKey: string; agentId?: string },
+  ) => {
+    if (host.sidebarRecentSessionsAllAgents === true) {
+      return {};
+    }
+    if (target.agentId) {
+      return { agentId: target.agentId };
+    }
+    const [, agentId] = target.sessionKey.split(":");
+    return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
   recordFirstAssistantChatTiming: recordFirstAssistantChatTimingMock,

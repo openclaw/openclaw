@@ -51,6 +51,27 @@ vi.mock("./app-chat.ts", () => ({
     const [, agentId] = sessionKey.split(":");
     return sessionKey.startsWith("agent:") && agentId ? { agentId } : { agentId: "main" };
   },
+  // Cross-agent visibility (issue #95295): the helper drops the agentId
+  // scope filter when the sidebar scope control is on; tests below cover
+  // both branches.
+  sidebarRecentSessionsListParamsForSession: (
+    state: { sidebarRecentSessionsAllAgents?: boolean },
+    sessionKey: string,
+  ) => {
+    if (state.sidebarRecentSessionsAllAgents === true) {
+      return {};
+    }
+    if (sessionKey === "global") {
+      return {
+        agentId: (state as { assistantAgentId?: string | null }).assistantAgentId ?? "main",
+      };
+    }
+    if (sessionKey === "unknown") {
+      return {};
+    }
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : { agentId: "main" };
+  },
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
   flushChatQueueAfterIdleSessionReconciliation: flushChatQueueAfterIdleSessionReconciliationMock,

@@ -314,7 +314,7 @@ export type AppViewState = {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsShowArchived: boolean;
-  sessionsAllAgents: boolean;
+  sidebarRecentSessionsAllAgents?: boolean;
   sessionsFiltersCollapsed: boolean;
   sessionsHideCron: boolean;
   sessionsSearchQuery: string;

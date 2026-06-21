@@ -38,7 +38,6 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeGlobal: false,
     includeUnknown: false,
     showArchived: false,
-    allAgents: false,
     filtersCollapsed: false,
     basePath: "",
     searchQuery: "",
@@ -54,7 +53,6 @@ function buildProps(result: SessionsListResult): SessionsProps {
     checkpointBusyKey: null,
     checkpointErrorByKey: {},
     onFiltersChange: () => undefined,
-    onAllAgentsChange: () => undefined,
     onToggleFiltersCollapsed: () => undefined,
     onClearFilters: () => undefined,
     onSearchChange: () => undefined,
@@ -246,7 +244,7 @@ describe("sessions view", () => {
     const toggleGroup = container.querySelector(".session-filter-toggle-group");
     expect(toggleGroup?.getAttribute("role")).toBe("group");
     expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
-    expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(4);
+    expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(3);
     expect(
       Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
         toggle.querySelector("input")?.getAttribute("name"),
@@ -259,7 +257,6 @@ describe("sessions view", () => {
       ],
       ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
       ["showArchived", ["session-filter-check", "session-filter-toggle", "session-archive-toggle"]],
-      ["allAgents", ["session-filter-check", "session-filter-toggle", "session-all-agents-toggle"]],
     ]);
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
   });

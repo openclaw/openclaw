@@ -7,7 +7,7 @@ import {
   refreshChat,
   refreshChatAvatar,
   scopedAgentParamsForSession,
-  scopedAgentListParamsForSession,
+  sidebarRecentSessionsListParamsForSession,
 } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -767,7 +767,7 @@ export async function createChatSession(
     },
     {
       ...createChatSessionsLoadOverrides(state),
-      ...scopedAgentListParamsForSession(state, previousSessionKey),
+      ...sidebarRecentSessionsListParamsForSession(state, previousSessionKey),
     },
   );
   if (
@@ -794,11 +794,22 @@ export async function createChatSession(
   return true;
 }
 
-async function refreshSessionOptions(state: AppViewState) {
-  await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
+// Cross-agent visibility (issue #95295): when the sidebar's "All agents"
+// mode is active, drop the agentId scope filter from the sidebar refresh so
+// child-spawned subagent rows owned by other agents surface too. Otherwise
+// scope the refresh to the assistant's current agent.
+export function createSidebarRecentSessionsLoadOverrides(state: AppViewState) {
+  return {
     ...createChatSessionsLoadOverrides(state),
-    ...scopedAgentListParamsForSession(state, state.sessionKey),
-  });
+    ...sidebarRecentSessionsListParamsForSession(state, state.sessionKey),
+  };
+}
+
+async function refreshSessionOptions(state: AppViewState) {
+  await loadSessions(
+    state as unknown as Parameters<typeof loadSessions>[0],
+    createSidebarRecentSessionsLoadOverrides(state),
+  );
 }
 
 /** Count cron sessions hidden by the active agent-scoped chat filter. */

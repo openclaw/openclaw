@@ -9,7 +9,6 @@ import {
   hasAbortableSessionRun,
   refreshChat,
   refreshChatCommands,
-  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
@@ -21,6 +20,7 @@ import {
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
+  createSidebarRecentSessionsLoadOverrides,
   createChatSession,
   dismissChatError,
   dismissRealtimeTalkError,
@@ -529,16 +529,15 @@ function isSidebarSessionForSelectedAgent(
 }
 
 // Exported for unit tests. Filters the Control UI's left Recent Sessions
-// sidebar. When `sessionsAllAgents` is on, opts out of the strict per-agent
-// + subagent filters so cross-agent child-spawned rows surface here too,
-// mirroring the `sessions.list allAgents` cross-agent visibility path
-// (issue #95295). Archived / global / unknown / cron rows stay filtered
-// either way.
+// sidebar. When `sidebarRecentSessionsAllAgents` is on, opts out of the
+// strict per-agent + subagent filters so cross-agent child-spawned rows
+// surface here too (issue #95295). Archived / global / unknown / cron rows
+// stay filtered either way.
 export function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
+  const allAgents = state.sidebarRecentSessionsAllAgents === true;
   const selectedAgentId = resolveSidebarSelectedAgentId(state);
   const shouldFilterByAgent =
-    normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
-  const allAgents = state.sessionsAllAgents;
+    !allAgents && normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
   return (state.sessionsResult?.sessions ?? [])
     .filter((row) => {
       if (row.archived) {
@@ -579,6 +578,11 @@ function renderSidebarSessions(state: AppViewState) {
     : busy
       ? "Finish the active run before creating a new session"
       : "New session";
+  // Always render the recent-sessions header (when the sidebar is expanded)
+  // so the "All agents" scope control is reachable even when there are zero
+  // recent rows — issue #95295 P1 #2 asks the cross-agent toggle to live in
+  // the sidebar header, not on the Sessions page.
+  const showRecentSection = !collapsed;
 
   return html`
     <section class="sidebar-sessions ${collapsed ? "sidebar-sessions--collapsed" : ""}">
@@ -611,38 +615,61 @@ function renderSidebarSessions(state: AppViewState) {
           surface: "sidebar",
         })}
       </div>
-      ${collapsed || recent.length === 0
-        ? nothing
-        : html`
+      ${showRecentSection
+        ? html`
             <div
               class="sidebar-recent-sessions ${state.settings.recentSessionsCollapsed
                 ? "sidebar-recent-sessions--collapsed"
                 : ""}"
               aria-label=${t("overview.cards.recentSessions")}
             >
-              <button
-                class="sidebar-recent-sessions__label"
-                type="button"
-                aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
-                @click=${() => {
-                  state.applySettings({
-                    ...state.settings,
-                    recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
-                  });
-                }}
-              >
-                <span class="sidebar-recent-sessions__label-text"
-                  >${t("usage.sessions.recentShort")}</span
+              <div class="sidebar-recent-sessions__header">
+                <button
+                  class="sidebar-recent-sessions__label"
+                  type="button"
+                  aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
+                  @click=${() => {
+                    state.applySettings({
+                      ...state.settings,
+                      recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
+                    });
+                  }}
                 >
-                <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
-              </button>
-              <div class="sidebar-recent-sessions__list">
-                ${recent.map((row) => renderSidebarRecentSession(state, row))}
+                  <span class="sidebar-recent-sessions__label-text"
+                    >${t("usage.sessions.recentShort")}</span
+                  >
+                  <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
+                </button>
+                <button
+                  class="sidebar-recent-sessions__scope"
+                  type="button"
+                  aria-pressed=${String(state.sidebarRecentSessionsAllAgents === true)}
+                  title=${t("workboard.allAgents")}
+                  @click=${() => toggleSidebarRecentSessionsAgentScope(state)}
+                >
+                  ${t("workboard.allAgents")}
+                </button>
               </div>
+              ${recent.length === 0
+                ? nothing
+                : html`<div class="sidebar-recent-sessions__list">
+                    ${recent.map((row) => renderSidebarRecentSession(state, row))}
+                  </div>`}
             </div>
-          `}
+          `
+        : nothing}
     </section>
   `;
+}
+
+// Cross-agent visibility (issue #95295): flipping the sidebar scope control
+// re-runs sessions.list with `sidebarRecentSessionsListParamsForSession`,
+// which returns `{}` when on (no agentId scope) and the assistant's current
+// `agentId` when off. The sidebar projection in `resolveSidebarRecentSessions`
+// then mirrors the new scope without touching the gateway protocol.
+function toggleSidebarRecentSessionsAgentScope(state: AppViewState) {
+  state.sidebarRecentSessionsAllAgents = state.sidebarRecentSessionsAllAgents !== true;
+  void loadSessions(state, createSidebarRecentSessionsLoadOverrides(state));
 }
 
 function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow) {
@@ -2881,7 +2908,6 @@ export function renderApp(state: AppViewState) {
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
                 showArchived: state.sessionsShowArchived,
-                allAgents: state.sessionsAllAgents,
                 filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
@@ -2921,24 +2947,13 @@ export function renderApp(state: AppViewState) {
                 onToggleFiltersCollapsed: () => {
                   state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
                 },
-                onAllAgentsChange: (next) => {
-                  state.sessionsAllAgents = next;
-                  state.sessionsSelectedKeys = new Set();
-                  state.sessionsPage = 0;
-                  // Cross-agent visibility (issue #95295) is now expressed by
-                  // omitting `agentId` and keeping `configuredAgentsOnly: true`.
-                  // The toggle only flips the sidebar projection filter; a
-                  // plain reload keeps the controller's "no override → query
-                  // all configured agents" default behavior.
-                  void loadSessions(state);
-                },
                 onClearFilters: () => {
                   state.sessionsFilterActive = "";
                   state.sessionsFilterLimit = "";
                   state.sessionsIncludeGlobal = true;
                   state.sessionsIncludeUnknown = true;
                   state.sessionsShowArchived = true;
-                  state.sessionsAllAgents = false;
+                  state.sidebarRecentSessionsAllAgents = false;
                   state.sessionsSearchQuery = "";
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
@@ -3861,10 +3876,7 @@ export function renderApp(state: AppViewState) {
                   onOpenSessionCheckpoints: () => {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;
                     state.setTab("sessions" as import("./navigation.ts").Tab);
-                    void loadSessions(state, {
-                      ...createChatSessionsLoadOverrides(state),
-                      ...scopedAgentListParamsForSession(state, state.sessionKey),
-                    });
+                    void loadSessions(state, createSidebarRecentSessionsLoadOverrides(state));
                   },
                   onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
                   onToggleRealtimeTalkOptions: () => {

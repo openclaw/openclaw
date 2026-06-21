@@ -56,7 +56,7 @@ export type SessionsState = SessionsChatRunState & {
    * subagent sessions owned by other agents become visible (issue #95295).
    * The view's default is to scope to the assistant's agent.
    */
-  sessionsAllAgents: boolean;
+  sessionsAllAgents?: boolean;
   sessionsExpandedCheckpointKey: string | null;
   sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;

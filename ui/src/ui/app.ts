@@ -499,7 +499,7 @@ export class OpenClawApp extends LitElement {
   // Cross-agent visibility toggle. When on, the next sessions.list call drops the
   // per-agent scope filter so child-spawned subagent sessions from other agents
   // become visible in the sidebar (issue #95295).
-  @state() sessionsAllAgents = false;
+  @state() sidebarRecentSessionsAllAgents = false;
   @state() sessionsFiltersCollapsed = false;
   @state() sessionsHideCron = true;
   @state() sessionsSearchQuery = "";

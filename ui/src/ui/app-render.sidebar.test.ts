@@ -1,6 +1,6 @@
 // Tests for `resolveSidebarRecentSessions`, the left Recent Sessions sidebar
-// projection. Regression coverage for #95295: when the Sessions-view "All
-// agents" toggle is on, the sidebar must surface cross-agent child-spawned
+// projection. Regression coverage for #95295: when the sidebar's "All agents"
+// scope control is on, the sidebar must surface cross-agent child-spawned
 // rows instead of silently dropping them like the pre-fix projection did.
 import { describe, expect, it } from "vitest";
 import { resolveSidebarRecentSessions } from "./app-render.ts";
@@ -27,7 +27,7 @@ function makeState(overrides: SessionRowOverrides = {}) {
     assistantAgentId: null,
     sessionKey: "agent:main:main",
     sessionsResult: null,
-    sessionsAllAgents: false,
+    sidebarRecentSessionsAllAgents: false,
     ...overrides,
   } as unknown as AppViewState;
 }
@@ -66,9 +66,9 @@ describe("resolveSidebarRecentSessions (#95295)", () => {
     expect(result.map((row) => row.key)).toEqual(["agent:main:main"]);
   });
 
-  it("surfaces cross-agent child-spawned subagent rows when sessionsAllAgents is on", () => {
+  it("surfaces cross-agent child-spawned subagent rows when sidebarRecentSessionsAllAgents is on", () => {
     const state = makeState({
-      sessionsAllAgents: true,
+      sidebarRecentSessionsAllAgents: true,
       sessionsResult: {
         ...baseSessionsPayload,
         sessions: [
@@ -98,9 +98,9 @@ describe("resolveSidebarRecentSessions (#95295)", () => {
     ]);
   });
 
-  it("keeps archived / global / unknown / cron rows hidden even with sessionsAllAgents on", () => {
+  it("keeps archived / global / unknown / cron rows hidden even with sidebarRecentSessionsAllAgents on", () => {
     const state = makeState({
-      sessionsAllAgents: true,
+      sidebarRecentSessionsAllAgents: true,
       sessionsResult: {
         ...baseSessionsPayload,
         sessions: [
