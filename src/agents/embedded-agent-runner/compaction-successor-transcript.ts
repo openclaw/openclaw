@@ -134,6 +134,23 @@ function buildSuccessorEntries(params: {
     }
   }
 
+  // Preserve the last assistant message before firstKeptEntryId so the successor
+  // transcript keeps a compactionSummary → assistant → user structure instead of
+  // dropping the assistant reply (issue #76729).
+  let preservedAssistantId: string | undefined;
+  for (let index = latestCompactionIndex - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (
+      entry &&
+      summarizedBranchIds.has(entry.id) &&
+      entry.type === "message" &&
+      entry.message.role === "assistant"
+    ) {
+      preservedAssistantId = entry.id;
+      break;
+    }
+  }
+
   const latestStateEntryIds = collectLatestStateEntryIds(branch.slice(0, latestCompactionIndex));
   const staleStateEntryIds = new Set<string>();
   for (const entry of branch.slice(0, latestCompactionIndex)) {
@@ -153,12 +170,19 @@ function buildSuccessorEntries(params: {
   ]);
   for (const entry of allEntries) {
     if (
-      (summarizedBranchIds.has(entry.id) && entry.type === "message") ||
+      (summarizedBranchIds.has(entry.id) &&
+        entry.type === "message" &&
+        entry.id !== preservedAssistantId) ||
       staleStateEntryIds.has(entry.id) ||
       duplicateUserMessageIds.has(entry.id)
     ) {
       removedIds.add(entry.id);
     }
+  }
+  // The preserved assistant reply is pre-compaction content that needs thinking
+  // signature stripping, same as other pre-compaction kept entries.
+  if (preservedAssistantId) {
+    preCompactionKeptBranchIds.add(preservedAssistantId);
   }
   for (const entry of allEntries) {
     if (entry.type === "label" && removedIds.has(entry.targetId)) {
@@ -194,10 +218,24 @@ function buildSuccessorEntries(params: {
     // signatures are bound to the original context prefix; the successor file has a different
     // prefix so those signatures would cause Anthropic "Invalid signature in thinking block".
     // Post-compaction entries were generated in the new context and have valid signatures.
-    const transformed =
-      reparented.type === "message" && preCompactionKeptBranchIds.has(reparented.id)
-        ? { ...reparented, message: stripThinkingSignaturesFromMessage(reparented.message) }
-        : reparented;
+    // When preserving the last assistant before firstKeptEntryId (issue #76729), shift the
+    // compaction's firstKeptEntryId so buildSessionContext() includes the preserved assistant.
+    // Skip this for hardened manual compaction boundaries where firstKeptEntryId already
+    // points to the compaction entry itself (all pre-compaction content is intentionally
+    // excluded).
+    let transformed: SessionEntry = reparented;
+    if (reparented.type === "message" && preCompactionKeptBranchIds.has(reparented.id)) {
+      transformed = {
+        ...reparented,
+        message: stripThinkingSignaturesFromMessage(reparented.message),
+      };
+    } else if (
+      reparented.type === "compaction" &&
+      preservedAssistantId &&
+      reparented.firstKeptEntryId !== reparented.id
+    ) {
+      transformed = { ...reparented, firstKeptEntryId: preservedAssistantId };
+    }
     keptEntries.push(transformed);
   }
 

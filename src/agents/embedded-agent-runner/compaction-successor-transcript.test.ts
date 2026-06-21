@@ -164,6 +164,13 @@ describe("rotateTranscriptAfterCompaction", () => {
         summary: "Summary of old user and old assistant.",
         tokensBefore: 5000,
       },
+      // The last assistant reply before firstKeptEntryId is preserved so the
+      // successor shows compactionSummary → assistant → user (issue #76729).
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old assistant" }],
+        timestamp: 2,
+      },
       { role: "user", content: "kept user", timestamp: 3 },
       {
         role: "assistant",
