@@ -181,4 +181,85 @@ describe("cron tool flat-params", () => {
       staggerMs: 30_000,
     });
   });
+
+  it("trims trailing whitespace from object keys in job (Issue #95407)", async () => {
+    // Some small/local models (e.g. qwen35b via llamacpp) emit JSON with
+    // trailing whitespace in object keys. The cron tool should trim these
+    // keys before processing to avoid validation errors.
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-trailing-space-keys", {
+      action: "add",
+      job: {
+        name: "test job",
+        "schedule ": {
+          kind: "cron",
+          expr: "0 * * * *",
+          tz: "UTC",
+        },
+        "sessionTarget ": "isolated",
+        "payload ": {
+          kind: "agentTurn",
+          message: "test message",
+        },
+        "enabled ": true,
+      },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      job?: {
+        name?: string;
+        schedule?: unknown;
+        sessionTarget?: string;
+        payload?: unknown;
+        enabled?: boolean;
+      };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.job?.name).toBe("test job");
+    expect(params.job?.schedule).toEqual({
+      kind: "cron",
+      expr: "0 * * * *",
+      tz: "UTC",
+    });
+    expect(params.job?.sessionTarget).toBe("isolated");
+    expect(params.job?.payload).toEqual({
+      kind: "agentTurn",
+      message: "test message",
+    });
+    expect(params.job?.enabled).toBe(true);
+  });
+
+  it("trims trailing whitespace from flat params (Issue #95407)", async () => {
+    // Flat params recovery should also trim whitespace from keys
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-trailing-space-flat", {
+      action: "add",
+      "name ": "flat job",
+      "schedule ": {
+        kind: "cron",
+        expr: "0 12 * * *",
+        tz: "UTC",
+      },
+      "message ": "flat message",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      name?: string;
+      schedule?: unknown;
+      payload?: unknown;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.name).toBe("flat job");
+    expect(params.schedule).toEqual({
+      kind: "cron",
+      expr: "0 12 * * *",
+      tz: "UTC",
+    });
+    expect(params.payload).toEqual({
+      kind: "agentTurn",
+      message: "flat message",
+    });
+  });
 });

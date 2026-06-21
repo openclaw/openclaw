@@ -85,6 +85,23 @@ function moveDefinedField(params: {
   return true;
 }
 
+/**
+ * Trims whitespace from object keys to handle malformed model outputs.
+ * Some small/local models (e.g. qwen35b via llamacpp) emit JSON with trailing
+ * whitespace in object keys (e.g. `"schedule "` instead of `"schedule"`).
+ * See: https://github.com/openclaw/openclaw/issues/95407
+ */
+function trimObjectKeys(value: Record<string, unknown>): Record<string, unknown> {
+  const trimmed: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const clean = key.trim();
+    if (clean.length > 0) {
+      trimmed[clean] = value[key];
+    }
+  }
+  return trimmed;
+}
+
 function repairConcatenatedCronToolKeys(value: Record<string, unknown>): void {
   // Some small/local tool-call parsers can return valid JSON with adjacent cron
   // key names merged. Recover only the observed schema-specific pairs before
@@ -247,7 +264,14 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
 export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
-  const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
+  // Trim whitespace from keys to handle malformed model outputs
+  // Some small/local models emit keys with trailing spaces (e.g. "schedule ")
+  const trimmedValue = trimObjectKeys(value);
+  const unwrapped = isRecord(trimmedValue.data)
+    ? trimmedValue.data
+    : isRecord(trimmedValue.job)
+      ? trimmedValue.job
+      : trimmedValue;
   const next = { ...unwrapped };
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
@@ -275,11 +299,14 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   found: boolean;
   value: Record<string, unknown>;
 } {
+  // Trim whitespace from keys to handle malformed model outputs
+  // Some small/local models emit keys with trailing spaces (e.g. "schedule ")
+  const trimmedParams = trimObjectKeys(params);
   const value: Record<string, unknown> = {};
   let found = false;
-  for (const key of Object.keys(params)) {
-    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
-      value[key] = params[key];
+  for (const key of Object.keys(trimmedParams)) {
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && trimmedParams[key] !== undefined) {
+      value[key] = trimmedParams[key];
       found = true;
     }
   }
