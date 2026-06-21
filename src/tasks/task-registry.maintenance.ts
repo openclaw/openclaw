@@ -1185,7 +1185,10 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
           t.ownerKey === current.ownerKey,
       );
       if (backingCliChild) {
-        const error = backingCliChild.error ?? "backing session missing";
+        const error =
+          backingCliChild.status === "failed" || backingCliChild.status === "timed_out"
+            ? (backingCliChild.error ?? "backing session missing")
+            : backingCliChild.error;
         if (backingCliChild.status === "lost") {
           const next = markTaskLost(current, now, backingSessionContext);
           if (next?.status === "lost") {
