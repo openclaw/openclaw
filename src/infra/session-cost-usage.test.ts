@@ -1497,6 +1497,55 @@ describe("session cost usage", () => {
     });
   });
 
+  it("falls back to the current session id when cached lineage metadata is stale", async () => {
+    const root = await makeSessionCostRoot("cost-cache-stale-session-file-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const staleFile = path.join(sessionsDir, "old-session-id.jsonl");
+    const currentFile = path.join(sessionsDir, "current-session-id.jsonl");
+    const currentArchive = path.join(
+      sessionsDir,
+      "current-session-id.jsonl.reset.2026-02-05T12-30-00.000Z",
+    );
+    const assistantMessage = (tokens: number, cost: number, timestamp: string) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: cost } },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(
+        currentArchive,
+        assistantMessage(12, 0.012, "2026-02-05T12:00:00.000Z"),
+        "utf-8",
+      ),
+      fs.writeFile(currentFile, assistantMessage(18, 0.018, "2026-02-05T13:00:00.000Z"), "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [currentArchive, currentFile] });
+      const single = await loadSessionCostSummaryFromCache({
+        sessionId: "current-session-id",
+        sessionFile: staleFile,
+        requestRefresh: false,
+      });
+      const batch = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: "current-session-id", sessionFile: staleFile }],
+        agentId: "main",
+        requestRefresh: false,
+      });
+
+      expect(single.summary?.sessionFile).toBe(currentFile);
+      expect(single.summary?.totalTokens).toBe(30);
+      expect(batch.summaries[0]?.sessionFile).toBe(currentFile);
+      expect(batch.summaries[0]?.totalTokens).toBe(30);
+    });
+  });
+
   it("shares one in-flight directory listing for hidden batch lineage readers", async () => {
     const root = await makeSessionCostRoot("cost-cache-batch-lineage-dir-cache");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -2553,6 +2602,63 @@ describe("session cost usage", () => {
       expect(summary?.totalTokens).toBe(30);
       expect(timeseries?.points.map((point) => point.totalTokens)).toEqual([12, 18]);
       expect(logs?.map((log) => log.content)).toEqual(["topic archive", "topic active"]);
+    });
+  });
+
+  it("falls back to the current session id when per-session detail metadata is stale", async () => {
+    const root = await makeSessionCostRoot("session-stale-session-file-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const staleFile = path.join(sessionsDir, "old-session-id.jsonl");
+    const currentFile = path.join(sessionsDir, "current-session-id.jsonl");
+    const currentArchive = path.join(
+      sessionsDir,
+      "current-session-id.jsonl.reset.2026-02-12T10-30-00.000Z",
+    );
+    const entry = (timestamp: string, totalTokens: number, content: string): string =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          content,
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(
+        currentArchive,
+        entry("2026-02-12T10:00:00.000Z", 12, "current archive"),
+        "utf-8",
+      ),
+      fs.writeFile(currentFile, entry("2026-02-12T11:00:00.000Z", 18, "current active"), "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({
+        sessionId: "current-session-id",
+        sessionFile: staleFile,
+      });
+      const timeseries = await loadSessionUsageTimeSeries({
+        sessionId: "current-session-id",
+        sessionFile: staleFile,
+      });
+      const logs = await loadSessionLogs({
+        sessionId: "current-session-id",
+        sessionFile: staleFile,
+      });
+
+      expect(summary?.sessionFile).toBe(currentFile);
+      expect(summary?.totalTokens).toBe(30);
+      expect(timeseries?.points.map((point) => point.totalTokens)).toEqual([12, 18]);
+      expect(logs?.map((log) => log.content)).toEqual(["current archive", "current active"]);
     });
   });
 

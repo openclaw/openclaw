@@ -1301,14 +1301,38 @@ function parseUsageSessionLineageIdFromPath(filePath?: string): string | undefin
   return parseUsageCountedSessionIdFromFileName(path.basename(filePath)) ?? undefined;
 }
 
-async function listUsageSessionLineageFileNames(
-  sessionsDir: string,
-  sessionId: string,
-): Promise<string[]> {
+function filterUsageSessionLineageFileNames(entryNames: string[], sessionId: string): string[] {
+  return entryNames.filter((name) => isUsageSessionLineageFileName(name, sessionId));
+}
+
+function selectUsageSessionLineageFileNames(params: {
+  entryNames: string[];
+  preferredSessionId?: string;
+  fallbackSessionId?: string;
+}): string[] {
+  const preferredSessionId = params.preferredSessionId?.trim();
+  const fallbackSessionId = params.fallbackSessionId?.trim();
+  if (preferredSessionId) {
+    const preferredEntries = filterUsageSessionLineageFileNames(
+      params.entryNames,
+      preferredSessionId,
+    );
+    if (
+      preferredEntries.length > 0 ||
+      !fallbackSessionId ||
+      fallbackSessionId === preferredSessionId
+    ) {
+      return preferredEntries;
+    }
+  }
+  return fallbackSessionId
+    ? filterUsageSessionLineageFileNames(params.entryNames, fallbackSessionId)
+    : [];
+}
+
+async function listSessionFileNames(sessionsDir: string): Promise<string[]> {
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && isUsageSessionLineageFileName(entry.name, sessionId))
-    .map((entry) => entry.name);
+  return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
 }
 
 function selectUsageSessionFileFromLineageNames(params: {
@@ -1346,8 +1370,9 @@ export function resolveExistingUsageSessionFile(params: {
     return candidate;
   }
 
-  const sessionId = parseUsageSessionLineageIdFromPath(candidate) ?? params.sessionId?.trim();
-  if (!sessionId) {
+  const preferredSessionId = parseUsageSessionLineageIdFromPath(candidate);
+  const fallbackSessionId = params.sessionId?.trim();
+  if (!preferredSessionId && !fallbackSessionId) {
     return candidate;
   }
 
@@ -1355,10 +1380,15 @@ export function resolveExistingUsageSessionFile(params: {
     const sessionsDir = candidate
       ? path.dirname(candidate)
       : resolveSessionTranscriptsDirForAgent(params.agentId);
-    const entries = fs
+    const entryNames = fs
       .readdirSync(sessionsDir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && isUsageSessionLineageFileName(entry.name, sessionId))
+      .filter((entry) => entry.isFile())
       .map((entry) => entry.name);
+    const entries = selectUsageSessionLineageFileNames({
+      entryNames,
+      preferredSessionId,
+      fallbackSessionId,
+    });
 
     return selectUsageSessionFileFromLineageNames({ sessionsDir, entries, candidate });
   } catch {
@@ -1392,8 +1422,9 @@ async function resolveExistingUsageSessionFileForLineage(params: {
     return candidate;
   }
 
-  const sessionId = parseUsageSessionLineageIdFromPath(candidate) ?? params.sessionId?.trim();
-  if (!sessionId) {
+  const preferredSessionId = parseUsageSessionLineageIdFromPath(candidate);
+  const fallbackSessionId = params.sessionId?.trim();
+  if (!preferredSessionId && !fallbackSessionId) {
     return candidate;
   }
 
@@ -1401,7 +1432,11 @@ async function resolveExistingUsageSessionFileForLineage(params: {
     const sessionsDir = candidate
       ? path.dirname(candidate)
       : resolveSessionTranscriptsDirForAgent(params.agentId);
-    const entries = await listUsageSessionLineageFileNames(sessionsDir, sessionId);
+    const entries = selectUsageSessionLineageFileNames({
+      entryNames: await listSessionFileNames(sessionsDir),
+      preferredSessionId,
+      fallbackSessionId,
+    });
     return selectUsageSessionFileFromLineageNames({ sessionsDir, entries, candidate });
   } catch {
     return candidate;
@@ -1445,14 +1480,19 @@ async function resolveUsageSessionLineageFiles(params: {
     return { sessionFile, files: [] };
   }
 
-  const sessionId = parseUsageSessionLineageIdFromPath(sessionFile) ?? params.sessionId?.trim();
-  if (!sessionId) {
+  const preferredSessionId = parseUsageSessionLineageIdFromPath(sessionFile);
+  const fallbackSessionId = params.sessionId?.trim();
+  if (!preferredSessionId && !fallbackSessionId) {
     return { sessionFile, files: [sessionFile] };
   }
 
   try {
     const sessionsDir = path.dirname(sessionFile);
-    const entries = await listUsageSessionLineageFileNames(sessionsDir, sessionId);
+    const entries = selectUsageSessionLineageFileNames({
+      entryNames: await listSessionFileNames(sessionsDir),
+      preferredSessionId,
+      fallbackSessionId,
+    });
     return selectUsageSessionLineageFromNames({
       sessionsDir,
       entryNames: entries,
@@ -2073,15 +2113,17 @@ export async function loadSessionCostSummariesFromCache(params: {
   };
   const lineages = await Promise.all(
     params.sessions.map(async (session) => {
-      const sessionId =
-        parseUsageSessionLineageIdFromPath(session.sessionFile) ?? session.sessionId?.trim();
-      if (!sessionId) {
+      const preferredSessionId = parseUsageSessionLineageIdFromPath(session.sessionFile);
+      const fallbackSessionId = session.sessionId?.trim();
+      if (!preferredSessionId && !fallbackSessionId) {
         return { sessionFile: session.sessionFile, files: [session.sessionFile] };
       }
       const sessionsDir = path.dirname(session.sessionFile);
-      const entryNames = (await readSessionsDirNames(sessionsDir)).filter((name) =>
-        isUsageSessionLineageFileName(name, sessionId),
-      );
+      const entryNames = selectUsageSessionLineageFileNames({
+        entryNames: await readSessionsDirNames(sessionsDir),
+        preferredSessionId,
+        fallbackSessionId,
+      });
       if (entryNames.length === 0) {
         return { sessionFile: session.sessionFile, files: [session.sessionFile] };
       }
