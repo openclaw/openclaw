@@ -26,6 +26,7 @@ export type DeliveryTargetResolution =
       ok: true;
       channel: Exclude<OutboundChannel, "none">;
       to: string;
+      aliases?: string[];
       accountId?: string;
       threadId?: string | number;
       mode: "explicit" | "implicit";
@@ -34,6 +35,7 @@ export type DeliveryTargetResolution =
       ok: false;
       channel?: Exclude<OutboundChannel, "none">;
       to?: string;
+      aliases?: string[];
       accountId?: string;
       threadId?: string | number;
       mode: "explicit" | "implicit";
@@ -129,6 +131,56 @@ function stripSelectedProviderPrefix(params: {
 
 function shouldStripResolvedTargetProviderPrefix(target: ResolvedMessagingTarget): boolean {
   return target.resolutionSource === "normalized";
+}
+
+function isSlackDeliveryTargetAlias(params: {
+  canonicalTo: string;
+  value: string;
+  directoryResolved: boolean;
+}): boolean {
+  const canonical = params.canonicalTo.trim();
+  const value = params.value.trim();
+  if (value === canonical) {
+    return false;
+  }
+  const canonicalChannelId = canonical.match(/^channel:([A-Z0-9]+)$/i)?.[1];
+  if (!canonicalChannelId) {
+    return false;
+  }
+  if (value.toLowerCase() === `channel:${canonicalChannelId.toLowerCase()}`) {
+    return false;
+  }
+  if (value.toLowerCase() === canonicalChannelId.toLowerCase()) {
+    return true;
+  }
+  return params.directoryResolved;
+}
+
+function compactDeliveryTargetAliases(params: {
+  channel: Exclude<OutboundChannel, "none">;
+  canonicalTo: string;
+  directoryResolved: boolean;
+  values: Array<string | undefined>;
+}): string[] | undefined {
+  const canonical = params.canonicalTo.trim();
+  const aliases = uniqueStrings(
+    params.values
+      .map((value) => value?.trim())
+      .filter((value): value is string => {
+        if (!value || value === canonical) {
+          return false;
+        }
+        return (
+          params.channel === "slack" &&
+          isSlackDeliveryTargetAlias({
+            canonicalTo: canonical,
+            value,
+            directoryResolved: params.directoryResolved,
+          })
+        );
+      }),
+  );
+  return aliases.length > 0 ? aliases : undefined;
 }
 
 /** Resolves cron delivery config into a concrete channel target and optional thread/account. */
@@ -486,11 +538,18 @@ export async function resolveDeliveryTarget(
     })
       ? resolved.threadId
       : undefined);
+  const aliases = compactDeliveryTargetAliases({
+    channel,
+    canonicalTo: toCandidate,
+    directoryResolved: resolvedTarget.source === "directory",
+    values: [explicitTo, preResolvedRouteTargetCandidate, resolvedTarget.to, route?.to],
+  });
   if (options?.dryRun) {
     return {
       ok: true,
       channel,
       to: toCandidate,
+      ...(aliases ? { aliases } : {}),
       accountId,
       threadId,
       mode,
@@ -500,6 +559,7 @@ export async function resolveDeliveryTarget(
     ok: true,
     channel,
     to: toCandidate,
+    ...(aliases ? { aliases } : {}),
     accountId,
     threadId,
     mode,

@@ -241,9 +241,10 @@ function normalizeMessagingToolTarget(
     channel === "message" && resolvedDelivery.ok && delivery.verifiedTarget
       ? resolvedDelivery.channel
       : channel;
+  const traceTo = resolvedDelivery.ok && delivery.verifiedTarget ? resolvedDelivery.to : target.to;
   return {
     channel: traceChannel,
-    ...(target.to ? { to: target.to } : {}),
+    ...(traceTo ? { to: traceTo } : {}),
     ...(target.accountId ? { accountId: target.accountId } : {}),
     ...(target.threadId ? { threadId: target.threadId } : {}),
   };
@@ -318,6 +319,7 @@ function resolveCronSourceDeliveryPlan(params: {
   const target = {
     channel: params.resolvedDelivery.channel,
     to: params.resolvedDelivery.to,
+    aliases: params.resolvedDelivery.aliases,
     accountId: params.resolvedDelivery.accountId,
     threadId: params.resolvedDelivery.threadId,
   };
