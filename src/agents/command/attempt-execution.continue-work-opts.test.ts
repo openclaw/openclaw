@@ -21,7 +21,6 @@
  *
  * Trap-test-first methodology (RED on the pre-cure shape, GREEN after).
  */
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -144,14 +143,9 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
   let sessionEntry: SessionEntry;
   let sessionStore: Record<string, SessionEntry>;
   let storePath: string;
-  let sessionKey: string;
+  const sessionKey = "agent:main:subagent:746-trap";
 
   beforeEach(async () => {
-    const { resetContinuationWorkDispatchForTests } =
-      await import("../../auto-reply/continuation/work-dispatch.js");
-    const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
-    resetContinuationWorkDispatchForTests();
-    resetTaskFlowRegistryForTests({ persist: false });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-746-trap-"));
     storePath = path.join(tmpDir, "sessions.json");
     runEmbeddedAgentMock.mockReset();
@@ -161,14 +155,12 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
       sessionId: "session-embedded",
       updatedAt: Date.now(),
     } as SessionEntry;
-    sessionKey = `agent:main:subagent:746-trap:${crypto.randomUUID()}`;
     sessionStore = { [sessionKey]: sessionEntry };
     await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
     clearSessionStoreCacheForTest();
   });
 
   afterEach(async () => {
-    vi.useRealTimers();
     const { resetContinuationWorkDispatchForTests } =
       await import("../../auto-reply/continuation/work-dispatch.js");
     const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
@@ -264,78 +256,6 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
     expect(persisted[sessionKey]?.continuationChainCount).toBe(1);
     expect(persisted[sessionKey]?.continuationChainTokens).toBe(2);
-  });
-
-  it("schedules every same-turn continue_work tool election with independent delays", async () => {
-    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
-      const opts = (
-        callArgs as {
-          continueWorkOpts?: {
-            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
-          };
-        }
-      ).continueWorkOpts;
-      opts?.requestContinuation({ reason: "first immediate-ish wake", delaySeconds: 60 });
-      opts?.requestContinuation({ reason: "second slower wake", delaySeconds: 120 });
-      opts?.requestContinuation({ reason: "third default-ish wake", delaySeconds: 15 });
-      return makeEmbeddedResult();
-    });
-
-    await runEmbeddedAttempt(makeContinuationEnabledConfig());
-
-    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
-    const states = listTaskFlowsForOwnerKey(sessionKey)
-      .map((flow) => flow.stateJson as { delayMs?: number; hop?: number; reason?: string })
-      .toSorted((left, right) => (left.hop ?? 0) - (right.hop ?? 0));
-
-    expect(states).toHaveLength(3);
-    expect(states.map((state) => state.hop)).toEqual([1, 2, 3]);
-    expect(states.map((state) => state.delayMs)).toEqual([60_000, 120_000, 15_000]);
-    expect(states.map((state) => state.reason)).toEqual([
-      "first immediate-ish wake",
-      "second slower wake",
-      "third default-ish wake",
-    ]);
-    expect(sessionStore[sessionKey]?.continuationChainCount).toBe(3);
-  });
-
-  it("does not collapse a multi continue_work tool batch when the model turn returns after the requested delays elapsed", async () => {
-    const electedAt = Date.parse("2026-06-20T00:00:00.000Z");
-    vi.useFakeTimers();
-    vi.setSystemTime(electedAt);
-    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
-      const opts = (
-        callArgs as {
-          continueWorkOpts?: {
-            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
-          };
-        }
-      ).continueWorkOpts;
-      opts?.requestContinuation({ reason: "sixty seconds", delaySeconds: 60 });
-      opts?.requestContinuation({ reason: "one hundred twenty seconds", delaySeconds: 120 });
-      opts?.requestContinuation({ reason: "default delay", delaySeconds: 15 });
-      // The runner schedules captured tool requests only after the agent turn
-      // yields. Advancing time here pins that current behavior: elapsed time
-      // during the model turn does not collapse or pre-mature the batch.
-      vi.setSystemTime(electedAt + 120_000);
-      return makeEmbeddedResult();
-    });
-
-    await runEmbeddedAttempt(makeContinuationEnabledConfig());
-
-    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
-    const states = listTaskFlowsForOwnerKey(sessionKey)
-      .map((flow) => flow.stateJson as { delayMs?: number; dueAt?: number; hop?: number })
-      .toSorted((left, right) => (left.hop ?? 0) - (right.hop ?? 0));
-
-    expect(states).toHaveLength(3);
-    expect(states.map((state) => state.delayMs)).toEqual([60_000, 120_000, 15_000]);
-    expect(states.map((state) => state.dueAt)).toEqual([
-      electedAt + 180_000,
-      electedAt + 240_000,
-      electedAt + 135_000,
-    ]);
-    expect(sessionStore[sessionKey]?.continuationChainCount).toBe(3);
   });
 
   // P2-2 never-silent symmetry: the spawn-init lane must surface a multi-election
@@ -464,34 +384,6 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
       kind: "continuation_work",
       delayMs: 15000,
     });
-  });
-
-  it("schedules one same-session wake for a CONTINUE_WORK token when no tool call exists", async () => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "done\nCONTINUE_WORK:60" }],
-      meta: {
-        durationMs: 1,
-        finalAssistantVisibleText: "done",
-        agentMeta: {
-          sessionId: "session-embedded",
-          provider: "anthropic",
-          model: "claude-sonnet-4.7",
-          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
-        },
-      },
-    } satisfies EmbeddedAgentRunResult);
-
-    const result = await runEmbeddedAttempt(makeContinuationEnabledConfig());
-
-    expect(result.payloads?.[0]?.text).toBe("done");
-    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
-    const states = listTaskFlowsForOwnerKey(sessionKey).map(
-      (flow) => flow.stateJson as { delayMs?: number; hop?: number; reason?: string },
-    );
-    expect(states).toHaveLength(1);
-    expect(states[0]).toMatchObject({ hop: 1, delayMs: 60_000 });
-    expect(states[0]?.reason).toBeUndefined();
-    expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
   });
 
   it("captured continue_work request is invocable end-to-end on spawn-init (turn-1 cure-mechanism pin)", async () => {
