@@ -510,9 +510,13 @@ run_apt_with_lock_retry apt-get -o DPkg::Lock::Timeout=30 install -y curl ca-cer
     this.guest.bash(`
 set -e
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL ${shellQuote(url)} -o ${shellQuote(outputPath)}
+  curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
+    url,
+  )} -o ${shellQuote(outputPath)}
 else
-  wget -q -O ${shellQuote(outputPath)} ${shellQuote(url)}
+  wget -q --timeout=10 --read-timeout=120 --tries=3 -O ${shellQuote(outputPath)} ${shellQuote(
+    url,
+  )}
 fi`);
   }
 

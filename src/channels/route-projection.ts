@@ -3,10 +3,7 @@ import type {
   ConversationRef,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import {
-  normalizeChannelRouteRef,
-  type ChannelRouteRef,
-} from "../plugin-sdk/channel-route.js";
+import { normalizeChannelRouteRef, type ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import {
   normalizeConversationTargetParams,
   type ConversationTargetParams,
@@ -63,11 +60,6 @@ export function resolveConversationDeliveryTarget(params: ConversationTargetPara
   return { to };
 }
 
-/** Converts a channel route back to legacy delivery context metadata. */
-export function deliveryContextFromRoute(route?: ChannelRouteRef): DeliveryContext | undefined {
-  return deliveryContextFromChannelRoute(route);
-}
-
 /** Converts a persisted conversation reference into a channel route. */
 export function routeFromConversationRef(
   conversation?: ConversationRef | null,
@@ -104,7 +96,7 @@ export function routeToDeliveryFields(route?: ChannelRouteRef): {
   accountId?: string;
   threadId?: string | number;
 } {
-  const deliveryContext = deliveryContextFromRoute(route);
+  const deliveryContext = deliveryContextFromChannelRoute(route);
   return {
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(deliveryContext?.channel ? { channel: deliveryContext.channel } : {}),

@@ -142,6 +142,48 @@ function sleep(ms) {
   });
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function redactDiagnosticText(text, extraSecrets = []) {
+  let redacted = text
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer <redacted>")
+    .replace(/openwebui-session=[^;"\s]+/giu, "openwebui-session=<redacted>");
+  for (const secret of [email, password, ...extraSecrets]) {
+    if (!secret) {
+      continue;
+    }
+    redacted = redacted.replace(new RegExp(escapeRegExp(secret), "g"), "<redacted>");
+    redacted = redacted.replace(
+      new RegExp(escapeRegExp(JSON.stringify(secret).slice(1, -1)), "g"),
+      "<redacted>",
+    );
+  }
+  return redacted;
+}
+
+function cookieSecretValues(cookieHeader) {
+  if (!cookieHeader) {
+    return [];
+  }
+  return cookieHeader
+    .split(";")
+    .map((part) => {
+      const text = part.trim();
+      const separatorIndex = text.indexOf("=");
+      return separatorIndex === -1 ? "" : text.slice(separatorIndex + 1).trim();
+    })
+    .filter(Boolean);
+}
+
+function authDiagnosticSecretValues(authHeaders) {
+  const authorization = typeof authHeaders.authorization === "string" ? authHeaders.authorization : "";
+  const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+  const cookie = typeof authHeaders.cookie === "string" ? authHeaders.cookie : "";
+  return [bearerToken, authorization, cookie, ...cookieSecretValues(cookie)].filter(Boolean);
+}
+
 async function fetchSignin() {
   return await withRequestTimeout(
     "Open WebUI signin",
@@ -155,7 +197,7 @@ async function fetchSignin() {
       });
       if (!response.ok) {
         const body = await readBoundedResponseText(response, "Open WebUI signin", timeoutPromise);
-        throw new Error(`signin failed: HTTP ${response.status} ${body}`);
+        throw new Error(`signin failed: HTTP ${response.status} ${redactDiagnosticText(body)}`);
       }
       return {
         cookie: getCookieHeader(response),
@@ -165,21 +207,22 @@ async function fetchSignin() {
   );
 }
 
-async function fetchModels(authHeaders, attempt) {
+async function fetchModels(authHeaders, attempt, diagnosticSecrets) {
   return await withRequestTimeout(
     `Open WebUI models attempt ${attempt}`,
     controlTimeoutMs,
     async (signal, timeoutPromise) => {
       const response = await fetch(`${baseUrl}/api/models`, { headers: authHeaders, signal });
       if (!response.ok) {
+        const text = await readBoundedResponseText(
+          response,
+          `Open WebUI models attempt ${attempt}`,
+          timeoutPromise,
+        );
         return {
           ok: false,
           status: response.status,
-          text: await readBoundedResponseText(
-            response,
-            `Open WebUI models attempt ${attempt}`,
-            timeoutPromise,
-          ),
+          text: redactDiagnosticText(text, diagnosticSecrets),
         };
       }
       return {
@@ -194,7 +237,7 @@ async function fetchModels(authHeaders, attempt) {
   );
 }
 
-async function fetchChatCompletion(authHeaders, targetModel) {
+async function fetchChatCompletion(authHeaders, targetModel, diagnosticSecrets) {
   return await withRequestTimeout(
     "Open WebUI chat completion",
     chatTimeoutMs,
@@ -217,7 +260,12 @@ async function fetchChatCompletion(authHeaders, targetModel) {
           "Open WebUI chat completion",
           timeoutPromise,
         );
-        throw new Error(`/api/chat/completions failed: HTTP ${response.status} ${body}`);
+        throw new Error(
+          `/api/chat/completions failed: HTTP ${response.status} ${redactDiagnosticText(
+            body,
+            diagnosticSecrets,
+          )}`,
+        );
       }
       return await readBoundedResponseJson(response, "Open WebUI chat completion", timeoutPromise);
     },
@@ -245,12 +293,13 @@ const authHeaders = {
   ...buildAuthHeaders(token, signin.cookie),
   accept: "application/json",
 };
+const diagnosticSecrets = [token, signin.cookie, ...cookieSecretValues(signin.cookie)];
 
 let modelIds = [];
 let targetModel = "";
 let lastModelsError = "";
 for (let attempt = 1; attempt <= modelAttempts; attempt += 1) {
-  const modelsResult = await fetchModels(authHeaders, attempt).catch(
+  const modelsResult = await fetchModels(authHeaders, attempt, diagnosticSecrets).catch(
     /** @param {unknown} error */ (error) => {
       lastModelsError = error instanceof Error ? error.message : String(error);
       return undefined;
@@ -281,11 +330,15 @@ if (smokeMode === "models") {
   process.exit(0);
 }
 
-const chatJson = await fetchChatCompletion(authHeaders, targetModel);
+const chatJson = await fetchChatCompletion(authHeaders, targetModel, diagnosticSecrets);
 const reply =
   chatJson?.choices?.[0]?.message?.content ?? chatJson?.message?.content ?? chatJson?.content ?? "";
 if (typeof reply !== "string" || !reply.includes(expectedNonce)) {
-  throw new Error(`chat reply missing nonce: ${JSON.stringify(reply)}`);
+  const diagnosticReply = redactDiagnosticText(JSON.stringify(reply), [
+    ...diagnosticSecrets,
+    ...authDiagnosticSecretValues(authHeaders),
+  ]);
+  throw new Error(`chat reply missing nonce: ${diagnosticReply}`);
 }
 
 console.log(JSON.stringify({ ok: true, model: targetModel, reply }, null, 2));

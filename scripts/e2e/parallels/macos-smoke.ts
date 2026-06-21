@@ -10,8 +10,10 @@ import {
   currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
+  isLikelyMacosDesktopHome,
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
+  parseMacosDsclUserHomeLine,
   packOpenClaw,
   parseMode,
   parseProvider,
@@ -690,10 +692,11 @@ exec node "$entry" ${argv}`,
       },
     ).stdout.replaceAll("\r", "");
     for (const line of users.split("\n")) {
-      const [user, home] = line.trim().split(/\s+/);
+      const parsed = parseMacosDsclUserHomeLine(line);
+      const user = parsed?.user;
       if (
         user &&
-        home?.startsWith("/Users/") &&
+        isLikelyMacosDesktopHome(parsed?.home) &&
         !user.startsWith("_") &&
         user !== "Shared" &&
         user !== ".localized"
@@ -806,7 +809,9 @@ rm -f /tmp/openclaw-parallels-macos-gateway.log`);
   private installLatestRelease(): void {
     this.guestSh(
       `export OPENCLAW_NO_ONBOARD=1
-curl -fsSL ${shellQuote(this.options.installUrl)} -o /tmp/openclaw-install.sh
+curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
+        this.options.installUrl,
+      )} -o /tmp/openclaw-install.sh
 bash /tmp/openclaw-install.sh --version ${shellQuote(this.installVersion)}
 ${guestOpenClaw} --version`,
     );
@@ -834,7 +839,9 @@ ${guestOpenClaw} --version`);
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
     this.guestSh(`printf 'install-source: host-tgz %s\\n' ${shellQuote(tgzUrl)}
-curl -fsSL ${shellQuote(tgzUrl)} -o /tmp/${tempName}
+curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
+      tgzUrl,
+    )} -o /tmp/${tempName}
 ${guestNpm} install -g /tmp/${tempName}
 ${guestOpenClaw} --version`);
   }

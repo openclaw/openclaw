@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -81,6 +82,17 @@ for (const signal of Object.keys(CROSS_OS_SIGNAL_EXIT_CODES) as NodeJS.Signals[]
       process.exit(forwardedSignalExitCode);
     }, CROSS_OS_PROCESS_TREE_KILL_AFTER_MS);
   });
+}
+
+function exitForwardedSignalWhenChildTreesDone() {
+  if (forwardedSignalExitCode === undefined || CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.size > 0) {
+    return;
+  }
+  if (forwardedSignalForceKillTimer) {
+    clearTimeout(forwardedSignalForceKillTimer);
+    forwardedSignalForceKillTimer = undefined;
+  }
+  process.exit(forwardedSignalExitCode);
 }
 
 const providerConfig = {
@@ -3612,11 +3624,15 @@ async function stopGateway(gateway) {
       return;
     }
     if (process.platform === "win32") {
-      await runCommand("taskkill", ["/PID", String(gateway.child.pid), "/T", "/F"], {
-        logPath: gateway.logPath,
-        check: false,
-        timeoutMs: 30_000,
-      });
+      await runCommand(
+        resolveWindowsTaskkillPath(),
+        ["/PID", String(gateway.child.pid), "/T", "/F"],
+        {
+          logPath: gateway.logPath,
+          check: false,
+          timeoutMs: 30_000,
+        },
+      );
       const exited = await waitForChildExit(gateway.child, 10_000);
       if (!exited) {
         gateway.child.stdout?.destroy();
@@ -3956,10 +3972,14 @@ async function runCommandInvocation(invocation, options) {
     const requestKill = () => {
       if (process.platform === "win32" && child.pid) {
         try {
-          const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-            stdio: "ignore",
-            windowsHide: true,
-          });
+          const killer = spawn(
+            resolveWindowsTaskkillPath(),
+            ["/PID", String(child.pid), "/T", "/F"],
+            {
+              stdio: "ignore",
+              windowsHide: true,
+            },
+          );
           killer.on("error", () => {
             child.kill();
           });
@@ -4014,15 +4034,23 @@ async function runCommandInvocation(invocation, options) {
     });
 
     child.on("error", (error) => {
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.killChildTree("SIGKILL");
+      }
       activeChildTree.unregister();
       finalize(() => rejectPromise(error));
     });
 
     child.on("close", (exitCode) => {
-      activeChildTree.unregister();
       if (forwardedSignalExitCode !== undefined) {
+        // The leader can exit on SIGTERM while descendants remain in its group.
+        // Kill the group before unregistering so signal forwarding cannot leave them running.
+        activeChildTree.killChildTree("SIGKILL");
+        activeChildTree.unregister();
+        finalize(exitForwardedSignalWhenChildTreesDone);
         return;
       }
+      activeChildTree.unregister();
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,

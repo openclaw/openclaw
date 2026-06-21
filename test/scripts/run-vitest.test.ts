@@ -26,6 +26,7 @@ import {
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
+  spawnWatchedVitestProcess,
   shouldSuppressVitestStderrLine,
 } from "../../scripts/run-vitest.mjs";
 
@@ -716,14 +717,21 @@ describe("scripts/run-vitest", () => {
       os.tmpdir(),
       `openclaw-run-vitest-delegated-child-${process.pid}-${Date.now()}.pid`,
     );
+    const descendantPidPath = nodePath.join(
+      os.tmpdir(),
+      `openclaw-run-vitest-delegated-descendant-${process.pid}-${Date.now()}.pid`,
+    );
 
     fs.writeFileSync(
       fixturePath,
       [
+        'import { spawn } from "node:child_process";',
         'import fs from "node:fs";',
         'import { it } from "vitest";',
         'it("waits for wrapper termination", async () => {',
+        '  const child = spawn(process.execPath, ["-e", "process.on(\\\'SIGTERM\\\', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });',
         "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID!, String(process.pid));",
+        "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID!, String(child.pid));",
         "  await new Promise(() => {});",
         "});",
         "",
@@ -737,24 +745,31 @@ describe("scripts/run-vitest", () => {
         env: {
           ...process.env,
           OPENCLAW_DELEGATED_SIGNAL_CHILD_PID: childPidPath,
+          OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID: descendantPidPath,
         },
         stdio: "ignore",
       },
     );
     let childPid = 0;
+    let descendantPid = 0;
 
     try {
       await waitFor(() => fs.existsSync(childPidPath), 10_000);
+      await waitFor(() => fs.existsSync(descendantPidPath), 10_000);
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
       expect(Number.isInteger(childPid)).toBe(true);
+      expect(Number.isInteger(descendantPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
 
       expect(runner.pid).toBeGreaterThan(0);
       process.kill(runner.pid!, "SIGTERM");
       const result = await waitForClose(runner);
 
-      expect(result).toEqual({ code: 143, signal: null });
+      expect(result).toEqual({ code: null, signal: "SIGTERM" });
       await waitFor(() => !isProcessAlive(childPid), 5_000);
+      await waitFor(() => !isProcessAlive(descendantPid), 5_000);
     } finally {
       if (runner.pid && isProcessAlive(runner.pid)) {
         process.kill(runner.pid, "SIGKILL");
@@ -762,8 +777,12 @@ describe("scripts/run-vitest", () => {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
       }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
       fs.rmSync(fixturePath, { force: true });
       fs.rmSync(childPidPath, { force: true });
+      fs.rmSync(descendantPidPath, { force: true });
     }
   });
 
@@ -778,6 +797,26 @@ describe("scripts/run-vitest", () => {
       detached: false,
       stdio: ["inherit", "pipe", "pipe"],
     });
+  });
+
+  posixIt("terminates a silent Vitest child through the watchdog", async () => {
+    const watched = spawnWatchedVitestProcess({
+      pnpmArgs: ["exec", "node", "-e", "setInterval(() => {}, 1000)"],
+      spawnParams: {
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+      env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "100" },
+    });
+
+    try {
+      expect(await waitForClose(watched.child)).toEqual({ code: null, signal: "SIGTERM" });
+    } finally {
+      watched.teardown();
+      if (watched.child.pid && isProcessAlive(watched.child.pid)) {
+        process.kill(-watched.child.pid, "SIGKILL");
+      }
+    }
   });
 
   it("reenables local check policy for local Vitest children", () => {
@@ -920,6 +959,36 @@ describe("scripts/run-vitest", () => {
       );
 
       teardown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps force-kill scheduled when output arrives after the idle timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const stdout = new EventEmitter();
+      const timeoutSpy = vi.fn();
+      const forceKillSpy = vi.fn();
+
+      installVitestNoOutputWatchdog({
+        streams: [stdout],
+        timeoutMs: 1000,
+        forceKillAfterMs: 5000,
+        onTimeout: timeoutSpy,
+        onForceKill: forceKillSpy,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      vi.advanceTimersByTime(1000);
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+
+      stdout.emit("data", "too late");
+      vi.advanceTimersByTime(5000);
+
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(forceKillSpy).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

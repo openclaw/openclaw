@@ -446,14 +446,19 @@ describe("OpenClaw SDK websocket e2e", () => {
       const identity = expectJsonObject(await agent.identity({ sessionKey: "sdk-session" }));
       expect(identity.agentId).toBe("main");
       expect(identity.sessionKey).toBe("sdk-session");
-      const createAgent = expectJsonObject(await oc.agents.create({ id: "sdk-agent" }));
+      const createAgent = expectJsonObject(
+        await oc.agents.create({ name: "SDK Agent", workspace: "/tmp/sdk-agent" }),
+      );
       expect(createAgent.method).toBe("agents.create");
+      expect(createAgent.params).toEqual({ name: "SDK Agent", workspace: "/tmp/sdk-agent" });
       const updateAgent = expectJsonObject(
-        await oc.agents.update({ id: "sdk-agent", label: "SDK Agent" }),
+        await oc.agents.update({ agentId: "sdk-agent", name: "Renamed SDK Agent" }),
       );
       expect(updateAgent.method).toBe("agents.update");
-      const deleteAgent = expectJsonObject(await oc.agents.delete({ id: "sdk-agent" }));
+      expect(updateAgent.params).toEqual({ agentId: "sdk-agent", name: "Renamed SDK Agent" });
+      const deleteAgent = expectJsonObject(await oc.agents.delete({ agentId: "sdk-agent" }));
       expect(deleteAgent.method).toBe("agents.delete");
+      expect(deleteAgent.params).toEqual({ agentId: "sdk-agent" });
 
       const sessions = expectJsonObject(await oc.sessions.list());
       expect(sessions.sessions).toEqual([{ key: "sdk-session" }]);

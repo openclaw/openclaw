@@ -1,12 +1,12 @@
-// Openai Chat Tools Client tests cover openai chat tools client script behavior.
+// OpenAI-compatible chat tools tests cover QA Lab HTTP tool-call evidence.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
+import { cleanupTempDirs, makeTempDir } from "../../../helpers/temp-dir.js";
 
 const clientPath = path.resolve("scripts/e2e/lib/openai-chat-tools/client.mjs");
 const dockerRunnerPath = path.resolve("scripts/e2e/openai-chat-tools-docker.sh");
@@ -14,7 +14,6 @@ const writeConfigPath = path.resolve("scripts/e2e/lib/openai-chat-tools/write-co
 
 interface ClientResult {
   error?: Error;
-  signal: NodeJS.Signals | null;
   status: number | null;
   stderr: string;
   stdout: string;
@@ -69,13 +68,12 @@ function runClient(
     }, timeout);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolve({ error, signal: null, status: null, stderr: stderr.text(), stdout: stdout.text() });
+      resolve({ error, status: null, stderr: stderr.text(), stdout: stdout.text() });
     });
-    child.on("exit", (status, signal) => {
+    child.on("exit", (status) => {
       clearTimeout(timer);
       resolve({
         error: timedOut ? new Error(`client timed out after ${timeout}ms`) : undefined,
-        signal,
         status,
         stderr: stderr.text(),
         stdout: stdout.text(),

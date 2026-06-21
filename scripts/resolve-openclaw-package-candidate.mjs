@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,6 +25,7 @@ export const ARTIFACT_TARBALL_SCAN_MAX_ENTRIES = 10_000;
 const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
+const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -195,25 +197,17 @@ function run(command, args, options = {}) {
     });
     let timedOut = false;
     let killTimer;
-    let timeoutReject;
-    const killChild = (signal) => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The process group can disappear between timeout and cleanup.
-        }
-      }
-      child.kill(signal);
-    };
+    let forceKillAt;
+    const killChild = (signal) => signalChildProcessTree(child, signal, { useProcessGroup });
     const terminateChild = () => {
       killChild("SIGTERM");
+      const killAfterMs = options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS;
+      forceKillAt = Date.now() + killAfterMs;
       killTimer = setTimeout(() => {
         killTimer = undefined;
+        forceKillAt = undefined;
         killChild("SIGKILL");
-        timeoutReject?.();
-      }, options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS);
+      }, killAfterMs);
     };
     const timeout =
       options.timeoutMs === undefined
@@ -244,6 +238,7 @@ function run(command, args, options = {}) {
       }
       if (killTimer && !timedOut) {
         clearTimeout(killTimer);
+        forceKillAt = undefined;
       }
       ACTIVE_CHILD_KILLERS.delete(killChild);
       if (
@@ -261,7 +256,13 @@ function run(command, args, options = {}) {
           `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`,
         );
         if (killTimer) {
-          timeoutReject = () => reject(timeoutError);
+          void finishTimedOutProcessTree(child, {
+            forceKillAt,
+            killChild,
+            killTimer,
+            killAfterMs: options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS,
+            useProcessGroup,
+          }).then(() => reject(timeoutError), reject);
           return;
         }
         reject(timeoutError);
@@ -284,6 +285,91 @@ function run(command, args, options = {}) {
       reject(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}${detail}`));
     });
   });
+}
+
+async function finishTimedOutProcessTree(
+  child,
+  { forceKillAt, killAfterMs, killChild, killTimer, useProcessGroup },
+) {
+  const graceRemainingMs =
+    forceKillAt === undefined ? killAfterMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForProcessTreeExit(child, graceRemainingMs, useProcessGroup);
+  }
+  clearTimeout(killTimer);
+  if (processTreeIsAlive(child, useProcessGroup)) {
+    killChild("SIGKILL");
+    await waitForProcessTreeExit(child, killAfterMs, useProcessGroup);
+  }
+}
+
+export function signalChildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process group can disappear between timeout and cleanup.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
+}
+
+function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function processTreeIsAlive(child, useProcessGroup) {
+  if (!child || typeof child.pid !== "number") {
+    return false;
+  }
+  if (!useProcessGroup) {
+    return !childHasExited(child);
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForProcessTreeExit(child, timeoutMs, useProcessGroup) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!processTreeIsAlive(child, useProcessGroup)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !processTreeIsAlive(child, useProcessGroup);
 }
 
 function appendBoundedCommandOutput(buffer, chunk, maxChars) {
@@ -318,7 +404,7 @@ async function sha256(file) {
 }
 
 function assertSha256(value) {
-  if (!/^[a-f0-9]{64}$/u.test(value)) {
+  if (!/^[a-f0-9]{64}$/iu.test(value)) {
     throw new Error(`package_sha256 must be a lowercase or uppercase 64-character SHA-256 digest`);
   }
 }
@@ -334,6 +420,8 @@ async function assertExpectedSha256(file, expected) {
   }
   return actual;
 }
+
+export const assertExpectedSha256ForTest = assertExpectedSha256;
 
 async function findSingleTarball(dir) {
   const root = path.resolve(ROOT_DIR, dir);
@@ -363,8 +451,11 @@ async function findSingleTarball(dir) {
       if (entry.isFile() && /\.t(?:ar\.)?gz$/u.test(entry.name)) {
         tarballs.push(absolute);
         if (tarballs.length > 1) {
+          const relativeTarballs = tarballs
+            .map((tarball) => path.relative(root, tarball))
+            .toSorted((a, b) => a.localeCompare(b));
           throw new Error(
-            `source=artifact requires exactly one .tgz under ${dir}; found at least 2: ${tarballs.toSorted((a, b) => a.localeCompare(b)).join(", ")}`,
+            `source=artifact requires exactly one .tgz under ${dir}; found at least 2: ${relativeTarballs.join(", ")}`,
           );
         }
       }
@@ -902,8 +993,11 @@ function validateTrustedPackageDownloadUrl(parsed, trustedSource, options = {}) 
   }
 }
 
-function createTrustedPackageAuthHeaders(trustedSource) {
+function createTrustedPackageAuthHeaders(trustedSource, parsed, initialOrigin) {
   if (!trustedSource?.auth) {
+    return undefined;
+  }
+  if (parsed.origin !== initialOrigin) {
     return undefined;
   }
   const token = process.env[TRUSTED_PACKAGE_SOURCE_TOKEN_ENV];
@@ -1132,8 +1226,8 @@ async function openPackageDownloadResponse(url, options) {
   const timeoutMs = options.timeoutMs ?? PACKAGE_URL_DOWNLOAD_TIMEOUT_MS;
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
-  const headers = createTrustedPackageAuthHeaders(trustedSource);
   let parsed = new URL(url);
+  const initialOrigin = parsed.origin;
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
     if (trustedSource) {
       validateTrustedPackageDownloadUrl(parsed, trustedSource, { isRedirect: redirectCount > 0 });
@@ -1141,6 +1235,7 @@ async function openPackageDownloadResponse(url, options) {
       validatePackageDownloadUrl(parsed);
     }
     const addresses = await resolvePackageDownloadAddresses(parsed, lookupHost, trustedSource);
+    const headers = createTrustedPackageAuthHeaders(trustedSource, parsed, initialOrigin);
     const opened = options.fetchImpl
       ? await openFetchPackageDownloadResponse(parsed, {
           fetchImpl: options.fetchImpl,

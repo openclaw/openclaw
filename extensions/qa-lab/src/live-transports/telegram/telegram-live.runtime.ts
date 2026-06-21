@@ -936,6 +936,7 @@ async function callTelegramApi<T>(
     timeoutMs: requestTimeoutMs,
     policy: { hostnameAllowlist: ["api.telegram.org"] },
     auditContext: "qa-lab-telegram-live",
+    capture: false,
   });
   try {
     const payload = (await response.json()) as TelegramApiEnvelope<T>;

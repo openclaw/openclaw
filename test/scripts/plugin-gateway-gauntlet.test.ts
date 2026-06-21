@@ -1,9 +1,10 @@
 // Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildObservationGuardFailures,
@@ -90,6 +91,20 @@ describe("plugin gateway gauntlet helpers", () => {
       await delay(25);
     }
     throw new Error("condition was not met before timeout");
+  }
+
+  async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
+    return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("child did not close before timeout"));
+        }, timeoutMs);
+        child.once("close", (code, signal) => {
+          clearTimeout(timer);
+          resolve({ code, signal });
+        });
+      },
+    );
   }
 
   it("stops parsing options after the argument terminator", () => {
@@ -599,6 +614,66 @@ setInterval(() => {}, 1000);
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "lets timed-out measured command descendants drain during kill grace",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const scriptPath = path.join(repoRoot, "leader-exits-drain.mjs");
+      const readyPath = path.join(repoRoot, "grandchild.ready");
+      const drainedPath = path.join(repoRoot, "grandchild.drained");
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchildScript = [
+  "const fs = require('node:fs');",
+  "process.on('SIGTERM', () => {",
+  "  setTimeout(() => {",
+  "    fs.writeFileSync(process.argv[3], 'drained');",
+  "    process.exit(0);",
+  "  }, 50);",
+  "});",
+  "fs.writeFileSync(process.argv[2], 'ready');",
+  "setInterval(() => {}, 1000);",
+].join("\\n");
+spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[2], process.argv[3]], {
+  stdio: "ignore",
+});
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+
+      const rowPromise = runMeasuredCommand({
+        cwd: repoRoot,
+        env: process.env,
+        logDir,
+        command: process.execPath,
+        args: [scriptPath, readyPath, drainedPath],
+        label: "timeout-leader-drain",
+        phase: "probe",
+        timeoutKillGraceMs: 1_000,
+        timeoutMs: 500,
+        timeMode: "none",
+      });
+
+      await waitFor(() =>
+        fs
+          .access(readyPath)
+          .then(() => true)
+          .catch(() => false),
+      );
+      const row = await rowPromise;
+
+      expect(row.timedOut).toBe(true);
+      expect(row.spawnError?.code).toBe("ETIMEDOUT");
+      await expect(fs.readFile(drainedPath, "utf8")).resolves.toBe("drained");
+    },
+  );
+
   it("captures output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
     const row = await runMeasuredCommandLive({
@@ -659,6 +734,196 @@ setInterval(() => {}, 1000);
     expect(row.status).toBe(0);
     expect(process.listenerCount("SIGTERM")).toBe(before);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "cleans parent-terminated measured process groups when the leader exits first",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const harnessPath = path.join(repoRoot, "parent-termination-harness.mjs");
+      const scriptPath = path.join(repoRoot, "parent-termination-leader.mjs");
+      const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
+      const grandchildReadyPath = path.join(repoRoot, "grandchild.ready");
+      let grandchildPid = 0;
+
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchildScript = [
+  "const fs = require('node:fs');",
+  "process.on('SIGTERM', () => {});",
+  "process.on('SIGHUP', () => {});",
+  "fs.writeFileSync(process.argv[2], 'ready');",
+  "setInterval(() => {}, 1000);",
+].join("\\n");
+const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
+  stdio: "ignore",
+});
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+      await fs.writeFile(
+        harnessPath,
+        `
+import { runMeasuredCommandLive } from ${JSON.stringify(
+          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+        )};
+
+await runMeasuredCommandLive({
+  cwd: ${JSON.stringify(repoRoot)},
+  env: process.env,
+  logDir: ${JSON.stringify(logDir)},
+  command: process.execPath,
+  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}, ${JSON.stringify(
+    grandchildReadyPath,
+  )}],
+  label: "parent-termination-leader-exits",
+  phase: "probe",
+  timeoutKillGraceMs: 25,
+  timeoutMs: 60_000,
+  timeMode: "none",
+});
+`,
+        "utf8",
+      );
+
+      const harness = spawn(process.execPath, [harnessPath], {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        await waitFor(async () => {
+          try {
+            await fs.access(grandchildReadyPath);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+        expect(isProcessAlive(grandchildPid)).toBe(true);
+
+        harness.kill("SIGTERM");
+        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        if (harness.pid && isProcessAlive(harness.pid)) {
+          harness.kill("SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rethrows parent termination received during timeout cleanup",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const harnessPath = path.join(repoRoot, "timeout-parent-termination-harness.mjs");
+      const scriptPath = path.join(repoRoot, "timeout-parent-termination-leader.mjs");
+      const grandchildPidPath = path.join(repoRoot, "timeout-grandchild.pid");
+      const grandchildReadyPath = path.join(repoRoot, "timeout-grandchild.ready");
+      const leaderExitedPath = path.join(repoRoot, "timeout-leader.exited");
+      let grandchildPid = 0;
+
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchildScript = [
+  "const fs = require('node:fs');",
+  "process.on('SIGTERM', () => {});",
+  "process.on('SIGHUP', () => {});",
+  "fs.writeFileSync(process.argv[2], 'ready');",
+  "setInterval(() => {}, 1000);",
+].join("\\n");
+const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
+  stdio: "ignore",
+});
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => {
+  fs.writeFileSync(process.argv[4], "exited");
+  process.exit(0);
+});
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+      await fs.writeFile(
+        harnessPath,
+        `
+import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
+import { runMeasuredCommandLive } from ${JSON.stringify(
+          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+        )};
+
+const promise = runMeasuredCommandLive({
+  cwd: ${JSON.stringify(repoRoot)},
+  env: process.env,
+  logDir: ${JSON.stringify(logDir)},
+  command: process.execPath,
+  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}, ${JSON.stringify(
+    grandchildReadyPath,
+  )}, ${JSON.stringify(leaderExitedPath)}],
+  label: "timeout-parent-termination",
+  phase: "probe",
+  timeoutKillGraceMs: 1_000,
+  timeoutMs: 100,
+  timeMode: "none",
+});
+for (let attempt = 0; attempt < 100 && !fs.existsSync(${JSON.stringify(
+          leaderExitedPath,
+        )}); attempt += 1) {
+  await delay(25);
+}
+if (!fs.existsSync(${JSON.stringify(leaderExitedPath)})) {
+  process.exit(2);
+}
+await delay(100);
+process.kill(process.pid, "SIGTERM");
+await promise;
+process.exit(7);
+`,
+        "utf8",
+      );
+
+      const harness = spawn(process.execPath, [harnessPath], {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        await waitFor(async () => {
+          try {
+            await fs.access(grandchildReadyPath);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+
+        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        if (harness.pid && isProcessAlive(harness.pid)) {
+          harness.kill("SIGKILL");
+        }
+      }
+    },
+  );
 
   it("bounds captured output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
