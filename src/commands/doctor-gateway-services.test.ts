@@ -579,13 +579,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
       installEntrypoint:
         "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/dist/index.js",
       realpath: async (value: string) => {
-        if (value.includes("/global/5/node_modules/openclaw/")) {
-          return value.replace(
+        const normalized = value.replaceAll("\\", "/").replace(/^[A-Z]:/i, "");
+        if (normalized.includes("/global/5/node_modules/openclaw/")) {
+          return normalized.replace(
             "/global/5/node_modules/openclaw/",
             "/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/",
           );
         }
-        return value;
+        return normalized;
       },
     });
 

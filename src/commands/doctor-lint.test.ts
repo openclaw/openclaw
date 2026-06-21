@@ -77,6 +77,39 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("passes deep mode to health check context", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    const detect = vi.fn(async () => []);
+    registerHealthCheck({
+      id: "test/deep-context",
+      kind: "plugin",
+      description: "test deep context",
+      detect,
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await runDoctorLintCli(runtime, {
+        deep: true,
+        onlyIds: ["test/deep-context"],
+      });
+
+      expect(detect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: "lint",
+          deep: true,
+        }),
+      );
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("emits structured JSON for invalid config snapshots", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,

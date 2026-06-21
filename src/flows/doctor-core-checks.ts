@@ -659,15 +659,17 @@ const gatewayServicesExtraCheck: HealthCheck = {
   kind: "core",
   description: "Extra gateway-like services are represented as structured findings.",
   source: "doctor",
-  async detect() {
+  async detect(ctx) {
     const { detectExtraGatewayServiceIssues, extraGatewayServiceToHealthFinding } =
       await import("../commands/doctor-gateway-services.js");
-    return (await detectExtraGatewayServiceIssues()).map(extraGatewayServiceToHealthFinding);
+    return (await detectExtraGatewayServiceIssues({ deep: ctx.deep === true })).map(
+      extraGatewayServiceToHealthFinding,
+    );
   },
   async repair(ctx) {
     const { detectExtraGatewayServiceIssues, extraGatewayServiceToRepairEffects } =
       await import("../commands/doctor-gateway-services.js");
-    const effects = (await detectExtraGatewayServiceIssues()).flatMap(
+    const effects = (await detectExtraGatewayServiceIssues({ deep: ctx.deep === true })).flatMap(
       extraGatewayServiceToRepairEffects,
     );
     if (ctx.dryRun === true) {

@@ -17,10 +17,25 @@ import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async () => []),
+  detectExtraGatewayServiceIssues: vi.fn(async () => []),
+  extraGatewayServiceToHealthFinding: vi.fn(
+    (service: { label: string }): HealthFinding => ({
+      checkId: "core/doctor/gateway-services/extra",
+      severity: "warning",
+      message: service.label,
+    }),
+  ),
+  extraGatewayServiceToRepairEffects: vi.fn(() => []),
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: mocks.loadModelCatalog,
+}));
+
+vi.mock("../commands/doctor-gateway-services.js", () => ({
+  detectExtraGatewayServiceIssues: mocks.detectExtraGatewayServiceIssues,
+  extraGatewayServiceToHealthFinding: mocks.extraGatewayServiceToHealthFinding,
+  extraGatewayServiceToRepairEffects: mocks.extraGatewayServiceToRepairEffects,
 }));
 
 const runtime = { log() {}, error() {}, exit() {} };
@@ -128,6 +143,10 @@ describe("CORE_HEALTH_CHECKS", () => {
   beforeEach(() => {
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
+    mocks.detectExtraGatewayServiceIssues.mockClear();
+    mocks.detectExtraGatewayServiceIssues.mockResolvedValue([]);
+    mocks.extraGatewayServiceToHealthFinding.mockClear();
+    mocks.extraGatewayServiceToRepairEffects.mockClear();
     tmp = undefined;
   });
 
@@ -143,6 +162,72 @@ describe("CORE_HEALTH_CHECKS", () => {
         check.description.endsWith("represented in the health registry."),
       ),
     ).toBe(false);
+  });
+
+  it("threads deep mode into structured extra gateway service detection", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/gateway-services/extra",
+    );
+    mocks.detectExtraGatewayServiceIssues.mockResolvedValueOnce([
+      {
+        label: "custom-gateway.service",
+      },
+    ]);
+
+    await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {},
+      deep: true,
+    });
+
+    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
+    expect(mocks.extraGatewayServiceToHealthFinding).toHaveBeenCalledWith(
+      {
+        label: "custom-gateway.service",
+      },
+      0,
+      [{ label: "custom-gateway.service" }],
+    );
+  });
+
+  it("threads deep mode into structured extra gateway service repair previews", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/gateway-services/extra",
+    );
+    mocks.detectExtraGatewayServiceIssues.mockResolvedValueOnce([
+      {
+        label: "legacy-gateway.service",
+      },
+    ]);
+    mocks.extraGatewayServiceToRepairEffects.mockReturnValueOnce([
+      {
+        kind: "service",
+        action: "would-remove-legacy-gateway-service",
+        target: "legacy-gateway.service",
+        dryRunSafe: false,
+      },
+    ]);
+
+    const result = await check.repair?.(
+      {
+        mode: "fix",
+        runtime,
+        cfg: {},
+        deep: true,
+        dryRun: true,
+      },
+      [],
+    );
+
+    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
+    expect(result?.effects).toContainEqual(
+      expect.objectContaining({
+        target: "legacy-gateway.service",
+      }),
+    );
   });
 
   it("converts unavailable skills into repair-capable health findings", async () => {
