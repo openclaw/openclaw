@@ -385,6 +385,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     return {
       text,
       richMessage: { html, skip_entity_detection: true },
+      plainTextTransport: true,
     };
   }
 
@@ -2819,6 +2820,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("renders api progress item edge cases as plain transport previews", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({ kind: "api", progressText: "GET /v1/users" });
+      await replyOptions?.onItemEvent?.({
+        kind: "api",
+        name: "api",
+        progressText: "POST /v1/jobs",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n🌐 API: GET /v1/users\n🌐 API: POST /v1/jobs",
+        "<b>Shelling</b>\n<b>🌐 API</b> <code>GET /v1/users</code>\n<b>🌐 API</b> <code>POST /v1/jobs</code>",
+      ),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not restart progress drafts after final answer delivery", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -3257,34 +3285,34 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
-  it.each([
-    { label: false },
-    { label: "Shelling", maxLines: 1 },
-  ] as const)("does not duplicate Telegram progress HTML rows without a visible label", async (progress) => {
-    const draftStream = createSequencedDraftStream(2001);
-    createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      await replyOptions?.onReplyStart?.();
-      await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      return { queuedFinal: false };
-    });
+  it.each([{ label: false }, { label: "Shelling", maxLines: 1 }] as const)(
+    "does not duplicate Telegram progress HTML rows without a visible label",
+    async (progress) => {
+      const draftStream = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        return { queuedFinal: false };
+      });
 
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "progress",
-      telegramCfg: {
-        streaming: {
-          mode: "progress",
-          progress,
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: {
+            mode: "progress",
+            progress,
+          },
         },
-      },
-    });
+      });
 
-    expect(draftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("🛠️ Exec", "<b>🛠️ Exec</b>"),
-    );
-  });
+      expect(draftStream.updatePreview).toHaveBeenCalledWith(
+        telegramProgressPreview("🛠️ Exec", "<b>🛠️ Exec</b>"),
+      );
+    },
+  );
 
   it("keeps progress draft labels static while the draft is active", async () => {
     const draftStream = createSequencedDraftStream(2001);

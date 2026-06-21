@@ -61,6 +61,7 @@ export type TelegramDraftPreview = {
   text: string;
   parseMode?: "HTML";
   richMessage?: TelegramInputRichMessage;
+  plainTextTransport?: boolean;
 };
 
 type SupersededTelegramPreview = {
@@ -91,6 +92,12 @@ function isTelegramHtmlParseError(err: unknown): boolean {
 function normalizeTelegramDraftTransportPreview(
   preview: TelegramDraftPreview,
 ): TelegramDraftTransportPreview {
+  if (preview.plainTextTransport) {
+    return {
+      text: preview.text,
+      plainText: preview.text,
+    };
+  }
   if (preview.richMessage?.html) {
     return {
       text: preview.richMessage.html,
@@ -123,6 +130,7 @@ function telegramDraftPreviewKey(preview: TelegramDraftPreview): string {
     text: preview.text,
     parseMode: preview.parseMode ?? "plain",
     richMessage: preview.richMessage,
+    plainTextTransport: preview.plainTextTransport === true,
   });
 }
 

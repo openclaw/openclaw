@@ -372,6 +372,8 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
       return "apply_patch";
     case "search":
       return "web_search";
+    case "api":
+      return "api";
     case "tool":
       return "tool_call";
     default:

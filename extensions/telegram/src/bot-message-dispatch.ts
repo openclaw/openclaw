@@ -502,11 +502,8 @@ function renderTelegramProgressDraftPreview(
   const trimmed = text.trimEnd();
   const textLines = trimmed.split(/\r?\n/u);
   const labelVisible =
-    label !== undefined &&
-    (trimmed === label || (textLines[0] === label && textLines[1] === ""));
-  const bodyLines = labelVisible
-    ? textLines.slice(textLines[1] === "" ? 2 : 1)
-    : textLines;
+    label !== undefined && (trimmed === label || (textLines[0] === label && textLines[1] === ""));
+  const bodyLines = labelVisible ? textLines.slice(textLines[1] === "" ? 2 : 1) : textLines;
   const renderedLines = lines.map(renderTelegramProgressHtmlLine).filter(Boolean);
   const visibleLines = renderedLines.slice(-bodyLines.filter(Boolean).length);
   const htmlParts = labelVisible
@@ -516,6 +513,7 @@ function renderTelegramProgressDraftPreview(
   return {
     text: trimmed,
     richMessage: buildTelegramRichHtml(html, { skipEntityDetection: true }),
+    plainTextTransport: true,
   };
 }
 
