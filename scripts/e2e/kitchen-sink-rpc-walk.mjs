@@ -8,6 +8,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 const PLUGIN_SPEC =
   process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
@@ -31,6 +32,7 @@ const DEFAULT_MAX_COMMAND_RSS_MIB = 8192;
 const DEFAULT_OUTPUT_CAPTURE_CHARS = 1024 * 1024;
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
+const COMMAND_PARENT_SIGNAL_KILL_GRACE_MS = 2000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
@@ -56,6 +58,40 @@ const ERROR_LOG_ALLOW_PATTERNS = [
 ];
 
 let callGatewayModulePromise;
+const activeCommandChildren = new Set();
+const commandParentSignals =
+  process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+let commandShutdownPromise;
+let commandSignalHandlersInstalled = false;
+
+function installCommandSignalHandlers() {
+  if (commandSignalHandlersInstalled) {
+    return;
+  }
+  commandSignalHandlersInstalled = true;
+  for (const signal of commandParentSignals) {
+    process.on(signal, commandSignalHandlers.get(signal));
+  }
+}
+
+function removeCommandSignalHandlers() {
+  if (!commandSignalHandlersInstalled) {
+    return;
+  }
+  commandSignalHandlersInstalled = false;
+  for (const signal of commandParentSignals) {
+    process.off(signal, commandSignalHandlers.get(signal));
+  }
+}
+
+const commandSignalHandlers = new Map(
+  commandParentSignals.map((signal) => [
+    signal,
+    () => {
+      void shutdownActiveCommands(signal);
+    },
+  ]),
+);
 
 function usage() {
   return `Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs
@@ -301,6 +337,11 @@ function formatCapturedOutput(label, buffer) {
 }
 
 export function runCommand(command, args, options = {}) {
+  if (commandShutdownPromise) {
+    return commandShutdownPromise.then(() => {
+      throw new Error(`${command} ${args.join(" ")} skipped during parent signal shutdown`);
+    });
+  }
   return new Promise((resolve, reject) => {
     const config = resolveKitchenSinkRpcConfig();
     const {
@@ -320,6 +361,8 @@ export function runCommand(command, args, options = {}) {
       ...spawnOptions,
       detached: spawnOptions.detached ?? process.platform !== "win32",
     });
+    activeCommandChildren.add(child);
+    installCommandSignalHandlers();
     const startedAt = Date.now();
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
@@ -393,6 +436,7 @@ export function runCommand(command, args, options = {}) {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
       forceKillAt = undefined;
+      releaseCommandChild(child);
       void stopResourceSampling().finally(() =>
         reject(toLintErrorObject(error, "Command failed before exit")),
       );
@@ -402,6 +446,7 @@ export function runCommand(command, args, options = {}) {
       const finish = () => {
         clearTimeout(forceKillTimer);
         forceKillAt = undefined;
+        releaseCommandChild(child);
         void stopResourceSampling().then((resourceSampleFailure) => {
           if (!timedOut && status === 0) {
             if (resourceSampleFailure) {
@@ -470,6 +515,38 @@ async function finishTimedOutCommandProcessTree(child, { forceKillAt, timeoutKil
   await waitForCommandProcessTreeExit(child, timeoutKillGraceMs);
 }
 
+function releaseCommandChild(child) {
+  activeCommandChildren.delete(child);
+  if (activeCommandChildren.size === 0 && !commandShutdownPromise) {
+    removeCommandSignalHandlers();
+  }
+}
+
+async function shutdownActiveCommands(signal) {
+  if (commandShutdownPromise) {
+    for (const child of activeCommandChildren) {
+      signalProcessGroup(child, "SIGKILL");
+    }
+    return commandShutdownPromise;
+  }
+  const children = [...activeCommandChildren];
+  for (const child of children) {
+    signalProcessGroup(child, signal);
+  }
+  commandShutdownPromise = Promise.all(
+    children.map((child) =>
+      finishTimedOutCommandProcessTree(child, {
+        forceKillAt: Date.now() + COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+        timeoutKillGraceMs: COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+      }),
+    ),
+  ).finally(() => {
+    removeCommandSignalHandlers();
+    process.kill(process.pid, signal);
+  });
+  return commandShutdownPromise;
+}
+
 async function waitForCommandProcessTreeExit(child, timeoutMs) {
   const deadlineAt = Date.now() + timeoutMs;
   while (Date.now() < deadlineAt) {
@@ -498,12 +575,42 @@ function commandProcessTreeIsAlive(child) {
   }
 }
 
-function signalProcessGroup(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function signalWindowsProcessTree(pid, signal, runTaskkill = childProcess.spawnSync) {
+  const taskkillPath = resolveWindowsTaskkillPath();
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = childProcess.spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+export function signalProcessGroup(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {}
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
   }
   try {
     child.kill(signal);
@@ -548,7 +655,7 @@ async function resolveOpenClawCommand(runner, args, env, options = {}) {
   };
 }
 
-function parseJsonOutput(stdout) {
+export function parseJsonOutput(stdout) {
   const trimmed = stdout.trim();
   if (!trimmed) {
     throw new Error("command produced no JSON output");
@@ -681,6 +788,9 @@ function extractBalancedJsonObjects(text) {
     if (text[index] !== "{") {
       continue;
     }
+    if (!isJsonObjectRecordStart(text, index)) {
+      continue;
+    }
     const end = findBalancedJsonObjectEnd(text, index);
     if (end > index) {
       candidates.push(text.slice(index, end + 1));
@@ -688,6 +798,17 @@ function extractBalancedJsonObjects(text) {
     }
   }
   return candidates;
+}
+
+function isJsonObjectRecordStart(text, index) {
+  if (index === 0) {
+    return true;
+  }
+  let cursor = index - 1;
+  while (cursor >= 0 && (text[cursor] === " " || text[cursor] === "\t")) {
+    cursor -= 1;
+  }
+  return cursor < 0 || text[cursor] === "\n" || text[cursor] === "\r";
 }
 
 function findBalancedJsonObjectEnd(text, startIndex) {
@@ -1223,8 +1344,13 @@ function releaseUnsettledGatewayChild(child) {
   child.unref?.();
 }
 
-function signalGateway(child, signal, killProcess = defaultKillProcess) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function signalGateway(child, signal, killProcess = defaultKillProcess, options = {}) {
+  const {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = options;
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       killProcess(-child.pid, signal);
       return true;
@@ -1232,6 +1358,11 @@ function signalGateway(child, signal, killProcess = defaultKillProcess) {
       if (error?.code === "ESRCH") {
         return false;
       }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return true;
     }
   }
   try {

@@ -6,6 +6,7 @@ import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
@@ -97,31 +98,21 @@ function getAgentIdentity(
   return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
 }
 
-function rowMatchesSessionDefaults(
-  row: GatewaySessionRow,
-  defaults: SessionsListResult["defaults"] | undefined,
-): boolean {
-  return (
-    (!row.modelProvider || row.modelProvider === defaults?.modelProvider) &&
-    (!row.model || row.model === defaults?.model)
-  );
-}
-
 function resolveThinkLevelOptions(
   row: GatewaySessionRow,
   defaults?: SessionsListResult["defaults"],
 ): readonly { value: string; label: string }[] {
-  const sessionModelMatchesDefaults = rowMatchesSessionDefaults(row, defaults);
+  const modelMatchesDefaults = sessionModelMatchesDefaults(row, defaults);
   const defaultLabel = formatInheritedThinkingLabel(
-    row.thinkingDefault ?? (sessionModelMatchesDefaults ? defaults?.thinkingDefault : undefined),
+    row.thinkingDefault ?? (modelMatchesDefaults ? defaults?.thinkingDefault : undefined),
   );
   const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
     ? row.thinkingLevels
-    : sessionModelMatchesDefaults && defaults?.thinkingLevels?.length
+    : modelMatchesDefaults && defaults?.thinkingLevels?.length
       ? defaults.thinkingLevels
       : (row.thinkingOptions?.length
           ? row.thinkingOptions
-          : sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+          : modelMatchesDefaults && defaults?.thinkingOptions?.length
             ? defaults.thinkingOptions
             : DEFAULT_THINK_LEVELS
         ).map((label) => ({

@@ -1004,6 +1004,43 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+  it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 12345,
+        exitCode: null as number | null,
+        signalCode: null as string | null,
+        kill: vi.fn(),
+      });
+      const runTaskkill = vi
+        .fn()
+        .mockReturnValueOnce({ status: 1 })
+        .mockReturnValueOnce({ status: 0 });
+
+      testing.signalQaGatewayChildProcessTree(
+        child as unknown as Parameters<typeof testing.signalQaGatewayChildProcessTree>[0],
+        "SIGTERM",
+        runTaskkill,
+      );
+
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
+  });
+
   it("does not trust an exited gateway wrapper while its process group is alive", async () => {
     const child = Object.assign(new EventEmitter(), {
       pid: 12346,

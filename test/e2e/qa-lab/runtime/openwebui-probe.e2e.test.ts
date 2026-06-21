@@ -1,17 +1,16 @@
-// Openwebui Probe tests cover openwebui probe script behavior.
+// OpenWebUI probe tests cover QA Lab OpenAI-compatible API evidence.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
 
 const probePath = path.resolve("scripts/e2e/openwebui-probe.mjs");
 
 interface ProbeResult {
   error?: Error;
-  signal: NodeJS.Signals | null;
   status: number | null;
   stderr: string;
   stdout: string;
@@ -67,13 +66,12 @@ function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3
     }, timeout);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolve({ error, signal: null, status: null, stderr: stderr.text(), stdout: stdout.text() });
+      resolve({ error, status: null, stderr: stderr.text(), stdout: stdout.text() });
     });
-    child.on("exit", (status, signal) => {
+    child.on("exit", (status) => {
       clearTimeout(timer);
       resolve({
         error: timedOut ? new Error(`probe timed out after ${timeout}ms`) : undefined,
-        signal,
         status,
         stderr: stderr.text(),
         stdout: stdout.text(),
@@ -258,9 +256,9 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
       if (request.url === "/api/v1/auths/signin") {
         response.writeHead(200, {
           "content-type": "application/json",
-          "set-cookie": "openwebui-session=test; Path=/",
+          "set-cookie": "openwebui-session=chat=secret=cookie; Path=/",
         });
-        response.end(JSON.stringify({ token: "test-token" }));
+        response.end(JSON.stringify({ token: "chat-secret-token" }));
         return;
       }
       if (request.url === "/api/models") {
@@ -329,9 +327,9 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
       if (request.url === "/api/v1/auths/signin") {
         response.writeHead(200, {
           "content-type": "application/json",
-          "set-cookie": "openwebui-session=test; Path=/",
+          "set-cookie": "openwebui-session=chat=secret=cookie; Path=/",
         });
-        response.end(JSON.stringify({ token: "test-token" }));
+        response.end(JSON.stringify({ token: "chat-secret-token" }));
         return;
       }
       if (request.url === "/api/models") {
@@ -461,8 +459,16 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
         return;
       }
       if (request.url === "/api/chat/completions") {
+        const authorization = request.headers.authorization ?? "";
+        const cookie = request.headers.cookie ?? "";
         response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ message: { content: "missing the marker" } }));
+        response.end(
+          JSON.stringify({
+            message: {
+              content: `missing the marker with ${authorization} and ${cookie}`,
+            },
+          }),
+        );
         return;
       }
       response.writeHead(404).end();
@@ -473,7 +479,11 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
 
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain('chat reply missing nonce: "missing the marker"');
+      expect(result.stderr).toContain("chat reply missing nonce");
+      expect(result.stderr).toContain("<redacted>");
+      expect(result.stderr).not.toContain("chat-secret-token");
+      expect(result.stderr).not.toContain("chat=secret=cookie");
+      expect(result.stderr).not.toContain("openwebui-session=chat");
     } finally {
       server.close();
     }

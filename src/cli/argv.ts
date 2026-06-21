@@ -619,7 +619,3 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   }
   return true;
 }
-
-export function shouldMigrateState(argv: string[]): boolean {
-  return shouldMigrateStateFromPath(getCommandPathWithRootOptions(argv, 2));
-}

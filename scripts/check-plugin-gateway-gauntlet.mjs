@@ -484,6 +484,7 @@ export function runMeasuredCommandLive(params) {
     let settled = false;
     let forceKillTimeout = null;
     let forceKillAt = 0;
+    let parentTerminationSignal = null;
     const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
     const maxRelayBytes = params.consoleOutputMaxBytes ?? maxBufferBytes;
     const timeoutKillGraceMs = params.timeoutKillGraceMs ?? 5_000;
@@ -530,6 +531,14 @@ export function runMeasuredCommandLive(params) {
       }
       return !processGroupAlive();
     };
+    const scheduleForceKill = () => {
+      forceKillAt = Date.now() + timeoutKillGraceMs;
+      forceKillTimeout ??= setTimeout(() => {
+        forceKillTimeout = null;
+        killMeasuredProcess("SIGKILL");
+      }, timeoutKillGraceMs);
+      forceKillTimeout.unref?.();
+    };
     const parentSignalHandlers = new Map();
     const removeParentSignalHandlers = () => {
       for (const [signal, handler] of parentSignalHandlers) {
@@ -541,9 +550,12 @@ export function runMeasuredCommandLive(params) {
       process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
     for (const signal of parentSignals) {
       const handler = () => {
+        if (parentTerminationSignal) {
+          return;
+        }
+        parentTerminationSignal = signal;
         killMeasuredProcess(signal);
-        removeParentSignalHandlers();
-        process.kill(process.pid, signal);
+        scheduleForceKill();
       };
       parentSignalHandlers.set(signal, handler);
       process.once(signal, handler);
@@ -637,11 +649,7 @@ export function runMeasuredCommandLive(params) {
               message: `Command timed out after ${params.timeoutMs}ms`,
             };
             killMeasuredProcess();
-            forceKillAt = Date.now() + timeoutKillGraceMs;
-            forceKillTimeout = setTimeout(() => {
-              killMeasuredProcess("SIGKILL");
-            }, timeoutKillGraceMs);
-            forceKillTimeout.unref?.();
+            scheduleForceKill();
           }, params.timeoutMs)
         : null;
     timeout?.unref?.();
@@ -695,7 +703,7 @@ export function runMeasuredCommandLive(params) {
         ...parseTimedMetrics(finalStderr, wallMs, mode),
       });
     };
-    const finishAfterTimeoutTeardown = async (status, signal) => {
+    const waitForTerminationCleanup = async () => {
       const remainingGraceMs = Math.max(0, forceKillAt - Date.now());
       if (remainingGraceMs > 0) {
         await waitForProcessGroupExit(remainingGraceMs);
@@ -704,7 +712,29 @@ export function runMeasuredCommandLive(params) {
         killMeasuredProcess("SIGKILL");
         await waitForProcessGroupExit(100);
       }
+    };
+    const rethrowParentTermination = () => {
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
+      removeParentSignalHandlers();
+      process.kill(process.pid, parentTerminationSignal);
+    };
+    const finishAfterTimeoutTeardown = async (status, signal) => {
+      await waitForTerminationCleanup();
+      if (parentTerminationSignal) {
+        rethrowParentTermination();
+        return;
+      }
       finish(status, signal);
+    };
+    const finishAfterParentTermination = async () => {
+      await waitForTerminationCleanup();
+      rethrowParentTermination();
     };
     child.on("error", (error) => {
       spawnError = {
@@ -714,6 +744,10 @@ export function runMeasuredCommandLive(params) {
       finish(null, null);
     });
     child.on("close", (status, signal) => {
+      if (parentTerminationSignal) {
+        void finishAfterParentTermination();
+        return;
+      }
       if (timedOut) {
         void finishAfterTimeoutTeardown(status, signal);
         return;

@@ -1147,6 +1147,49 @@ describe("buildOpenClawReleaseClawHubRuntimeState", () => {
 });
 
 describe("plugin-clawhub-publish.sh", () => {
+  it("prints help before package or ClawHub checks", () => {
+    const output = execFileSync(
+      "bash",
+      [join(process.cwd(), "scripts/plugin-clawhub-publish.sh"), "--help"],
+      {
+        encoding: "utf8",
+      },
+    );
+
+    expect(output.trim()).toBe(
+      "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>",
+    );
+  });
+
+  it("rejects option-like package dirs before package or ClawHub checks", () => {
+    expect(() =>
+      execFileSync(
+        "bash",
+        [join(process.cwd(), "scripts/plugin-clawhub-publish.sh"), "--dry-run", "--wat"],
+        {
+          encoding: "utf8",
+        },
+      ),
+    ).toThrow("unexpected plugin ClawHub package-dir option: --wat");
+  });
+
+  it("rejects extra arguments before package or ClawHub checks", () => {
+    expect(() =>
+      execFileSync(
+        "bash",
+        [
+          join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
+          "--dry-run",
+          "extensions/demo-plugin",
+          "extra",
+        ],
+        {
+          encoding: "utf8",
+        },
+      ),
+    ).toThrow("unexpected plugin ClawHub publish argument: extra");
+  });
+
   it("previews the publish command through the ClawHub CLI dry-run preflight", () => {
     const repoDir = createTempPluginRepo();
     const binDir = join(repoDir, "bin");

@@ -1,11 +1,22 @@
 /**
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifyAgentHarnessTerminalOutcome,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
+
+const { loadResearchAutocapture } = vi.hoisted(() => ({
+  loadResearchAutocapture: vi.fn(),
+}));
+
+vi.mock("../skills/research/autocapture.js", () => {
+  loadResearchAutocapture();
+  return {
+    runSkillResearchAutoCapture: vi.fn(),
+  };
+});
 
 describe("classifyAgentHarnessTerminalOutcome", () => {
   it("does not classify an in-flight turn", () => {
@@ -127,5 +138,17 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
       }) ?? "empty";
 
     expect(classification).toBe("empty");
+  });
+});
+
+describe("agent harness runtime SDK facade", () => {
+  beforeEach(() => {
+    loadResearchAutocapture.mockClear();
+  });
+
+  it("does not load research autocapture when the SDK facade is imported", async () => {
+    await import("./agent-harness-runtime.js");
+
+    expect(loadResearchAutocapture).not.toHaveBeenCalled();
   });
 });

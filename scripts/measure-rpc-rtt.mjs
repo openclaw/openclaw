@@ -1,6 +1,6 @@
 // Measures gateway RPC round-trip time by launching an isolated local gateway
 // and writing qa-lab-compatible summary artifacts.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -10,6 +10,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
@@ -264,6 +265,10 @@ function defaultKillProcess(pid, signal) {
   return process.kill(pid, signal);
 }
 
+function defaultRunTaskkill(command, args, options) {
+  return spawnSync(command, args, options);
+}
+
 async function defaultOpen(filePath, flags) {
   return await fs.open(filePath, flags);
 }
@@ -277,10 +282,15 @@ function resolveOpenClawLaunchArgs(repoRoot, sourceEntryExists = existsSync) {
 }
 
 /**
- * Signals the gateway process group on POSIX so spawned children are cleaned up.
+ * Signals the gateway process tree so spawned package-manager children are cleaned up.
  */
-export function signalGatewayProcess(child, signal, killProcess = defaultKillProcess) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function signalGatewayProcess(
+  child,
+  signal,
+  killProcess = defaultKillProcess,
+  { platform = process.platform, runTaskkill = defaultRunTaskkill } = {},
+) {
+  if (platform !== "win32" && typeof child.pid === "number") {
     try {
       killProcess(-child.pid, signal);
       return true;
@@ -289,6 +299,23 @@ export function signalGatewayProcess(child, signal, killProcess = defaultKillPro
         return false;
       }
       throw error;
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return true;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return true;
+      }
     }
   }
   try {
@@ -304,8 +331,12 @@ export function signalGatewayProcess(child, signal, killProcess = defaultKillPro
 /**
  * Checks process-group liveness without treating an already-exited child as an error.
  */
-export function isGatewayProcessAlive(child, killProcess = defaultKillProcess) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function isGatewayProcessAlive(
+  child,
+  killProcess = defaultKillProcess,
+  { platform = process.platform } = {},
+) {
+  if (platform !== "win32" && typeof child.pid === "number") {
     try {
       killProcess(-child.pid, 0);
       return true;
@@ -319,17 +350,17 @@ export function isGatewayProcessAlive(child, killProcess = defaultKillProcess) {
   return child.exitCode === null && child.signalCode === null;
 }
 
-function signalGatewayProcessForParentExit(child, signal, killProcess) {
+function signalGatewayProcessForParentExit(child, signal, killProcess, signalOptions) {
   try {
-    signalGatewayProcess(child, signal, killProcess);
+    signalGatewayProcess(child, signal, killProcess, signalOptions);
   } catch {
     // Parent shutdown cleanup is best effort; the original signal should win.
   }
 }
 
-function gatewayProcessAliveForParentExit(child, killProcess) {
+function gatewayProcessAliveForParentExit(child, killProcess, signalOptions) {
   try {
-    return isGatewayProcessAlive(child, killProcess);
+    return isGatewayProcessAlive(child, killProcess, signalOptions);
   } catch {
     return true;
   }
@@ -340,28 +371,37 @@ function gatewayProcessAliveForParentExit(child, killProcess) {
  */
 export function installGatewayParentCleanup(
   child,
-  { killProcess = defaultKillProcess, processLike = process } = {},
+  {
+    killProcess = defaultKillProcess,
+    platform = process.platform,
+    processLike = process,
+    runTaskkill = defaultRunTaskkill,
+  } = {},
 ) {
+  const signalOptions = { platform, runTaskkill };
   const signalHandlers = new Map();
   let forceKillTimer;
   let parentSignalPending = false;
   const forceCleanup = (signal) => {
-    signalGatewayProcessForParentExit(child, signal, killProcess);
-    if (process.platform !== "win32") {
-      signalGatewayProcessForParentExit(child, "SIGKILL", killProcess);
+    signalGatewayProcessForParentExit(child, signal, killProcess, signalOptions);
+    if (platform !== "win32") {
+      signalGatewayProcessForParentExit(child, "SIGKILL", killProcess, signalOptions);
     }
   };
   const cleanupAndReraise = (signal) => {
     parentSignalPending = true;
-    signalGatewayProcessForParentExit(child, signal, killProcess);
+    signalGatewayProcessForParentExit(child, signal, killProcess, signalOptions);
     const finish = () => {
       forceKillTimer = undefined;
-      signalGatewayProcessForParentExit(child, "SIGKILL", killProcess);
+      signalGatewayProcessForParentExit(child, "SIGKILL", killProcess, signalOptions);
       processLike.kill?.(processLike.pid, signal);
     };
     // Signal handlers can give the detached gateway group one normal teardown
     // grace window before re-raising; process exit cleanup cannot wait.
-    if (process.platform === "win32" || !gatewayProcessAliveForParentExit(child, killProcess)) {
+    if (
+      platform === "win32" ||
+      !gatewayProcessAliveForParentExit(child, killProcess, signalOptions)
+    ) {
       processLike.kill?.(processLike.pid, signal);
       return;
     }
@@ -393,31 +433,40 @@ export function installGatewayParentCleanup(
   return removeHandlers;
 }
 
-async function waitForGatewayExit(child, timeoutMs, killProcess = defaultKillProcess) {
+async function waitForGatewayExit(
+  child,
+  timeoutMs,
+  killProcess = defaultKillProcess,
+  signalOptions = {},
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
-    if (!isGatewayProcessAlive(child, killProcess)) {
+    if (!isGatewayProcessAlive(child, killProcess, signalOptions)) {
       return true;
     }
     await sleep(Math.min(25, Math.max(0, deadline - Date.now())));
   }
-  return !isGatewayProcessAlive(child, killProcess);
+  return !isGatewayProcessAlive(child, killProcess, signalOptions);
 }
 
 /**
  * Stops the gateway with SIGTERM first and SIGKILL after the grace window.
  */
 export async function stopGateway(child, options = {}) {
-  if (!isGatewayProcessAlive(child, options.killProcess)) {
+  const signalOptions = {
+    platform: options.platform ?? process.platform,
+    runTaskkill: options.runTaskkill ?? defaultRunTaskkill,
+  };
+  if (!isGatewayProcessAlive(child, options.killProcess, signalOptions)) {
     return;
   }
   const killGraceMs = Math.max(0, options.killGraceMs ?? 1_500);
   const forceKillGraceMs = Math.max(0, options.forceKillGraceMs ?? GATEWAY_FORCE_KILL_GRACE_MS);
-  signalGatewayProcess(child, "SIGTERM", options.killProcess);
-  const exited = await waitForGatewayExit(child, killGraceMs, options.killProcess);
+  signalGatewayProcess(child, "SIGTERM", options.killProcess, signalOptions);
+  const exited = await waitForGatewayExit(child, killGraceMs, options.killProcess, signalOptions);
   if (!exited) {
-    signalGatewayProcess(child, "SIGKILL", options.killProcess);
-    await waitForGatewayExit(child, forceKillGraceMs, options.killProcess);
+    signalGatewayProcess(child, "SIGKILL", options.killProcess, signalOptions);
+    await waitForGatewayExit(child, forceKillGraceMs, options.killProcess, signalOptions);
   }
 }
 
