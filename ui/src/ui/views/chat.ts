@@ -509,7 +509,6 @@ function renderRealtimeTalkConversation(props: ChatProps) {
 type PendingClearedSubmittedDraft = {
   key: string;
   value: string;
-  inputVersion: number;
 };
 
 interface ChatEphemeralState {
@@ -526,7 +525,6 @@ interface ChatEphemeralState {
   pinnedExpanded: boolean;
   composerComposing: boolean;
   composerInputIntentKey: string | null;
-  composerInputVersions: Map<string, number>;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   historyRenderSessionKey: string | null;
   historyRenderMessagesRef: unknown[] | null;
@@ -556,7 +554,6 @@ function createChatEphemeralState(): ChatEphemeralState {
     pinnedExpanded: false,
     composerComposing: false,
     composerInputIntentKey: null,
-    composerInputVersions: new Map(),
     pendingClearedSubmittedDraft: null,
     historyRenderSessionKey: null,
     historyRenderMessagesRef: null,
@@ -614,12 +611,7 @@ function commitComposerDraft(props: ChatProps, value: string): void {
   props.onDraftChange(value);
 }
 
-function currentComposerInputVersion(key: string): number {
-  return vs.composerInputVersions.get(key) ?? 0;
-}
-
 function markComposerInputIntent(key: string): void {
-  vs.composerInputVersions.set(key, currentComposerInputVersion(key) + 1);
   vs.composerInputIntentKey = key;
 }
 
@@ -651,12 +643,7 @@ function suppressStaleSubmittedDraftReplay(
   if (!pending) {
     return false;
   }
-  if (
-    target.value !== pending.value ||
-    pending.inputVersion !== currentComposerInputVersion(pending.key) ||
-    hasInputIntent ||
-    isExplicitComposerInsertion(event)
-  ) {
+  if (target.value !== pending.value || hasInputIntent || isExplicitComposerInsertion(event)) {
     return false;
   }
 
@@ -2338,7 +2325,6 @@ export function renderChat(props: ChatProps) {
       vs.pendingClearedSubmittedDraft = {
         key: mirrorKey,
         value: submittedDraft,
-        inputVersion: currentComposerInputVersion(mirrorKey),
       };
     } else {
       clearPendingClearedSubmittedDraft(mirrorKey);
@@ -2513,7 +2499,6 @@ export function renderChat(props: ChatProps) {
     if (suppressStaleSubmittedDraftReplay(target, e, draftMirror, hasInputIntent)) {
       return;
     }
-    clearPendingClearedSubmittedDraft(mirrorKey);
     syncComposerValue(target);
   };
   const handleCompositionEnd = (e: CompositionEvent) => {
