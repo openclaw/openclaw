@@ -14,6 +14,10 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import {
+  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmProjectDir,
+} from "./install-paths.js";
 import * as installSecurityScan from "./install-security-scan.js";
 import {
   installPluginFromArchive,
@@ -24,6 +28,7 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
+import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 import {
@@ -1999,7 +2004,7 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "denied-dependency-bundle" installation blocked');
       expect(result.error).toContain('"plain-crypto-js" as package name');
-      expect(result.error).toContain("vendor/plain-crypto-js/package.json");
+      expect(result.error.replaceAll("\\", "/")).toContain("vendor/plain-crypto-js/package.json");
     }
     expect(warnings.some((warning) => warning.includes('"plain-crypto-js" as package name'))).toBe(
       true,
@@ -2579,12 +2584,14 @@ describe("installPluginFromNpmSpec", () => {
       ]),
     });
     mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
-    const scanSpy = vi.spyOn(installSecurityScan, "scanPackageInstallSource").mockResolvedValueOnce({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by package scan",
-      },
-    });
+    const scanSpy = vi
+      .spyOn(installSecurityScan, "scanPackageInstallSource")
+      .mockResolvedValueOnce({
+        blocked: {
+          code: "security_scan_blocked",
+          reason: "blocked by package scan",
+        },
+      });
     const captured = captureSecurityEvents();
 
     let result: Awaited<ReturnType<typeof installPluginFromNpmPackArchive>>;
@@ -2730,6 +2737,204 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.error).toContain("fresh npm installs are disabled by policy");
     }
     expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.request.mode).toBe("install");
+    expect(requests[0]?.request.kind).toBe("plugin-npm");
+  });
+
+  it("does not treat similarly named npm projects as update generations", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const packageName = "foo";
+    const legacyProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
+    const unrelatedProjectRoot = path.join(
+      path.dirname(legacyProjectRoot),
+      `${path.basename(legacyProjectRoot)}-unrelated`,
+    );
+    const unrelatedDependencyDir = path.join(unrelatedProjectRoot, "node_modules", packageName);
+    fs.mkdirSync(unrelatedDependencyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(unrelatedDependencyDir, "package.json"),
+      JSON.stringify({ name: packageName, version: "0.9.0" }),
+      "utf8",
+    );
+    const { scriptPath, logPath } = writeInstallOnlyBlockingPolicyScript(root);
+    mockNpmViewMetadata({ name: packageName, version: "1.0.0" });
+    mockSuccessfulManagedNpmInstall({ packageName, version: "1.0.0" });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      extensionsDir,
+      npmDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+      mode: "update",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("fresh npm installs are disabled by policy");
+    }
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.request.mode).toBe("install");
+  });
+
+  it("reports update mode to policy when npm update installs a new artifact generation", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const packageName = "@acme/policy-generation-plugin";
+    const existingProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
+    const existingPackageDir = path.join(
+      existingProjectRoot,
+      "node_modules",
+      ...packageName.split("/"),
+    );
+    fs.mkdirSync(existingPackageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(existingPackageDir, "package.json"),
+      JSON.stringify({
+        name: packageName,
+        version: "0.9.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(existingPackageDir, "index.js"), "export {};\n");
+    const { scriptPath, logPath } = writeInstallOnlyBlockingPolicyScript(root);
+    mockNpmViewMetadata({ name: packageName, version: "1.2.3" });
+    mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+    try {
+      result = await installPluginFromNpmSpec({
+        spec: `${packageName}@1.2.3`,
+        extensionsDir,
+        npmDir,
+        config: configWithInstallPolicy(scriptPath, logPath),
+        mode: "update",
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.ok).toBe(true);
+    if (!result!.ok) {
+      return;
+    }
+    expect(result.targetDir).not.toBe(existingPackageDir);
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.map((request) => request.request.mode)).toEqual(requests.map(() => "update"));
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "plugin.updated",
+      outcome: "success",
+      target: { kind: "plugin", name: packageName },
+      attributes: {
+        source_family: "npm",
+        mode: "update",
+      },
+    });
+  });
+
+  it("reports install mode to policy when a retained npm legacy target needs a new generation", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const packageName = "@acme/policy-generation-plugin";
+    const legacyProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
+    const legacyPackageDir = path.join(
+      legacyProjectRoot,
+      "node_modules",
+      ...packageName.split("/"),
+    );
+    fs.mkdirSync(legacyPackageDir, { recursive: true });
+    await markRetainedManagedNpmInstall({
+      packageDir: legacyPackageDir,
+      pluginId: "policy-generation-plugin",
+      retainedAt: "2026-04-25T00:00:00.000Z",
+      reason: "test-retained-generation",
+    });
+    const { scriptPath, logPath } = writeInstallOnlyBlockingPolicyScript(root);
+    mockNpmViewMetadata({ name: packageName, version: "1.2.3" });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.2.3`,
+      extensionsDir,
+      npmDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("fresh npm installs are disabled by policy");
+    }
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.request.mode).toBe("install");
+    expect(requests[0]?.request.kind).toBe("plugin-npm");
+  });
+
+  it("reports install mode to policy when update-mode reactivates retained-only generations", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const packageName = "@acme/policy-generation-plugin";
+    const legacyProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
+    const generationProjectRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir,
+      packageName,
+      generationKey: [
+        packageName,
+        "1.2.3",
+        `${packageName}@1.2.3`,
+        "sha512-plugin-test",
+        "pluginshasum",
+      ].join("\n"),
+    });
+    const legacyPackageDir = path.join(
+      legacyProjectRoot,
+      "node_modules",
+      ...packageName.split("/"),
+    );
+    const generationPackageDir = path.join(
+      generationProjectRoot,
+      "node_modules",
+      ...packageName.split("/"),
+    );
+    for (const packageDir of [legacyPackageDir, generationPackageDir]) {
+      fs.mkdirSync(packageDir, { recursive: true });
+      await markRetainedManagedNpmInstall({
+        packageDir,
+        pluginId: "policy-generation-plugin",
+        retainedAt: "2026-04-25T00:00:00.000Z",
+        reason: "test-retained-generation",
+      });
+    }
+    const { scriptPath, logPath } = writeInstallOnlyBlockingPolicyScript(root);
+    mockNpmViewMetadata({
+      name: packageName,
+      version: "1.2.3",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.2.3`,
+      extensionsDir,
+      npmDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+      mode: "update",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("fresh npm installs are disabled by policy");
+    }
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.request.mode).toBe("install");
@@ -3014,7 +3219,9 @@ describe("installPluginFromDir", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
+      expect(result.error.replaceAll("\\", "/")).toContain(
+        "node_modules/plain-crypto-js/package.json",
+      );
     }
     expect(captured.events).toHaveLength(1);
     expect(captured.events[0]).toMatchObject({

@@ -1,7 +1,15 @@
 // Plugin install record commit tests cover install record persistence after CLI installs.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  hasRetainedManagedNpmInstallMarker,
+  markRetainedManagedNpmInstall,
+} from "../plugins/managed-npm-retention.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -27,6 +35,7 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
 import {
   commitConfigWithPendingPluginInstalls,
   commitConfigWriteWithPendingPluginInstalls,
+  commitPluginInstallRecordsWithConfig,
   stripPendingPluginInstallRecords,
   unchangedPendingPluginInstallRecordIds,
 } from "./plugins-install-record-commit.js";
@@ -176,6 +185,294 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         unsetPaths: [["plugins", "installs"]],
       },
     });
+  });
+
+  it("marks replaced managed npm generations when install records are committed", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const previousInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v1",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    const nextInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v2",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    fs.mkdirSync(previousInstallPath, { recursive: true });
+    fs.mkdirSync(nextInstallPath, { recursive: true });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex@1.0.0",
+              installPath: previousInstallPath,
+            },
+          },
+          nextInstallRecords: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex@2.0.0",
+              installPath: nextInstallPath,
+            },
+          },
+          nextConfig: {},
+        });
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mark arbitrary npm paths outside the managed npm root", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-outside-"));
+    const previousInstallPath = path.join(
+      outsideRoot,
+      "npm",
+      "projects",
+      "codex-v1",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    const nextInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v2",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    fs.mkdirSync(previousInstallPath, { recursive: true });
+    fs.mkdirSync(nextInstallPath, { recursive: true });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex@1.0.0",
+              installPath: previousInstallPath,
+            },
+          },
+          nextInstallRecords: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex@2.0.0",
+              installPath: nextInstallPath,
+            },
+          },
+          nextConfig: {},
+        });
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("marks replaced npm generations across install record id migrations", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const previousInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "voice-call-v1",
+      "node_modules",
+      "@openclaw",
+      "voice-call",
+    );
+    const nextInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "voice-call-v2",
+      "node_modules",
+      "@openclaw",
+      "voice-call",
+    );
+    fs.mkdirSync(previousInstallPath, { recursive: true });
+    fs.mkdirSync(nextInstallPath, { recursive: true });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call@1.0.0",
+              installPath: previousInstallPath,
+            },
+          },
+          nextInstallRecords: {
+            "@openclaw/voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call@2.0.0",
+              installPath: nextInstallPath,
+            },
+          },
+          nextConfig: {},
+        });
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes newly retained npm markers when the config commit rolls back", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const previousInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v1",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    const nextInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v2",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    fs.mkdirSync(previousInstallPath, { recursive: true });
+    fs.mkdirSync(nextInstallPath, { recursive: true });
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(
+          commitPluginInstallRecordsWithConfig({
+            previousInstallRecords: {
+              codex: {
+                source: "npm",
+                spec: "@openclaw/codex@1.0.0",
+                installPath: previousInstallPath,
+              },
+            },
+            nextInstallRecords: {
+              codex: {
+                source: "npm",
+                spec: "@openclaw/codex@2.0.0",
+                installPath: nextInstallPath,
+              },
+            },
+            nextConfig: {},
+          }),
+        ).rejects.toThrow("config changed");
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears retained npm markers for active committed install records", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const installPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v2",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    fs.mkdirSync(installPath, { recursive: true });
+    await markRetainedManagedNpmInstall({
+      packageDir: installPath,
+      pluginId: "codex",
+      retainedAt: "2026-04-25T00:00:00.000Z",
+      reason: "test-retained-generation",
+    });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {},
+          nextInstallRecords: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex@2.0.0",
+              installPath,
+            },
+          },
+          nextConfig: {},
+        });
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores cleared active npm markers when the config commit rolls back", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const installPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v2",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    fs.mkdirSync(installPath, { recursive: true });
+    await markRetainedManagedNpmInstall({
+      packageDir: installPath,
+      pluginId: "codex",
+      retainedAt: "2026-04-25T00:00:00.000Z",
+      reason: "test-retained-generation",
+    });
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(
+          commitPluginInstallRecordsWithConfig({
+            previousInstallRecords: {},
+            nextInstallRecords: {
+              codex: {
+                source: "npm",
+                spec: "@openclaw/codex@2.0.0",
+                installPath,
+              },
+            },
+            nextConfig: {},
+          }),
+        ).rejects.toThrow("config changed");
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("rolls back plugin index writes when the config write fails", async () => {
