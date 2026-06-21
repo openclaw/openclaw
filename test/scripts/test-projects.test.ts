@@ -467,12 +467,38 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts"],
       ],
       [
+        "scripts/e2e/lib/auth-profile-store-assertions.mjs",
+        [
+          "test/scripts/release-scenarios-assertions.test.ts",
+          "test/scripts/npm-onboard-channel-agent-assertions.test.ts",
+        ],
+      ],
+      [
         "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
         ["test/scripts/docker-build-helper.test.ts"],
       ],
       [
+        "scripts/e2e/lib/codex-install-utils.mjs",
+        ["test/scripts/codex-install-assertions.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/codex-on-demand/assertions.mjs",
+        ["test/scripts/codex-install-assertions.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/clawhub-fixture-server.cjs",
+        [
+          "test/scripts/clawhub-fixture-server.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+        ],
+      ],
+      [
         "scripts/e2e/lib/config-reload/assert-log.mjs",
         ["test/scripts/e2e-mock-config-limits.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/config-reload/mutate-metadata.mjs",
+        ["test/scripts/config-reload-mutate-metadata.test.ts"],
       ],
       ["scripts/e2e/lib/env-limits.mjs", ["test/scripts/e2e-helper-env-limits.test.ts"]],
       [
@@ -484,6 +510,10 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/docker-build-helper.test.ts"],
       ],
       [
+        "scripts/e2e/lib/doctor-install-switch/write-wrapper.mjs",
+        ["test/scripts/doctor-install-switch-wrapper.test.ts"],
+      ],
+      [
         "scripts/e2e/lib/doctor-install-switch/shims/loginctl",
         ["test/scripts/docker-build-helper.test.ts"],
       ],
@@ -493,9 +523,27 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/e2e/lib/fixture.mjs",
-        ["test/scripts/fixture-config.test.ts", "test/scripts/fixtures-workspace.test.ts"],
+        [
+          "test/scripts/fixture-config.test.ts",
+          "test/scripts/fixtures-workspace.test.ts",
+          "test/scripts/fixture-plugin-commands.test.ts",
+        ],
       ],
       ["scripts/e2e/lib/fixtures/config.mjs", ["test/scripts/fixture-config.test.ts"]],
+      ["scripts/e2e/lib/fixtures/common.mjs", ["test/scripts/fixture-common.test.ts"]],
+      [
+        "scripts/e2e/lib/fixtures/mock-openai-config.mjs",
+        ["test/scripts/mock-openai-config.test.ts"],
+      ],
+      ["scripts/e2e/lib/fixtures/plugins.mjs", ["test/scripts/fixture-plugin-commands.test.ts"]],
+      [
+        "scripts/e2e/lib/incremental-line-reader.mjs",
+        [
+          "test/scripts/incremental-line-reader.test.ts",
+          "test/scripts/config-reload-log-scanner.test.ts",
+          "test/scripts/codex-media-path-client.test.ts",
+        ],
+      ],
       [
         "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh",
         ["test/scripts/kitchen-sink-plugin-assertions.test.ts"],
@@ -651,6 +699,14 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "scripts/e2e/lib/onboard/scenario.sh",
         ["test/scripts/e2e-shell-tempfiles.test.ts", "test/scripts/openclaw-test-state.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/onboard/assert-config.mjs",
+        ["test/scripts/onboard-config-fixtures.test.ts"],
+      ],
+      [
+        "scripts/e2e/lib/onboard/write-config.mjs",
+        ["test/scripts/onboard-config-fixtures.test.ts"],
       ],
       ["scripts/e2e/lib/package-compat.mjs", ["test/scripts/docker-build-helper.test.ts"]],
       [
@@ -898,10 +954,7 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("routes unmatched script changes to the tooling suite instead of skipping tests", () => {
-    const targets = [
-      "scripts/check-no-raw-http2-imports.mjs",
-      "scripts/e2e/lib/clawhub-fixture-server.cjs",
-    ];
+    const targets = ["scripts/check-no-raw-http2-imports.mjs"];
 
     expect(resolveChangedTestTargetPlan(targets)).toEqual({
       mode: "targets",
@@ -2237,6 +2290,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/e2e/parallels/update-job-timeout.ts",
         "scripts/e2e/parallels/windows-smoke.ts",
         "scripts/e2e/parallels-windows-smoke.sh",
+        "scripts/e2e/lib/parallels-package/build-info-commit.mjs",
       ]),
     ).toEqual([
       {
@@ -2246,6 +2300,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/parallels-smoke-model.test.ts",
           "test/scripts/parallels-npm-update-smoke.test.ts",
           "test/scripts/parallels-update-job-timeout.test.ts",
+          "test/scripts/parallels-lib-helpers.test.ts",
         ],
         watchMode: false,
       },

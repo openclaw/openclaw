@@ -52,7 +52,7 @@ export function resolvePlaywrightInstallRunner(options = {}) {
   const env = options.env ?? process.env;
   const targets = options.targets ?? ["chromium"];
   return resolvePnpmRunner({
-    comSpec: options.comSpec ?? env.ComSpec ?? env.COMSPEC,
+    comSpec: options.comSpec,
     env,
     npmExecPath: env === process.env ? env.npm_execpath : (env.npm_execpath ?? ""),
     platform: options.platform,

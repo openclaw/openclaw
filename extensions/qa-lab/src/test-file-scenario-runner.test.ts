@@ -431,26 +431,44 @@ describe("qa test file scenario runner", () => {
   });
 
   it("force-kills Windows scenario command trees when graceful taskkill fails", () => {
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.WINDIR;
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
     const runTaskkill = vi
       .fn()
       .mockReturnValueOnce({ status: 1 })
       .mockReturnValueOnce({ status: 0 });
 
-    expect(
-      qaTestFileScenarioRunnerTesting.killQaScenarioWindowsProcessTree(
-        12345,
-        "SIGTERM",
-        runTaskkill,
-      ),
-    ).toBe(true);
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/pid", "12345", "/T"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/pid", "12345", "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
+    try {
+      expect(
+        qaTestFileScenarioRunnerTesting.killQaScenarioWindowsProcessTree(
+          12345,
+          "SIGTERM",
+          runTaskkill,
+        ),
+      ).toBe(true);
+      const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/pid", "12345", "/T"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/pid", "12345", "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } finally {
+      if (originalSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = originalSystemRoot;
+      }
+      if (originalWindir === undefined) {
+        delete process.env.WINDIR;
+      } else {
+        process.env.WINDIR = originalWindir;
+      }
+    }
   });
 
   it("fails script scenarios that exit cleanly after timeout termination", async () => {

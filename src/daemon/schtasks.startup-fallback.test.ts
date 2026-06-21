@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsage,
@@ -292,7 +293,7 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = resolveStartupEntryPath(env);
       const startupScript = await fs.readFile(startupEntryPath, "utf8");
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
-      expect(startupScript).toContain('start "" /min cmd.exe /d /c');
+      expect(startupScript).toContain(`start "" /min ${getWindowsCmdExePath()} /d /c`);
       expect(startupScript).toContain("gateway.cmd");
       expectStartupFallbackSpawn();
       expect(childUnref).toHaveBeenCalled();
