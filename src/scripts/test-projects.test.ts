@@ -887,7 +887,6 @@ describe("test-projects args", () => {
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
-          "test/scripts/openai-chat-tools-client.test.ts",
           "test/scripts/parallels-smoke-model.test.ts",
           "test/scripts/plugins-assertions.test.ts",
           "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
@@ -918,6 +917,7 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts",
           "test/openclaw-launcher.e2e.test.ts",
         ],
         includePatterns: null,

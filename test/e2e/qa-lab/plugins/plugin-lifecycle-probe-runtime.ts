@@ -1,5 +1,5 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -17,6 +17,7 @@ interface CommandOptions {
   env?: NodeJS.ProcessEnv;
   outputFile?: string;
   spawnImpl?: typeof spawn;
+  taskkillImpl?: typeof spawnSync;
   timeoutKillGraceMs?: number;
   timeoutMs?: number;
 }
@@ -264,6 +265,26 @@ async function runCommand(command: string, args: readonly string[], options: Com
             return;
           } catch {
             // The process group may already be gone; fall back to the direct child.
+          }
+        }
+        if (!useProcessGroup && child.pid) {
+          const runTaskkill = options.taskkillImpl ?? spawnSync;
+          const args = ["/PID", String(child.pid), "/T"];
+          if (signal === "SIGKILL") {
+            args.push("/F");
+          }
+          const result = runTaskkill("taskkill", args, { stdio: "ignore", windowsHide: true });
+          if (!result.error && result.status === 0) {
+            return;
+          }
+          if (signal !== "SIGKILL") {
+            const forceResult = runTaskkill("taskkill", [...args, "/F"], {
+              stdio: "ignore",
+              windowsHide: true,
+            });
+            if (!forceResult.error && forceResult.status === 0) {
+              return;
+            }
           }
         }
         child.kill(signal);
