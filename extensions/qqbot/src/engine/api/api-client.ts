@@ -27,6 +27,10 @@ function resolveQqbotApiSsrfPolicy(url: string): SsrFPolicy {
   };
 }
 
+function isRequestTimeoutError(err: unknown): boolean {
+  return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
+}
+
 interface RequestOptions {
   /** Request timeout override in milliseconds. */
   timeoutMs?: number;
@@ -145,7 +149,7 @@ export class ApiClient {
       release = guarded.release;
     } catch (err) {
       clearTimeout(timeoutId);
-      if (err instanceof Error && err.name === "AbortError") {
+      if (isRequestTimeoutError(err)) {
         this.logger?.error?.(`[qqbot:api] <<< Timeout after ${timeout}ms`);
         throw new ApiError(`Request timeout [${path}]: exceeded ${timeout}ms`, 0, path);
       }
