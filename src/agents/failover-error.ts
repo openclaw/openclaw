@@ -21,6 +21,15 @@ import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
 
+/**
+ * Pattern matching the Codex MISSING_TOOL_RESULT_ERROR constant in
+ * extensions/codex/src/app-server/event-projector.ts. Local native tool
+ * execution failures (hung/reaped bash calls) must not trigger cross-provider
+ * model fallback — no other model can fix a local command. See #95474.
+ */
+const MISSING_NATIVE_TOOL_RESULT_RE =
+  /recorded a native Codex tool\.call without a matching tool\.result/;
+
 /** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -345,20 +354,54 @@ function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new
 }
 
 /**
+ * True when the error (or any nested cause) indicates a local native tool
+ * execution failure from the Codex harness — a hung tool call reaped as a
+ * synthetic missing_tool_result. These are local conditions that no other
+ * provider/model can remedy, so model fallback must abort. See #95474.
+ */
+function hasLocalNativeToolExecutionFailure(err: unknown, seen: Set<object> = new Set()): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if (seen.has(err)) {
+    return false;
+  }
+  seen.add(err);
+  const message = getErrorMessage(err);
+  if (message && MISSING_NATIVE_TOOL_RESULT_RE.test(message)) {
+    return true;
+  }
+  const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
+  return (
+    hasLocalNativeToolExecutionFailure(candidate.error, seen) ||
+    hasLocalNativeToolExecutionFailure(candidate.cause, seen) ||
+    hasLocalNativeToolExecutionFailure(candidate.reason, seen)
+  );
+}
+
+/**
  * True when the error is a local runtime coordination error (session write-lock
- * timeout or embedded attempt session takeover) rather than a provider/model
- * failure. The model fallback chain must abort on these instead of consuming
- * candidate slots — retrying any model would hit the same local condition.
- * See #83510.
+ * timeout or embedded attempt session takeover) or a local native tool execution
+ * failure (Codex missing_tool_result) rather than a provider/model failure.
+ * The model fallback chain must abort on these instead of consuming candidate
+ * slots — retrying any model would hit the same local condition.
+ * See #83510, #95474.
  */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  if (!hasSessionWriteLockContention(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
+  if (
+    !hasSessionWriteLockContention(err) &&
+    !hasEmbeddedAttemptSessionTakeover(err) &&
+    !hasLocalNativeToolExecutionFailure(err)
+  ) {
     return false;
   }
   if (isFailoverError(err)) {
     return false;
   }
   if (isEmbeddedAttemptSessionTakeover(err)) {
+    return true;
+  }
+  if (hasLocalNativeToolExecutionFailure(err)) {
     return true;
   }
   return resolveFailoverClassificationFromError(err) === null;

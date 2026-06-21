@@ -1288,6 +1288,35 @@ describe("failover-error", () => {
       expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
     });
 
+    it("returns true for direct Codex missing native tool result errors", () => {
+      const err = new Error(
+        "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed. toolCallId=call_abc123; toolName=bash",
+      );
+      expect(isNonProviderRuntimeCoordinationError(err)).toBe(true);
+    });
+
+    it("returns true when the missing tool result error is nested via cause", () => {
+      const inner = new Error(
+        "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.",
+      );
+      const outer = new Error("wrapper", { cause: inner });
+      expect(isNonProviderRuntimeCoordinationError(outer)).toBe(true);
+    });
+
+    it("returns true when the missing tool result error is nested via error property", () => {
+      const inner = new Error(
+        "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed. missingToolResultCount=3",
+      );
+      const outer = new Error("prompt failed");
+      (outer as Record<string, unknown>).error = inner;
+      expect(isNonProviderRuntimeCoordinationError(outer)).toBe(true);
+    });
+
+    it("returns false for unrelated error messages that mention 'tool'", () => {
+      const err = new Error("tool call failed due to network error");
+      expect(isNonProviderRuntimeCoordinationError(err)).toBe(false);
+    });
+
     it("returns false for plain timeouts and provider errors", () => {
       const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
       expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
