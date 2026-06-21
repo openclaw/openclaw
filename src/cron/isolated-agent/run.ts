@@ -1523,8 +1523,12 @@ async function finalizeCronRun(params: {
       // execution status made the outer scheduled run report `status=error`
       // for a session that actually ended successfully (#94058). Delivery
       // failure is recorded separately via `delivered`/`deliveryAttempted` and
-      // delivery diagnostics, which drive the decoupled run-log delivery status.
-      if (deliveryResult.result.status === "error" && !params.isAborted()) {
+      // delivery diagnostics, while deliberate target-guard refusals stay errors.
+      if (
+        deliveryResult.result.status === "error" &&
+        deliveryResult.result.errorKind !== "delivery-target" &&
+        !params.isAborted()
+      ) {
         return resolveRunOutcome({
           delivered: resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
           deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
