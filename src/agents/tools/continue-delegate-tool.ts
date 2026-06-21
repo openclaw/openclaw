@@ -39,8 +39,8 @@ const ContinueDelegateToolSchema = Type.Object({
     Type.Number({
       minimum: 0,
       description:
-        "Seconds to wait before spawning the delegate. 0 or omitted = immediate. " +
-        "Clamped to continuation.minDelayMs / maxDelayMs from config.",
+        "Seconds to wait before spawning the delegate. 0 = immediate; omitted = default delay. " +
+        "Positive delays are clamped to continuation.minDelayMs / maxDelayMs from config.",
     }),
   ),
   mode: optionalStringEnum(DELEGATE_MODES, {

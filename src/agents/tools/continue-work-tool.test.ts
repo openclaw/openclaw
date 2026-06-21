@@ -111,8 +111,7 @@ describe("continue_work tool", () => {
     });
     expect(result).toEqual({
       status: "scheduled",
-      delaySeconds: 5,
-      note: "Requested 0s, clamped to 5s by continuation config.",
+      delaySeconds: 0,
     });
   });
 
@@ -132,8 +131,7 @@ describe("continue_work tool", () => {
     });
     expect(result).toEqual({
       status: "scheduled",
-      delaySeconds: 5,
-      note: "Requested 0s, clamped to 5s by continuation config.",
+      delaySeconds: 0,
     });
     expect(result).not.toHaveProperty("traceparent");
   });
@@ -208,8 +206,7 @@ describe("continue_work tool", () => {
     });
     expect(result).toMatchObject({
       status: "scheduled",
-      delaySeconds: 5,
-      note: "Requested 0s, clamped to 5s by continuation config.",
+      delaySeconds: 0,
       traceparent: VALID_TRACEPARENT,
     });
     expect(spans).toHaveLength(1);
@@ -240,8 +237,7 @@ describe("continue_work tool", () => {
     });
     expect(result).toMatchObject({
       status: "scheduled",
-      delaySeconds: 5,
-      note: "Requested 0s, clamped to 5s by continuation config.",
+      delaySeconds: 0,
       traceparent: ACTIVE_TRACEPARENT,
     });
   });
@@ -266,8 +262,7 @@ describe("continue_work tool", () => {
     });
     expect(result).toMatchObject({
       status: "scheduled",
-      delaySeconds: 5,
-      note: "Requested 0s, clamped to 5s by continuation config.",
+      delaySeconds: 0,
       traceparent: VALID_TRACEPARENT,
     });
   });

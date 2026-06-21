@@ -28,7 +28,7 @@ const ContinueWorkToolSchema = Type.Object({
       minimum: 0,
       description:
         "Seconds to wait before the next turn fires. 0 or omitted = immediate. " +
-        "Clamped to continuation.minDelayMs / maxDelayMs from config.",
+        "Positive delays are clamped to continuation.minDelayMs / maxDelayMs from config.",
     }),
   ),
   traceparent: Type.Optional(

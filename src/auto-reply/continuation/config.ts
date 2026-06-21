@@ -167,5 +167,13 @@ export function resolveMaxDelegatesPerTurn(cfg: OpenClawConfig = getRuntimeConfi
  */
 export function clampDelayMs(rawMs: number | undefined, config: ContinuationRuntimeConfig): number {
   const requested = rawMs ?? config.defaultDelayMs;
+  // #1075: an explicit zero (or any non-positive) is the IMMEDIATE sentinel —
+  // preserve it instead of flooring to minDelayMs, so the model-facing
+  // "delaySeconds: 0 = immediate" contract actually holds. Omitted (undefined)
+  // still resolves to defaultDelayMs above (preserving the #918 distinction
+  // that an explicit 0 is not the 15s default); only positive delays clamp.
+  if (requested <= 0) {
+    return 0;
+  }
   return Math.max(config.minDelayMs, Math.min(config.maxDelayMs, requested));
 }

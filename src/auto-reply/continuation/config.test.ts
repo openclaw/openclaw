@@ -226,14 +226,14 @@ describe("clampDelayMs", () => {
     expect(clampDelayMs(undefined, config)).toBe(15_000);
   });
 
-  it("treats an explicit zero as a real 0 → clamps up to minDelayMs, NOT defaultDelayMs (#918 codex P2)", () => {
-    // Contract anchor for the continue_work zero-delay finding
-    // (followup-runner.ts:1198 + spawn-init duplicate): an explicit/omitted
-    // `delaySeconds=0` resolves to `0 * 1000 = 0`, which must clamp UP to the
-    // 5s minimum (matching the continue_work tool result), never fall back to
-    // the 15s default via a `|| defaultDelayMs` falsy check. Both schedulers now
-    // route through this helper so the tool result and wake timing can't drift.
-    expect(clampDelayMs(0, config)).toBe(5_000);
+  it("treats an explicit zero as the immediate sentinel → 0, NOT defaultDelayMs (#918 + #1075)", () => {
+    // #918 anchor: an explicit `delaySeconds=0` must NOT fall back to the 15s
+    // default via a `|| defaultDelayMs` falsy check (0 is not "absent").
+    // #1075 refinement: a real 0 is the IMMEDIATE sentinel and passes through
+    // as 0 rather than clamping up to minDelayMs — matching the model-facing
+    // "0 = immediate" schema. Omitted (undefined) still → defaultDelayMs (below),
+    // so the 0-is-not-default distinction #918 guards is preserved.
+    expect(clampDelayMs(0, config)).toBe(0);
   });
 
   it("clamps below minimum", () => {

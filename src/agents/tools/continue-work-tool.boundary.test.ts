@@ -176,19 +176,19 @@ describe("continue_work tool — delaySeconds boundary validation", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // CLAMP-UP branch: delaySeconds === 0 (under minDelayMs).
+  // IMMEDIATE-SENTINEL branch: delaySeconds === 0 (#1075).
   //
-  // CANON GUARDED: zero is VALID (non-negative) but UNDER min, so it gets
-  // lifted up to minDelayMs (5s). This is the asymmetric pair to the
-  // negative-rejection case: 0 is the smallest accepted input, and it
-  // doesn't pass through unchanged.
+  // CANON GUARDED: zero is the IMMEDIATE sentinel — it passes through as a
+  // literal 0s schedule, NOT lifted to minDelayMs. This matches the
+  // model-facing schema ("0 or omitted = immediate"): only POSITIVE delays
+  // clamp to the [minDelayMs, maxDelayMs] band. Negatives are still rejected.
   //
   // Regression indicator: if zero starts rejecting (collapse with -1) OR
-  // starts passing through as a literal 0s schedule (collapse with the
-  // pass-through case), the boundary has shifted; reviewer should check
-  // whether minDelayMs is still being applied to the lower bound.
+  // starts clamping up to minDelayMs (5s) again, the immediate-sentinel
+  // contract has regressed; reviewer should check clampDelayMs preserves
+  // the `requested <= 0 → 0` short-circuit.
   // ───────────────────────────────────────────────────────────────────────
-  it("clamps delaySeconds = 0 to minDelayMs (5s)", async () => {
+  it("preserves delaySeconds = 0 as immediate (#1075)", async () => {
     const requestContinuation = vi.fn();
     const tool = makeTool({ requestContinuation });
 
@@ -203,14 +203,12 @@ describe("continue_work tool — delaySeconds boundary validation", () => {
       reason: "Zero delay boundary test.",
       delaySeconds: 0,
     });
-    // Compute: 0s → 0ms → clamp = Math.max(5000, Math.min(300000, 0)) = 5000ms = 5s.
-    // The note string is asserted exactly (not via stringContaining) here
-    // because the user-visible note format itself is part of the contract —
-    // the model parses it to decide whether to re-ask.
+    // Compute: 0s → 0ms → clampDelayMs short-circuits `requested <= 0 → 0` = 0s.
+    // Because resolvedDelaySeconds === the requested 0, NO clamp note is emitted —
+    // the immediate schedule passes through unchanged (the #1075 contract).
     expect(result).toEqual({
       status: "scheduled",
-      delaySeconds: 5,
-      note: "Requested 0s, clamped to 5s by continuation config.",
+      delaySeconds: 0,
     });
   });
 });
