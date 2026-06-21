@@ -46,7 +46,9 @@ describe("Slack relay source", () => {
 
   it("applies hello identity, dispatches a routed event, and acknowledges its delivery", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve) => server.once("listening", resolve));
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
     const port = (server.address() as AddressInfo).port;
     const ack = deferred<Record<string, unknown>>();
     const receivedAcks: Array<Record<string, unknown>> = [];
@@ -57,7 +59,12 @@ describe("Slack relay source", () => {
         url: request.url,
       });
       socket.on("message", (data) => {
-        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        const messageText = Array.isArray(data)
+          ? Buffer.concat(data).toString("utf8")
+          : data instanceof ArrayBuffer
+            ? Buffer.from(new Uint8Array(data)).toString("utf8")
+            : Buffer.from(data).toString("utf8");
+        const frame = JSON.parse(messageText) as Record<string, unknown>;
         receivedAcks.push(frame);
         ack.resolve(frame);
       });
@@ -124,7 +131,7 @@ describe("Slack relay source", () => {
         gatewayId: "pash",
       },
       handleSlackMessage,
-      runtime: { error: runtimeError, log: vi.fn() } as RuntimeEnv,
+      runtime: { error: runtimeError, log: vi.fn() } as unknown as RuntimeEnv,
       abortSignal: abortController.signal,
       setIdentity: (identity) => identities.push(identity),
       setStatus: (status) => statuses.push(status),
@@ -158,8 +165,14 @@ describe("Slack relay source", () => {
     for (const client of server.clients) {
       client.terminate();
     }
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
   });
 });
