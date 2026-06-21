@@ -577,7 +577,11 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     buildMessageSendingBeforeDeliver(finalized),
   );
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(
+        params.dispatcherOptions.beforeDeliver,
+        replyPayloadBeforeDeliver,
+        buildMessageSendingBeforeDeliver(finalized),
+      )
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
@@ -676,7 +680,11 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     buildMessageSendingBeforeDeliver(params.ctx),
   );
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(
+        params.dispatcherOptions.beforeDeliver,
+        replyPayloadBeforeDeliver,
+        buildMessageSendingBeforeDeliver(params.ctx),
+      )
     : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,
