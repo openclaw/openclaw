@@ -6,7 +6,7 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { resolveNpmRunner } from "../../npm-runner.mjs";
 import { resolvePnpmRunner } from "../../pnpm-runner.mjs";
-import { buildCmdExeCommandLine } from "../../windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
 import type { CommandResult, RunOptions } from "./types.ts";
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -338,11 +338,6 @@ function isBareCommand(command: string, name: "npm" | "pnpm"): boolean {
   return portableBasename(command) === command && command.toLowerCase() === name;
 }
 
-function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key === undefined ? undefined : env[key];
-}
-
 export function resolveHostCommandInvocation(
   command: string,
   args: string[],
@@ -350,7 +345,7 @@ export function resolveHostCommandInvocation(
 ): HostCommandInvocation {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  const comSpec = options.comSpec ?? resolveEnvValue(env, "ComSpec") ?? "cmd.exe";
+  const comSpec = options.comSpec ?? resolveWindowsCmdExePath(env);
 
   if (isBareCommand(command, "pnpm")) {
     const runner = resolvePnpmRunner({

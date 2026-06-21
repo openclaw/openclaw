@@ -50,22 +50,19 @@ describe("qa scenario catalog", () => {
     expect(
       scenarioIds.filter((scenarioId) => requiredScenarioIds.includes(scenarioId)).toSorted(),
     ).toEqual(requiredScenarioIds);
-    expect(
-      pack.scenarios
-        .filter((scenario) => scenario.execution?.kind !== "flow")
-        .map((scenario) => scenario.id)
-        .toSorted(),
-    ).toStrictEqual(
-      [
-        "channel-message-flows",
-        "control-ui-chat-flow-playwright",
-        "gateway-smoke",
-        "package-openclaw-for-docker",
-        "plugin-lifecycle-probe",
-        "qa-otel-smoke",
-        "ux-matrix-evidence-dashboard",
-      ].toSorted(),
+    const nativeExecutionScenarios = pack.scenarios.filter(
+      (scenario) => scenario.execution.kind !== "flow",
     );
+    expect(nativeExecutionScenarios.length).toBeGreaterThan(0);
+    for (const scenario of nativeExecutionScenarios) {
+      const execution = scenario.execution;
+      if (execution.kind === "flow") {
+        throw new Error(`expected native execution scenario: ${scenario.id}`);
+      }
+      expect(["playwright", "script", "vitest"]).toContain(execution.kind);
+      expect(fs.existsSync(execution.path), `${scenario.id} execution.path exists`).toBe(true);
+      expect(execution.flow).toBeUndefined();
+    }
     expect(
       pack.scenarios
         .filter((scenario) => scenario.execution.kind === "flow")
@@ -174,6 +171,21 @@ describe("qa scenario catalog", () => {
     expect(uxMatrix.execution.args).toStrictEqual(["--artifact-base", "${outputDir}"]);
     expect(uxMatrix.execution.config).toBeUndefined();
     expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
+  });
+
+  it("loads folded HTTP API script scenarios with primary taxonomy coverage", () => {
+    expect(readQaScenarioById("openai-compatible-chat-tools").coverage?.primary).toStrictEqual([
+      "gateway.openai-compatible-apis",
+    ]);
+    expect(readQaScenarioById("openai-web-search-minimal").coverage?.primary).toStrictEqual([
+      "runtime.reasoning-and-cache-controls",
+    ]);
+    expect(
+      readQaScenarioById("openai-web-search-native-assertions").coverage?.primary,
+    ).toStrictEqual(["web-search.openai-native-web-search", "plugins.web-search-and-fetch"]);
+    expect(readQaScenarioById("openwebui-openai-compatible").coverage?.primary).toStrictEqual([
+      "gateway.openai-compatible-apis",
+    ]);
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {

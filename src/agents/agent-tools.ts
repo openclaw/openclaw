@@ -452,6 +452,8 @@ export function createOpenClawCodingTools(options?: {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
@@ -869,6 +871,7 @@ export function createOpenClawCodingTools(options?: {
         currentChannelId: options?.currentChannelId,
         currentThreadTs: options?.currentThreadTs,
         accountId: options?.agentAccountId,
+        approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
         backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
         timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
         approvalRunningNoticeMs:

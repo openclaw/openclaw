@@ -24,6 +24,7 @@ import {
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
 } from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
+import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 type ModelRow = {
   key: string;
@@ -120,10 +121,14 @@ function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
   }
   try {
     if (process.platform === "win32") {
-      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
+      const killer = spawn(
+        resolveQaWindowsSystem32ExePath("taskkill.exe"),
+        ["/pid", String(pid), "/t", "/f"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
       killer.once("error", () => {
         try {
           process.kill(pid, signal);

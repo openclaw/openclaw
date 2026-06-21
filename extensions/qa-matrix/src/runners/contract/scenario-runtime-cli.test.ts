@@ -3,13 +3,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
   resolveMatrixQaOpenClawCliEntryPath,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
+  testing,
 } from "./scenario-runtime-cli.js";
 
 function isProcessRunning(pid: number): boolean {
@@ -58,6 +59,53 @@ describe("Matrix QA CLI runtime", () => {
     expect(
       redactMatrixQaCliOutput("GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij"),
     ).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
+  });
+
+  it("force-kills Windows CLI process trees when graceful taskkill fails", () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.WINDIR;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
+    try {
+      const killMock = vi.fn();
+      const child = {
+        pid: 12345,
+        kill: killMock,
+      } as unknown as Parameters<typeof testing.killMatrixQaCliChild>[0];
+      const runTaskkill = vi
+        .fn()
+        .mockReturnValueOnce({ status: 1 })
+        .mockReturnValueOnce({ status: 0 });
+
+      testing.killMatrixQaCliChild(child, "SIGTERM", runTaskkill);
+
+      const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(killMock).not.toHaveBeenCalled();
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+      if (originalSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = originalSystemRoot;
+      }
+      if (originalWindir === undefined) {
+        delete process.env.WINDIR;
+      } else {
+        process.env.WINDIR = originalWindir;
+      }
+    }
   });
 
   it("prefers the ESM OpenClaw CLI entrypoint when present", async () => {

@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -96,7 +97,7 @@ function signalWindowsProcessTree(
   if (signal === "SIGKILL") {
     args.push("/F");
   }
-  const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
   return !result?.error && result?.status === 0;
 }
 

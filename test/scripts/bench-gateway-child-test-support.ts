@@ -2,6 +2,11 @@
 import type { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 type StopChildResult = {
   exitedBeforeTeardown: boolean;
@@ -140,12 +145,17 @@ export function registerStopChildBehaviorTests<TChild>(params: {
       exitCode: null,
       signal: "SIGKILL",
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "4450", "/T"], {
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "4450", "/T"], {
       stdio: "ignore",
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "4450", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "4450", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
     expect(child.stdin.destroy).toHaveBeenCalledOnce();
     expect(child.stdout.destroy).toHaveBeenCalledOnce();
@@ -190,15 +200,25 @@ export function registerStopChildBehaviorTests<TChild>(params: {
       exitCode: null,
       signal: "SIGKILL",
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "4450", "/T"], {
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "4450", "/T"], {
       stdio: "ignore",
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "4450", "/T", "/F"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(3, "taskkill", ["/PID", "4450", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "4450", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      3,
+      expectedTaskkillPath(),
+      ["/PID", "4450", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
   });
 

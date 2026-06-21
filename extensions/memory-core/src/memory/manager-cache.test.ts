@@ -1,12 +1,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 // Memory Core tests cover manager cache plugin behavior.
-import { createDeferred } from "../../../../src/test-utils/deferred.js";
 import {
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
   type ManagedCache,
 } from "./manager-cache.js";
+
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
 
 type TestEntry = {
   id: string;

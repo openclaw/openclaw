@@ -152,6 +152,10 @@ function readNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function readCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 function readBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
@@ -371,9 +375,44 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
     };
   }
   const counts = isRecord(payload.counts) ? payload.counts : undefined;
-  const totalCount = readNumber(counts?.total);
-  const passedCount = readNumber(counts?.passed);
-  const failedCount = readNumber(counts?.failed);
+  for (const key of ["total", "passed", "failed", "skipped"] as const) {
+    if (counts && Object.hasOwn(counts, key) && readCount(counts[key]) === undefined) {
+      return {
+        passed: false,
+        status: "unknown",
+        details: `qa-suite-summary counts.${key} must be a non-negative integer`,
+      };
+    }
+  }
+  const totalCount = readCount(counts?.total);
+  const passedCount = readCount(counts?.passed);
+  const failedCount = readCount(counts?.failed);
+  const explicitSkippedCount = readCount(counts?.skipped);
+  if (totalCount !== undefined) {
+    const providedCountSum =
+      (passedCount ?? 0) + (failedCount ?? 0) + (explicitSkippedCount ?? 0);
+    if (totalCount < providedCountSum) {
+      return {
+        passed: false,
+        status: "unknown",
+        details: `qa-suite-summary counts.total=${totalCount} is less than provided count sum=${providedCountSum}`,
+      };
+    }
+    if (
+      passedCount !== undefined &&
+      failedCount !== undefined &&
+      explicitSkippedCount !== undefined &&
+      totalCount !== providedCountSum
+    ) {
+      return {
+        passed: false,
+        status: "unknown",
+        details: `qa-suite-summary counts.total=${totalCount} does not match counts.passed+counts.failed+counts.skipped=${
+          providedCountSum
+        }`,
+      };
+    }
+  }
   const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : undefined;
   const failedScenarios = scenarios?.filter(
     (scenario) => isRecord(scenario) && scenario.status === "fail",
@@ -446,7 +485,6 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
         details: `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
       };
     }
-    const explicitSkippedCount = readNumber(counts?.skipped);
     const inferredSkippedCount =
       totalCount === undefined || passedCount === undefined
         ? undefined
