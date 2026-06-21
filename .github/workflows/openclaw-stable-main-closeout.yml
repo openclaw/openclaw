@@ -39,6 +39,12 @@ jobs:
       evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
       fallback_correction: ${{ steps.inputs.outputs.fallback_correction }}
       main_ref: ${{ steps.inputs.outputs.main_ref }}
+      policy_main_sha: ${{ steps.inputs.outputs.policy_main_sha }}
+      publish_artifact_name: ${{ steps.inputs.outputs.publish_artifact_name }}
+      release_tag_sha: ${{ steps.inputs.outputs.release_tag_sha }}
+      stable_source_ref: ${{ steps.inputs.outputs.stable_source_ref }}
+      stable_source_sha: ${{ steps.inputs.outputs.stable_source_sha }}
+      strict_closeout: ${{ steps.inputs.outputs.strict_closeout }}
       repair_partial_closeout: ${{ steps.inputs.outputs.repair_partial_closeout }}
       should_closeout: ${{ steps.inputs.outputs.should_closeout }}
       tag: ${{ steps.inputs.outputs.tag }}
@@ -161,6 +167,7 @@ jobs:
           repair_partial_closeout=false
           existing_closeout_full_release_validation_run_id=""
           existing_closeout_release_publish_run_id=""
+          existing_closeout_schema_version=""
           if [[ -f "$closeout_json_path" && -f "$closeout_checksum_path" ]]; then
             expected_closeout_digest="$(awk 'NF { print $1; exit }' "$closeout_checksum_path")"
             actual_closeout_digest="$(sha256sum "$closeout_json_path" | awk '{print $1}')"
@@ -175,10 +182,20 @@ jobs:
             exit 1
           fi
           if [[ -f "$closeout_json_path" ]]; then
+            existing_closeout_schema_version="$(jq -r '.version // empty' "$closeout_json_path")"
             existing_closeout_tag="$(jq -r '.releaseTag // empty' "$closeout_json_path")"
             existing_closeout_version="$(jq -r '.releaseVersion // empty' "$closeout_json_path")"
             existing_closeout_release_tag_sha="$(jq -r '.releaseTagSha // empty' "$closeout_json_path")"
-            existing_closeout_main_ref="$(jq -r '.mainSha // empty' "$closeout_json_path")"
+            if [[ "$existing_closeout_schema_version" == "1" ]]; then
+              existing_closeout_main_ref="$(jq -r '.mainSha // empty' "$closeout_json_path")"
+              existing_closeout_stable_source_sha=""
+            elif [[ "$existing_closeout_schema_version" == "2" ]]; then
+              existing_closeout_main_ref="$(jq -r '.policyMainSha // empty' "$closeout_json_path")"
+              existing_closeout_stable_source_sha="$(jq -r '.stableSourceSha // empty' "$closeout_json_path")"
+            else
+              echo "Stable closeout manifest for $tag has an unsupported version; refusing to repair it." >&2
+              exit 1
+            fi
             existing_closeout_full_release_validation_run_id="$(jq -r '.fullReleaseValidationRunId // empty' "$closeout_json_path")"
             existing_closeout_release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$closeout_json_path")"
             existing_closeout_rollback_drill_id="$(jq -r '.rollbackDrill.id // empty' "$closeout_json_path")"
@@ -187,6 +204,7 @@ jobs:
               "$existing_closeout_version" != "$tag_package_version" ||
               ! "$existing_closeout_release_tag_sha" =~ ^[0-9a-f]{40}$ ||
               ! "$existing_closeout_main_ref" =~ ^[0-9a-f]{40}$ ||
+              ( "$existing_closeout_schema_version" == "2" && ! "$existing_closeout_stable_source_sha" =~ ^[0-9a-f]{40}$ ) ||
               -z "$existing_closeout_full_release_validation_run_id" ||
               -z "$existing_closeout_release_publish_run_id" ||
               -z "$existing_closeout_rollback_drill_id" ||
@@ -197,7 +215,9 @@ jobs:
             main_ref="$existing_closeout_main_ref"
             ROLLBACK_DRILL_ID="$existing_closeout_rollback_drill_id"
             ROLLBACK_DRILL_DATE="$existing_closeout_rollback_drill_date"
-            repair_partial_closeout=true
+            if [[ "$existing_closeout_schema_version" == "1" ]]; then
+              repair_partial_closeout=true
+            fi
           elif [[ "$EVENT_NAME" == "push" ]]; then
             main_version="$(jq -r '.version // empty' package.json)"
             if [[ "$main_version" != "$release_package_version" &&
@@ -230,11 +250,88 @@ jobs:
             echo "Postpublish evidence checksum failed for $tag." >&2
             exit 1
           fi
+          early_evidence_version="$(jq -r '.version // empty' "$evidence_path")"
+          early_release_class="$(jq -r '.releasePolicy.releaseClass // empty' "$evidence_path")"
+          if [[ "$early_evidence_version" == "2" &&
+            ( "$early_release_class" == "daily" || "$early_release_class" == "alpha" || "$early_release_class" == "beta" ) ]]; then
+            echo "Stable closeout skipped for release class $early_release_class." >&2
+            echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           evidence_release_tag="$(jq -r '.releaseTag // empty' "$evidence_path")"
           full_release_validation_run_id="$(jq -r '[.workflowRuns[]? | select(.label == "Full Release Validation") | .id] | if length == 1 then .[0] else empty end' "$evidence_path")"
           release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$evidence_path")"
           if [[ "$evidence_release_tag" != "$evidence_source_tag" || -z "$full_release_validation_run_id" || -z "$release_publish_run_id" ]]; then
             echo "Stable closeout is required for $tag, but postpublish evidence does not bind $evidence_source_tag to exactly one Full Release Validation run and its Publish run." >&2
+            exit 1
+          fi
+          strict_closeout=false
+          policy_main_sha=""
+          stable_source_ref=""
+          stable_source_sha=""
+          release_tag_sha=""
+          publish_artifact_name=""
+          evidence_schema_version="$(jq -r '.version // empty' "$evidence_path")"
+          if [[ "$evidence_schema_version" == "2" ]]; then
+            release_class="$(jq -r '.releasePolicy.releaseClass // empty' "$evidence_path")"
+            release_selector="$(jq -r '.releasePolicy.releaseSelector // empty' "$evidence_path")"
+            policy_mode="$(jq -r '.releasePolicy.policyMode // empty' "$evidence_path")"
+            publish_eligible="$(jq -r '.releasePolicy.publishEligible // empty' "$evidence_path")"
+            if [[ "$policy_mode" != "strict" || "$release_selector" != "stable" ||
+              "$publish_eligible" != "true" ||
+              ( "$release_class" != "stable-base" && "$release_class" != "stable-patch" ) ]]; then
+              echo "Strict stable closeout requires a publishable stable policy and selector." >&2
+              exit 1
+            fi
+            strict_closeout=true
+            policy_main_sha="$(jq -r '.releasePolicy.policySource.sha // empty' "$evidence_path")"
+            publish_artifact_name="$(jq -r '.publishManifest.artifactName // empty' "$evidence_path")"
+            publish_run_attempt="$(jq -r '.publishManifest.runAttempt // empty' "$evidence_path")"
+            publish_payload_sha256="$(jq -r '.publishManifest.payloadSha256 // empty' "$evidence_path")"
+            if [[ ! "$policy_main_sha" =~ ^[0-9a-f]{40}$ ||
+              ! "$publish_run_attempt" =~ ^[1-9][0-9]*$ ||
+              ! "$publish_payload_sha256" =~ ^[0-9a-f]{64}$ ||
+              "$publish_artifact_name" != "release-publish-manifest-${release_publish_run_id}-${publish_run_attempt}" ]]; then
+              echo "Strict postpublish evidence has an invalid policy or publish descriptor." >&2
+              exit 1
+            fi
+            publish_dir="$RUNNER_TEMP/release-publish-manifest"
+            rm -rf "$publish_dir"
+            mkdir -p "$publish_dir"
+            gh run download "$release_publish_run_id" --repo "$GITHUB_REPOSITORY" \
+              --name "$publish_artifact_name" --dir "$publish_dir"
+            mapfile -t publish_files < <(find "$publish_dir" -type f -print)
+            if [[ "${#publish_files[@]}" != "1" || "$(basename "${publish_files[0]}")" != "release-publish-manifest.json" ]]; then
+              echo "Strict stable closeout requires exactly one release-publish-manifest.json payload." >&2
+              exit 1
+            fi
+            publish_path="${publish_files[0]}"
+            actual_publish_sha256="$(sha256sum "$publish_path" | awk '{print $1}')"
+            if [[ "$actual_publish_sha256" != "$publish_payload_sha256" ]]; then
+              echo "Strict stable closeout publish manifest digest mismatch." >&2
+              exit 1
+            fi
+            stable_source_ref="$(jq -r '.target.authorizedSourceRef // empty' "$publish_path")"
+            stable_source_sha="$(jq -r '.target.authorizedSourceTipSha // empty' "$publish_path")"
+            release_tag_sha="$(jq -r '.target.targetSha // empty' "$publish_path")"
+            publish_policy_main_sha="$(jq -r '.releasePolicy.policySource.sha // empty' "$publish_path")"
+            publish_release_tag="$(jq -r '.target.releaseTag // empty' "$publish_path")"
+            publish_release_version="$(jq -r '.releasePolicy.releaseVersion // empty' "$publish_path")"
+            if [[ ! "$publish_release_version" =~ ^([0-9]{4})\.([1-9]|1[0-2])\.([1-9][0-9]*)$ ]]; then
+              echo "Strict stable closeout publish version is invalid." >&2
+              exit 1
+            fi
+            expected_stable_source_ref="refs/heads/stable/${BASH_REMATCH[1]}.$((10#${BASH_REMATCH[2]})).33"
+            if [[ "$publish_policy_main_sha" != "$policy_main_sha" ||
+              "$publish_release_tag" != "$tag" ||
+              "$stable_source_ref" != "$expected_stable_source_ref" ||
+              ! "$stable_source_sha" =~ ^[0-9a-f]{40}$ ||
+              ! "$release_tag_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Strict stable closeout publish identity is incomplete or inconsistent." >&2
+              exit 1
+            fi
+          elif [[ "$evidence_schema_version" != "1" ]]; then
+            echo "Unsupported postpublish evidence version: $evidence_schema_version." >&2
             exit 1
           fi
           if [[ -n "$existing_closeout_full_release_validation_run_id" &&
@@ -260,6 +357,12 @@ jobs:
             echo "evidence_tag=$evidence_source_tag"
             echo "fallback_correction=$fallback_correction"
             echo "main_ref=$main_ref"
+            echo "policy_main_sha=$policy_main_sha"
+            echo "publish_artifact_name=$publish_artifact_name"
+            echo "release_tag_sha=$release_tag_sha"
+            echo "stable_source_ref=$stable_source_ref"
+            echo "stable_source_sha=$stable_source_sha"
+            echo "strict_closeout=$strict_closeout"
             echo "repair_partial_closeout=$repair_partial_closeout"
             echo "should_closeout=true"
             echo "tag=$tag"
@@ -273,16 +376,35 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout resolved main state
+        if: ${{ needs.resolve.outputs.strict_closeout != 'true' }}
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.resolve.outputs.main_ref }}
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Checkout exact policy authority
+        if: ${{ needs.resolve.outputs.strict_closeout == 'true' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve.outputs.policy_main_sha }}
+          path: policy-main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout exact stable source
+        if: ${{ needs.resolve.outputs.strict_closeout == 'true' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve.outputs.stable_source_sha }}
+          path: stable-source
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Checkout shipped release tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.strict_closeout == 'true' && needs.resolve.outputs.release_tag_sha || format('refs/tags/{0}', needs.resolve.outputs.tag) }}
           path: release-tag
           fetch-depth: 1
           persist-credentials: false
@@ -330,6 +452,63 @@ jobs:
             return "$status"
           }
           BASH
+
+      - name: Materialize strict publication evidence
+        if: ${{ needs.resolve.outputs.strict_closeout == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          RELEASE_PUBLISH_RUN_ID: ${{ needs.resolve.outputs.release_publish_run_id }}
+          PUBLISH_ARTIFACT_NAME: ${{ needs.resolve.outputs.publish_artifact_name }}
+          CLOSEOUT_DIR: ${{ runner.temp }}/openclaw-stable-main-closeout
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLOSEOUT_DIR"
+          release_version="${RELEASE_TAG#v}"
+          evidence_asset="openclaw-${release_version}-postpublish-evidence.json"
+          evidence_checksum_asset="${evidence_asset}.sha256"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$evidence_asset" --pattern "$evidence_checksum_asset" \
+            --dir "$CLOSEOUT_DIR"
+          (
+            cd "$CLOSEOUT_DIR"
+            sha256sum --strict --status -c "$evidence_checksum_asset"
+          )
+          postpublish_path="$CLOSEOUT_DIR/$evidence_asset"
+          publish_run_attempt="$(jq -r '.publishManifest.runAttempt' "$postpublish_path")"
+          publish_payload_sha256="$(jq -r '.publishManifest.payloadSha256' "$postpublish_path")"
+          publish_dir="$CLOSEOUT_DIR/publish"
+          mkdir -p "$publish_dir"
+          gh run download "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "$PUBLISH_ARTIFACT_NAME" --dir "$publish_dir"
+          mapfile -t publish_files < <(find "$publish_dir" -type f -print)
+          if [[ "${#publish_files[@]}" != "1" || "$(basename "${publish_files[0]}")" != "release-publish-manifest.json" ]]; then
+            echo "Strict closeout requires exactly one release-publish-manifest.json." >&2
+            exit 1
+          fi
+          mv "${publish_files[0]}" "$CLOSEOUT_DIR/release-publish-manifest.json"
+          rmdir "$publish_dir"
+          actual_publish_sha256="$(sha256sum "$CLOSEOUT_DIR/release-publish-manifest.json" | awk '{print $1}')"
+          if [[ "$actual_publish_sha256" != "$publish_payload_sha256" ]]; then
+            echo "Strict closeout publish manifest digest mismatch." >&2
+            exit 1
+          fi
+          jq -cnS \
+            --arg runId "$RELEASE_PUBLISH_RUN_ID" \
+            --arg runAttempt "$publish_run_attempt" \
+            --arg artifactName "$PUBLISH_ARTIFACT_NAME" \
+            --arg payloadSha256 "$publish_payload_sha256" \
+            '{runId:$runId,runAttempt:$runAttempt,artifactName:$artifactName,payloadSha256:$payloadSha256}' \
+            > "$CLOSEOUT_DIR/publish-descriptor.json"
+          postpublish_digest="$(sha256sum "$postpublish_path" | awk '{print $1}')"
+          postpublish_run_attempt="$(jq -r '.releasePublishRunAttempt' "$postpublish_path")"
+          jq -cnS \
+            --arg runId "$RELEASE_PUBLISH_RUN_ID" \
+            --arg runAttempt "$postpublish_run_attempt" \
+            --arg artifactName "openclaw-release-postpublish-evidence-v${release_version}" \
+            --arg payloadSha256 "$postpublish_digest" \
+            '{runId:$runId,runAttempt:$runAttempt,artifactName:$artifactName,payloadSha256:$payloadSha256}' \
+            > "$CLOSEOUT_DIR/postpublish-descriptor.json"
 
       - name: Verify release workflow evidence
         env:
@@ -393,6 +572,37 @@ jobs:
             exit 1
           }
 
+      - name: Authenticate strict closeout operation
+        if: ${{ needs.resolve.outputs.strict_closeout == 'true' }}
+        env:
+          CLOSEOUT_DIR: ${{ runner.temp }}/openclaw-stable-main-closeout
+          POLICY_MAIN_SHA: ${{ needs.resolve.outputs.policy_main_sha }}
+        run: |
+          set -euo pipefail
+          publish="$CLOSEOUT_DIR/release-publish-manifest.json"
+          jq -nS \
+            --arg releaseVersion "$(jq -r '.releasePolicy.releaseVersion' "$publish")" \
+            --arg releaseSelector "$(jq -r '.releasePolicy.releaseSelector' "$publish")" \
+            --arg policyMode "$(jq -r '.releasePolicy.policyMode' "$publish")" \
+            --arg expectedPolicySourceSha "$POLICY_MAIN_SHA" \
+            --arg event "$GITHUB_EVENT_NAME" \
+            --arg workflowPath ".github/workflows/openclaw-stable-main-closeout.yml" \
+            --arg executionRef "$GITHUB_REF" \
+            --arg runHeadSha "$GITHUB_SHA" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg targetRef "$(jq -r '.target.targetRef' "$publish")" \
+            --arg targetSha "$(jq -r '.target.targetSha' "$publish")" \
+            --arg releaseTag "$(jq -r '.target.releaseTag' "$publish")" \
+            --arg authorizedSourceRef "$(jq -r '.target.authorizedSourceRef' "$publish")" \
+            '{schemaVersion:1,operation:"stable-closeout",releaseVersion:$releaseVersion,releaseSelector:$releaseSelector,policyMode:$policyMode,expectedPolicySourceSha:$expectedPolicySourceSha,execution:{event:$event,workflowPath:$workflowPath,executionRef:$executionRef,runHeadSha:$runHeadSha,runId:$runId,runAttempt:$runAttempt},target:{targetRef:$targetRef,targetSha:$targetSha,releaseTag:$releaseTag,authorizedSourceRef:$authorizedSourceRef}}' \
+            > "$CLOSEOUT_DIR/release-operation.json"
+          node "$GITHUB_WORKSPACE/policy-main/scripts/verify-release-operation.mjs" verify \
+            --contract-version 1 \
+            --policy-root "$GITHUB_WORKSPACE/policy-main" \
+            --input "$CLOSEOUT_DIR/release-operation.json" \
+            > "$CLOSEOUT_DIR/release-operation-verifier-v1.json"
+
       - name: Verify stable state and write closeout manifest
         env:
           GH_TOKEN: ${{ github.token }}
@@ -402,6 +612,10 @@ jobs:
           ROLLBACK_DRILL_ID: ${{ needs.resolve.outputs.rollback_drill_id }}
           ROLLBACK_DRILL_DATE: ${{ needs.resolve.outputs.rollback_drill_date }}
           REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}
+          STRICT_CLOSEOUT: ${{ needs.resolve.outputs.strict_closeout }}
+          POLICY_MAIN_SHA: ${{ needs.resolve.outputs.policy_main_sha }}
+          STABLE_SOURCE_SHA: ${{ needs.resolve.outputs.stable_source_sha }}
+          RELEASE_TAG_SHA: ${{ needs.resolve.outputs.release_tag_sha }}
           CLOSEOUT_DIR: ${{ runner.temp }}/openclaw-stable-main-closeout
         run: |
           set -euo pipefail
@@ -410,17 +624,35 @@ jobs:
           gh_with_retry release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json tagName,isDraft,isPrerelease,assets \
             > "$CLOSEOUT_DIR/github-release.json"
-          node scripts/verify-stable-main-closeout.mjs \
-            --tag "$RELEASE_TAG" \
-            --main-dir "$GITHUB_WORKSPACE" \
-            --tag-dir "$GITHUB_WORKSPACE/release-tag" \
-            --release-json "$CLOSEOUT_DIR/github-release.json" \
-            --full-release-validation-run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
-            --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
-            --rollback-drill-id "$ROLLBACK_DRILL_ID" \
-            --rollback-drill-date "$ROLLBACK_DRILL_DATE" \
-            --allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT" \
-            --output "$CLOSEOUT_DIR/stable-main-closeout.json"
+          if [[ "$STRICT_CLOSEOUT" == "true" ]]; then
+            release_version="${RELEASE_TAG#v}"
+            node "$GITHUB_WORKSPACE/policy-main/scripts/verify-stable-main-closeout.mjs" \
+              --tag "$RELEASE_TAG" \
+              --policy-main-dir "$GITHUB_WORKSPACE/policy-main" --policy-main-sha "$POLICY_MAIN_SHA" \
+              --stable-source-dir "$GITHUB_WORKSPACE/stable-source" --stable-source-sha "$STABLE_SOURCE_SHA" \
+              --release-tag-dir "$GITHUB_WORKSPACE/release-tag" --release-tag-sha "$RELEASE_TAG_SHA" \
+              --release-json "$CLOSEOUT_DIR/github-release.json" \
+              --publish-manifest "$CLOSEOUT_DIR/release-publish-manifest.json" \
+              --publish-descriptor "$CLOSEOUT_DIR/publish-descriptor.json" \
+              --postpublish-evidence "$CLOSEOUT_DIR/openclaw-${release_version}-postpublish-evidence.json" \
+              --postpublish-descriptor "$CLOSEOUT_DIR/postpublish-descriptor.json" \
+              --full-release-validation-run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+              --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
+              --rollback-drill-id "$ROLLBACK_DRILL_ID" --rollback-drill-date "$ROLLBACK_DRILL_DATE" \
+              --output "$CLOSEOUT_DIR/stable-main-closeout.json"
+          else
+            node scripts/verify-stable-main-closeout.mjs \
+              --tag "$RELEASE_TAG" \
+              --main-dir "$GITHUB_WORKSPACE" \
+              --tag-dir "$GITHUB_WORKSPACE/release-tag" \
+              --release-json "$CLOSEOUT_DIR/github-release.json" \
+              --full-release-validation-run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+              --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
+              --rollback-drill-id "$ROLLBACK_DRILL_ID" \
+              --rollback-drill-date "$ROLLBACK_DRILL_DATE" \
+              --allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT" \
+              --output "$CLOSEOUT_DIR/stable-main-closeout.json"
+          fi
           release_version="${RELEASE_TAG#v}"
           sha256sum "$CLOSEOUT_DIR/stable-main-closeout.json" | awk -v asset="openclaw-${release_version}-stable-main-closeout.json" \
             '{print $1 "  " asset}' \
