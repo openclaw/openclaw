@@ -26,6 +26,7 @@ import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
   getToolParamsRecord,
+  replaceKnownHallucinatedExtension,
   stripMalformedXmlArgValueSuffix,
   stripMalformedXmlArgValueSuffixFromKeys,
   wrapToolParamValidation,
@@ -770,7 +771,9 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
-        const filePath = stripMalformedXmlArgValueSuffix(rawFilePath);
+        const filePath = replaceKnownHallucinatedExtension(
+          stripMalformedXmlArgValueSuffix(rawFilePath),
+        );
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }

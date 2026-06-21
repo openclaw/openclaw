@@ -16,6 +16,27 @@ const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>+$/;
 const XML_ARG_VALUE_PATH_PARAM_KEYS = new Set(["path"]);
 
+/** Model-hallucinated document extensions mapped to their canonical counterparts.
+ *  LLMs occasionally produce extensions like ".docodex" or ".pptcodex" when
+ *  the tool definition mentions "docx"/"pptx" plus "codex" in the system prompt. */
+const HALLUCINATED_EXTENSION_REPLACEMENTS: Record<string, string> = {
+  ".docodex": ".docx",
+  ".pptcodex": ".pptx",
+  ".xlscodex": ".xlsx",
+};
+
+/** Correct known hallucinated document extensions at the end of a path string.
+ *  Only matches when the path ends with the canonical lower-case pattern,
+ *  so paths like "report.DOCODEX" or "file.docx.backup" are not rewritten. */
+export function replaceKnownHallucinatedExtension(path: string): string {
+  for (const [hallucinated, canonical] of Object.entries(HALLUCINATED_EXTENSION_REPLACEMENTS)) {
+    if (path.toLowerCase().endsWith(hallucinated)) {
+      return path.slice(0, -hallucinated.length) + canonical;
+    }
+  }
+  return path;
+}
+
 function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
 }
@@ -110,7 +131,14 @@ export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
-/** Strip malformed XML suffixes from selected string fields without mutating input. */
+/** Normalize a single path param value: strip XML suffix, then correct hallucinated extensions. */
+export function normalizePathParam(value: string): string {
+  const stripped = replaceKnownHallucinatedExtension(stripMalformedXmlArgValueSuffix(value));
+  return value === stripped ? value : stripped;
+}
+
+/** Strip malformed XML suffixes and correct hallucinated extensions from selected string fields
+ *  without mutating input. Path keys also receive hallucinated-extension correction. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,
   keys: readonly string[],
@@ -121,10 +149,13 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
     if (typeof value !== "string") {
       continue;
     }
-    const stripped = stripMalformedXmlArgValueSuffix(value);
-    if (stripped !== value) {
+    let cleaned = stripMalformedXmlArgValueSuffix(value);
+    if (XML_ARG_VALUE_PATH_PARAM_KEYS.has(key)) {
+      cleaned = replaceKnownHallucinatedExtension(cleaned);
+    }
+    if (cleaned !== value) {
       normalized ??= { ...record };
-      normalized[key as keyof T] = stripped as T[keyof T];
+      normalized[key as keyof T] = cleaned as T[keyof T];
     }
   }
   return normalized ?? record;

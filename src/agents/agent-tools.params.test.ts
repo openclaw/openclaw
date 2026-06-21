@@ -7,6 +7,8 @@ import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
   getToolParamsRecord,
+  normalizePathParam,
+  replaceKnownHallucinatedExtension,
   stripMalformedXmlArgValueSuffix,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
@@ -252,5 +254,153 @@ describe("assertRequiredParams", () => {
         "write",
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("replaceKnownHallucinatedExtension", () => {
+  it("corrects .docodex → .docx", () => {
+    expect(replaceKnownHallucinatedExtension("report.docodex")).toBe("report.docx");
+  });
+
+  it("corrects .pptcodex → .pptx", () => {
+    expect(replaceKnownHallucinatedExtension("slides.pptcodex")).toBe("slides.pptx");
+  });
+
+  it("corrects .xlscodex → .xlsx", () => {
+    expect(replaceKnownHallucinatedExtension("data.xlscodex")).toBe("data.xlsx");
+  });
+
+  it("preserves valid .docx extension", () => {
+    expect(replaceKnownHallucinatedExtension("report.docx")).toBe("report.docx");
+  });
+
+  it("preserves valid .pptx extension", () => {
+    expect(replaceKnownHallucinatedExtension("slides.pptx")).toBe("slides.pptx");
+  });
+
+  it("preserves valid .xlsx extension", () => {
+    expect(replaceKnownHallucinatedExtension("data.xlsx")).toBe("data.xlsx");
+  });
+
+  it("preserves unrelated extensions", () => {
+    expect(replaceKnownHallucinatedExtension("notes.txt")).toBe("notes.txt");
+    expect(replaceKnownHallucinatedExtension("image.png")).toBe("image.png");
+  });
+
+  it("only replaces the extension suffix, not mid-path occurrences", () => {
+    expect(replaceKnownHallucinatedExtension("docodex-report.docodex")).toBe("docodex-report.docx");
+  });
+});
+
+describe("normalizePathParam", () => {
+  it("composes XML suffix stripping with extension correction", () => {
+    expect(normalizePathParam("report.docodex</arg_value>>")).toBe("report.docx");
+  });
+
+  it("preserves strings that need no normalization", () => {
+    expect(normalizePathParam("report.docx")).toBe("report.docx");
+  });
+});
+
+describe("extension correction via wrapToolParamValidation", () => {
+  it("corrects hallucinated extension in write tool path param", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("id", {
+      path: "report.docodex",
+      content: "hello world",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      { path: "report.docx", content: "hello world" },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("corrects hallucinated extension in edit tool path param", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "edit",
+        label: "edit",
+        description: "edit a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.edit,
+    );
+
+    await tool.execute("id", {
+      path: "slides.pptcodex",
+      edits: [{ oldText: "old", newText: "new" }],
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      { path: "slides.pptx", edits: [{ oldText: "old", newText: "new" }] },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("composes XML suffix removal with extension correction in path", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("id", {
+      path: "data.xlscodex</arg_value>>",
+      content: "col1,col2",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      { path: "data.xlsx", content: "col1,col2" },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("preserves valid extension when no hallucination is present", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("id", { path: "notes.txt", content: "text" });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      { path: "notes.txt", content: "text" },
+      undefined,
+      undefined,
+    );
   });
 });
