@@ -328,6 +328,30 @@ describe("skill workshop proposals", () => {
     );
   });
 
+  it("allows complete updates for existing valid skills without H1 headings", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "h1-less-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "h1-less-skill",
+      description: "No markdown heading",
+      body: "Use this skill when the workflow has frontmatter and prose only.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "h1-less-skill",
+      content:
+        "Use this updated skill when the workflow remains frontmatter and prose only.\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "updated skill",
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "blocks trusted workspace skills symlink writes until workshop writes are enabled",
     async () => {

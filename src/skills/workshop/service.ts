@@ -669,12 +669,18 @@ function assertCompleteSkillUpdateDraft(params: {
   const proposedBody = stripSkillFrontmatter(params.proposedContent);
   const previousH1 = firstMarkdownHeading(previousBody, 1);
   const proposedH1 = firstMarkdownHeading(proposedBody, 1);
-  if (!proposedBody.trim() || !proposedH1) {
+  if (!proposedBody.trim()) {
+    throw new Error(
+      "Skill update proposal content must include a complete replacement SKILL.md body.",
+    );
+  }
+  if (previousH1 && !proposedH1) {
     throw new Error(
       "Skill update proposal content must include a complete replacement SKILL.md body " +
         "with the existing skill heading.",
     );
   }
+  const comparableProposedH1 = proposedH1;
   const proposedBodyLower = proposedBody.toLowerCase();
   const proposalLikeMarkers = [
     "# update proposal",
@@ -697,11 +703,13 @@ function assertCompleteSkillUpdateDraft(params: {
   }
   if (
     previousH1 &&
-    normalizeHeadingForComparison(previousH1) !== normalizeHeadingForComparison(proposedH1)
+    comparableProposedH1 &&
+    normalizeHeadingForComparison(previousH1) !==
+      normalizeHeadingForComparison(comparableProposedH1)
   ) {
     throw new Error(
       "Skill update proposal content appears to replace the existing skill identity " +
-        `(${previousH1}) with ${proposedH1}. Revise the proposal with a complete ` +
+        `(${previousH1}) with ${comparableProposedH1}. Revise the proposal with a complete ` +
         "replacement SKILL.md that preserves the existing skill heading, or create a new skill.",
     );
   }
