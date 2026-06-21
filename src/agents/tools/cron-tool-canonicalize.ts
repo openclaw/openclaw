@@ -104,8 +104,8 @@ function repairWhitespacePaddedCronToolKeys(value: Record<string, unknown>): voi
     }
     if (value[recoveredKey] === undefined) {
       value[recoveredKey] = value[key];
+      delete value[key];
     }
-    delete value[key];
   }
 }
 
@@ -305,8 +305,11 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   for (const key of Object.keys(params)) {
     const recoveredKey = recoverCronToolKey(key);
     if (recoveredKey !== undefined && params[key] !== undefined) {
-      if (key === recoveredKey || value[recoveredKey] === undefined) {
+      const hasCanonicalParam = Object.prototype.hasOwnProperty.call(params, recoveredKey);
+      if (key === recoveredKey || !hasCanonicalParam) {
         value[recoveredKey] = params[key];
+      } else {
+        value[key] = params[key];
       }
       found = true;
     }

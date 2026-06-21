@@ -1,5 +1,6 @@
 // Cron tool tests cover schedule guidance, scoped job operations, delivery
 // context inheritance, session routing, and agent id ownership.
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayMock, extractDeliveryInfoMock } = vi.hoisted(() => ({
@@ -19,6 +20,7 @@ vi.mock("../../config/sessions/delivery-info.js", () => ({
   extractDeliveryInfo: extractDeliveryInfoMock,
 }));
 
+import { CronAddParamsSchema } from "../../../packages/gateway-protocol/src/schema/cron.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import { createCronTool } from "./cron-tool.js";
@@ -1130,6 +1132,62 @@ describe("cron tool", () => {
         sessionTarget: "isolated",
         wakeMode: "now",
       });
+    },
+  );
+
+  it.each([
+    {
+      callId: "call-duplicate-padded-add",
+      input: {
+        action: "add",
+        job: {
+          name: "Holiday Check-in",
+          schedule: { expr: "30 10,20 * * *", kind: "cron", tz: "Europe/Madrid" },
+          sessionTarget: "isolated",
+          payload: {
+            kind: "agentTurn",
+            message: "Holiday check-in: how's everything going?",
+          },
+          enabled: false,
+          "enabled ": true,
+        },
+      },
+      label: "job",
+    },
+    {
+      callId: "call-flat-duplicate-padded-add",
+      input: {
+        action: "add",
+        name: "Holiday Check-in",
+        schedule: { expr: "30 10,20 * * *", kind: "cron", tz: "Europe/Madrid" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "Holiday check-in: how's everything going?",
+        },
+        enabled: false,
+        "enabled ": true,
+      },
+      label: "flat",
+    },
+  ])(
+    "preserves duplicate whitespace-padded cron add $label keys for strict validation",
+    async ({ callId, input }) => {
+      const tool = createTestCronTool();
+      await tool.execute(callId, input);
+
+      const params = expectSingleGatewayCallMethod("cron.add") as Record<string, unknown>;
+      expect(params.enabled).toBe(false);
+      expect(params["enabled "]).toBe(true);
+      expect(Value.Check(CronAddParamsSchema, params)).toBe(false);
+      expect(Array.from(Value.Errors(CronAddParamsSchema, params))).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            keyword: "additionalProperties",
+            params: { additionalProperties: ["enabled "] },
+          }),
+        ]),
+      );
     },
   );
 
