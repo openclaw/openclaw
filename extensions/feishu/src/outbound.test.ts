@@ -861,6 +861,37 @@ describe("feishuOutbound.sendPayload native cards", () => {
     );
     expectFeishuResult(result, "reply_msg");
   });
+
+  it("omits command guidance when all command buttons have URLs overriding the fallback text", async () => {
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "Review this",
+      accountId: "main",
+      payload: {
+        text: "Review this",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Open URL",
+                  url: "https://example.com/action",
+                  action: { type: "command", command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(commentThreadParams()?.content).toBe(
+      "Review this\n\n- Open URL: https://example.com/action",
+    );
+    expectFeishuResult(result, "reply_msg");
+  });
 });
 
 describe("feishuOutbound comment-thread routing", () => {
