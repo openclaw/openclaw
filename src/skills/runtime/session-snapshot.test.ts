@@ -9,7 +9,7 @@ const TEST_WORKSPACE_DIR = "/tmp/workspace";
 function strippedSnapshot(skillName = "test", version = 1): SkillSnapshot {
   return {
     prompt: "skills prompt",
-    skills: [{ name: skillName }],
+    skills: [{ name: skillName, skillKey: skillName }],
     version,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };

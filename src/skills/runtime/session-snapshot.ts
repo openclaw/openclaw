@@ -68,9 +68,13 @@ export function resolveReusableWorkspaceSkillSnapshot(
     params.existingSnapshot?.version,
     snapshotVersion,
   );
+  const skillsMissingSkillKey = params.existingSnapshot?.skills?.some(
+    (s) => s.skillKey === undefined,
+  );
   const shouldRefresh =
     promptFormatChanged ||
     skillVersionChanged ||
+    skillsMissingSkillKey ||
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter);
   const buildSnapshot = () => {
     return buildWorkspaceSkillSnapshot(params.workspaceDir, {
