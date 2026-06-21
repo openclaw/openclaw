@@ -84,6 +84,23 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
+  it("keeps docs-change detection fail-safe and fixture-aware", () => {
+    const action = readFileSync(".github/actions/detect-docs-changes/action.yml", "utf8");
+
+    expect(action).toContain("docs_only:");
+    expect(action).toContain("docs_changed:");
+    expect(action).toContain('BASE="${{ github.event.before }}"');
+    expect(action).toContain('BASE="${{ github.event.pull_request.base.sha }}"');
+    expect(action).toContain(
+      'CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")',
+    );
+    expect(action).toContain('if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then');
+    expect(action).toContain("docs_only=false");
+    expect(action).toContain("docs_changed=false");
+    expect(action).toContain("test/fixtures/*)");
+    expect(action).toContain("docs/* | *.md | *.mdx)");
+  });
+
   it("runs the session accessor ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];

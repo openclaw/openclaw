@@ -468,6 +468,49 @@ describe("script-specific dev tooling hardening", () => {
     },
   );
 
+  it("signals Windows TUI PTY watch process trees with taskkill", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+
+    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows TUI PTY watch process trees when graceful taskkill fails", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
     const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {

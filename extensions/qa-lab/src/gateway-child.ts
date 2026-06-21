@@ -1,5 +1,5 @@
 // Qa Lab plugin module implements gateway child behavior.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -361,6 +361,7 @@ export const testing = {
   resolveQaRuntimeHostVersion,
   createQaGatewayChildLogCollector,
   createQaBundledPluginsDir,
+  signalQaGatewayChildProcessTree,
   stopQaGatewayChildProcessTree,
 };
 
@@ -390,12 +391,47 @@ function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
   }
 }
 
-function signalQaGatewayChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
+type QaGatewayTaskkillRunner = typeof spawnSync;
+
+function signalQaGatewayWindowsProcessTree(
+  pid: number,
+  signal: NodeJS.Signals,
+  runTaskkill: QaGatewayTaskkillRunner = spawnSync,
+) {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill("taskkill", args, {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  if (!result.error && result.status === 0) {
+    return true;
+  }
+  if (signal !== "SIGKILL") {
+    const forceResult = runTaskkill("taskkill", [...args, "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    return !forceResult.error && forceResult.status === 0;
+  }
+  return false;
+}
+
+function signalQaGatewayChildProcessTree(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  runTaskkill: QaGatewayTaskkillRunner = spawnSync,
+) {
   if (!child.pid) {
     return;
   }
   try {
     if (process.platform === "win32") {
+      if (signalQaGatewayWindowsProcessTree(child.pid, signal, runTaskkill)) {
+        return;
+      }
       child.kill(signal);
       return;
     }

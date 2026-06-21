@@ -153,6 +153,55 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     expect(child.unref).toHaveBeenCalledOnce();
   });
 
+  it("force-kills Windows child process trees when graceful taskkill fails", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      kill: ReturnType<typeof vi.fn>;
+      pid: number;
+      signalCode: NodeJS.Signals | null;
+      stderr: { destroy: ReturnType<typeof vi.fn> };
+      stdin: { destroy: ReturnType<typeof vi.fn> };
+      stdout: { destroy: ReturnType<typeof vi.fn> };
+      unref: ReturnType<typeof vi.fn>;
+    };
+    child.exitCode = null;
+    child.kill = vi.fn(() => true);
+    child.pid = 4450;
+    child.signalCode = null;
+    child.stderr = { destroy: vi.fn() };
+    child.stdin = { destroy: vi.fn() };
+    child.stdout = { destroy: vi.fn() };
+    child.unref = vi.fn();
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    await expect(
+      params.stopChild(child as unknown as TChild, {
+        killGraceMs: 1,
+        platform: "win32",
+        runTaskkill,
+        teardownGraceMs: 1,
+      }),
+    ).resolves.toEqual({
+      exitedBeforeTeardown: false,
+      exitCode: null,
+      signal: "SIGKILL",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "4450", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "4450", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(3, "taskkill", ["/PID", "4450", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it.skipIf(process.platform === "win32")(
     "preserves pre-teardown wrapper exits while cleaning the process group",
     async () => {

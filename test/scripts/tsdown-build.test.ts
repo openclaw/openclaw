@@ -15,6 +15,7 @@ import {
   pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   runTsdownBuildInvocation,
+  signalTsdownBuildProcessTree,
 } from "../../scripts/tsdown-build.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -660,6 +661,49 @@ describe("runTsdownBuildInvocation", () => {
     expect(result.status).toBeNull();
     expect(result.signal).toBe("SIGTERM");
     expect(output.chunks.join("")).toContain("timeout after 50ms");
+  });
+
+  it("signals Windows tsdown process trees with taskkill", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalTsdownBuildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+
+    signalTsdownBuildProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows tsdown process trees when graceful taskkill fails", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalTsdownBuildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(childKill).not.toHaveBeenCalled();
   });
 
   it.skipIf(process.platform === "win32")(

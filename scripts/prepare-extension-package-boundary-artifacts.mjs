@@ -1,6 +1,6 @@
 // Prepares declaration and entry-shim artifacts that prove plugin package
 // boundary imports resolve through public package surfaces.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
@@ -399,13 +399,37 @@ function abortSiblingSteps(abortController) {
   }
 }
 
-function signalNodeStep(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function signalNodeStep(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {
       // The child process group can already be gone by the time cleanup runs.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill("taskkill", [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
     }
   }
   child.kill(signal);
@@ -464,9 +488,10 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
     let killDeadlineAt = 0;
     const stdoutWriter = createPrefixedOutputWriter(label, process.stdout);
     const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
-    const killNodeStep = (signal) => signalNodeStep(child, signal);
+    const useProcessGroup = process.platform !== "win32";
+    const killNodeStep = (signal) => signalNodeStep(child, signal, { useProcessGroup });
     const processGroupAlive = () => {
-      if (process.platform === "win32" || !child.pid) {
+      if (!useProcessGroup || !child.pid) {
         return false;
       }
       try {
