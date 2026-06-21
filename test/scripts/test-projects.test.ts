@@ -298,7 +298,11 @@ describe("scripts/test-projects changed-target routing", () => {
     });
     expect(resolveChangedTestTargetPlan(["scripts/lib/docker-e2e-plan.mjs"])).toEqual({
       mode: "targets",
-      targets: ["test/scripts/docker-e2e-plan.test.ts"],
+      targets: [
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/docker-all-scheduler.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+      ],
     });
     expect(resolveChangedTestTargetPlan(["scripts/github/real-behavior-proof-check.mjs"])).toEqual({
       mode: "targets",
@@ -1337,6 +1341,80 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/deprecated-plugin-sdk-usage.mjs",
         ["test/scripts/check-deprecated-api-usage.test.ts"],
       ],
+      [
+        "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+        [
+          "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
+          "src/plugins/contracts/plugin-sdk-index.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+          "src/plugins/contracts/extension-package-project-boundaries.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+          "test/release-check.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/ts-topology.test.ts",
+          "test/vitest/vitest.tooling.config.ts",
+        ],
+      ],
+      [
+        "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
+        [
+          "test/scripts/check-deprecated-api-usage.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/plugin-sdk-entrypoints.json",
+        [
+          "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
+          "src/plugins/contracts/plugin-sdk-index.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+          "src/plugins/contracts/extension-package-project-boundaries.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+          "test/release-check.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/ts-topology.test.ts",
+          "test/vitest/vitest.tooling.config.ts",
+        ],
+      ],
+      [
+        "scripts/lib/plugin-sdk-entries.mjs",
+        [
+          "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
+          "src/plugins/contracts/plugin-sdk-index.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+          "src/plugins/contracts/extension-package-project-boundaries.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+          "test/release-check.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/ts-topology.test.ts",
+          "test/vitest/vitest.tooling.config.ts",
+        ],
+      ],
+      [
+        "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
+        [
+          "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
+          "src/plugins/contracts/plugin-sdk-index.test.ts",
+          "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+          "src/plugins/contracts/extension-package-project-boundaries.test.ts",
+          "test/scripts/plugin-sdk-surface-report.test.ts",
+          "test/scripts/build-all.test.ts",
+          "test/release-check.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/ts-topology.test.ts",
+          "test/vitest/vitest.tooling.config.ts",
+        ],
+      ],
+      ["scripts/lib/direct-run.mjs", ["test/scripts/changed-lanes.test.ts"]],
       ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
       [
         "scripts/lib/plugin-npm-runtime-build.mjs",
@@ -1353,6 +1431,14 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       ["scripts/lib/arg-utils.mjs", ["test/scripts/arg-utils.test.ts"]],
+      [
+        "scripts/lib/android-version.ts",
+        ["test/scripts/android-version.test.ts", "test/scripts/android-pin-version.test.ts"],
+      ],
+      [
+        "scripts/lib/ios-version.ts",
+        ["test/scripts/ios-version.test.ts", "test/scripts/ios-pin-version.test.ts"],
+      ],
       ["scripts/docker/cleanup-smoke/run.sh", ["test/scripts/docker-build-helper.test.ts"]],
       [
         "scripts/docker/install-sh-e2e/run.sh",
@@ -1396,6 +1482,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/npm-pack-budget.mjs",
         ["test/release-check.test.ts", "test/scripts/test-install-sh-docker.test.ts"],
       ],
+      [
+        "scripts/lib/workspace-bootstrap-smoke.mjs",
+        ["test/release-check.test.ts", "test/openclaw-npm-release-check.test.ts"],
+      ],
       ["scripts/lib/openclaw-release-clawhub-plan.ts", ["test/plugin-clawhub-release.test.ts"]],
       [
         "scripts/lib/plugin-clawhub-release.ts",
@@ -1419,6 +1509,16 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       ["scripts/lib/test-group-report.mjs", ["test/scripts/test-group-report.test.ts"]],
       ["scripts/lib/stable-release-closeout.mjs", ["test/stable-release-closeout.test.ts"]],
+      [
+        "scripts/lib/extension-source-classifier.mjs",
+        [
+          "test/scripts/extension-source-classifier.test.ts",
+          "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
+        ],
+      ],
+      ["scripts/lib/ts-topology/analyze.ts", ["test/scripts/ts-topology.test.ts"]],
+      ["scripts/lib/ts-topology/reports.ts", ["test/scripts/ts-topology.test.ts"]],
+      ["scripts/lib/ts-topology/scope.ts", ["test/scripts/ts-topology.test.ts"]],
       ["scripts/lib/ts-guard-utils.mjs", ["test/scripts/ts-guard-utils.test.ts"]],
       [
         "scripts/lib/tsgo-sparse-guard.mjs",
@@ -1432,8 +1532,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/lib/bundled-plugin-build-entries.mjs",
-        ["test/scripts/bundled-plugin-build-entries.test.ts"],
+        ["test/scripts/bundled-plugin-build-entries.test.ts", "test/release-check.test.ts"],
       ],
+      ["scripts/lib/changed-extensions.mjs", ["test/scripts/test-extension.test.ts"]],
+      ["scripts/lib/extension-vitest-paths.mjs", ["test/scripts/test-extension.test.ts"]],
     ]);
 
     for (const [source, targets] of expectedTargets) {
@@ -1459,8 +1561,35 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/plugin-extension-import-boundary.test.ts"],
       ],
       [
+        "scripts/lib/config-boundary-guard.mjs",
+        [
+          "src/plugins/contracts/config-boundary-guard.test.ts",
+          "src/plugins/contracts/deprecated-internal-config-api.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/deprecated-config-api-guard.mjs",
+        ["src/plugins/contracts/deprecated-internal-config-api.test.ts"],
+      ],
+      [
+        "scripts/lib/extension-package-boundary.ts",
+        ["src/plugins/contracts/extension-package-project-boundaries.test.ts"],
+      ],
+      [
         "scripts/check-src-extension-import-boundary.mjs",
         ["test/extension-import-boundaries.test.ts"],
+      ],
+      [
+        "scripts/lib/guard-inventory-utils.mjs",
+        [
+          "test/extension-import-boundaries.test.ts",
+          "test/plugin-extension-import-boundary.test.ts",
+          "test/architecture-smells.test.ts",
+          "test/web-provider-boundary.test.ts",
+          "test/test-helper-extension-import-boundary.test.ts",
+          "test/scripts/extension-import-boundary-checker.test.ts",
+          "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+        ],
       ],
       [
         "scripts/check-test-helper-extension-import-boundary.mjs",
