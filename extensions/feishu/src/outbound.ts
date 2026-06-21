@@ -515,13 +515,19 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text: ctx.payload.text,
         presentation: normalizedPresentation,
       });
-      const hasCommandAction =
+      const hasRenderedCommandAction =
         normalizedPresentation?.blocks.some(
           (block) =>
             block.type === "buttons" &&
-            block.buttons.some((button) => button.action?.type === "command"),
+            block.buttons.some(
+              (button) =>
+                button.action?.type === "command" &&
+                !button.url &&
+                !button.webApp?.url &&
+                !button.web_app?.url,
+            ),
         ) ?? false;
-      const text = hasCommandAction
+      const text = hasRenderedCommandAction
         ? `${presentationFallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
         : presentationFallbackText;
 
