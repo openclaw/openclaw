@@ -60,8 +60,6 @@ export type GetReplyOptions = {
   runId?: string;
   /** Parent run id when this run was spawned by a previous agent turn. */
   parentRunId?: string;
-  /** Explicit command lane for the embedded run's turn execution. */
-  lane?: string;
   /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */
   promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */

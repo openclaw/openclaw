@@ -2708,7 +2708,6 @@ export async function runAgentTurnWithFallback(params: {
                         effectiveRun.drainsContinuationDelegateQueue === true,
                     }),
                     parentRunId: params.opts?.parentRunId,
-                    lane: params.opts?.lane,
                     groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                     groupChannel:
                       normalizeOptionalString(params.sessionCtx.GroupChannel) ??

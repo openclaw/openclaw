@@ -43,16 +43,6 @@ vi.mock("../../sessions/session-key-utils.js", () => ({
     const match = /^agent:([^:]+)/.exec(sessionKey);
     return match ? { agentId: match[1] } : undefined;
   },
-  isSubagentSessionKey: (sessionKey: string) => {
-    if (typeof sessionKey !== "string" || sessionKey.length === 0) {
-      return false;
-    }
-    const lower = sessionKey.toLowerCase();
-    if (lower.startsWith("subagent:")) {
-      return true;
-    }
-    return lower.replace(/^agent:[^:]+:/, "").startsWith("subagent:");
-  },
 }));
 
 vi.mock("../reply/reply-run-registry.js", () => ({
@@ -341,8 +331,8 @@ describe("durable continuation_work dispatch", () => {
     });
     expect(callGateway).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(1_000);
     await dispatchPendingContinuationWork({ sessionKey: childSessionKey });
+    await vi.advanceTimersByTimeAsync(1_000);
     await Promise.resolve();
 
     expect(turnGrants).toEqual([
@@ -551,58 +541,6 @@ describe("durable continuation_work dispatch", () => {
         context: expect.objectContaining({
           SessionKey: sessionKey,
           Body: expect.stringContaining("queued user turn"),
-        }),
-      }),
-    ]);
-  });
-
-  it("busy-skips a main-session continuation when the global main lane is busy", async () => {
-    const sessionKey = "agent:main:main-lane-busy-positive-control";
-    mockSessionStore[sessionKey] = { sessionKey };
-    mainQueueSize = 1;
-    enqueuePendingWork({
-      sessionKey,
-      hop: 2,
-      delayMs: 0,
-      electedAt: Date.now(),
-      dueAt: Date.now(),
-      maxChainLength: 8,
-      reason: "main lane positive control",
-    });
-
-    const result = await dispatchPendingContinuationWork({ sessionKey });
-
-    expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
-    expect(turnGrants).toHaveLength(0);
-  });
-
-  it("drives a subagent continuation to completion on its own session lane when main is busy (#1057)", async () => {
-    const sessionKey = "agent:main:subagent:cross-session-independence-1057";
-    mockSessionStore[sessionKey] = { sessionKey };
-    mainQueueSize = 1;
-    enqueuePendingWork({
-      sessionKey,
-      hop: 2,
-      delayMs: 0,
-      electedAt: Date.now(),
-      dueAt: Date.now(),
-      maxChainLength: 8,
-      reason: "cross-session independence",
-    });
-
-    const result = await dispatchPendingContinuationWork({ sessionKey });
-
-    expect(result).toEqual({ dispatched: 1, failed: 0, reaped: 0 });
-    expect([...mockFlows.values()][0]).toMatchObject({ status: "succeeded" });
-    expect(turnGrants).toEqual([
-      expect.objectContaining({
-        context: expect.objectContaining({
-          SessionKey: sessionKey,
-          Body: expect.stringContaining("cross-session independence"),
-        }),
-        options: expect.objectContaining({
-          continuationTrigger: "work-wake",
-          lane: `session:${sessionKey}`,
         }),
       }),
     ]);
