@@ -892,6 +892,7 @@ Default slash command settings:
 
     - `channels.discord.accounts.<accountId>.ackReaction`
     - `channels.discord.ackReaction`
+    - `channels["*"].ackReaction`
     - `messages.ackReaction`
     - agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
 

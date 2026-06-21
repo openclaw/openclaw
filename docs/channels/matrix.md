@@ -592,11 +592,11 @@ Outbound reaction tooling is gated by `channels.matrix.actions.reactions`:
 
 **Resolution order** (first defined value wins):
 
-| Setting                 | Order                                                                            |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| `ackReaction`           | per-account → channel → `messages.ackReaction` → agent identity emoji fallback   |
-| `ackReactionScope`      | per-account → channel → `messages.ackReactionScope` → default `"group-mentions"` |
-| `reactionNotifications` | per-account → channel → default `"own"`                                          |
+| Setting                 | Order                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `ackReaction`           | per-account → channel → `channels["*"].ackReaction` → `messages.ackReaction` → agent identity emoji fallback |
+| `ackReactionScope`      | per-account → channel → `messages.ackReactionScope` → default `"group-mentions"`                             |
+| `reactionNotifications` | per-account → channel → default `"own"`                                                                      |
 
 `reactionNotifications: "own"` forwards added `m.reaction` events when they target bot-authored Matrix messages; `"off"` disables reaction system events. Reaction removals are not synthesized into system events because Matrix surfaces those as redactions, not as standalone `m.reaction` removals.
 
