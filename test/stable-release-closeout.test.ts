@@ -285,9 +285,7 @@ describe("stable release closeout", () => {
   it("parses stable and correction tags", () => {
     expect(parseStableReleaseTag("v2026.6.8")).toBe("2026.6.8");
     expect(parseStableReleaseTag("v2026.6.8-2")).toBe("2026.6.8");
-    expect(() => parseStableReleaseTag("v2026.6.8-0")).toThrow(
-      "expected a stable release tag",
-    );
+    expect(() => parseStableReleaseTag("v2026.6.8-0")).toThrow("expected a stable release tag");
     expect(() => parseStableReleaseTag("v2026.6.8-beta.1")).toThrow(
       "expected a stable release tag",
     );
@@ -700,7 +698,7 @@ describe("stable release closeout", () => {
     expect(workflow).toContain("needs.resolve.outputs.release_tag_sha ||");
     expect(workflow).toContain('scripts/verify-release-operation.mjs" verify');
     expect(workflow).toContain('--policy-main-dir "$GITHUB_WORKSPACE/policy-main"');
-    expect(workflow).toContain("candidate_tags < <(gh release list");
+    expect(workflow).toContain("candidate_tags < <(gh_with_retry release list");
     expect(workflow).toContain("releasePolicy.releaseClass // empty");
     expect(workflow).toContain("openclaw-release-postpublish-evidence-${RELEASE_TAG}");
     expect(workflow).toContain("release-publish-artifacts.json");
