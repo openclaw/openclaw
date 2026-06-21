@@ -167,6 +167,102 @@ const shellInlineCommandOptionsWithNextValue = new Set([
   "--init-file",
   "--rcfile",
 ]);
+const nodeOptionsWithNextValueBeforeScript = new Set([
+  "--allow-fs-read",
+  "--allow-fs-write",
+  "--conditions",
+  "--cpu-prof-dir",
+  "--cpu-prof-interval",
+  "--cpu-prof-name",
+  "--debug-port",
+  "--diagnostic-dir",
+  "--disable-proto",
+  "--disable-warning",
+  "--dns-result-order",
+  "--env-file",
+  "--env-file-if-exists",
+  "--experimental-config-file",
+  "--experimental-loader",
+  "--experimental-test-isolation",
+  "--heap-prof-dir",
+  "--heap-prof-interval",
+  "--heap-prof-name",
+  "--heapsnapshot-near-heap-limit",
+  "--heapsnapshot-signal",
+  "--icu-data-dir",
+  "--import",
+  "--inspect-port",
+  "--inspect-publish-uid",
+  "--initial-old-space-size",
+  "--localstorage-file",
+  "--loader",
+  "--max-http-header-size",
+  "--max-old-space-size",
+  "--max-old-space-size-percentage",
+  "--max-semi-space-size",
+  "--network-family-autoselection-attempt-timeout",
+  "--openssl-config",
+  "--redirect-warnings",
+  "--report-dir",
+  "--report-directory",
+  "--report-filename",
+  "--report-signal",
+  "--require",
+  "--secure-heap",
+  "--secure-heap-min",
+  "--snapshot-blob",
+  "--test-concurrency",
+  "--test-coverage-branches",
+  "--test-coverage-exclude",
+  "--test-coverage-functions",
+  "--test-coverage-include",
+  "--test-coverage-lines",
+  "--test-global-setup",
+  "--test-isolation",
+  "--test-name-pattern",
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-rerun-failures",
+  "--test-shard",
+  "--test-skip-pattern",
+  "--test-timeout",
+  "--title",
+  "--tls-cipher-list",
+  "--tls-keylog",
+  "--trace-event-categories",
+  "--trace-event-file-pattern",
+  "--trace-require-module",
+  "--unhandled-rejections",
+  "--use-largepages",
+  "--v8-pool-size",
+  "--watch-kill-signal",
+  "--watch-path",
+  "-C",
+  "-r",
+]);
+const nodeOptionsWithoutScript = new Set([
+  "--build-sea",
+  "--build-snapshot",
+  "--build-snapshot-config",
+  "--check",
+  "--completion-bash",
+  "--eval",
+  "--experimental-sea-config",
+  "--help",
+  "--input-type",
+  "--interactive",
+  "--print",
+  "--prof-process",
+  "--run",
+  "--v8-options",
+  "--version",
+  "-c",
+  "-e",
+  "-h",
+  "-i",
+  "-p",
+  "-v",
+]);
 
 function escapeBatchCommand(command) {
   return `${command}`.replace(cmdMetaCharactersRe, "^$1");
@@ -842,6 +938,12 @@ function commandWordsRuntimeEntrypoint(wordsInput) {
   return "";
 }
 
+function commandWordsShellEntrypoint(wordsInput) {
+  const words = normalizeExecutableWords(wordsInput);
+  const first = shellWordBasename(words[0]);
+  return shellInlineCommandInterpreters.has(first) ? first : "";
+}
+
 function commandNeedsAwsMacosPackageManager(commandArgs) {
   if (isChangedGateCommand(commandArgs)) {
     return true;
@@ -913,8 +1015,54 @@ function isChangedGateWords(wordsInput) {
   return (
     (words[0] === "pnpm" && words[1] === "check:changed") ||
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
-    (words[0] === "node" && (words[1] ?? "").endsWith("scripts/check-changed.mjs"))
+    nodeScriptWord(words)?.endsWith("scripts/check-changed.mjs")
   );
+}
+
+function nodeScriptWord(words) {
+  if (shellWordBasename(words[0]) !== "node") {
+    return "";
+  }
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (!word) {
+      return "";
+    }
+    if (word === "--") {
+      return words[index + 1] ?? "";
+    }
+    if (nodeOptionsWithoutScript.has(word) || nodeOptionsWithoutScriptPrefix(word)) {
+      return "";
+    }
+    const valueMode = nodeOptionValueModeBeforeScript(word);
+    if (valueMode === "next") {
+      index += 1;
+      continue;
+    }
+    if (valueMode === "inline") {
+      continue;
+    }
+    if (word.startsWith("-") && word !== "-") {
+      continue;
+    }
+    return word;
+  }
+  return "";
+}
+
+function nodeOptionsWithoutScriptPrefix(word) {
+  return word.startsWith("--eval=") || word.startsWith("--print=");
+}
+
+function nodeOptionValueModeBeforeScript(word) {
+  if (nodeOptionsWithNextValueBeforeScript.has(word)) {
+    return "next";
+  }
+  const equalsIndex = word.indexOf("=");
+  if (equalsIndex > 0 && nodeOptionsWithNextValueBeforeScript.has(word.slice(0, equalsIndex))) {
+    return "inline";
+  }
+  return "";
 }
 
 function shellInlineCommand(words) {
@@ -2009,15 +2157,14 @@ function awsMacosScriptBootstrapRequirements(script) {
   const requirements = { packageManager: false, bun: false };
   const firstLine = script.match(/^[^\r\n]*/u)?.[0] ?? "";
   if (firstLine.startsWith("#!")) {
-    let words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
-    if ((words[0] ?? "").split("/").pop() === "env") {
-      words = words.slice(1);
-      while ((words[0] ?? "").startsWith("-")) {
-        words = words.slice(1);
-      }
-    }
+    const words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
     requirements.packageManager = commandWordsNeedEntrypoint(words, awsMacosCorepackEntrypoints);
     requirements.bun = commandWordsNeedEntrypoint(words, awsMacosBunEntrypoints);
+    if (commandWordsShellEntrypoint(words)) {
+      const body = script.slice(firstLine.length).replace(/^\r?\n/u, "");
+      requirements.packageManager ||= commandNeedsAwsMacosPackageManager([body]);
+      requirements.bun ||= commandNeedsAwsMacosBun([body]);
+    }
     return requirements;
   }
   requirements.packageManager = commandNeedsAwsMacosPackageManager([script]);

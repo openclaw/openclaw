@@ -4025,11 +4025,17 @@ async function runCommandInvocation(invocation, options) {
     });
 
     child.on("error", (error) => {
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.killChildTree("SIGKILL");
+      }
       activeChildTree.unregister();
       finalize(() => rejectPromise(error));
     });
 
     child.on("close", (exitCode) => {
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.killChildTree("SIGKILL");
+      }
       activeChildTree.unregister();
       if (forwardedSignalExitCode !== undefined) {
         finalize(exitForwardedSignalWhenChildTreesDone);

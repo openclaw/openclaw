@@ -194,18 +194,27 @@ async function withPackageLock<T>(lockDir: string, fn: () => Promise<T>): Promis
   }
 }
 
-async function acquirePackageLock(lockDir: string, ownerToken: string): Promise<void> {
+async function acquirePackageLock(
+  lockDir: string,
+  ownerToken: string,
+  params: { writeOwner?: (lockDir: string, ownerToken: string) => Promise<void> } = {},
+): Promise<void> {
   const timeoutMs = readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_TIMEOUT_MS", 30 * 60_000);
   const staleMs = readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_STALE_MS", 2 * 60 * 60_000);
   const startedAt = Date.now();
   let waitAnnouncementBudget = 1;
   const consumeWaitAnnouncement = () => waitAnnouncementBudget-- > 0;
   while (Date.now() - startedAt < timeoutMs) {
+    let createdLockDir = false;
     try {
       await mkdir(lockDir);
-      await writeLockOwner(lockDir, ownerToken);
+      createdLockDir = true;
+      await (params.writeOwner ?? writeLockOwner)(lockDir, ownerToken);
       return;
     } catch (error) {
+      if (createdLockDir) {
+        await rm(lockDir, { force: true, recursive: true }).catch(() => undefined);
+      }
       if (!isErrorCode(error, "EEXIST")) {
         throw error;
       }
@@ -292,6 +301,7 @@ async function delay(ms: number): Promise<void> {
 }
 
 export const testing = {
+  acquirePackageLock,
   removeStalePackageLock,
   readLockOwner,
 };

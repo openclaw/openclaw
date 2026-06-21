@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
@@ -1111,8 +1112,7 @@ describe("readSessionMessages", () => {
       { message: { role: "assistant", content: "newer legacy archive" } },
     ]);
     clearSessionTranscriptIndexCache();
-    vi.stubEnv("OPENCLAW_HOME", tmpDir);
-    try {
+    await withEnvAsync({ OPENCLAW_HOME: tmpDir }, async () => {
       const fullMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
         mode: "full",
         reason: "test cross-root reset archive fallback",
@@ -1122,9 +1122,7 @@ describe("readSessionMessages", () => {
       expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
         "newer legacy archive",
       ]);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    });
   });
 
   test("does not use stale generated session archives for reset archive fallback", async () => {
@@ -2242,19 +2240,14 @@ describe("readLatestSessionUsageFromTranscript", () => {
 });
 
 describe("resolveSessionTranscriptCandidates", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   test("fallback candidate uses OPENCLAW_HOME instead of os.homedir()", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
-
-    const candidates = resolveSessionTranscriptCandidates("sess-1", undefined);
-    const fallback = candidates[candidates.length - 1];
-    expect(fallback).toBe(
-      path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
-    );
+    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
+      const candidates = resolveSessionTranscriptCandidates("sess-1", undefined);
+      const fallback = candidates[candidates.length - 1];
+      expect(fallback).toBe(
+        path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
+      );
+    });
   });
 });
 
@@ -2381,13 +2374,9 @@ describe("archiveSessionTranscripts", () => {
     storePath = nextStorePath;
   });
 
-  beforeAll(() => {
-    vi.stubEnv("OPENCLAW_HOME", tmpDir);
-  });
-
-  afterAll(() => {
-    vi.unstubAllEnvs();
-  });
+  function withArchiveHome<T>(fn: () => T): T {
+    return withEnv({ OPENCLAW_HOME: tmpDir }, fn);
+  }
 
   test.each([
     {
@@ -2408,42 +2397,48 @@ describe("archiveSessionTranscripts", () => {
   ] as const)(
     "archives transcript from default and explicit sessionFile path for $sessionId",
     ({ transcriptFileName, buildArgs }) => {
-      const transcriptPath = path.join(tmpDir, transcriptFileName);
-      const args = buildArgs();
-      fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
-      const archived = archiveSessionTranscripts(args);
-      expect(archived).toHaveLength(1);
-      expect(archived[0]).toContain(".reset.");
-      expect(fs.existsSync(transcriptPath)).toBe(false);
-      expect(fs.existsSync(archived[0])).toBe(true);
+      withArchiveHome(() => {
+        const transcriptPath = path.join(tmpDir, transcriptFileName);
+        const args = buildArgs();
+        fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+        const archived = archiveSessionTranscripts(args);
+        expect(archived).toHaveLength(1);
+        expect(archived[0]).toContain(".reset.");
+        expect(fs.existsSync(transcriptPath)).toBe(false);
+        expect(fs.existsSync(archived[0])).toBe(true);
+      });
     },
   );
 
   test("returns empty array when no transcript files exist", () => {
-    const archived = archiveSessionTranscripts({
-      sessionId: "nonexistent-session",
-      storePath,
-      reason: "reset",
-    });
+    withArchiveHome(() => {
+      const archived = archiveSessionTranscripts({
+        sessionId: "nonexistent-session",
+        storePath,
+        reason: "reset",
+      });
 
-    expect(archived).toStrictEqual([]);
+      expect(archived).toStrictEqual([]);
+    });
   });
 
   test("skips files that do not exist and archives only existing ones", () => {
-    const sessionId = "sess-archive-3";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+    withArchiveHome(() => {
+      const sessionId = "sess-archive-3";
+      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
 
-    const archived = archiveSessionTranscripts({
-      sessionId,
-      storePath,
-      sessionFile: "/nonexistent/path/file.jsonl",
-      reason: "deleted",
+      const archived = archiveSessionTranscripts({
+        sessionId,
+        storePath,
+        sessionFile: "/nonexistent/path/file.jsonl",
+        reason: "deleted",
+      });
+
+      expect(archived).toHaveLength(1);
+      expect(archived[0]).toContain(".deleted.");
+      expect(fs.existsSync(transcriptPath)).toBe(false);
     });
-
-    expect(archived).toHaveLength(1);
-    expect(archived[0]).toContain(".deleted.");
-    expect(fs.existsSync(transcriptPath)).toBe(false);
   });
 });
 

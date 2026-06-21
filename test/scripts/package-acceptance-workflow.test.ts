@@ -676,13 +676,15 @@ describe("package artifact reuse", () => {
     expect(pullHelper).toContain(
       'retry_delay_seconds="${OPENCLAW_DOCKER_PULL_RETRY_DELAY_SECONDS:-5}"',
     );
+    expect(pullHelper).toContain('source "$SCRIPT_DIR/lib/host-timeout.sh"');
+    expect(pullHelper).toContain("openclaw_host_timeout_bin");
+    expect(pullHelper).toContain('"$timeout_bin" --kill-after=1s 1s true');
     expect(pullHelper).toContain(
-      'timeout --kill-after=30s "${timeout_seconds}s" docker pull "$image"',
+      '"$timeout_bin" --kill-after=30s "${timeout_seconds}s" docker pull "$image"',
     );
-    expect(pullHelper).toContain("timeout --kill-after=1s 1s true >/dev/null 2>&1");
-    expect(pullHelper).toContain('timeout "${timeout_seconds}s" docker pull "$image"');
+    expect(pullHelper).toContain('"$timeout_bin" "${timeout_seconds}s" docker pull "$image"');
     expect(pullHelper).toContain(
-      "timeout command not found; cannot bound Docker pull after ${timeout_seconds}s",
+      "timeout or gtimeout command not found; cannot bound Docker pull after ${timeout_seconds}s",
     );
     expect(dockerE2ePlanAction.match(/bash scripts\/ci-docker-pull-retry\.sh/g)?.length).toBe(2);
     expect(dockerE2ePlanAction).not.toContain('docker pull "${OPENCLAW_DOCKER_E2E_');

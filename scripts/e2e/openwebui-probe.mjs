@@ -147,7 +147,9 @@ function escapeRegExp(value) {
 }
 
 function redactDiagnosticText(text, extraSecrets = []) {
-  let redacted = text;
+  let redacted = text
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer <redacted>")
+    .replace(/openwebui-session=[^;"\s]+/giu, "openwebui-session=<redacted>");
   for (const secret of [email, password, ...extraSecrets]) {
     if (!secret) {
       continue;
@@ -173,6 +175,13 @@ function cookieSecretValues(cookieHeader) {
       return separatorIndex === -1 ? "" : text.slice(separatorIndex + 1).trim();
     })
     .filter(Boolean);
+}
+
+function authDiagnosticSecretValues(authHeaders) {
+  const authorization = typeof authHeaders.authorization === "string" ? authHeaders.authorization : "";
+  const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+  const cookie = typeof authHeaders.cookie === "string" ? authHeaders.cookie : "";
+  return [bearerToken, authorization, cookie, ...cookieSecretValues(cookie)].filter(Boolean);
 }
 
 async function fetchSignin() {
@@ -325,7 +334,11 @@ const chatJson = await fetchChatCompletion(authHeaders, targetModel, diagnosticS
 const reply =
   chatJson?.choices?.[0]?.message?.content ?? chatJson?.message?.content ?? chatJson?.content ?? "";
 if (typeof reply !== "string" || !reply.includes(expectedNonce)) {
-  throw new Error(`chat reply missing nonce: ${JSON.stringify(reply)}`);
+  const diagnosticReply = redactDiagnosticText(JSON.stringify(reply), [
+    ...diagnosticSecrets,
+    ...authDiagnosticSecretValues(authHeaders),
+  ]);
+  throw new Error(`chat reply missing nonce: ${diagnosticReply}`);
 }
 
 console.log(JSON.stringify({ ok: true, model: targetModel, reply }, null, 2));

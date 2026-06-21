@@ -10,6 +10,7 @@ const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const INSTALL_E2E_DOCKER_PATH = "scripts/test-install-sh-e2e-docker.sh";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
+const HOST_TIMEOUT_PATH = "scripts/lib/host-timeout.sh";
 const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
 const PODMAN_RUN_PATH = "scripts/run-openclaw-podman.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
@@ -323,14 +324,14 @@ describe("test-install-sh-docker", () => {
 
   it("bounds Docker setup image pulls", () => {
     const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+    const timeoutHelper = readFileSync(HOST_TIMEOUT_PATH, "utf8");
 
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/host-timeout.sh"');
     expect(script).toContain('DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"');
     expect(script).toContain("run_docker_pull()");
-    expect(script).toContain("timeout --kill-after=1s 1s true");
-    expect(script).toContain(
-      'timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"',
-    );
-    expect(script).toContain('timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
+    expect(script).toContain('openclaw_host_timeout_cmd "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
+    expect(timeoutHelper).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+    expect(timeoutHelper).toContain('"$timeout_bin" --kill-after=30s "$timeout_value" "$@"');
     expect(script).toContain('run_docker_pull "$IMAGE_NAME"');
     expect(script).not.toContain('docker pull "$IMAGE_NAME"');
   });
@@ -338,13 +339,12 @@ describe("test-install-sh-docker", () => {
   it("bounds Podman setup image pulls", () => {
     const script = readFileSync(PODMAN_SETUP_PATH, "utf8");
 
+    expect(script).toContain('source "$REPO_PATH/scripts/lib/host-timeout.sh"');
     expect(script).toContain('PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"');
     expect(script).toContain("run_podman_pull()");
-    expect(script).toContain("timeout --kill-after=1s 1s true");
     expect(script).toContain(
-      'timeout --kill-after=30s "$PODMAN_PULL_TIMEOUT" podman pull "$image"',
+      'openclaw_host_timeout_cmd "$PODMAN_PULL_TIMEOUT" podman pull "$image"',
     );
-    expect(script).toContain('timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"');
     expect(script).toContain('run_podman_pull "$OPENCLAW_IMAGE"');
     expect(script).not.toContain('podman pull "$OPENCLAW_IMAGE"');
   });
@@ -356,9 +356,7 @@ describe("test-install-sh-docker", () => {
       'PODMAN_BUILD_TIMEOUT="${OPENCLAW_PODMAN_SETUP_BUILD_TIMEOUT:-1800s}"',
     );
     expect(script).toContain("run_podman_build()");
-    expect(script).toContain("timeout --kill-after=1s 1s true");
-    expect(script).toContain('timeout --kill-after=30s "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
-    expect(script).toContain('timeout "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+    expect(script).toContain('openclaw_host_timeout_cmd "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
     expect(script).toContain('run_podman_build -t "$OPENCLAW_IMAGE"');
     expect(script).not.toContain('podman build -t "$OPENCLAW_IMAGE"');
   });
@@ -368,10 +366,9 @@ describe("test-install-sh-docker", () => {
 
     expect(script).toContain('PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"');
     expect(script).toContain("OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT");
+    expect(script).toContain('source "$SCRIPT_DIR/lib/host-timeout.sh"');
     expect(script).toContain("run_podman_detached()");
-    expect(script).toContain("timeout --kill-after=1s 1s true");
-    expect(script).toContain('timeout --kill-after=30s "$PODMAN_RUN_TIMEOUT" podman run "$@"');
-    expect(script).toContain('timeout "$PODMAN_RUN_TIMEOUT" podman run "$@"');
+    expect(script).toContain('openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"');
     expect(script).toContain('podman run --pull="$PODMAN_PULL" --rm -it \\');
     expect(script).toContain('run_podman_detached --pull="$PODMAN_PULL" -d --replace \\');
     expect(script).not.toContain('podman run --pull="$PODMAN_PULL" -d --replace \\');
