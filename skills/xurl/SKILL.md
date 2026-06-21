@@ -75,14 +75,24 @@ xurl dms -n 10
 
 ## Media
 
+> **⚠️ Auto-detection defaults to video (`--category amplify_video --media-type video/mp4`), not image.** Always specify type explicitly for images to avoid upload failures.
+
 ```bash
-xurl media upload image.jpg
+# Images — always specify category and media type
+xurl media upload photo.jpg --category tweet_image --media-type image/jpeg
+xurl media upload art.png --category tweet_image --media-type image/png
+xurl media upload art.webp --category tweet_image --media-type image/webp
+
+# Videos — defaults work, but explicit is safer
 xurl media upload clip.mp4
+xurl media upload clip.mp4 --category amplify_video --media-type video/mp4
+
+# Check processing status and post
 xurl media status MEDIA_ID
 xurl post "caption" --media-id MEDIA_ID
 ```
 
-Videos may need processing; poll `media status`.
+Videos may need processing; poll `media status`. Images are usually ready immediately.
 
 ## Auth/app management
 
@@ -117,4 +127,4 @@ Use raw mode when shortcuts do not cover the endpoint. Keep payloads in temp fil
 - Non-zero exit on API/auth/network errors.
 - 401/403: auth, scope, or app mismatch; check `xurl auth status`.
 - 429: rate limited; back off.
-- Media upload failures: check file type/size and media processing status.
+- Media upload failures: check file type/size and media processing status. **For images**, ensure you pass `--category tweet_image --media-type image/jpeg` (or png/webp). The default category is `amplify_video`, which will fail for image uploads.
