@@ -188,7 +188,7 @@ export function buildReleasePostpublishEvidence(params) {
   });
 }
 
-export function writeReleasePostpublishEvidence(argv) {
+function writeReleasePostpublishEvidence(argv) {
   const flags = parseFlags(argv);
   if (!DECIMAL_RE.test(flags["release-publish-run-id"])) {
     throw new Error("release-publish-run-id must be a positive decimal string");

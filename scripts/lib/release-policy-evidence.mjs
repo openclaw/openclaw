@@ -280,7 +280,7 @@ export function validateArtifactDescriptor(value, path = "descriptor") {
   return descriptor;
 }
 
-export function validatePredecessorDescriptor(value, path = "descriptor") {
+function validatePredecessorDescriptor(value, path = "descriptor") {
   const descriptor = closedObject(value, path, ["runId", "runAttempt", "payloadSha256"]);
   decimalAt(descriptor.runId, `${path}.runId`);
   decimalAt(descriptor.runAttempt, `${path}.runAttempt`);
@@ -599,7 +599,7 @@ export function validatePublishManifest(value, path = "publishManifest") {
   }
   validatePredecessorDescriptor(manifest.preflight, `${path}.preflight`);
   validatePredecessorDescriptor(manifest.fullValidation, `${path}.fullValidation`);
-  const execution = validateExecution(manifest.execution, `${path}.execution`);
+  validateExecution(manifest.execution, `${path}.execution`);
   const target = validateTarget(manifest.target, `${path}.target`);
   const changelog = validateChangelogEvidence(
     manifest.changelogEvidence,

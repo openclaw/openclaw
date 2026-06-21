@@ -109,7 +109,7 @@ export function parseStableVersion(value, label = "version", code = "stable-line
   return { value, year, month, patch, monthValue: `${year}.${month}` };
 }
 
-export function validateIsoDate(value, label = "date", code = "stable-lines-invalid") {
+function validateIsoDate(value, label = "date", code = "stable-lines-invalid") {
   if (typeof value !== "string") {
     reject(`${label} must be YYYY-MM-DD`, code);
   }
@@ -162,7 +162,7 @@ function monthFromOrdinal(ordinal) {
   return `${year}.${month}`;
 }
 
-export function precedingStableMonth(dailyMonth) {
+function precedingStableMonth(dailyMonth) {
   const parsed = parseStableMonth(dailyMonth, "dailyMonth");
   return monthFromOrdinal(parsed.ordinal - 1n);
 }
