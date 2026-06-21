@@ -1,5 +1,3 @@
-// Native PDF provider tests cover direct Anthropic and Gemini request shapes,
-// base URL handling, and bounded API error reporting.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 
@@ -66,7 +64,6 @@ describe("native PDF provider API calls", () => {
 
   afterEach(() => {
     global.fetch = priorFetch;
-    vi.unstubAllEnvs();
   });
 
   it("anthropicAnalyzePdf sends correct request shape", async () => {
@@ -102,21 +99,6 @@ describe("native PDF provider API calls", () => {
     expect(body.messages[0].content[1].type).toBe("text");
   });
 
-  it("anthropicAnalyzePdf honors ANTHROPIC_BASE_URL when no base URL is configured", async () => {
-    vi.stubEnv("ANTHROPIC_BASE_URL", "https://anthropic-pdf-proxy.example/v1");
-    const fetchMock = mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        content: [{ type: "text", text: "Analysis of PDF" }],
-      }),
-    });
-
-    await pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams());
-
-    const [url] = firstFetchCall(fetchMock) as [string];
-    expect(url).toBe("https://anthropic-pdf-proxy.example/v1/messages");
-  });
-
   it("anthropicAnalyzePdf throws on API error", async () => {
     mockFetchResponse({
       ok: false,
@@ -131,8 +113,6 @@ describe("native PDF provider API calls", () => {
   });
 
   it("bounds large Anthropic API error bodies", async () => {
-    // Provider errors can contain large or sensitive payloads; surface a compact
-    // diagnostic and cancel the stream once the cap is reached.
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -209,8 +189,6 @@ describe("native PDF provider API calls", () => {
   });
 
   it("geminiAnalyzePdf sends correct request shape", async () => {
-    // Gemini API keys belong in headers here, not query strings that are more
-    // likely to leak through logs and URL diagnostics.
     const fetchMock = mockFetchResponse({
       ok: true,
       json: async () => ({

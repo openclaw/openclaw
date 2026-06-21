@@ -1505,4 +1505,114 @@ describe("subscribeEmbeddedAgentSession", () => {
       summary: "Nothing needs attention.",
     });
   });
+
+  describe("agent stream=thinking emission without onReasoningStream callback", () => {
+    // Regression coverage for the gateway / WebSocket path. chat.send-originated
+    // runs (webchat, control UI, ACP, cron tick auto-replies, plain WS clients)
+    // do not supply onReasoningStream. Previously streamReasoning required the
+    // callback to be a function, so live thinking events never reached gateway
+    // subscribers even when reasoningMode === "stream".
+
+    function emitThinkingDelta(emit: (evt: unknown) => void, fullText: string, deltaText: string) {
+      emit({
+        type: "message_update",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: fullText }],
+        },
+        assistantMessageEvent: {
+          type: "thinking_delta",
+          delta: deltaText,
+        },
+      });
+    }
+
+    it("broadcasts agent stream=thinking to gateway clients with no callback supplied", () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run-no-callback",
+        reasoningMode: "stream",
+        // intentionally no onReasoningStream — chat.send / WS path
+      });
+
+      emitThinkingDelta(emit, "Step 1", "Step 1");
+      emitThinkingDelta(emit, "Step 1 and Step 2", " and Step 2");
+
+      const thinkingEvents = emitAgentEventSpy.mock.calls
+        .map((call) => call[0])
+        .filter((evt) => evt?.stream === "thinking");
+
+      expect(thinkingEvents.length).toBe(2);
+      expect(thinkingEvents[0]?.runId).toBe("run-no-callback");
+      expect(thinkingEvents[0]?.data?.text).toBe("Step 1");
+      expect(thinkingEvents[0]?.data?.delta).toBe("Step 1");
+      expect(thinkingEvents[1]?.data?.text).toBe("Step 1 and Step 2");
+      expect(thinkingEvents[1]?.data?.delta).toBe(" and Step 2");
+      emitAgentEventSpy.mockRestore();
+    });
+
+    it("does not leak reasoning when thinkingLevel is 'off' even without a callback", () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run-thinking-off",
+        reasoningMode: "stream",
+        thinkingLevel: "off",
+      });
+
+      emitThinkingDelta(emit, "Should never leak", "Should never leak");
+
+      const thinkingEvents = emitAgentEventSpy.mock.calls
+        .map((call) => call[0])
+        .filter((evt) => evt?.stream === "thinking");
+      expect(thinkingEvents).toEqual([]);
+      emitAgentEventSpy.mockRestore();
+    });
+
+    it("respects silentExpected and emits no thinking events even without a callback", () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run-silent",
+        reasoningMode: "stream",
+        silentExpected: true,
+      });
+
+      emitThinkingDelta(emit, "Suppressed", "Suppressed");
+
+      const thinkingEvents = emitAgentEventSpy.mock.calls
+        .map((call) => call[0])
+        .filter((evt) => evt?.stream === "thinking");
+      expect(thinkingEvents).toEqual([]);
+      emitAgentEventSpy.mockRestore();
+    });
+
+    it("still invokes onReasoningStream when supplied (Telegram / Mattermost path)", () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const onReasoningStream = vi.fn();
+      const { emit } = createSubscribedHarness({
+        runId: "run-with-callback",
+        reasoningMode: "stream",
+        onReasoningStream,
+      });
+
+      emitThinkingDelta(emit, "Telegram still works", "Telegram still works");
+
+      const thinkingEvents = emitAgentEventSpy.mock.calls
+        .map((call) => call[0])
+        .filter((evt) => evt?.stream === "thinking");
+      expect(thinkingEvents.length).toBe(1);
+      expect(onReasoningStream).toHaveBeenCalledTimes(1);
+      expect(onReasoningStream).toHaveBeenCalledWith({
+        text: "Telegram still works",
+      });
+      emitAgentEventSpy.mockRestore();
+    });
+  });
 });

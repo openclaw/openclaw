@@ -180,10 +180,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     reasoningMode,
     includeReasoning: reasoningMode === "on" && canShowReasoning,
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
-    streamReasoning:
-      reasoningMode === "stream" &&
-      canShowReasoning &&
-      typeof params.onReasoningStream === "function",
+    // Gates `agent stream=thinking` broadcast and the optional
+    // onReasoningStream callback. canShowReasoning preserves the
+    // thinkingLevel:"off" visibility gate so reasoning never leaks
+    // when the user opted out.
+    streamReasoning: reasoningMode === "stream" && canShowReasoning,
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
@@ -1167,7 +1168,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (params.silentExpected) {
       return;
     }
-    if (!state.streamReasoning || !params.onReasoningStream) {
+    if (!state.streamReasoning) {
       return;
     }
     const trimmed = text.trim();
@@ -1193,7 +1194,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       },
     });
 
-    void params.onReasoningStream({
+    void params.onReasoningStream?.({
       text: trimmed,
     });
   };
