@@ -1,5 +1,6 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
@@ -253,6 +254,56 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
             message: "Agent couldn't generate a response.",
             fallbackSafe: true,
           },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("triggers fallback when visible payloads consist solely of generic external runner failure text", () => {
+    // CLI subprocess errors arrive as normal text payloads (isError absent) rather
+    // than error payloads.  The classifier must detect the well-known failure text
+    // and treat the result as invisible so fallback can proceed.  Issue #95489.
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [
+          {
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "claude-cli/claude-sonnet-4-6 ended with generic external runner failure",
+      reason: "format",
+      code: "external_runner_failure",
+    });
+  });
+
+  it("does NOT trigger fallback when visible payloads mix generic failure text with real content", () => {
+    // Only skip the short-circuit when every visible payload is the generic failure
+    // text.  Mixed payloads still represent real visible output and must not retry.
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [
+          {
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          },
+          {
+            text: "Here is the actual response you asked for.",
+          },
+        ],
+        meta: {
+          durationMs: 42,
         },
       },
     });

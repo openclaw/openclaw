@@ -1,6 +1,7 @@
 /**
  * Classifies embedded-agent run results for model fallback decisions.
  */
+import { isGenericExternalRunFailureText } from "../../auto-reply/reply/agent-runner-failure-copy.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
@@ -25,6 +26,29 @@ function isEmbeddedAgentRunResult(value: unknown): value is EmbeddedAgentRunResu
     "meta" in value &&
     (value as { meta?: unknown }).meta &&
     typeof (value as { meta?: unknown }).meta === "object",
+  );
+}
+
+/**
+ * Returns true when every visible (non-error, non-reasoning) payload text is the generic
+ * external runner failure copy.  CLI subprocesses deliver their fatal errors as normal
+ * text payloads (isError is absent), so the classifier must detect this pattern instead
+ * of short-circuiting on hasVisibleAgentPayload and skipping fallback entirely.
+ */
+function hasSolelyGenericFailureVisiblePayload(result: EmbeddedAgentRunResult): boolean {
+  const payloads = result.payloads;
+  if (!Array.isArray(payloads) || payloads.length === 0) return false;
+  const visiblePayloads = payloads.filter(
+    (p) =>
+      p &&
+      typeof p === "object" &&
+      (p as Record<string, unknown>).isError !== true &&
+      (p as Record<string, unknown>).isReasoning !== true &&
+      typeof (p as Record<string, unknown>).text === "string",
+  );
+  if (visiblePayloads.length === 0) return false;
+  return visiblePayloads.every((p) =>
+    isGenericExternalRunFailureText((p as Record<string, unknown>).text as string),
   );
 }
 
@@ -137,10 +161,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
     params.hasBlockReplyPipelineOutput === true ||
-    hasVisibleAgentPayload(params.result, {
+    (hasVisibleAgentPayload(params.result, {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,
-    })
+    }) &&
+      !hasSolelyGenericFailureVisiblePayload(params.result))
   ) {
     return null;
   }
@@ -160,6 +185,19 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     // bypass a policy decision rather than recover a malformed model result.
     return null;
   }
+
+  // CLI subprocesses deliver fatal errors (out-of-credits, etc.) as normal text
+  // payloads rather than error payloads.  When every visible payload is the generic
+  // external runner failure text, treat the run as an empty-runner failure so the
+  // model-fallback engine can advance to the next candidate.  Issue #95489.
+  if (hasSolelyGenericFailureVisiblePayload(params.result)) {
+    return {
+      message: `${params.provider}/${params.model} ended with generic external runner failure`,
+      reason: "format",
+      code: "external_runner_failure",
+    };
+  }
+
   const payloads = params.result.payloads ?? [];
 
   if (fallbackSafeIncompleteTurn) {
