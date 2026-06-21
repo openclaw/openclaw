@@ -154,9 +154,12 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "buffer" as const }
+      ? { timeout: resolveTimerTimeoutMs(opts, 1), encoding: "buffer" as const }
       : {
-          timeout: opts.timeoutMs,
+          timeout:
+            typeof opts.timeoutMs === "number"
+              ? resolveTimerTimeoutMs(opts.timeoutMs, 1)
+              : undefined,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
           encoding: "buffer" as const,
