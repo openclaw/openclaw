@@ -29,11 +29,23 @@ function capitalize(s: string): string {
 }
 
 /**
- * Shortens long identifiers for display. Short IDs (<=20 chars)
- * are returned as-is. Long IDs are truncated to first 6 chars + "..." + last 4.
+ * Shorten long direct-chat identifiers for compact cell display.
+ * Only affects the Sessions table key cell — parseSessionKey stays canonical.
+ * Short IDs (<=20 chars) are returned unchanged.
  */
-function shortenDirectIdentifier(id: string): string {
-  return id.length <= 20 ? id : `${id.slice(0, 6)}...${id.slice(-4)}`;
+export function shortenSessionKeyForCell(key: string): string {
+  const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
+  if (!directMatch) {
+    // Non-direct keys: defer to parseSessionKey for typed prefix + fallback.
+    const { prefix, fallbackName } = parseSessionKey(key);
+    return prefix ? `${prefix} ${fallbackName}`.trim() : fallbackName;
+  }
+  const channel = directMatch[1];
+  const identifier = directMatch[2];
+  const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+  const shortId =
+    identifier.length <= 20 ? identifier : `${identifier.slice(0, 6)}...${identifier.slice(-4)}`;
+  return `${channelLabel} · ${shortId}`;
 }
 
 /**
@@ -63,9 +75,8 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   if (directMatch) {
     const channel = directMatch[1];
     const identifier = directMatch[2];
-    const shortIdentifier = shortenDirectIdentifier(identifier);
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} · ${shortIdentifier}` };
+    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}` };
   }
 
   // Group chat: agent:<x>:<channel>:group:<id>.
