@@ -254,24 +254,16 @@ export function initFastReplySessionState(params: {
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,
-    thinkingLevel: resetTriggered ? existingEntry?.thinkingLevel : existingEntry?.thinkingLevel,
-    verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
-    reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,
-    ttsAuto: resetTriggered ? existingEntry?.ttsAuto : existingEntry?.ttsAuto,
+    thinkingLevel: existingEntry?.thinkingLevel,
+    verboseLevel: existingEntry?.verboseLevel,
+    reasoningLevel: existingEntry?.reasoningLevel,
+    ttsAuto: existingEntry?.ttsAuto,
     responseUsage: !resetTriggered ? existingEntry?.responseUsage : undefined,
-    modelOverride: resetTriggered ? existingEntry?.modelOverride : existingEntry?.modelOverride,
-    providerOverride: resetTriggered
-      ? existingEntry?.providerOverride
-      : existingEntry?.providerOverride,
-    authProfileOverride: resetTriggered
-      ? existingEntry?.authProfileOverride
-      : existingEntry?.authProfileOverride,
-    authProfileOverrideSource: resetTriggered
-      ? existingEntry?.authProfileOverrideSource
-      : existingEntry?.authProfileOverrideSource,
-    authProfileOverrideCompactionCount: resetTriggered
-      ? existingEntry?.authProfileOverrideCompactionCount
-      : existingEntry?.authProfileOverrideCompactionCount,
+    modelOverride: existingEntry?.modelOverride,
+    providerOverride: existingEntry?.providerOverride,
+    authProfileOverride: existingEntry?.authProfileOverride,
+    authProfileOverrideSource: existingEntry?.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: existingEntry?.authProfileOverrideCompactionCount,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
     ...(normalizeOptionalString(ctx.Provider)
       ? { channel: normalizeOptionalString(ctx.Provider) }
