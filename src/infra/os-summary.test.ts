@@ -42,7 +42,7 @@ describe("resolveOsSummary", () => {
       },
     },
     {
-      name: "falls back to os.release when sw_vers output is blank",
+      name: "falls back to os.release (Darwin 24 → macOS 15) when sw_vers output is blank",
       platform: "darwin" as const,
       release: "24.1.0",
       arch: "x64",
@@ -51,7 +51,20 @@ describe("resolveOsSummary", () => {
         platform: "darwin",
         arch: "x64",
         release: "24.1.0",
-        label: "macos 24.1.0 (x64)",
+        label: "macos 15.1.0 (x64)",
+      },
+    },
+    {
+      name: "maps Darwin 25 to macOS 26 (Tahoe)",
+      platform: "darwin" as const,
+      release: "25.5.0",
+      arch: "arm64",
+      swVersStdout: "",
+      expected: {
+        platform: "darwin",
+        arch: "arm64",
+        release: "25.5.0",
+        label: "macos 26.5.0 (arm64)",
       },
     },
     {
