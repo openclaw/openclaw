@@ -13,6 +13,11 @@ const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() => vi.fn(() => [
 const readGatewayProcessArgsSync = vi.hoisted(() => vi.fn());
 const defaultGatewayBindMode = vi.hoisted(() => vi.fn(() => "loopback"));
 const isLoopbackAddress = vi.hoisted(() => vi.fn((host: string) => host === "127.0.0.1"));
+const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
+const resolveGatewayListenHosts = vi.hoisted(() =>
+  vi.fn(async (host: string) => (host === "127.0.0.1" ? ["127.0.0.1", "::1"] : [host])),
+);
+const inspectPortUsage = vi.hoisted(() => vi.fn());
 const resolveSetupSecretInputString = vi.hoisted(() => vi.fn());
 const loadGatewayTlsRuntime = vi.hoisted(() => vi.fn());
 
@@ -44,6 +49,8 @@ vi.mock("../config/paths.js", () => ({
 vi.mock("../gateway/net.js", () => ({
   defaultGatewayBindMode,
   isLoopbackAddress,
+  resolveGatewayBindHost,
+  resolveGatewayListenHosts,
 }));
 
 vi.mock("../process/kill-tree.js", () => ({
@@ -58,6 +65,8 @@ vi.mock("../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync,
   readGatewayProcessArgsSync,
 }));
+
+vi.mock("../infra/ports.js", () => ({ inspectPortUsage }));
 
 vi.mock("./setup.secret-input.js", () => ({ resolveSetupSecretInputString }));
 
@@ -103,6 +112,18 @@ describe("agent-assisted Gateway runtime", () => {
     readGatewayProcessArgsSync
       .mockReset()
       .mockReturnValue(["/usr/bin/node", "/app/openclaw.mjs", "gateway", "--port", "18789"]);
+    resolveGatewayBindHost.mockReset().mockResolvedValue("127.0.0.1");
+    resolveGatewayListenHosts
+      .mockReset()
+      .mockImplementation(async (host: string) =>
+        host === "127.0.0.1" ? ["127.0.0.1", "::1"] : [host],
+      );
+    inspectPortUsage.mockReset().mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4321, address: "127.0.0.1:18789" }],
+      hints: [],
+    });
     resolveSetupSecretInputString
       .mockReset()
       .mockImplementation(async ({ value }: { value?: unknown }) =>
@@ -185,6 +206,134 @@ describe("agent-assisted Gateway runtime", () => {
         detailLevel: "full",
       }),
     );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a loopback-configured Gateway that is actually listening broadly", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4321, address: "TCP *:18789 (LISTEN)" }],
+      hints: [],
+    });
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "loopback",
+              auth: { mode: "token" },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_TOKEN_MISMATCH" },
+      });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789);
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a custom-configured Gateway listening on a different address", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    readGatewayProcessArgsSync.mockReturnValue([
+      "/usr/bin/node",
+      "/app/openclaw.mjs",
+      "gateway",
+      "run",
+      "--bind=custom",
+      "--tailscale=off",
+    ]);
+    resolveGatewayBindHost.mockResolvedValue("192.168.1.10");
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4321, address: "0.0.0.0:18789" }],
+      hints: [],
+    });
+    const customSettings = {
+      ...settings,
+      bind: "custom" as const,
+      customBindHost: "192.168.1.10",
+    };
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "custom",
+              customBindHost: "192.168.1.10",
+              auth: { mode: "token" },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_TOKEN_MISMATCH" },
+      });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings: customSettings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(resolveGatewayBindHost).toHaveBeenCalledWith("custom", "192.168.1.10");
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789);
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a custom bind that resolves away from its configured address", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    readGatewayProcessArgsSync.mockReturnValue([
+      "/usr/bin/node",
+      "/app/openclaw.mjs",
+      "gateway",
+      "run",
+      "--bind=custom",
+      "--tailscale=off",
+    ]);
+    resolveGatewayBindHost.mockResolvedValue("0.0.0.0");
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings: {
+          ...settings,
+          bind: "custom",
+          customBindHost: "192.168.1.10",
+        },
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(resolveGatewayBindHost).toHaveBeenCalledWith("custom", "192.168.1.10");
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+    expect(probeGateway).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -419,7 +568,7 @@ describe("agent-assisted Gateway runtime", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("rejects a verified Gateway whose runtime exposure can no longer be inspected", async () => {
+  it("rejects a verified Gateway whose process args can no longer be inspected", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
     readGatewayProcessArgsSync.mockReturnValue(null);
 
@@ -432,6 +581,23 @@ describe("agent-assisted Gateway runtime", () => {
     ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
 
     expect(readGatewayProcessArgsSync).toHaveBeenCalledWith(4321);
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a verified Gateway whose listener addresses can no longer be inspected", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    inspectPortUsage.mockRejectedValue(new Error("port inspection unavailable"));
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789);
     expect(probeGateway).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });

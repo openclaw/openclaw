@@ -13,13 +13,20 @@ import { DEFAULT_GATEWAY_PORT, resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { defaultGatewayBindMode, isLoopbackAddress } from "../gateway/net.js";
+import {
+  defaultGatewayBindMode,
+  isLoopbackAddress,
+  resolveGatewayBindHost,
+  resolveGatewayListenHosts,
+} from "../gateway/net.js";
 import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
   readGatewayProcessArgsSync,
 } from "../infra/gateway-processes.js";
+import { parsePortListenerAddress } from "../infra/ports-format.js";
+import { inspectPortUsage } from "../infra/ports.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
@@ -151,11 +158,80 @@ function hasGatewayProcessOption(args: string[], name: string): boolean {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 
-function runtimeExposureMatchesGatewaySettings(params: {
+function listenerHostMatchesExpected(host: string, expected: string): boolean {
+  return (
+    host === expected ||
+    (expected === "127.0.0.1" && host === "localhost") ||
+    (expected === "0.0.0.0" && host === "*")
+  );
+}
+
+function resolvedBindHostMatchesGatewaySettings(
+  bindHost: string,
+  settings: GatewayWizardSettings,
+): boolean {
+  if (settings.bind === "loopback") {
+    return isLoopbackAddress(bindHost);
+  }
+  if (settings.bind === "custom") {
+    return bindHost === settings.customBindHost?.trim();
+  }
+  return true;
+}
+
+async function listenerAddressesMatchGatewaySettings(params: {
   listenerPids: number[];
   settings: GatewayWizardSettings;
-}): boolean {
-  return params.listenerPids.every((pid) => {
+}): Promise<boolean> {
+  try {
+    const bindHost = await resolveGatewayBindHost(
+      params.settings.bind,
+      params.settings.customBindHost,
+    );
+    if (!resolvedBindHostMatchesGatewaySettings(bindHost, params.settings)) {
+      return false;
+    }
+    const allowedHosts = await resolveGatewayListenHosts(bindHost);
+    const usage = await inspectPortUsage(params.settings.port);
+    if (usage.status !== "busy" || usage.listeners.length === 0) {
+      return false;
+    }
+
+    const observedPids = new Set<number>();
+    let observedPrimaryHost = false;
+    for (const listener of usage.listeners) {
+      if (
+        typeof listener.pid !== "number" ||
+        !Number.isFinite(listener.pid) ||
+        !params.listenerPids.includes(listener.pid) ||
+        typeof listener.address !== "string"
+      ) {
+        return false;
+      }
+      const address = parsePortListenerAddress(listener.address);
+      if (!address || address.port !== params.settings.port) {
+        return false;
+      }
+      if (!allowedHosts.some((host) => listenerHostMatchesExpected(address.host, host))) {
+        return false;
+      }
+      observedPids.add(listener.pid);
+      observedPrimaryHost ||= listenerHostMatchesExpected(address.host, bindHost);
+    }
+    return (
+      observedPrimaryHost &&
+      params.listenerPids.every((listenerPid) => observedPids.has(listenerPid))
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function runtimeExposureMatchesGatewaySettings(params: {
+  listenerPids: number[];
+  settings: GatewayWizardSettings;
+}): Promise<boolean> {
+  const processArgsMatch = params.listenerPids.every((pid) => {
     const args = readGatewayProcessArgsSync(pid);
     if (!args) {
       return false;
@@ -171,6 +247,7 @@ function runtimeExposureMatchesGatewaySettings(params: {
         params.settings.tailscaleResetOnExit)
     );
   });
+  return processArgsMatch && (await listenerAddressesMatchGatewaySettings(params));
 }
 
 function verifiedGatewayListenerStillOwnsPort(params: {
@@ -179,6 +256,18 @@ function verifiedGatewayListenerStillOwnsPort(params: {
 }): boolean {
   return findVerifiedGatewayListenerPidsOnPortSync(params.port).some((pid) =>
     params.listenerPids.includes(pid),
+  );
+}
+
+async function verifiedGatewayRuntimeStillMatches(params: {
+  listenerPids: number[];
+  settings: GatewayWizardSettings;
+}): Promise<boolean> {
+  return (
+    verifiedGatewayListenerStillOwnsPort({
+      port: params.settings.port,
+      listenerPids: params.listenerPids,
+    }) && (await runtimeExposureMatchesGatewaySettings(params))
   );
 }
 
@@ -239,9 +328,9 @@ async function probeVerifiedExistingGateway(params: {
     params.settings.authMode !== "none" && canSafelyProbeInvalidAuth(params)
       ? buildInvalidProbeAuth(params.settings, params.auth)
       : undefined;
-  const listenerStillOwnsPort = () =>
-    verifiedGatewayListenerStillOwnsPort({
-      port: params.settings.port,
+  const listenerStillMatchesRuntime = () =>
+    verifiedGatewayRuntimeStillMatches({
+      settings: params.settings,
       listenerPids: params.listenerPids,
     });
   // Shared-secret Gateway reuse requires proving that invalid auth is rejected.
@@ -249,7 +338,7 @@ async function probeVerifiedExistingGateway(params: {
   if (params.settings.authMode !== "none" && !invalidAuth) {
     return false;
   }
-  if (!listenerStillOwnsPort()) {
+  if (!(await listenerStillMatchesRuntime())) {
     return false;
   }
   // Do not let cached device credentials prove a listener that rejects the
@@ -279,13 +368,13 @@ async function probeVerifiedExistingGateway(params: {
       ) {
         return false;
       }
-      if (!listenerStillOwnsPort()) {
+      if (!(await listenerStillMatchesRuntime())) {
         return false;
       }
       if (!invalidAuth) {
         return true;
       }
-      if (!listenerStillOwnsPort()) {
+      if (!(await listenerStillMatchesRuntime())) {
         return false;
       }
       const invalid = await probeGateway({
@@ -297,7 +386,7 @@ async function probeVerifiedExistingGateway(params: {
         tlsFingerprint: params.tlsFingerprint,
       });
       return (
-        listenerStillOwnsPort() &&
+        (await listenerStillMatchesRuntime()) &&
         invalidAuthProbeProvesEnforcement({ settings: params.settings, probe: invalid })
       );
     },
@@ -487,10 +576,11 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
   const existingListenerPids = findVerifiedGatewayListenerPidsOnPortSync(params.settings.port);
   if (existingListenerPids.length > 0) {
     const canVerifyExisting =
-      runtimeExposureMatchesGatewaySettings({
+      hasDirectAuth &&
+      (await runtimeExposureMatchesGatewaySettings({
         listenerPids: existingListenerPids,
         settings: params.settings,
-      }) && hasDirectAuth;
+      }));
     const existingMatches =
       canVerifyExisting &&
       (await probeVerifiedExistingGateway({
@@ -503,10 +593,10 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
       }));
     if (
       existingMatches &&
-      verifiedGatewayListenerStillOwnsPort({
-        port: params.settings.port,
+      (await verifiedGatewayRuntimeStillMatches({
+        settings: params.settings,
         listenerPids: existingListenerPids,
-      })
+      }))
     ) {
       return NOOP_GATEWAY_RUNTIME;
     }
