@@ -21,6 +21,14 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
   fi
 fi
 
+# This wrapper parses GitHub CLI JSON with jq. Ignore interactive color settings
+# inherited from operator shells so machine output stays valid JSON.
+export NO_COLOR=1
+export CLICOLOR=0
+export CLICOLOR_FORCE=0
+unset GH_FORCE_TTY
+export GH_PAGER=cat
+
 usage() {
   cat <<USAGE
 Usage:
