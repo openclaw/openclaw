@@ -1,0 +1,22 @@
+{
+  "id": "msg_newsletter_001",
+  "threadId": "thread_newsletter_001",
+  "labelIds": ["INBOX", "CATEGORY_PROMOTIONS"],
+  "snippet": "Daily Newsletter",
+  "internalDate": "1704326400000",
+  "payload": {
+    "mimeType": "text/html",
+    "headers": [
+      { "name": "Message-ID", "value": "<newsletter-001@example.invalid>" },
+      { "name": "Subject", "value": "Daily media links" },
+      { "name": "From", "value": "Newsletter <newsletter@example.invalid>" },
+      { "name": "List-ID", "value": "Daily Media <daily.example.invalid>" },
+      { "name": "To", "value": "subscriber@example.invalid" },
+      { "name": "Date", "value": "Thu, 04 Jan 2024 00:00:00 +0000" }
+    ],
+    "body": {
+      "size": 151,
+      "data": "PGh0bWw-PGJvZHk-PGgyPkRhaWx5IE5ld3NsZXR0ZXI8L2gyPjxwPlRvcCBsaW5rczwvcD48YSBocmVmPSJodHRwczovL25ld3MuZXhhbXBsZS5jb20vYSI-QTwvYT48YSBocmVmPSJodHRwczovL25ld3MuZXhhbXBsZS5jb20vYiI-QjwvYT48L2JvZHk-PC9odG1sPg"
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "id": "msg_attachment_001",
+  "threadId": "thread_attachment_001",
+  "labelIds": ["INBOX"],
+  "snippet": "Attached is the deck metadata.",
+  "internalDate": "1704585600000",
+  "payload": {
+    "mimeType": "multipart/mixed",
+    "headers": [
+      { "name": "Message-ID", "value": "<attachment-001@example.invalid>" },
+      { "name": "Subject", "value": "Attachment metadata fixture" },
+      { "name": "From", "value": "Analyst <analyst@example.invalid>" },
+      { "name": "To", "value": "media@example.invalid" },
+      { "name": "Date", "value": "Sun, 07 Jan 2024 00:00:00 +0000" }
+    ],
+    "parts": [
+      {
+        "partId": "0",
+        "mimeType": "text/plain",
+        "body": {
+          "size": 58,
+          "data": "QXR0YWNoZWQgaXMgdGhlIGRlY2sgbWV0YWRhdGEuIERvIG5vdCBkb3dubG9hZCBhdHRhY2htZW50cy4K"
+        }
+      },
+      {
+        "partId": "1",
+        "mimeType": "application/pdf",
+        "filename": "briefing.pdf",
+        "headers": [
+          { "name": "Content-Disposition", "value": "attachment; filename=\"briefing.pdf\"" },
+          { "name": "Content-ID", "value": "<briefing-pdf@example.invalid>" }
+        ],
+        "body": {
+          "attachmentId": "fixture-attachment-id-001",
+          "size": 12345
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "msg_forwarded_001",
+  "threadId": "thread_forwarded_001",
+  "labelIds": ["INBOX"],
+  "snippet": "FYI forwarded message",
+  "internalDate": "1704412800000",
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      { "name": "Message-ID", "value": "<forwarded-001@example.invalid>" },
+      { "name": "Subject", "value": "Fwd: Original note" },
+      { "name": "From", "value": "Forwarder <forwarder@example.invalid>" },
+      { "name": "To", "value": "media@example.invalid" },
+      { "name": "Date", "value": "Fri, 05 Jan 2024 00:00:00 +0000" }
+    ],
+    "body": {
+      "size": 129,
+      "data": "RllJCgotLS0tLS0tLS0tIEZvcndhcmRlZCBtZXNzYWdlIC0tLS0tLS0tLQpGcm9tOiBTb3VyY2UgPHNvdXJjZUBleGFtcGxlLmNvbT4KU3ViamVjdDogT3JpZ2luYWwgbm90ZQpTZWUgaHR0cHM6Ly9leGFtcGxlLmNvbS9vcmlnaW5hbAo"
+    }
+  }
+}

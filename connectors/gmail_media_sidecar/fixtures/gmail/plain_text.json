@@ -1,0 +1,22 @@
+{
+  "id": "msg_plain_001",
+  "threadId": "thread_plain_001",
+  "labelIds": ["INBOX", "Label_Media"],
+  "snippet": "Hello Media team. This is a plain text email.",
+  "internalDate": "1704067200000",
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      { "name": "Message-ID", "value": "<plain-001@example.invalid>" },
+      { "name": "Subject", "value": "Plain fixture" },
+      { "name": "From", "value": "Reporter One <reporter@example.invalid>" },
+      { "name": "To", "value": "media@example.invalid" },
+      { "name": "Cc", "value": "desk@example.invalid" },
+      { "name": "Date", "value": "Mon, 01 Jan 2024 00:00:00 +0000" }
+    ],
+    "body": {
+      "size": 91,
+      "data": "SGVsbG8gTWVkaWEgdGVhbS4gVGhpcyBpcyBhIHBsYWluIHRleHQgZW1haWwuIFZpc2l0IGh0dHBzOi8vZXhhbXBsZS5jb20vc3Rvcnk_aWQ9MSBmb3IgZGV0YWlscy4K"
+    }
+  }
+}

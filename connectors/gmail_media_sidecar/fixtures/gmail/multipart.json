@@ -1,0 +1,35 @@
+{
+  "id": "msg_multipart_001",
+  "threadId": "thread_multipart_001",
+  "labelIds": ["INBOX", "IMPORTANT"],
+  "snippet": "Plain version with a link",
+  "internalDate": "1704240000000",
+  "payload": {
+    "mimeType": "multipart/alternative",
+    "headers": [
+      { "name": "Message-ID", "value": "<multipart-001@example.invalid>" },
+      { "name": "Subject", "value": "Multipart fixture" },
+      { "name": "From", "value": "Multipart Sender <multi@example.invalid>" },
+      { "name": "To", "value": "media@example.invalid, editor@example.invalid" },
+      { "name": "Date", "value": "Wed, 03 Jan 2024 00:00:00 +0000" }
+    ],
+    "parts": [
+      {
+        "partId": "0",
+        "mimeType": "text/plain",
+        "body": {
+          "size": 49,
+          "data": "UGxhaW4gdmVyc2lvbiB3aXRoIGh0dHBzOi8vZXhhbXBsZS5jb20vcGxhaW4tbGluawo"
+        }
+      },
+      {
+        "partId": "1",
+        "mimeType": "text/html",
+        "body": {
+          "size": 94,
+          "data": "PGh0bWw-PGJvZHk-PHA-SFRNTCB2ZXJzaW9uIDxhIGhyZWY9Imh0dHBzOi8vZXhhbXBsZS5jb20vaHRtbC1saW5rIj5saW5rPC9hPjwvcD48L2JvZHk-PC9odG1sPg"
+        }
+      }
+    ]
+  }
+}

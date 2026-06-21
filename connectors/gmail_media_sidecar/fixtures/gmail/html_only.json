@@ -1,0 +1,21 @@
+{
+  "id": "msg_html_001",
+  "threadId": "thread_html_001",
+  "labelIds": ["INBOX"],
+  "snippet": "HTML Only",
+  "internalDate": "1704153600000",
+  "payload": {
+    "mimeType": "text/html",
+    "headers": [
+      { "name": "Message-ID", "value": "<html-001@example.invalid>" },
+      { "name": "Subject", "value": "HTML fixture" },
+      { "name": "From", "value": "HTML Sender <html@example.invalid>" },
+      { "name": "To", "value": "media@example.invalid" },
+      { "name": "Date", "value": "Tue, 02 Jan 2024 00:00:00 +0000" }
+    ],
+    "body": {
+      "size": 132,
+      "data": "PGh0bWw-PGJvZHk-PGgxPkhUTUwgT25seTwvaDE-PHA-UmVhZCA8YSBocmVmPSJodHRwczovL2V4YW1wbGUuY29tL2h0bWwiPnRoZSBhcnRpY2xlPC9hPi48L3A-PHNjcmlwdD5pZ25vcmUoKTwvc2NyaXB0PjwvYm9keT48L2h0bWw-"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "msg_empty_001",
+  "threadId": "thread_empty_001",
+  "labelIds": ["INBOX"],
+  "snippet": "",
+  "internalDate": "1704672000000",
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      { "name": "Message-ID", "value": "<empty-001@example.invalid>" },
+      { "name": "Subject", "value": "Empty body fixture" },
+      { "name": "From", "value": "Empty Sender <empty@example.invalid>" },
+      { "name": "To", "value": "media@example.invalid" },
+      { "name": "Date", "value": "Mon, 08 Jan 2024 00:00:00 +0000" }
+    ],
+    "body": {
+      "size": 0,
+      "data": ""
+    }
+  }
+}

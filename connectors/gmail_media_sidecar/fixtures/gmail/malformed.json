@@ -1,0 +1,5 @@
+{
+  "threadId": "thread_malformed_001",
+  "labelIds": ["INBOX"],
+  "snippet": "This fixture is intentionally missing id and payload."
+}

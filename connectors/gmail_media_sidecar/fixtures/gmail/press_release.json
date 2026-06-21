@@ -1,0 +1,21 @@
+{
+  "id": "msg_press_001",
+  "threadId": "thread_press_001",
+  "labelIds": ["INBOX", "Label_Press"],
+  "snippet": "FOR IMMEDIATE RELEASE",
+  "internalDate": "1704499200000",
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      { "name": "Message-ID", "value": "<press-001@example.invalid>" },
+      { "name": "Subject", "value": "Press release: Fixture-first media ingestion" },
+      { "name": "From", "value": "Press Team <press@example.invalid>" },
+      { "name": "To", "value": "media@example.invalid" },
+      { "name": "Date", "value": "Sat, 06 Jan 2024 00:00:00 +0000" }
+    ],
+    "body": {
+      "size": 126,
+      "data": "Rk9SIElNTUVESUFURSBSRUxFQVNFCk9wZW5DbGF3IGxhdW5jaGVzIGZpeHR1cmUtZmlyc3QgbWVkaWEgaW5nZXN0aW9uLiBDb250YWN0IHByZXNzQGV4YW1wbGUuY29tLiBodHRwczovL3ByZXNzLmV4YW1wbGUuY29tL3JlbGVhc2UK"
+    }
+  }
+}
