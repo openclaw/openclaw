@@ -360,6 +360,78 @@ describe("renderAgents", () => {
     expect(skillsTab.querySelector(".agent-tab-count")?.textContent).toBe("1");
   });
 
+  it("renders ElevenLabs fields when provider is elevenlabs", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "beta",
+            tts: {
+              enabled: true,
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  apiKey: "test-key",
+                  speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
+                  model: "eleven_multilingual_v2",
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+
+    // Voice/TTS card title should render
+    const cardTitle = Array.from(container.querySelectorAll(".card-title")).find((el) =>
+      el.textContent?.includes(t("agents.voice.title")),
+    );
+    expect(cardTitle).toBeTruthy();
+
+    // API key field should render (password input)
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeTruthy();
+    expect(passwordInput?.value).toBe("test-key");
+
+    // Voice ID field should render (text input with the voice ID value)
+    const textInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="text"]'),
+    );
+    const voiceIdInput = textInputs.find((input) => input.value === "EXAVITQu4vr4xnSDxMaL");
+    expect(voiceIdInput).toBeTruthy();
+
+    // Model select should render with the correct value
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      '.card select:not([class*="agent-model"])',
+    );
+    // The model select should exist and have the eleven_multilingual_v2 option selected
+    const allSelects = container.querySelectorAll<HTMLSelectElement>("select");
+    const ttsModelSelect = Array.from(allSelects).find((sel) =>
+      Array.from(sel.options).some((opt) => opt.value === "eleven_multilingual_v2"),
+    );
+    expect(ttsModelSelect).toBeTruthy();
+    expect(ttsModelSelect?.value).toBe("eleven_multilingual_v2");
+  });
+
   it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("zh-CN");
