@@ -11,6 +11,7 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { emitNodeGatewayEvent } from "openclaw/plugin-sdk/node-gateway-emit-internal";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
@@ -166,7 +167,7 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
       // node-attributed turns without emitNodeGatewayEvent on the public plugin SDK.
       const { startBrowserControlServiceFromConfig, setNodeGatewayEventEmitter } =
         await loadBrowserRegistrationRuntimeModule();
-      setNodeGatewayEventEmitter(ctx.emitNodeGatewayEvent, ctx.nodeId);
+      setNodeGatewayEventEmitter(emitNodeGatewayEvent, ctx.nodeId);
       await startBrowserControlServiceFromConfig();
     },
   },

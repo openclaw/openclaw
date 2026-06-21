@@ -59,6 +59,8 @@
     "!dist/plugin-sdk/reply-payload-testing.d.ts",
     "!dist/plugin-sdk/ssrf-runtime-internal.js",
     "!dist/plugin-sdk/ssrf-runtime-internal.d.ts",
+    "!dist/plugin-sdk/node-gateway-emit-internal.js",
+    "!dist/plugin-sdk/node-gateway-emit-internal.d.ts",
     "!dist/plugin-sdk/test-env.js",
     "!dist/plugin-sdk/test-env.d.ts",
     "!dist/plugin-sdk/test-fixtures.js",

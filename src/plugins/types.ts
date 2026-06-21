@@ -2209,8 +2209,6 @@ export type OpenClawPluginNodeHostCommand = {
    * before the first command dial. Must be idempotent and self-guarding.
    */
   onNodeHostStart?: (ctx: {
-    /** Originate a node-attributed gateway event over this node's authenticated connection. */
-    emitNodeGatewayEvent: (event: string, payload: unknown) => Promise<void>;
     /** This node-host's id, surfaced on the bridge /whoami so the extension treats it as node-hosted. */
     nodeId?: string;
   }) => Promise<void>;
