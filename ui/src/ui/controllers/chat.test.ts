@@ -1892,7 +1892,7 @@ describe("sendChatMessage", () => {
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
     expect(sendParams.resumeSession).toBeUndefined();
-    expect(sendParams.__controlUiReconnectResume).toBeUndefined();
+    expect(sendParams).not.toHaveProperty("__controlUiReconnectResume");
     expect(sendParams.message).toBe("continue");
   });
 
