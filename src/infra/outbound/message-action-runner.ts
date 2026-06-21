@@ -7,7 +7,7 @@ import {
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveResponsePrefix } from "../../agents/identity.js";
+import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readPositiveIntegerParam,
@@ -16,6 +16,7 @@ import {
 } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -1025,6 +1026,10 @@ async function buildSendPayloadParts(params: {
   };
 }
 
+// Detects leftover `{variable}` placeholders after prefix interpolation. Non-global so
+// `.test()` stays stateless; mirrors the variable shape in response-prefix-template.ts.
+const UNRESOLVED_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
+
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
   const {
     cfg,
@@ -1053,13 +1058,26 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
 
   // `message(action=send)` crosses into other conversations, so mirror the direct-reply
   // egress and prepend messages.responsePrefix here too; otherwise the disambiguation
-  // prefix is silently dropped on tool sends while replies keep it. The startsWith guard
-  // matches normalize-reply.ts and keeps re-runs idempotent.
-  const responsePrefix = resolveResponsePrefix(cfg, agentId ?? "", {
-    channel,
-    accountId: accountId ?? undefined,
-  });
-  if (responsePrefix && sendPayload.message && !sendPayload.message.startsWith(responsePrefix)) {
+  // prefix is silently dropped on tool sends while replies keep it. Interpolate the
+  // template like normalize-reply.ts so identity tokens render. model/provider/thinking
+  // tokens need the live model selection that a tool send never performs, so when any
+  // placeholder stays unresolved we skip prefixing instead of leaking a literal `{model}`.
+  // The startsWith guard matches normalize-reply.ts and keeps re-runs idempotent.
+  const responsePrefix = resolveResponsePrefixTemplate(
+    resolveResponsePrefix(cfg, agentId ?? "", {
+      channel,
+      accountId: accountId ?? undefined,
+    }),
+    { identityName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId ?? "")?.name) },
+  );
+  const prefixHasUnresolvedVar =
+    responsePrefix !== undefined && UNRESOLVED_PREFIX_VAR_PATTERN.test(responsePrefix);
+  if (
+    responsePrefix &&
+    !prefixHasUnresolvedVar &&
+    sendPayload.message &&
+    !sendPayload.message.startsWith(responsePrefix)
+  ) {
     const prefixedMessage = `${responsePrefix} ${sendPayload.message}`;
     sendPayload = {
       ...sendPayload,

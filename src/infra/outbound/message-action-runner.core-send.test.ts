@@ -437,6 +437,52 @@ describe("runMessageAction core send routing", () => {
     expect(firstMockArg(sendMedia, "send media").text ?? "").toBe("");
   });
 
+  it("resolves identity templates in responsePrefix on message-tool sends", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { responsePrefix: "[{identity.name}]" },
+        agents: { list: [{ id: "main", identity: { name: "Nexus" } }] },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:OTHER",
+        message: "hello world",
+      },
+      agentId: "main",
+      dryRun: false,
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(firstMockArg(sendText, "send text").text).toBe("[Nexus] hello world");
+  });
+
+  it("skips responsePrefix on tool sends when a model template cannot be resolved", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { responsePrefix: "[{provider}/{model}]" },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:OTHER",
+        message: "hello world",
+      },
+      dryRun: false,
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    // A tool send performs no live model selection, so the unresolved template is dropped
+    // rather than leaked as a literal `{provider}/{model}` prefix.
+    expect(firstMockArg(sendText, "send text").text).toBe("hello world");
+  });
+
   it("uses best-effort delivery for explicit current-source message-tool-only replies", async () => {
     const sendText = registerSlackTextPlugin();
 
