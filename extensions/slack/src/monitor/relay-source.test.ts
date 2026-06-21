@@ -149,7 +149,14 @@ describe("Slack relay source", () => {
     expect(runtimeError).toHaveBeenCalledTimes(2);
     expect(handleSlackMessage).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "C1", text: "hello" }),
-      { source: "message", wasMentioned: true },
+      {
+        source: "message",
+        wasMentioned: true,
+        relayIdentity: {
+          username: "Nik Team Claw",
+          iconUrl: "https://example.com/nik.png",
+        },
+      },
     );
     expect(identities).toContainEqual({
       username: "Nik Team Claw",

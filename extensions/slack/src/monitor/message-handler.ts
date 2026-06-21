@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
+import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
@@ -33,7 +34,11 @@ function loadSlackMessagePipeline(): Promise<SlackMessagePipeline> {
 
 export type SlackMessageHandler = (
   message: SlackMessageEvent,
-  opts: { source: "message" | "app_mention"; wasMentioned?: boolean },
+  opts: {
+    source: "message" | "app_mention";
+    wasMentioned?: boolean;
+    relayIdentity?: SlackSendIdentity;
+  },
 ) => Promise<void>;
 
 const APP_MENTION_RETRY_TTL_MS = 60_000;
@@ -71,7 +76,11 @@ export function createSlackMessageHandler(params: {
   const { ctx, account, trackEvent } = params;
   const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
-    opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+    opts: {
+      source: "message" | "app_mention";
+      wasMentioned?: boolean;
+      relayIdentity?: SlackSendIdentity;
+    };
   }>({
     cfg: ctx.cfg,
     channel: "slack",

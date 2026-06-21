@@ -466,7 +466,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         iconUrl: outboundIdentity.avatarUrl,
         iconEmoji: outboundIdentity.emoji,
       }
-    : undefined;
+    : prepared.relayIdentity;
 
   if (prepared.isDirectMessage) {
     const sessionCfg = cfg.session;

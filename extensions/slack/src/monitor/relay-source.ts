@@ -28,6 +28,10 @@ type OpenRelayWebSocket = {
   detachBuffer: () => void;
 };
 
+type RelayConnectionState = {
+  identity?: SlackRelayIdentity;
+};
+
 const SLACK_RELAY_ROUTE_KINDS = new Set(["user_group", "thread_affinity", "channel_default"]);
 
 export type SlackRelayRoute = {
@@ -154,6 +158,7 @@ function runRelayWebSocket(params: {
   setIdentity?: (identity: SlackRelayIdentity | undefined) => void;
 }): Promise<void> {
   const { ws } = params.connection;
+  const relayState: RelayConnectionState = {};
   let pending = Promise.resolve();
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -177,6 +182,7 @@ function runRelayWebSocket(params: {
             ws,
             data,
             handleSlackMessage: params.handleSlackMessage,
+            relayState,
             setStatus: params.setStatus,
             setIdentity: params.setIdentity,
           }),
@@ -218,12 +224,14 @@ async function handleRelayFrame(params: {
   ws: WebSocket;
   data: RawData;
   handleSlackMessage: SlackMessageHandler;
+  relayState: RelayConnectionState;
   setStatus?: (next: Record<string, unknown>) => void;
   setIdentity?: (identity: SlackRelayIdentity | undefined) => void;
 }): Promise<void> {
   const frame = parseRelayFrame(params.data);
   const hello = extractRelayHello(frame);
   if (hello) {
+    params.relayState.identity = hello.identity;
     params.setIdentity?.(hello.identity);
     params.setStatus?.({ relayIdentity: hello.identity ?? null });
     return;
@@ -239,6 +247,7 @@ async function handleRelayFrame(params: {
   await params.handleSlackMessage(event.message, {
     source: "message",
     wasMentioned: true,
+    ...(params.relayState.identity ? { relayIdentity: params.relayState.identity } : {}),
   });
   sendRelayAck(params.ws, event.deliveryId);
 }

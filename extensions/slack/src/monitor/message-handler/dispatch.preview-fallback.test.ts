@@ -339,6 +339,7 @@ function createPreparedSlackMessage(params?: {
   typingReaction?: string;
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
+  relayIdentity?: { username?: string; iconUrl?: string; iconEmoji?: string };
 }) {
   const routeSessionKey = params?.route?.sessionKey ?? "agent:agent-1:slack:C123";
   const mainSessionKey = params?.route?.mainSessionKey ?? "main";
@@ -373,6 +374,7 @@ function createPreparedSlackMessage(params?: {
       accountId: "default",
       config: params?.accountConfig ?? {},
     },
+    relayIdentity: params?.relayIdentity,
     message,
     route: {
       agentId: "agent-1",
@@ -1277,6 +1279,15 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("uses the relay identity when the agent has no explicit Slack identity", async () => {
+    const relayIdentity = { username: "Nik Team Claw" };
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
   });
 
   it("does not create a Slack thread for top-level messages when replyToMode is off", async () => {
