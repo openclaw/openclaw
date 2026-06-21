@@ -478,14 +478,21 @@ async function waitForOwnedGatewayListener(params: {
   };
 }
 
-function temporaryGatewayOwnsListener(params: { port: number; child: ChildProcess }): boolean {
+async function temporaryGatewayOwnsExpectedListeners(params: {
+  settings: GatewayWizardSettings;
+  child: ChildProcess;
+}): Promise<boolean> {
   const pid = params.child.pid;
-  return Boolean(
-    pid &&
-    params.child.exitCode === null &&
-    params.child.signalCode === null &&
-    findVerifiedGatewayListenerPidsOnPortSync(params.port).includes(pid),
-  );
+  if (!pid || params.child.exitCode !== null || params.child.signalCode !== null) {
+    return false;
+  }
+  if (!findVerifiedGatewayListenerPidsOnPortSync(params.settings.port).includes(pid)) {
+    return false;
+  }
+  return await listenerAddressesMatchGatewaySettings({
+    listenerPids: [pid],
+    settings: params.settings,
+  });
 }
 
 function temporaryGatewayOwnershipFailureDetail(params: {
@@ -501,6 +508,7 @@ async function waitForOwnedGatewayReachable(params: {
   url: string;
   auth: GatewayProbeAuth;
   port: number;
+  settings: GatewayWizardSettings;
   child: ChildProcess;
   deadlineMs: number;
   tlsFingerprint?: string;
@@ -517,7 +525,7 @@ async function waitForOwnedGatewayReachable(params: {
   try {
     while (Date.now() - startedAt < params.deadlineMs) {
       // Revalidate ownership immediately before every authenticated attempt.
-      if (!temporaryGatewayOwnsListener(params)) {
+      if (!(await temporaryGatewayOwnsExpectedListeners(params))) {
         return { ok: false, detail: temporaryGatewayOwnershipFailureDetail(params) };
       }
       const remainingMs = params.deadlineMs - (Date.now() - startedAt);
@@ -530,7 +538,7 @@ async function waitForOwnedGatewayReachable(params: {
         tlsFingerprint: params.tlsFingerprint,
       });
       // Never accept a successful response after the owned listener has changed.
-      if (!temporaryGatewayOwnsListener(params)) {
+      if (!(await temporaryGatewayOwnsExpectedListeners(params))) {
         return { ok: false, detail: temporaryGatewayOwnershipFailureDetail(params) };
       }
       if (probe.ok) {
@@ -661,6 +669,7 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
           url: links.wsUrl,
           auth,
           port: params.settings.port,
+          settings: params.settings,
           child,
           deadlineMs: 15_000,
           tlsFingerprint,

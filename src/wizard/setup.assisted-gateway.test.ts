@@ -1092,6 +1092,38 @@ describe("agent-assisted Gateway runtime", () => {
     expect(detach).toHaveBeenCalledOnce();
   });
 
+  it("does not probe a temporary Gateway when another process owns the probe address", async () => {
+    const child = createMockChild();
+    spawn.mockReturnValueOnce(child);
+    probeGateway.mockResolvedValueOnce({ ok: true });
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [
+        { pid: 9999, address: "127.0.0.1:18789" },
+        { pid: 4321, address: "[::1]:18789" },
+      ],
+      hints: [],
+    });
+    killProcessTree.mockImplementationOnce(() => queueMicrotask(() => child.emit("exit", 0, null)));
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("Unable to start Gateway for assisted setup");
+
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789);
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(killProcessTree).toHaveBeenCalledWith(4321, {
+      detached: process.platform !== "win32",
+      graceMs: 1500,
+    });
+  });
+
   it("passes the local TLS fingerprint to temporary Gateway readiness probes", async () => {
     loadGatewayTlsRuntime.mockResolvedValueOnce({
       enabled: true,
