@@ -384,8 +384,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
   function telegramProgressPreview(text: string, html: string) {
     return {
       text,
-      richMessage: { html, skip_entity_detection: true },
-      plainTextTransport: true,
+      richMessage: { html: html.replaceAll("\n", "<br>"), skip_entity_detection: true },
     };
   }
 
@@ -2658,7 +2657,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Short");
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Short answer");
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramHtmlPreview("<b>Shelling</b>"),
+      telegramProgressPreview("Shelling", "<b>Shelling</b>"),
     );
   });
 
@@ -2750,7 +2749,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramHtmlPreview("<b>Shelling</b><br><b>🛠️ Exec</b>"),
+      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
     expectDeliveredReply(0, { text: "Tool output visible to Telegram" });
     expectDeliveredReply(0, { text: "Final answer" }, 1);
@@ -2780,7 +2779,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramHtmlPreview("<b>Shelling</b><br><b>🛠️ Exec</b>"),
+      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
     expectDeliveredReply(0, { mediaUrl: "https://example.com/validation.txt" });
     expectDeliveredReply(0, { text: "Final answer" }, 1);

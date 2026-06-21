@@ -602,37 +602,38 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
   });
 
-  it("sends marked progress rich previews through plain text transport", async () => {
+  it("sends marked progress rich previews through HTML text transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api);
 
     stream.updatePreview({
       text: "Shelling\n\n🛠️ Exec",
       richMessage: {
-        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
         skip_entity_detection: true,
       },
-      plainTextTransport: true,
     });
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "Shelling\n\n🛠️ Exec", {});
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b><br><b>🛠️ Exec</b>", {
+      parse_mode: "HTML",
+    });
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
 
     stream.updatePreview({
       text: "Shelling\n\n🛠️ Exec\n• Checking files",
       richMessage: {
-        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>Update</b> <code>Checking files</code>",
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><b>Update</b> <code>Checking files</code>",
         skip_entity_detection: true,
       },
-      plainTextTransport: true,
     });
     await stream.flush();
 
     expect(api.editMessageText).toHaveBeenCalledWith(
       123,
       17,
-      "Shelling\n\n🛠️ Exec\n• Checking files",
+      "<b>Shelling</b><br><b>🛠️ Exec</b><br><b>Update</b> <code>Checking files</code>",
+      { parse_mode: "HTML" },
     );
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
   });

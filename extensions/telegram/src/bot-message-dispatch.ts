@@ -513,7 +513,6 @@ function renderTelegramProgressDraftPreview(
   return {
     text: trimmed,
     richMessage: buildTelegramRichHtml(html, { skipEntityDetection: true }),
-    plainTextTransport: true,
   };
 }
 
