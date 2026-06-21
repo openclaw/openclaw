@@ -922,6 +922,19 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
+function classifyFailoverReasonFromErrorType(raw: string | undefined): FailoverReason | null {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  switch (normalized) {
+    case "server_error":
+    case "upstream_error":
+      return "server_error";
+    case "overloaded_error":
+      return "overloaded";
+    default:
+      return null;
+  }
+}
+
 function isProvider(provider: string | undefined, match: string): boolean {
   const normalized = normalizeOptionalLowercaseString(provider);
   return Boolean(normalized && normalized.includes(match));
@@ -1181,9 +1194,14 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
           errorType: signal.errorType,
         })
       : null;
+  const errorTypeReason = classifyFailoverReasonFromErrorType(signal.errorType);
+  const genericErrorTypeClassification = errorTypeReason
+    ? toReasonClassification(errorTypeReason)
+    : null;
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
-    : mergeMessageAndDetailClassification(messageClassification, detailClassification);
+    : (mergeMessageAndDetailClassification(messageClassification, detailClassification) ??
+      genericErrorTypeClassification);
   const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
@@ -1658,8 +1676,17 @@ function isStructuredServerErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
+  const parsedType = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  if (parsedType === "server_error" || parsedType === "upstream_error") {
+    return true;
+  }
   const value = normalizeLowercaseStringOrEmpty(raw);
-  return value.includes('"type":"server_error"') || value.includes('"code":"server_error"');
+  return (
+    value.includes('"type":"server_error"') ||
+    value.includes('"code":"server_error"') ||
+    value.includes('"type":"upstream_error"') ||
+    value.includes('"code":"upstream_error"')
+  );
 }
 
 export function parseImageDimensionError(raw: string): {
