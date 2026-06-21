@@ -44,6 +44,8 @@ const PROMPT_SNAPSHOT_CHECK_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
 const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
+const RUNTIME_SIDECAR_BASELINE_PATH_RE =
+  /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const TARGETED_CORE_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
@@ -185,6 +187,10 @@ export function shouldRunPromptSnapshotOwnerTest(paths) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
+export function shouldRunRuntimeSidecarBaselineCheck(paths) {
+  return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
+}
+
 export function shouldRunTestTempCreationReport(paths) {
   return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
 }
@@ -276,6 +282,13 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (shouldRunPromptSnapshotOwnerTest(result.paths)) {
     add("prompt snapshot owner test", ["test:serial", "test/scripts/prompt-snapshots.test.ts"]);
+  }
+  if (shouldRunRuntimeSidecarBaselineCheck(result.paths)) {
+    add("runtime sidecar baseline", ["runtime-sidecars:check"]);
+    add("runtime sidecar owner test", [
+      "test:serial",
+      "src/plugins/bundled-plugin-metadata.test.ts",
+    ]);
   }
   add("package patch guard", ["deps:patches:check"]);
 

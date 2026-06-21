@@ -3423,6 +3423,33 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("routes runtime sidecar baseline edits to baseline owner tests", () => {
+    for (const target of [
+      "scripts/generate-runtime-sidecar-paths-baseline.ts",
+      "src/plugins/runtime-sidecar-paths-baseline.ts",
+    ]) {
+      expect(resolveChangedTestTargetPlan([target])).toEqual({
+        mode: "targets",
+        targets: ["src/plugins/bundled-plugin-metadata.test.ts"],
+      });
+    }
+
+    for (const target of [
+      "scripts/lib/bundled-runtime-sidecar-paths.json",
+      "src/plugins/runtime-sidecar-paths.ts",
+    ]) {
+      expect(resolveChangedTestTargetPlan([target])).toEqual({
+        mode: "targets",
+        targets: [
+          "src/plugins/bundled-plugin-metadata.test.ts",
+          "src/infra/update-global.test.ts",
+          "src/infra/update-runner.test.ts",
+          "test/openclaw-npm-postpublish-verify.test.ts",
+        ],
+      });
+    }
+  });
+
   it.each([
     "test/vitest/vitest.agents-core.config.ts",
     "test/vitest/vitest.agents-embedded-agent.config.ts",

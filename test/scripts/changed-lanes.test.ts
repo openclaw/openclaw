@@ -21,6 +21,7 @@ import {
   shouldDelegateChangedCheckToCrabbox,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
+  shouldRunRuntimeSidecarBaselineCheck,
   shouldRunShrinkwrapGuard,
   shouldRunTestTempCreationReport,
   createShrinkwrapGuardCommand,
@@ -1333,6 +1334,29 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toContainEqual({
       name: "prompt snapshot owner test",
       args: ["test:serial", "test/scripts/prompt-snapshots.test.ts"],
+    });
+  });
+
+  it("runs runtime sidecar baseline checks for baseline owner surfaces", () => {
+    expect(
+      shouldRunRuntimeSidecarBaselineCheck([
+        "scripts/generate-runtime-sidecar-paths-baseline.ts",
+        "scripts/lib/bundled-runtime-sidecar-paths.json",
+        "src/plugins/runtime-sidecar-paths-baseline.ts",
+        "src/plugins/runtime-sidecar-paths.ts",
+      ]),
+    ).toBe(true);
+
+    const result = detectChangedLanes(["scripts/lib/bundled-runtime-sidecar-paths.json"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.commands).toContainEqual({
+      name: "runtime sidecar baseline",
+      args: ["runtime-sidecars:check"],
+    });
+    expect(plan.commands).toContainEqual({
+      name: "runtime sidecar owner test",
+      args: ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
     });
   });
 

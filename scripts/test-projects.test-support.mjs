@@ -423,6 +423,13 @@ const PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS = [
   "test/scripts/ts-topology.test.ts",
   TOOLING_VITEST_CONFIG,
 ];
+const RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS = ["src/plugins/bundled-plugin-metadata.test.ts"];
+const RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS = [
+  ...RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS,
+  "src/infra/update-global.test.ts",
+  "src/infra/update-runner.test.ts",
+  "test/openclaw-npm-postpublish-verify.test.ts",
+];
 const OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS = [
   "src/plugins/official-external-plugin-catalog.test.ts",
   "test/release-check.test.ts",
@@ -663,6 +670,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/check-deadcode-unused-files.mjs", ["test/scripts/check-deadcode-unused-files.test.ts"]],
   ["scripts/check-dynamic-import-warts.mjs", ["test/scripts/check-dynamic-import-warts.test.ts"]],
   ["scripts/generate-prompt-snapshots.ts", ["test/scripts/prompt-snapshots.test.ts"]],
+  [
+    "scripts/generate-runtime-sidecar-paths-baseline.ts",
+    RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS,
+  ],
   [
     "scripts/lib/config-boundary-guard.mjs",
     [
@@ -978,15 +989,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/lib/bundled-plugin-source-utils.mjs",
     ["test/scripts/bundled-plugin-source-utils.test.ts"],
   ],
-  [
-    "scripts/lib/bundled-runtime-sidecar-paths.json",
-    [
-      "src/plugins/bundled-plugin-metadata.test.ts",
-      "src/infra/update-global.test.ts",
-      "src/infra/update-runner.test.ts",
-      "test/openclaw-npm-postpublish-verify.test.ts",
-    ],
-  ],
+  ["scripts/lib/bundled-runtime-sidecar-paths.json", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
   ["scripts/lib/changed-extensions.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/dev-tooling-safety.ts", ["test/scripts/dev-tooling-safety.test.ts"]],
   [
@@ -1869,6 +1872,8 @@ const SOURCE_TEST_TARGETS = new Map([
     "test/helpers/agents/happy-path-prompt-snapshots.ts",
     HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS,
   ],
+  ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
+  ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
   ["ui/config/control-ui-chunking.ts", ["ui/src/ui/control-ui-chunking.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
