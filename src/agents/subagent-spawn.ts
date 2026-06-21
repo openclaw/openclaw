@@ -263,14 +263,20 @@ async function callSubagentGateway(
   ) {
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
+    // Subagent agent calls that forward a model need model-override authorization
+    // on the synthetic client; otherwise the gateway agent handler silently drops
+    // the override and the child run falls back to the default model (#91171).
+    const hasModelOverride =
+      request.method === "agent" && (request.params as Record<string, unknown>).model != null;
     return await subagentSpawnDeps.dispatchGatewayMethodInProcess(
       request.method,
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
-        ...(scopes != null ? { forceSyntheticClient: true } : {}),
+        ...(scopes != null || hasModelOverride ? { forceSyntheticClient: true } : {}),
         timeoutMs: request.timeoutMs,
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
+        ...(hasModelOverride ? { allowSyntheticModelOverride: true } : {}),
       },
     );
   }
@@ -1562,6 +1568,14 @@ export async function spawnSubagentDirect(
       workspaceDir: _workspaceDir,
       ...publicSpawnedMetadata
     } = spawnedMetadata;
+    // Forward the resolved model to the child agent run so the gateway agent
+    // handler sees the override and uses the explicitly-requested model instead
+    // of falling back to the session/agent default (#91171).
+    // The model is also persisted in the session store so restarted runs and
+    // cross-process dispatches can still resolve it; the agent call param is
+    // authoritative for the in-process path used by channel/tool spawns.
+    const agentModelOverride =
+      subagentSpawnDeps.hasInProcessGatewayContext() && resolvedModel ? resolvedModel : undefined;
     const response = await callSubagentGateway({
       method: "agent",
       params: {
@@ -1581,6 +1595,7 @@ export async function spawnSubagentDirect(
         cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
+        ...(agentModelOverride ? { model: agentModelOverride } : {}),
         timeout: runTimeoutSeconds,
         label: label || undefined,
         ...(bootstrapContextMode

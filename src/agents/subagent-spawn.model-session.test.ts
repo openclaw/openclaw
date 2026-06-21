@@ -147,4 +147,58 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expect(persistedEntry?.modelOverrideFallbackOriginProvider).toBe("openai");
     expect(persistedEntry?.modelOverrideFallbackOriginModel).toBe("gpt-5.4");
   });
+
+  it("forwards resolved model to the agent gateway call so the child run uses the correct model (#91171)", async () => {
+    // In-process spawn must include the resolved model in the agent gateway
+    // params so the agent handler authorizes and applies the override.
+    // Without this, the child run silently falls back to the default model.
+    const agentCallParams: Array<Record<string, unknown>> = [];
+    const dispatchedMethods: string[] = [];
+    const forwardDispatchMock = vi.fn(async (...args: unknown[]) => {
+      const method = args[0] as string;
+      const params = args[1] as Record<string, unknown>;
+      dispatchedMethods.push(method);
+      if (method === "agent") {
+        agentCallParams.push(params);
+      }
+      if (method === "sessions.patch" || method === "sessions.delete") {
+        return { ok: true };
+      }
+      return { runId: "run-forward", status: "accepted", acceptedAt: Date.now() };
+    });
+    const forwardPruneMock = vi.fn();
+    const forwardUpdateSessionStoreMock = vi.fn();
+    installSessionStoreCaptureMock(forwardUpdateSessionStoreMock);
+    const {
+      resetSubagentRegistryForTests: resetForForwardTest,
+      spawnSubagentDirect: spawnForForward,
+    } = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      dispatchGatewayMethodInProcessMock: forwardDispatchMock,
+      hasInProcessGatewayContextMock: () => true,
+      getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
+      updateSessionStoreMock: forwardUpdateSessionStoreMock,
+      pruneLegacyStoreKeysMock: forwardPruneMock,
+      workspaceDir: os.tmpdir(),
+    });
+    resetForForwardTest();
+
+    const result = await spawnForForward(
+      {
+        task: "verify model forwarding",
+        model: "qwen/qwen3.6-plus",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "guildchat",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.resolvedModel).toBe("qwen/qwen3.6-plus");
+    expect(dispatchedMethods).toContain("agent");
+    const agentParams = agentCallParams[0];
+    expect(agentParams).toBeDefined();
+    expect(agentParams.model).toBe("qwen/qwen3.6-plus");
+  });
 });
