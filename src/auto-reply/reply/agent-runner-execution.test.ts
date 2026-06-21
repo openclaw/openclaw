@@ -538,6 +538,7 @@ function createMockReplyOperation(): {
       abortForRestart: vi.fn(() => true),
       markTerminalRecovery: vi.fn(),
       markAcceptedSteeredInboundAudio: vi.fn(),
+      abortForStuckRecovery: vi.fn(),
     },
   };
 }
