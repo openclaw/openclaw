@@ -13,7 +13,7 @@ export type ReplyRunKey = string;
 
 export type ReplyBackendKind = "embedded" | "cli";
 
-export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded" | "stuck_recovery";
 
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
@@ -43,7 +43,10 @@ export type ReplyOperationFailureCode =
   | "session_corruption_reset"
   | "run_failed";
 
-export type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+export type ReplyOperationAbortCode =
+  | "aborted_by_user"
+  | "aborted_for_restart"
+  | "aborted_for_stuck_recovery";
 
 export type ReplyOperationResult =
   | { kind: "completed" }
@@ -93,6 +96,7 @@ export type ReplyOperation = {
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): void;
   abortForRestart(): void;
+  abortForStuckRecovery(): void;
 };
 
 export type ReplyRunRegistry = {
@@ -531,7 +535,9 @@ export function createReplyOperation(params: {
           result.kind === "aborted"
             ? result.code === "aborted_for_restart"
               ? "restart"
-              : "user_abort"
+              : result.code === "aborted_for_stuck_recovery"
+                ? "stuck_recovery"
+                : "user_abort"
             : "superseded",
         );
         return;
@@ -589,6 +595,15 @@ export function createReplyOperation(params: {
       const phaseBeforeAbort = phase;
       abortWithReason("restart", createAgentRunRestartAbortError(), {
         abortedCode: "aborted_for_restart",
+      });
+      if (phaseBeforeAbort === "queued") {
+        clearState();
+      }
+    },
+    abortForStuckRecovery() {
+      const phaseBeforeAbort = phase;
+      abortWithReason("stuck_recovery", new Error("Agent run aborted for stuck recovery"), {
+        abortedCode: "aborted_for_stuck_recovery",
       });
       if (phaseBeforeAbort === "queued") {
         clearState();
@@ -733,12 +748,21 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   return true;
 }
 
-export function abortReplyRunBySessionId(sessionId: string): boolean {
+export function abortReplyRunBySessionId(
+  sessionId: string,
+  reason: ReplyBackendCancelReason = "user_abort",
+): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   if (!operation) {
     return false;
   }
-  operation.abortByUser();
+  if (reason === "restart") {
+    operation.abortForRestart();
+  } else if (reason === "stuck_recovery") {
+    operation.abortForStuckRecovery();
+  } else {
+    operation.abortByUser();
+  }
   return true;
 }
 

@@ -63,6 +63,7 @@ function createReplyOperation(): TestReplyOperation {
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
     markTerminalRecovery: vi.fn(),
+    abortForStuckRecovery: vi.fn(),
   };
 }
 

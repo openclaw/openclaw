@@ -450,7 +450,7 @@ export function abortEmbeddedAgentRun(
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     if (!handle) {
-      if (abortReplyRunBySessionId(sessionId)) {
+      if (abortReplyRunBySessionId(sessionId, opts?.reason)) {
         return true;
       }
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
