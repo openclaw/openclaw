@@ -11,6 +11,12 @@ type JsonOptions = {
   json?: boolean;
 };
 
+type ListOptions = JsonOptions & {
+  board?: string;
+  status?: string;
+  includeArchived?: boolean;
+};
+
 type GatewayOptions = JsonOptions & {
   url?: string;
   token?: string;
@@ -130,9 +136,13 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .description("List Workboard cards")
     .option("--board <id>", "Board id")
     .option("--status <status>", "Filter by status")
+    .option("--include-archived", "Include archived cards", false)
     .option("--json", "Print JSON", false)
-    .action(async (options: JsonOptions & { board?: string; status?: string }) => {
+    .action(async (options: ListOptions) => {
       let cards = await params.store.list({ boardId: options.board });
+      if (!options.includeArchived) {
+        cards = cards.filter((card) => !card.metadata?.archivedAt);
+      }
       if (options.status) {
         cards = cards.filter((card) => card.status === options.status);
       }
