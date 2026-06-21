@@ -79,7 +79,6 @@
   "ssrf-policy",
   "ssrf-runtime",
   "ssrf-runtime-internal",
-  "node-gateway-emit-internal",
   "media-runtime",
   "media-store",
   "media-mime",

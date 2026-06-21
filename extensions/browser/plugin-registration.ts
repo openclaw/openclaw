@@ -11,7 +11,6 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { emitNodeGatewayEvent } from "openclaw/plugin-sdk/node-gateway-emit-internal";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
@@ -167,7 +166,14 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
       // node-attributed turns without emitNodeGatewayEvent on the public plugin SDK.
       const { startBrowserControlServiceFromConfig, setNodeGatewayEventEmitter } =
         await loadBrowserRegistrationRuntimeModule();
-      setNodeGatewayEventEmitter(emitNodeGatewayEvent, ctx.nodeId);
+      // emitNodeGatewayEvent is provided at runtime by the node-host (host-internal;
+      // intentionally NOT on the public onNodeHostStart ctx type so arbitrary plugins
+      // can't originate node-attributed events). The bundled browser plugin reads it
+      // via an internal cast.
+      const emit = (
+        ctx as { emitNodeGatewayEvent: (event: string, payload: unknown) => Promise<void> }
+      ).emitNodeGatewayEvent;
+      setNodeGatewayEventEmitter(emit, ctx.nodeId);
       await startBrowserControlServiceFromConfig();
     },
   },

@@ -1,6 +1,7 @@
 /** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { emitNodeGatewayEvent } from "./node-event-emitter.js";
 
 /**
  * Plugin node-host command registry bridge.
@@ -63,7 +64,11 @@ export async function runRegisteredNodeHostStartupHooks(params: {
       continue;
     }
     try {
-      await start({ nodeId: params.nodeId });
+      // Pass the host-internal node->gateway emitter on the runtime ctx (built as a
+      // non-literal so it stays assignable to the public {nodeId?} ctx type without
+      // adding the privileged emitter to that public type).
+      const startCtx = { emitNodeGatewayEvent, nodeId: params.nodeId };
+      await start(startCtx);
     } catch (err) {
       params.onWarn(
         "node-host startup hook failed (" + entry.pluginId + ":" + entry.command.command + "): " + String(err),
