@@ -20,6 +20,7 @@ import {
   type TaskDeliveryState,
   type TaskRecord,
 } from "./task-registry.types.js";
+import { deleteTaskRouteLeasesByTaskIdInDb } from "./task-route-lease.js";
 
 type TaskRunsTable = OpenClawStateKyselyDatabase["task_runs"];
 type TaskDeliveryStateTable = OpenClawStateKyselyDatabase["task_delivery_state"];
@@ -287,6 +288,13 @@ function deleteTaskRowsWithDeliveryState(db: DatabaseSync, taskId: string): void
     kysely.deleteFrom("task_delivery_state").where("task_id", "=", taskId),
   );
   executeSqliteQuerySync(db, kysely.deleteFrom("task_runs").where("task_id", "=", taskId));
+  // Cascade: every lease row keyed by task_id belongs to a run of this
+  // task. Delete those leases atomically with task_runs and
+  // task_delivery_state so settled/expired/orphaned rows do not
+  // accumulate in the shared state DB. Lease module owns the lease
+  // SQL; we own the transaction. See PR #95352 ClawSweeper review
+  // (P2 retention, confidence 0.9).
+  deleteTaskRouteLeasesByTaskIdInDb(db, taskId);
 }
 
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
