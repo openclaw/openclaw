@@ -133,11 +133,33 @@ const collectChannelStatus = vi.hoisted(() =>
 );
 const isChannelConfigured = vi.hoisted(() => vi.fn((_cfg?: unknown, _channel?: unknown) => true));
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: (cfg?: unknown, agentId?: unknown) =>
-    resolveAgentWorkspaceDir(cfg, agentId),
-  resolveDefaultAgentId: (cfg?: unknown) => resolveDefaultAgentId(cfg),
-}));
+vi.mock("../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-scope.js")>();
+  return {
+    ...actual,
+    resolveAgentWorkspaceDir: (cfg?: unknown, agentId?: unknown) =>
+      resolveAgentWorkspaceDir(cfg, agentId),
+    resolveDefaultAgentId: (cfg?: unknown) => resolveDefaultAgentId(cfg),
+    resolveSessionAgentIds: (
+      params: {
+        agentId?: string;
+        config?: OpenClawConfig;
+        sessionKey?: string;
+      } = {},
+    ) => {
+      const defaultAgentId = resolveDefaultAgentId(params.config);
+      const explicitAgentId = params.agentId?.trim().toLowerCase();
+      const sessionAgentId =
+        explicitAgentId ||
+        params.sessionKey
+          ?.trim()
+          .toLowerCase()
+          .match(/^agent:([^:]+):/)?.[1] ||
+        defaultAgentId;
+      return { defaultAgentId, sessionAgentId };
+    },
+  };
+});
 
 vi.mock("../channels/plugins/setup-registry.js", () => ({
   getChannelSetupPlugin: (channel?: unknown) => getChannelSetupPlugin(channel),
