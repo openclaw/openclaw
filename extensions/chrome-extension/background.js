@@ -144,56 +144,6 @@ chrome.tabGroups.onRemoved?.addListener(async (group) => {
 });
 
 // ---------------------------------------------------------------------------
-// Strip frame-blocking headers so the gateway Control UI loads in the side
-// panel iframe. Uses declarativeNetRequest dynamic rules scoped to sub_frame
-// resource types (only affects iframes, not top-level navigation).
-// ---------------------------------------------------------------------------
-const FRAME_STRIP_RULE_ID = 1;
-
-async function updateFrameStrippingRule() {
-  const gatewayUrl = await getGatewayUrl();
-  let hostname;
-  try {
-    hostname = new URL(gatewayUrl).hostname;
-  } catch {
-    return;
-  }
-
-  try {
-    await chrome.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds: [FRAME_STRIP_RULE_ID],
-      addRules: [
-        {
-          id: FRAME_STRIP_RULE_ID,
-          priority: 1,
-          action: {
-            type: "modifyHeaders",
-            responseHeaders: [
-              { header: "X-Frame-Options", operation: "remove" },
-              { header: "Content-Security-Policy", operation: "remove" },
-            ],
-          },
-          condition: {
-            urlFilter: `||${hostname}`,
-            resourceTypes: ["sub_frame"],
-          },
-        },
-      ],
-    });
-  } catch (err) {
-    console.warn("Failed to update frame-stripping rule:", err);
-  }
-}
-
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.gatewayUrl) {
-    void updateFrameStrippingRule();
-  }
-});
-
-void updateFrameStrippingRule();
-
-// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 const DEFAULT_PORT = 18792;
