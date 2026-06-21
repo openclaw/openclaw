@@ -19,11 +19,11 @@ jobs:
           - blacksmith-8vcpu-ubuntu-2404
           - blacksmith-16vcpu-ubuntu-2404
     steps:
-      - name: Compare current Git checkout with aria2c archive
+      - name: Compare current checkout with aria2c archive
         shell: bash
         env:
-          CHECKOUT_REPO: zats/openclaw
-          CHECKOUT_SHA: ea60971150a6b4dbbf619b8b1ccea6990354d652
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -34,130 +34,134 @@ jobs:
           command -v node
 
           bench_dir="$(mktemp -d "${RUNNER_TEMP}/checkout-benchmark.XXXXXX")"
-          results_path="${bench_dir}/results.json"
-          tsv_path="${bench_dir}/results.tsv"
-          export CHECKOUT_REPO CHECKOUT_SHA CHECKOUT_TOKEN bench_dir results_path tsv_path
+          results_tsv="${bench_dir}/results.tsv"
+          summary_json="${bench_dir}/summary.json"
+          export results_tsv summary_json
+          echo -e "method\ttrial\tmilliseconds\tattempts\tsize_kib\tarchive_kib" > "$results_tsv"
+
+          now_ms() {
+            date +%s%3N
+          }
+
+          reset_checkout_dir() {
+            local workdir="$1"
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          verify_checkout() {
+            test -f "$1/.github/actions/setup-node-env/action.yml"
+          }
+
+          git_checkout_attempt() {
+            local workdir="$1"
+            reset_checkout_dir "$workdir"
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+            git -C "$workdir" config gc.auto 0
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            verify_checkout "$workdir"
+          }
+
+          aria_checkout_attempt() {
+            local workdir="$1"
+            local archive_dir archive_path
+            archive_dir="$(mktemp -d)"
+            archive_path="${archive_dir}/source.tar.gz"
+            reset_checkout_dir "$workdir"
+            if ! timeout --signal=TERM --kill-after=10s 120s aria2c \
+              --quiet=true \
+              --allow-overwrite=true \
+              --auto-file-renaming=false \
+              --max-connection-per-server=8 \
+              --split=8 \
+              --min-split-size=1M \
+              --dir "$archive_dir" \
+              --out source.tar.gz \
+              --header "Authorization: Bearer ${CHECKOUT_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${CHECKOUT_REPO}/tarball/${CHECKOUT_SHA}"; then
+              rm -rf "$archive_dir"
+              return 1
+            fi
+            if ! tar -xzf "$archive_path" --strip-components=1 -C "$workdir"; then
+              rm -rf "$archive_dir"
+              return 1
+            fi
+            verify_checkout "$workdir" || {
+              rm -rf "$archive_dir"
+              return 1
+            }
+            echo "$(du -sk "$archive_path" | awk '{print $1}')"
+            rm -rf "$archive_dir"
+          }
+
+          run_with_retries() {
+            local method="$1"
+            local workdir="$2"
+            local attempts=0
+            local archive_kib=""
+            for attempt in 1 2 3 4 5; do
+              attempts="$attempt"
+              if [[ "$method" == "git-depth1" ]]; then
+                if git_checkout_attempt "$workdir"; then
+                  echo "${attempts}|"
+                  return 0
+                fi
+              else
+                if archive_kib="$(aria_checkout_attempt "$workdir")"; then
+                  echo "${attempts}|${archive_kib}"
+                  return 0
+                fi
+              fi
+              sleep $((attempt * 5))
+            done
+            return 1
+          }
+
+          record_trial() {
+            local method="$1"
+            local trial="$2"
+            local workdir="${bench_dir}/${method}-${trial}"
+            local start_ms end_ms retry_result attempts archive_kib size_kib
+            start_ms="$(now_ms)"
+            retry_result="$(run_with_retries "$method" "$workdir")"
+            end_ms="$(now_ms)"
+            attempts="${retry_result%%|*}"
+            archive_kib="${retry_result#*|}"
+            size_kib="$(du -sk "$workdir" | awk '{print $1}')"
+            echo -e "${method}\t${trial}\t$((end_ms - start_ms))\t${attempts}\t${size_kib}\t${archive_kib}" >> "$results_tsv"
+          }
+
+          for trial in 1 2 3 4 5; do
+            record_trial git-depth1 "$trial"
+            record_trial aria2c-tarball "$trial"
+          done
 
           node --input-type=module <<'EOF'
-          import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-          import path from "node:path";
-          import { performance } from "node:perf_hooks";
-          import { spawnSync } from "node:child_process";
+          import { readFileSync, writeFileSync } from "node:fs";
 
-          const repo = process.env.CHECKOUT_REPO;
-          const sha = process.env.CHECKOUT_SHA;
-          const token = process.env.CHECKOUT_TOKEN;
-          const benchDir = process.env.bench_dir;
-          const resultsPath = process.env.results_path;
-          const tsvPath = process.env.tsv_path;
-          const rows = [];
-
-          function run(command, args) {
-            const result = spawnSync(command, args, {
-              encoding: "utf8",
-              maxBuffer: 20 * 1024 * 1024,
-              timeout: 300_000,
+          const rows = readFileSync(process.env.results_tsv, "utf8")
+            .trim()
+            .split("\n")
+            .slice(1)
+            .map((line) => {
+              const [method, trial, milliseconds, attempts, sizeKiB, archiveKiB] = line.split("\t");
+              return {
+                method,
+                trial: Number(trial),
+                seconds: Number(milliseconds) / 1000,
+                attempts: Number(attempts),
+                sizeKiB: Number(sizeKiB),
+                archiveKiB: archiveKiB ? Number(archiveKiB) : null,
+              };
             });
-            if (result.status !== 0) {
-              throw new Error([
-                `$ ${command} ${args.join(" ")}`,
-                `status=${result.status} signal=${result.signal ?? ""}`,
-                "--- stdout ---",
-                result.stdout ?? "",
-                "--- stderr ---",
-                result.stderr ?? "",
-              ].join("\n"));
-            }
-          }
-
-          function sizeKiB(target) {
-            const result = spawnSync("du", ["-sk", target], { encoding: "utf8" });
-            return result.status === 0 ? Number(result.stdout.trim().split(/\s+/)[0]) : null;
-          }
-
-          function verify(workspace) {
-            const marker = path.join(workspace, ".github/actions/setup-node-env/action.yml");
-            if (!existsSync(marker)) {
-              throw new Error(`missing marker ${marker}`);
-            }
-          }
-
-          function gitAttempt(attempt) {
-            const workspace = path.join(benchDir, `git-${attempt}`);
-            mkdirSync(workspace);
-            const started = performance.now();
-            run("git", ["init", workspace]);
-            run("git", ["config", "--global", "--add", "safe.directory", workspace]);
-            run("git", ["-C", workspace, "remote", "add", "origin", `https://github.com/${repo}.git`]);
-            run("git", ["-C", workspace, "config", "gc.auto", "0"]);
-            run("git", [
-              "-C",
-              workspace,
-              "-c",
-              "protocol.version=2",
-              "fetch",
-              "--no-tags",
-              "--prune",
-              "--no-recurse-submodules",
-              "--depth=1",
-              "origin",
-              `+${sha}:refs/remotes/origin/ci-target`,
-            ]);
-            run("git", ["-C", workspace, "checkout", "--force", "--detach", sha]);
-            verify(workspace);
-            rows.push({
-              method: "git-depth1",
-              attempt,
-              seconds: (performance.now() - started) / 1000,
-              sizeKiB: sizeKiB(workspace),
-            });
-          }
-
-          function ariaAttempt(attempt) {
-            const workspace = path.join(benchDir, `aria-${attempt}`);
-            const archiveDir = path.join(benchDir, `aria-archive-${attempt}`);
-            const archivePath = path.join(archiveDir, "source.tar.gz");
-            mkdirSync(workspace);
-            mkdirSync(archiveDir);
-            const args = [
-              "--quiet=true",
-              "--allow-overwrite=true",
-              "--auto-file-renaming=false",
-              "--max-connection-per-server=8",
-              "--split=8",
-              "--min-split-size=1M",
-              "--dir",
-              archiveDir,
-              "--out",
-              "source.tar.gz",
-              "--header",
-              "Accept: application/vnd.github+json",
-              "--header",
-              "X-GitHub-Api-Version: 2022-11-28",
-            ];
-            if (token) {
-              args.push("--header", `Authorization: Bearer ${token}`);
-            }
-            args.push(`https://api.github.com/repos/${repo}/tarball/${sha}`);
-            const started = performance.now();
-            run("aria2c", args);
-            const downloaded = performance.now();
-            run("tar", ["-xzf", archivePath, "--strip-components=1", "-C", workspace]);
-            verify(workspace);
-            rows.push({
-              method: "aria2c-tarball",
-              attempt,
-              downloadSeconds: (downloaded - started) / 1000,
-              seconds: (performance.now() - started) / 1000,
-              sizeKiB: sizeKiB(workspace),
-              archiveKiB: sizeKiB(archivePath),
-            });
-          }
-
-          for (let attempt = 1; attempt <= 5; attempt += 1) {
-            gitAttempt(attempt);
-            ariaAttempt(attempt);
-          }
 
           function stats(values) {
             const xs = [...values].sort((a, b) => a - b);
@@ -176,45 +180,40 @@ jobs:
             };
           }
 
-          const summary = {
-            gitDepth1: stats(rows.filter((row) => row.method === "git-depth1").map((row) => row.seconds)),
-            aria2cTarballDownloadExtract: stats(rows.filter((row) => row.method === "aria2c-tarball").map((row) => row.seconds)),
-            aria2cTarballDownloadOnly: stats(rows.filter((row) => row.method === "aria2c-tarball").map((row) => row.downloadSeconds)),
+          const summary = Object.fromEntries(["git-depth1", "aria2c-tarball"].map((method) => [
+            method,
+            {
+              seconds: stats(rows.filter((row) => row.method === method).map((row) => row.seconds)),
+              attempts: rows.filter((row) => row.method === method).map((row) => row.attempts),
+            },
+          ]));
+
+          const payload = {
+            repo: process.env.CHECKOUT_REPO,
+            sha: process.env.CHECKOUT_SHA,
+            runner: process.env.RUNNER_NAME,
+            summary,
+            rows,
           };
-
-          const tsv = [
-            "method\tattempt\tseconds\tdownload_seconds\tsize_kib\tarchive_kib",
-            ...rows.map((row) => [
-              row.method,
-              row.attempt,
-              row.seconds.toFixed(3),
-              row.downloadSeconds?.toFixed(3) ?? "",
-              row.sizeKiB ?? "",
-              row.archiveKiB ?? "",
-            ].join("\t")),
-          ].join("\n") + "\n";
-
-          writeFileSync(tsvPath, tsv);
-          writeFileSync(resultsPath, `${JSON.stringify({ repo, sha, summary, rows }, null, 2)}\n`);
-          console.log(tsv);
-          console.log(JSON.stringify(summary, null, 2));
+          writeFileSync(process.env.summary_json, `${JSON.stringify(payload, null, 2)}\n`);
+          console.log(JSON.stringify(payload, null, 2));
           EOF
 
           {
             echo "## Checkout benchmark"
             echo
             echo '```json'
-            node -e 'const p=require(process.env.results_path); console.log(JSON.stringify(p.summary, null, 2));'
+            cat "$summary_json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          rm -rf "$bench_dir"/git-* "$bench_dir"/aria-* "$bench_dir"/aria-archive-*
+          find "$bench_dir" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
 
       - name: Upload checkout benchmark results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: checkout-benchmark-${{ matrix.runner }}
           path: |
-            ${{ runner.temp }}/checkout-benchmark.*/results.json
+            ${{ runner.temp }}/checkout-benchmark.*/summary.json
             ${{ runner.temp }}/checkout-benchmark.*/results.tsv
           retention-days: 3
