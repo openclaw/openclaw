@@ -338,6 +338,26 @@ describe("extractToolResultMediaArtifact", () => {
     ).toEqual(["/tmp/meeting.wav"]);
   });
 
+  it("does not let structured trusted local media bypass the exact-name gate", () => {
+    const result = {
+      details: {
+        media: {
+          mediaUrl: "/tmp/comfy-output.png",
+          trustedLocalMedia: true,
+        },
+      },
+    };
+
+    expect(
+      filterToolResultMediaUrls(
+        "comfy_run_workflow",
+        ["/tmp/comfy-output.png"],
+        result,
+        new Set(["exec"]),
+      ),
+    ).toEqual([]);
+  });
+
   it("strips local media for plugin-name collisions when the plugin is not registered", () => {
     expect(
       filterToolResultMediaUrls(
