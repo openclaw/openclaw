@@ -803,7 +803,10 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               },
             });
           }
-          if (ctx.action === "send") {
+          // Only intercept send when the caller explicitly requests topLevel.
+          // Normal sends fall through to the outbound adapter so media, payloads,
+          // chunking, hooks, and receipts stay on the established delivery path.
+          if (ctx.action === "send" && ctx.params.topLevel === true) {
             return await runWithRequiredActionTarget({
               actionLabel: "Send",
               toolParams: ctx.params,
