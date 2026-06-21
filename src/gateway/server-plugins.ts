@@ -281,6 +281,7 @@ function mergeGatewayClientInternal(
 }
 
 type DispatchGatewayMethodInProcessOptions = {
+  allowInternalModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
   agentRunTracking?: "plugin_subagent";
@@ -395,8 +396,10 @@ export async function dispatchGatewayMethodInProcessRaw(
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
       ? options.pluginRuntimeOwnerId.trim()
       : undefined;
+  const allowInternalModelOverride =
+    options?.allowInternalModelOverride === true || options?.allowSyntheticModelOverride === true;
   const syntheticClient = createSyntheticOperatorClient({
-    allowModelOverride: options?.allowSyntheticModelOverride === true,
+    allowModelOverride: allowInternalModelOverride,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
@@ -404,8 +407,9 @@ export async function dispatchGatewayMethodInProcessRaw(
   });
   const scopedClient = mergeGatewayClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking
+    allowInternalModelOverride || pluginRuntimeOwnerId || options?.agentRunTracking
       ? {
+          ...(allowInternalModelOverride ? { allowModelOverride: true } : {}),
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
         }
