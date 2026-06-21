@@ -92,14 +92,34 @@ describe("generate-dependency-release-evidence", () => {
   });
 
   it("rejects missing dependency evidence CLI option values", () => {
+    const requiredArgs = ["--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"];
     expect(() =>
       parseArgs(["--output-dir", "--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"]),
     ).toThrow("Expected --output-dir <value>.");
+    expect(() => parseArgs(["--output-dir", "-h", ...requiredArgs])).toThrow(
+      "Expected --output-dir <value>.",
+    );
     expect(() =>
       parseArgs(["--output-dir", "evidence", "--release-ref", "--npm-dist-tag", "latest"]),
     ).toThrow("Expected --release-ref <value>.");
     expect(() =>
+      parseArgs(["--output-dir", "evidence", "--release-ref", "-h", "--npm-dist-tag", "latest"]),
+    ).toThrow("Expected --release-ref <value>.");
+    expect(() =>
+      parseArgs([
+        "--output-dir",
+        "evidence",
+        "--release-ref",
+        "v2026.5.13",
+        "--npm-dist-tag",
+        "-h",
+      ]),
+    ).toThrow("Expected --npm-dist-tag <value>.");
+    expect(() =>
       parseArgs(["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--base-ref"]),
+    ).toThrow("Expected --base-ref <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", ...requiredArgs, "--base-ref", "-h"]),
     ).toThrow("Expected --base-ref <value>.");
     expect(() =>
       parseArgs([
@@ -113,6 +133,9 @@ describe("generate-dependency-release-evidence", () => {
         "--github-step-summary",
         "summary.md",
       ]),
+    ).toThrow("Expected --github-output <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", ...requiredArgs, "--github-output", "-h"]),
     ).toThrow("Expected --github-output <value>.");
   });
 

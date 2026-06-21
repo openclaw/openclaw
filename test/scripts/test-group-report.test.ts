@@ -592,6 +592,7 @@ describe("scripts/test-group-report arg parsing", () => {
       expect(() => parseTestGroupReportArgs([flag, "--limit", "5"])).toThrow(
         `${flag} requires a value`,
       );
+      expect(() => parseTestGroupReportArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
     for (const flag of [
       "--limit",

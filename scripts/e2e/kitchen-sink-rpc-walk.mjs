@@ -2157,9 +2157,14 @@ function collectPosixProcessTree(rows, rootPid) {
   const root = rows.find((row) => row.processId === rootPid);
   const collected = root ? [root] : [];
   const pending = [rootPid];
+  const seen = new Set(pending);
   while (pending.length > 0) {
     const nextPid = pending.shift();
     for (const child of byParent.get(nextPid) ?? []) {
+      if (seen.has(child.processId)) {
+        continue;
+      }
+      seen.add(child.processId);
       collected.push(child);
       pending.push(child.processId);
     }

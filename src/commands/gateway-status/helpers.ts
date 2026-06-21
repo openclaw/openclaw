@@ -10,7 +10,6 @@ import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 import { parseStrictInteger } from "../../infra/parse-finite-number.js";
-import { pickGatewaySelfPresence } from "../gateway-presence.js";
 
 const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
@@ -182,8 +181,6 @@ export async function resolveAuthForTarget(
     surface: target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local",
   });
 }
-
-export { pickGatewaySelfPresence };
 
 /** Extracts the config fields displayed by `openclaw gateway status --deep`. */
 export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSummary {

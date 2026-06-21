@@ -139,13 +139,24 @@ export type SlackSocketModeConfig = {
   pingPongLoggingEnabled?: boolean;
 };
 
+export type SlackRelayConfig = {
+  /** Full relay websocket URL, including the route path. */
+  url?: string;
+  /** Bearer token used to authenticate the gateway websocket to the Slack relay. */
+  authToken?: string;
+  /** Gateway destination id registered with openclaw-slack-router. */
+  gatewayId?: string;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
-  /** Slack connection mode (socket|http). Default: socket. */
-  mode?: "socket" | "http";
+  /** Slack connection mode (socket|http|relay). Default: socket. */
+  mode?: "socket" | "http" | "relay";
   /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
   socketMode?: SlackSocketModeConfig;
+  /** Relay-delivered Slack event source. Used when mode is "relay". */
+  relay?: SlackRelayConfig;
   /** Slack signing secret (required for HTTP mode). */
   signingSecret?: string;
   /** Slack Events API webhook path (default: /slack/events). */
