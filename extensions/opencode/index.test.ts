@@ -201,27 +201,18 @@ describe("opencode provider plugin", () => {
     if (!Array.isArray(manifestModels)) {
       throw new Error("expected manifest opencode models");
     }
-    expect(manifestModels).toHaveLength(expectedModelIds.length);
-    const manifestOpus48 = requireRecord(
-      manifestModels.find(
-        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-8",
-      ),
-      "manifest claude-opus-4-8",
-    );
-    expect(manifestOpus48.api).toBe("anthropic-messages");
-    expect(manifestOpus48.baseUrl).toBe("https://opencode.ai/zen");
+    expect(manifestModels.map((model) => requireRecord(model, "manifest model").id)).toEqual([
+      "claude-opus-4-8",
+      "gpt-5.5",
+      "gemini-3.1-pro",
+      "minimax-m2.7",
+    ]);
     const manifestMiniMax = requireRecord(
       manifestModels.find((model) => requireRecord(model, "manifest model").id === "minimax-m2.7"),
       "manifest minimax-m2.7",
     );
     expect(manifestMiniMax.api).toBe("openai-completions");
     expect(manifestMiniMax.baseUrl).toBe("https://opencode.ai/zen/v1");
-    const manifestQwen = requireRecord(
-      manifestModels.find((model) => requireRecord(model, "manifest model").id === "qwen3.6-plus"),
-      "manifest qwen3.6-plus",
-    );
-    expect(manifestQwen.api).toBe("anthropic-messages");
-    expect(manifestQwen.baseUrl).toBe("https://opencode.ai/zen");
   });
 
   it("keeps documented OpenCode Zen example models resolvable", async () => {
@@ -282,16 +273,42 @@ describe("opencode provider plugin", () => {
         `verified cost model ${modelId}`,
       );
       expect(verifiedCostModel.cost).toEqual(expectedCost);
-      const manifestVerifiedCostModel = requireRecord(
-        manifestModels.find((model) => requireRecord(model, "manifest model").id === modelId),
-        `manifest verified cost model ${modelId}`,
+    }
+
+    for (const manifestModel of manifestModels) {
+      const manifestModelRecord = requireRecord(manifestModel, "manifest model");
+      const modelId = manifestModelRecord.id;
+      if (typeof modelId !== "string") {
+        throw new Error("expected manifest model id");
+      }
+      const runtimeModel = requireRecord(
+        provider.resolveDynamicModel?.({ modelId } as never),
+        `runtime manifest anchor ${modelId}`,
       );
-      expect(manifestVerifiedCostModel.cost).toEqual(expectedCost);
+      expect(manifestModelRecord.cost).toEqual(runtimeModel.cost);
     }
   });
 
   it("loads OpenCode Zen model discovery through the provider runtime", () => {
+    expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
     expect(manifest.modelCatalog.discovery.opencode).toBe("runtime");
+  });
+
+  it("exposes the complete offline OpenCode Zen catalog through provider discovery", async () => {
+    const { default: opencodeProviderDiscovery } = await import("./provider-discovery.js");
+    const result = await opencodeProviderDiscovery.staticCatalog?.run({} as never);
+    if (!result || !("provider" in result)) {
+      throw new Error("expected OpenCode Zen static provider");
+    }
+
+    expect(result.provider.models).toHaveLength(48);
+    expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
+    expect(result.provider.models.map((model) => model.id)).toContain("minimax-m2.7");
+    expect(result.provider.models.find((model) => model.id === "minimax-m2.7")).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      provider: "opencode",
+    });
   });
 
   it("skips live OpenCode Zen catalog discovery when no shared key is configured", async () => {
