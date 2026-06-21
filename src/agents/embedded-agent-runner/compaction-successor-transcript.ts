@@ -137,17 +137,23 @@ function buildSuccessorEntries(params: {
   // Preserve the last assistant message before firstKeptEntryId so the successor
   // transcript keeps a compactionSummary → assistant → user structure instead of
   // dropping the assistant reply (issue #76729).
+  // Skip for hardened manual compaction boundaries where firstKeptEntryId already
+  // points to the compaction entry itself (all pre-compaction content is
+  // intentionally excluded).
+  const isHardenedBoundary = compaction.firstKeptEntryId === compaction.id;
   let preservedAssistantId: string | undefined;
-  for (let index = latestCompactionIndex - 1; index >= 0; index -= 1) {
-    const entry = branch[index];
-    if (
-      entry &&
-      summarizedBranchIds.has(entry.id) &&
-      entry.type === "message" &&
-      entry.message.role === "assistant"
-    ) {
-      preservedAssistantId = entry.id;
-      break;
+  if (!isHardenedBoundary) {
+    for (let index = latestCompactionIndex - 1; index >= 0; index -= 1) {
+      const entry = branch[index];
+      if (
+        entry &&
+        summarizedBranchIds.has(entry.id) &&
+        entry.type === "message" &&
+        entry.message.role === "assistant"
+      ) {
+        preservedAssistantId = entry.id;
+        break;
+      }
     }
   }
 
