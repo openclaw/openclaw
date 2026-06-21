@@ -606,6 +606,63 @@ function preserveSupportedTelegramHtmlTags(
   return result;
 }
 
+const TELEGRAM_RICH_HTML_BLANK_LINE_FILLER = "\u200B";
+
+function preserveTelegramRichHtmlBlankLinesInText(text: string): string {
+  if (!text.includes("\n\n")) {
+    return text;
+  }
+  return text
+    .split("\n")
+    .map((line, index, lines) =>
+      line.trim() === "" && index > 0 && index < lines.length - 1
+        ? TELEGRAM_RICH_HTML_BLANK_LINE_FILLER
+        : line,
+    )
+    .join("\n");
+}
+
+export function preserveTelegramRichHtmlBlankLines(html: string): string {
+  if (!html.includes("\n\n")) {
+    return html;
+  }
+
+  let codeDepth = 0;
+  let preDepth = 0;
+  let result = "";
+  let lastIndex = 0;
+
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
+    const tagStart = match.index;
+    const tagEnd = HTML_TAG_PATTERN.lastIndex;
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    const isClosing = match[1] === "</";
+    const textBefore = html.slice(lastIndex, tagStart);
+    result +=
+      codeDepth > 0 || preDepth > 0
+        ? textBefore
+        : preserveTelegramRichHtmlBlankLinesInText(textBefore);
+
+    if (tagName === "code") {
+      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+    } else if (tagName === "pre") {
+      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    }
+
+    result += html.slice(tagStart, tagEnd);
+    lastIndex = tagEnd;
+  }
+
+  const remainingText = html.slice(lastIndex);
+  result +=
+    codeDepth > 0 || preDepth > 0
+      ? remainingText
+      : preserveTelegramRichHtmlBlankLinesInText(remainingText);
+  return result;
+}
+
 function getFileReferencePattern(): RegExp {
   if (fileReferencePattern) {
     return fileReferencePattern;

@@ -14,6 +14,7 @@ import {
   escapeTelegramHtml,
   limitTelegramRichHtmlNesting,
   markdownToTelegramRichHtml,
+  preserveTelegramRichHtmlBlankLines,
   sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -187,7 +188,10 @@ export function buildTelegramRichMessage(
 }
 
 function prepareTelegramRichHtml(html: string): string {
-  return limitTelegramRichHtmlNesting(sanitizeTelegramRichHtml(html), TELEGRAM_RICH_NESTING_LIMIT);
+  return limitTelegramRichHtmlNesting(
+    preserveTelegramRichHtmlBlankLines(sanitizeTelegramRichHtml(html)),
+    TELEGRAM_RICH_NESTING_LIMIT,
+  );
 }
 
 const TELEGRAM_RICH_HTML_CHUNK_LIMITS = {
