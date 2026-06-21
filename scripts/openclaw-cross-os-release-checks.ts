@@ -4035,12 +4035,11 @@ async function runCommandInvocation(invocation, options) {
     child.on("close", (exitCode) => {
       if (forwardedSignalExitCode !== undefined) {
         activeChildTree.killChildTree("SIGKILL");
-      }
-      activeChildTree.unregister();
-      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.unregister();
         finalize(exitForwardedSignalWhenChildTreesDone);
         return;
       }
+      activeChildTree.unregister();
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,
