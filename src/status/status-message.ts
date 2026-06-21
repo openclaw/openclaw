@@ -1114,5 +1114,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     activationLine,
   ]
     .filter((line): line is string => Boolean(line))
-    .join("\n");
+    // Use double newlines so Markdown renderers (Telegram rich messages) treat
+    // each status field as a separate block instead of collapsing into one line.
+    .join("\n\n");
 }
