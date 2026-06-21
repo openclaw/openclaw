@@ -70,7 +70,6 @@ import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
-  isDeliveryMirrorTailDuplicate,
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,
   resolveAutoTopicLabelConfig,
@@ -319,6 +318,7 @@ function resolveTelegramMirroredTranscriptText(
 
 async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
+  dispatchStartedAt: number;
   route: TelegramMessageContext["route"];
   sessionKey: string;
   loadFreshSessionStore: FreshTelegramSessionStoreLoader;
@@ -345,12 +345,9 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     agentId: params.route.agentId,
     sessionsDir: path.dirname(storePath),
   });
-  // Tail-scoped guard (stops at this turn's user line), not a latest-reply scan:
-  // else an identical reply on a new "say it again" turn is taken for a duplicate
-  // and dropped. Redacts both sides and collapses whitespace internally, so a
-  // secret-shaped reply compares against the redacted persisted row and delivery
-  // rejoining streamed blocks does not defeat the skip.
-  if (await isDeliveryMirrorTailDuplicate(sessionFile, text, params.cfg)) {
+  // Only the current-turn tail may suppress this mirror; crossing a user line
+  // would drop legitimate repeated answers.
+  if (await isCurrentTurnTelegramMirrorDuplicate(sessionFile, text, params.dispatchStartedAt)) {
     return;
   }
   const message = {
@@ -404,6 +401,23 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     message: appendedMessage,
     messageId,
   });
+}
+
+async function isCurrentTurnTelegramMirrorDuplicate(
+  sessionFile: string,
+  text: string,
+  dispatchStartedAt: number,
+): Promise<boolean> {
+  const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+  return (
+    latest?.timestamp !== undefined &&
+    latest.timestamp >= dispatchStartedAt &&
+    normalizeTelegramMirrorText(latest.text) === normalizeTelegramMirrorText(text)
+  );
+}
+
+function normalizeTelegramMirrorText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
@@ -1550,6 +1564,7 @@ export const dispatchTelegramMessage = async ({
       ? async (payload: TelegramTranscriptMirrorPayload) => {
           await mirrorTelegramAssistantReplyToTranscript({
             cfg,
+            dispatchStartedAt,
             route,
             sessionKey,
             loadFreshSessionStore,

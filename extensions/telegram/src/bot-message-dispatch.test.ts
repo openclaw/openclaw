@@ -79,7 +79,6 @@ const appendSessionTranscriptMessage = vi.hoisted(() =>
 const emitSessionTranscriptUpdate = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const readLatestAssistantTextFromSessionTranscript = vi.hoisted(() => vi.fn());
-const isDeliveryMirrorTailDuplicate = vi.hoisted(() => vi.fn(async () => false));
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const resolveAndPersistSessionFile = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -153,7 +152,6 @@ vi.mock("./send.js", () => ({
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
-  isDeliveryMirrorTailDuplicate,
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,
   resolveAndPersistSessionFile,
@@ -270,8 +268,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     appendSessionTranscriptMessage.mockReset();
     emitSessionTranscriptUpdate.mockReset();
     readLatestAssistantTextFromSessionTranscript.mockReset();
-    isDeliveryMirrorTailDuplicate.mockReset();
-    isDeliveryMirrorTailDuplicate.mockResolvedValue(false);
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
     resolveAndPersistSessionFile.mockReset();
@@ -1788,25 +1784,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("mirrors a legitimate repeat after a new user turn instead of skipping it", async () => {
-    // Regression: a prior turn produced the same assistant text, then a new
-    // user turn (e.g. "say it again") yields the same mirror text. The
-    // latest-assistant reader scans past the user line and would falsely match
-    // the old reply, dropping this turn's row. The tail reader stops at the
-    // user line, so the current turn has no assistant tail yet and the
-    // legitimate repeat is written.
     const repeatedText = "Final answer";
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
     loadSessionStore.mockReturnValue({
       "agent:default:telegram:direct:123": { sessionId: "s1" },
     });
-    // Old identical reply still lives behind the current user turn.
     readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
       text: repeatedText,
       timestamp: 1,
     });
-    // Tail is the current user turn: no assistant reply recorded for it yet.
-    isDeliveryMirrorTailDuplicate.mockResolvedValue(false);
     deliverReplies.mockImplementation(
       async (params: {
         replies?: Array<{ text?: string }>;
@@ -1854,9 +1841,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
       text: fullAnswer,
       timestamp: Date.now() + 1_000,
     });
-    // Primary runner already recorded this turn's reply as the tail, so the
-    // mirror skip should fire.
-    isDeliveryMirrorTailDuplicate.mockResolvedValue(true);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({ text: fullAnswer });
@@ -1873,7 +1857,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
       content: fullAnswer,
       messageId: 2001,
     });
-    // Mirror is skipped because the primary reply already has the same text.
     expect(appendSessionTranscriptMessage).not.toHaveBeenCalled();
   });
 
@@ -2743,7 +2726,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
         replyOptions?.onVerboseProgressVisibility?.(() => true);
-        await dispatcherOptions.deliver({ text: "Tool output visible to Telegram" }, { kind: "tool" });
+        await dispatcherOptions.deliver(
+          { text: "Tool output visible to Telegram" },
+          { kind: "tool" },
+        );
         await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
         return { queuedFinal: true };
       },
