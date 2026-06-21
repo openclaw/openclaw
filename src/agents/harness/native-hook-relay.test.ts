@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { AgentToolResultMiddleware } from "../../plugins/agent-tool-result-middleware-types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -116,6 +117,18 @@ async function writeForeignNativeHookRelayBridgeRecordForTests(
 
 function uniqueNativeHookRelayIdForTests(prefix: string): string {
   return `${prefix}-${randomUUID()}`;
+}
+
+function installCodexToolResultMiddlewareForTests(handler: AgentToolResultMiddleware): void {
+  const registry = createEmptyPluginRegistry();
+  registry.agentToolResultMiddlewares.push({
+    pluginId: "tool-result-middleware",
+    rawHandler: handler,
+    handler,
+    runtimes: ["codex"],
+    source: "test",
+  });
+  setActivePluginRegistry(registry);
 }
 
 function openDeferredNativeHookRelayBridgeRequest(
@@ -618,6 +631,26 @@ describe("native hook relay registry", () => {
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
     expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
     expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
+    expect(relay.commandForEvent("post_tool_use")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --generation ${relay.generation} --event post_tool_use --timeout 1234`,
+    );
+  });
+
+  it("builds post-tool relay commands for active Codex tool-result middleware", () => {
+    installCodexToolResultMiddlewareForTests(vi.fn());
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      command: {
+        executable: "/opt/Open Claw/openclaw.mjs",
+        nodeExecutable: "/usr/local/bin/node",
+        timeoutMs: 1234,
+      },
+    });
+
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
     expect(relay.commandForEvent("post_tool_use")).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
         `${relay.relayId} --generation ${relay.generation} --event post_tool_use --timeout 1234`,
@@ -2277,6 +2310,91 @@ describe("native hook relay registry", () => {
       toolName: "exec",
       toolCallId: "native-call-1",
     });
+  });
+
+  it("runs Codex tool-result middleware for native PostToolUse without after_tool_call hooks", async () => {
+    const middleware = vi.fn<AgentToolResultMiddleware>(() => undefined);
+    installCodexToolResultMiddlewareForTests(middleware);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        cwd: "/repo",
+        turn_id: "turn-1",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { cmd: ["echo", "ok"] },
+        tool_response: { output: "ok\n", exit_code: 0 },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(middleware).toHaveBeenCalledTimes(1);
+    const event = getMockCallArg(middleware, 0, 0, "tool result middleware event");
+    expectRecordFields(event, {
+      turnId: "turn-1",
+      toolCallId: "native-call-1",
+      toolName: "exec",
+      args: { cmd: ["echo", "ok"], command: "echo ok" },
+      cwd: "/repo",
+      isError: false,
+    });
+    expectRecordFields(readRecordField(event, "result", "tool result middleware result"), {
+      content: [{ type: "text", text: "ok\n" }],
+      details: { exit_code: 0, exitCode: 0 },
+    });
+    const context = getMockCallArg(middleware, 0, 1, "tool result middleware context");
+    expectRecordFields(context, {
+      runtime: "codex",
+      harness: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+  });
+
+  it("returns Codex feedback when native PostToolUse middleware rewrites the result", async () => {
+    installCodexToolResultMiddlewareForTests(() => ({
+      result: {
+        content: [{ type: "text", text: "compacted output" }],
+        details: { exitCode: 0 },
+      },
+    }));
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        cwd: "/repo",
+        turn_id: "turn-1",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { command: "cat big.log" },
+        tool_response: { output: "uncompacted output", exit_code: 0 },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "compacted output\n", exitCode: 2 });
   });
 
   it("maps Codex MCP PreToolUse to OpenClaw before_tool_call and can block", async () => {

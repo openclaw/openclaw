@@ -29,7 +29,9 @@ import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import type { OpenClawAgentToolResult } from "../../plugins/agent-tool-result-middleware-types.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import {
   cancelDeferredPluginToolApproval,
@@ -44,6 +46,7 @@ import { normalizeToolName } from "../tool-policy.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
+import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 export type JsonValue =
   | null
@@ -183,6 +186,7 @@ type NativeHookRelayProviderAdapter = {
   readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
+  renderPostToolUseFeedbackResponse: (feedback: string) => NativeHookRelayProcessResponse;
   renderPreToolUseBlockResponse: (reason: string) => NativeHookRelayProcessResponse;
   renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
   renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
@@ -361,6 +365,11 @@ const nativeHookRelayProviderAdapters: Record<
       // Codex treats empty stdout plus exit 0 as no decision/no additional context.
       return { stdout: "", stderr: "", exitCode: 0 };
     },
+    renderPostToolUseFeedbackResponse: (feedback) => ({
+      stdout: "",
+      stderr: `${feedback.trim()}\n`,
+      exitCode: 2,
+    }),
     renderPreToolUseBlockResponse: (reason) => ({
       stdout: `${JSON.stringify({
         hookSpecificOutput: {
@@ -604,12 +613,16 @@ function nativeHookRelayEventHasLocalWork(
     return hasBeforeToolCallPolicy() || nativePreToolUseMayRunLoopDetection(registration);
   }
   if (event === "post_tool_use") {
-    return hasGlobalHooks("after_tool_call");
+    return hasGlobalHooks("after_tool_call") || nativeHookRelayHasCodexToolResultMiddleware();
   }
   if (event === "before_agent_finalize") {
     return hasGlobalHooks("before_agent_finalize");
   }
   return true;
+}
+
+function nativeHookRelayHasCodexToolResultMiddleware(): boolean {
+  return listAgentToolResultMiddlewares("codex").length > 0;
 }
 
 export async function invokeNativeHookRelay(
@@ -1444,6 +1457,35 @@ async function runNativeHookRelayPostToolUse(params: {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolCallId =
     params.invocation.toolUseId ?? `${params.invocation.event}:${params.invocation.receivedAt}`;
+  const startArgs = params.adapter.readToolInput(params.invocation.rawPayload);
+  const result = params.adapter.readToolResponse(params.invocation.rawPayload);
+  let response = params.adapter.renderNoopResponse(params.invocation.event);
+  if (nativeHookRelayHasCodexToolResultMiddleware()) {
+    // Codex native PostToolUse replaces model-visible output via exit-code-2
+    // feedback. Keep raw after_tool_call below for existing hook observers.
+    const middlewareRunner = createAgentToolResultMiddlewareRunner({
+      runtime: "codex",
+      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+      sessionId: params.registration.sessionId,
+      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      runId: params.registration.runId,
+    });
+    const middlewareInputResult = coerceNativeHookRelayToolResponseForMiddleware(result);
+    const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
+      ...(params.invocation.turnId ? { turnId: params.invocation.turnId } : {}),
+      toolCallId,
+      toolName,
+      args: structuredClone(startArgs),
+      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+      isError: nativeHookRelayToolResponseIsError(result),
+      result: middlewareInputResult,
+    });
+    const originalModelText = readNativeHookRelayToolResultText(middlewareInputResult);
+    const middlewareModelText = readNativeHookRelayToolResultText(middlewareResult);
+    if (middlewareModelText.trim() && middlewareModelText !== originalModelText) {
+      response = params.adapter.renderPostToolUseFeedbackResponse(middlewareModelText);
+    }
+  }
   await runAgentHarnessAfterToolCallHook({
     toolName,
     toolCallId,
@@ -1452,10 +1494,71 @@ async function runNativeHookRelayPostToolUse(params: {
     sessionId: params.registration.sessionId,
     ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
     ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-    startArgs: params.adapter.readToolInput(params.invocation.rawPayload),
-    result: params.adapter.readToolResponse(params.invocation.rawPayload),
+    startArgs,
+    result,
   });
-  return params.adapter.renderNoopResponse(params.invocation.event);
+  return response;
+}
+
+function coerceNativeHookRelayToolResponseForMiddleware(
+  result: unknown,
+): OpenClawAgentToolResult {
+  if (isNativeHookRelayToolResult(result)) {
+    return result;
+  }
+  const contentText = readNativeHookRelayToolResponseText(result);
+  const details = readNativeHookRelayToolResponseDetails(result);
+  return {
+    content: [{ type: "text", text: contentText }],
+    details: details ?? {},
+  };
+}
+
+function isNativeHookRelayToolResult(value: unknown): value is OpenClawAgentToolResult {
+  return isJsonObject(value) && Array.isArray(value.content);
+}
+
+function readNativeHookRelayToolResultText(result: OpenClawAgentToolResult): string {
+  return result.content
+    .filter((block): block is Extract<(typeof result.content)[number], { type: "text" }> =>
+      isJsonObject(block) && block.type === "text" && typeof block.text === "string"
+    )
+    .map((block) => block.text)
+    .join("\n");
+}
+
+function readNativeHookRelayToolResponseText(result: unknown): string {
+  if (typeof result === "string") {
+    return result;
+  }
+  if (isJsonObject(result) && typeof result.output === "string") {
+    return result.output;
+  }
+  if (result === undefined || result === null) {
+    return "";
+  }
+  return stableStringify(result);
+}
+
+function readNativeHookRelayToolResponseDetails(
+  result: unknown,
+): Record<string, JsonValue> | undefined {
+  if (!isJsonObject(result) || Array.isArray(result.content)) {
+    return undefined;
+  }
+  const { output: _output, ...details } = result as Record<string, JsonValue>;
+  if (typeof details.exit_code === "number" && details.exitCode === undefined) {
+    details.exitCode = details.exit_code;
+  }
+  return details;
+}
+
+function nativeHookRelayToolResponseIsError(result: unknown): boolean {
+  if (!isJsonObject(result)) {
+    return false;
+  }
+  const exitCode = result.exitCode ?? result.exit_code;
+  return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
 }
 
 async function runNativeHookRelayPermissionRequest(params: {
