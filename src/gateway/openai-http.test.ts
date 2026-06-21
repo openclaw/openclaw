@@ -2249,6 +2249,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         stream: "assistant",
         data: { text: "final answer", delta: "", replace: true, replaceable: true },
       });
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "final answer" } });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
       return { payloads: [{ text: "final answer" }] };
     }) as never);
 

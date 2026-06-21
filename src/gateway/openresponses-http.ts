@@ -916,6 +916,7 @@ export async function handleOpenResponsesHttpRequest(
   setSseHeaders(res);
 
   let accumulatedText = "";
+  let bufferedReplaceableAssistantContent = "";
   let sawAssistantDelta = false;
   let closed = false;
   let unsubscribe = () => {};
@@ -1035,7 +1036,7 @@ export async function handleOpenResponsesHttpRequest(
       if (isReplaceableAssistantStreamEvent(evt)) {
         const snapshot = resolveAssistantStreamSnapshotText(evt);
         if (snapshot) {
-          accumulatedText = snapshot;
+          bufferedReplaceableAssistantContent = snapshot;
         }
         return;
       }
@@ -1071,7 +1072,8 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        const finalText = accumulatedText || "No response from OpenClaw.";
+        const finalText =
+          accumulatedText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         requestFinalize(finalStatus, finalText);
       }
@@ -1145,6 +1147,7 @@ export async function handleOpenResponsesHttpRequest(
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
           accumulatedText ||
+          bufferedReplaceableAssistantContent ||
           (Array.isArray(resultAny.payloads)
             ? resultAny.payloads
                 .map((p) => (typeof p.text === "string" ? p.text : ""))
@@ -1152,14 +1155,14 @@ export async function handleOpenResponsesHttpRequest(
                 .join("\n\n")
             : "");
 
-        if (toolChoiceConstraint && accumulatedText) {
+        if (toolChoiceConstraint && finalText && !sawAssistantDelta) {
           sawAssistantDelta = true;
           writeSseEvent(res, {
             type: "response.output_text.delta",
             item_id: outputItemId,
             output_index: 0,
             content_index: 0,
-            delta: accumulatedText,
+            delta: finalText,
           });
         }
         writeSseEvent(res, {
@@ -1255,6 +1258,7 @@ export async function handleOpenResponsesHttpRequest(
         const payloads = resultAny.payloads;
         const content =
           accumulatedText ||
+          bufferedReplaceableAssistantContent ||
           (Array.isArray(payloads) && payloads.length > 0
             ? payloads
                 .map((p) => (typeof p.text === "string" ? p.text : ""))
