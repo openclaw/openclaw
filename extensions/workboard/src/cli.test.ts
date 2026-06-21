@@ -152,4 +152,64 @@ describe("registerWorkboardCli", () => {
       program.parseAsync(["workboard", "show", prefix], { from: "user" }),
     ).rejects.toThrow("Ambiguous card id prefix");
   });
+
+  it("hides archived cards from workboard list by default", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const active = await store.create({ title: "active-card" });
+    const archived = await store.create({ title: "archived-card" });
+    await store.update(archived.id, { metadata: { archivedAt: Date.now() } });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list"], { from: "user" });
+    });
+
+    expect(output).toContain("active-card");
+    expect(output).not.toContain("archived-card");
+  });
+
+  it("shows archived cards with --include-archived flag", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const active = await store.create({ title: "active-card" });
+    const archived = await store.create({ title: "archived-card" });
+    await store.update(archived.id, { metadata: { archivedAt: Date.now() } });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--include-archived"], { from: "user" });
+    });
+
+    expect(output).toContain("active-card");
+    expect(output).toContain("archived-card");
+  });
+
+  it("hides archived cards from JSON output by default", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.create({ title: "active-card" });
+    const archived = await store.create({ title: "archived-card" });
+    await store.update(archived.id, { metadata: { archivedAt: Date.now() } });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--json"], { from: "user" });
+    });
+
+    expect(output).toContain("active-card");
+    expect(output).not.toContain("archived-card");
+  });
+
+  it("shows archived cards in JSON output with --include-archived", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.create({ title: "active-card" });
+    const archived = await store.create({ title: "archived-card" });
+    await store.update(archived.id, { metadata: { archivedAt: Date.now() } });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--json", "--include-archived"], { from: "user" });
+    });
+
+    expect(output).toContain("active-card");
+    expect(output).toContain("archived-card");
+  });
 });
