@@ -995,6 +995,13 @@ export const dispatchTelegramMessage = async ({
       ? (replyQuoteMessageId ?? msg.message_id)
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
+  const resolveDraftLaneInitialPreview = (options?: { minInitialChars?: number }) => {
+    const minInitialChars = options?.minInitialChars ?? draftMinInitialChars;
+    return {
+      minInitialChars,
+      minInitialDelayMs: minInitialChars > 0 ? DRAFT_MIN_INITIAL_DELAY_MS : undefined,
+    };
+  };
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const createDraftLane = (
@@ -1002,6 +1009,7 @@ export const dispatchTelegramMessage = async ({
     enabled: boolean,
     options?: { minInitialChars?: number },
   ): DraftLaneState => {
+    const initialPreview = resolveDraftLaneInitialPreview(options);
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
           api: bot.api,
@@ -1010,8 +1018,8 @@ export const dispatchTelegramMessage = async ({
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
           richMessages: telegramCfg.richMessages,
-          minInitialChars: options?.minInitialChars ?? draftMinInitialChars,
-          minInitialDelayMs: draftMinInitialChars > 0 ? DRAFT_MIN_INITIAL_DELAY_MS : undefined,
+          minInitialChars: initialPreview.minInitialChars,
+          minInitialDelayMs: initialPreview.minInitialDelayMs,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
             if (superseded.retain) {

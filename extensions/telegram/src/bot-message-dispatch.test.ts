@@ -2931,6 +2931,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(progressDraftStream.updatePreview).not.toHaveBeenCalledWith(
       expect.objectContaining({ text: "I am checking the logs and will report back shortly." }),
     );
+    expect(createTelegramDraftStream).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        minInitialChars: 30,
+        minInitialDelayMs: 5000,
+      }),
+    );
     expect(assistantDraftStream.update).toHaveBeenCalledWith(
       "I am checking the logs and will report back shortly.",
     );
