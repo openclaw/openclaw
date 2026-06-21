@@ -592,6 +592,96 @@ describe("waitForAgentJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it("surfaces pending timeout diagnostics when outer timeout fires before timeout grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 400 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 400,
+          endedAt: 500,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("timeout");
+      expect(result?.startedAt).toBe(400);
+      expect(result?.endedAt).toBe(500);
+      expect(result?.timeoutPhase).toBe("provider");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps soft timeout phases correctable before the retry grace expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-soft-queue-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      // Emit a queue timeout — a soft phase that the retry grace should keep
+      // correctable. Only preflight / provider / post_turn are hard timeouts.
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "queue",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).toBeNull();
+
+      // A later start event before the grace expires should clear the pending
+      // timeout and allow a successful recovery.
+      await vi.advanceTimersByTimeAsync(3_000);
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 300 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 300, endedAt: 400 },
+      });
+
+      const recovered = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expect(recovered).not.toBeNull();
+      expect(recovered?.status).toBe("ok");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {

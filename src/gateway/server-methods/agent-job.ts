@@ -2,6 +2,7 @@
 // recent run outcomes even after the live event stream has moved on.
 import {
   buildAgentRunTerminalOutcome,
+  isHardAgentRunTimeoutPhase,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
@@ -471,7 +472,19 @@ export async function waitForAgentJob(params: {
 
     const timer = setSafeTimeout(() => {
       const pendingError = getPendingAgentRunError(runId);
-      finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
+      if (pendingError) {
+        finish(createPendingErrorTimeoutSnapshot(pendingError.snapshot));
+        return;
+      }
+      const pendingTimeout = getPendingAgentRunTimeout(runId);
+      // Only forward hard timeouts (preflight / provider / post_turn).
+      // Soft phases like queue and gateway_draining remain correctable
+      // via the pending timeout grace timer.
+      if (pendingTimeout && isHardAgentRunTimeoutPhase(pendingTimeout.snapshot.timeoutPhase)) {
+        finish(pendingTimeout.snapshot);
+        return;
+      }
+      finish(null);
     }, timeoutMs);
     const onAbort: (() => void) | undefined = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
