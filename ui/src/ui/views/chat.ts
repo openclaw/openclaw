@@ -33,13 +33,13 @@ import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
-import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
   resolveControlUiRealtimeTalkProviderTransports,
   type RealtimeTalkCatalogProvider,
 } from "../chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -158,6 +158,7 @@ export type ChatProps = {
   userAvatar?: string | null;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
+  assistantAttachmentAuthTokens?: readonly string[];
   autoExpandToolCalls?: boolean;
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
@@ -2147,6 +2148,7 @@ export function renderChat(props: ChatProps) {
             props.basePath,
             (props.localMediaPreviewRoots ?? []).join("\u0000"),
             props.assistantAttachmentAuthToken,
+            (props.assistantAttachmentAuthTokens ?? []).join("\u0000"),
             props.canvasPluginSurfaceUrl,
             props.embedSandboxMode ?? "scripts",
             props.allowExternalEmbedUrls ?? false,
@@ -2239,6 +2241,7 @@ export function renderChat(props: ChatProps) {
                     basePath: props.basePath,
                     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
                     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+                    assistantAttachmentAuthTokens: props.assistantAttachmentAuthTokens ?? [],
                     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                     embedSandboxMode: props.embedSandboxMode ?? "scripts",
                     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,

@@ -11,6 +11,7 @@ import {
   createSolidPngBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
+import { getImageMetadata } from "../media/image-ops.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -109,14 +110,20 @@ function requireBlock(blocks: unknown[], index = 0): ManagedImageBlock {
 
 async function createFixture(
   stateDir: string,
-  options?: { sessionKey?: string; agentId?: string; attachmentId?: string; filename?: string },
+  options?: {
+    sessionKey?: string;
+    agentId?: string;
+    attachmentId?: string;
+    filename?: string;
+    original?: Buffer;
+  },
 ) {
   const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
   const sessionKey = options?.sessionKey ?? "agent:main:main";
   const filename = options?.filename ?? `${attachmentId}-cat-full.png`;
   const originalPath = path.join(stateDir, "files", filename);
   await fs.mkdir(path.dirname(originalPath), { recursive: true });
-  await fs.writeFile(originalPath, Buffer.from("original-image"));
+  await fs.writeFile(originalPath, options?.original ?? Buffer.from("original-image"));
   const record: Record<string, unknown> = {
     attachmentId,
     sessionKey,
@@ -151,6 +158,7 @@ async function requestManagedImage(params: {
   denyAuth?: boolean;
   authResponse?: Record<string, unknown>;
   headers?: Record<string, string>;
+  thumbnailMaxSide?: number;
   transcriptMessages?: Record<string, unknown>[];
   sessionEntry?: { sessionId: string; sessionFile?: string };
   resolvedTranscriptPath?: string | null;
@@ -208,6 +216,7 @@ async function requestManagedImage(params: {
         trustedProxies: ["127.0.0.1/32"],
         allowRealIpFallback: false,
         stateDir: params.stateDir,
+        thumbnailMaxSide: params.thumbnailMaxSide,
       });
       if (!handled) {
         res.statusCode = 404;
@@ -253,6 +262,8 @@ async function requestManagedImage(params: {
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
+      server.closeIdleConnections();
+      server.closeAllConnections();
     });
   }
 }
@@ -304,12 +315,60 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     );
   });
 
+  it("requires gateway auth before same-session requester image reads", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      headers: { "x-openclaw-requester-session-key": sessionKey },
+      denyAuth: true,
+    });
+
+    expect(result.statusCode).toBe(401);
+    expect(result.body.byteLength).toBe(0);
+    expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses configured thumbnail sizing for managed outgoing previews", async () => {
+    const original = createSolidPngBuffer(120, 40, { r: 24, g: 64, b: 128 });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, { original });
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/thumbnail`,
+      headers: { "x-openclaw-requester-session-key": sessionKey },
+      authResponse: { authMethod: "token" },
+      thumbnailMaxSide: 60,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
+    const metadata = await getImageMetadata(result.body);
+    expect([
+      { width: 60, height: 20 },
+      { width: 120, height: 40 },
+    ]).toContainEqual(metadata);
+  });
+
   it("rejects unauthenticated requests before serving bytes", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
 
     const { result } = await requestManagedImage({
       stateDir,
       pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      denyAuth: true,
+    });
+
+    expect(result.statusCode).toBe(401);
+    expect(result.body.byteLength).toBe(0);
+  });
+
+  it("authenticates before checking whether a managed image record exists", async () => {
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName:
+        "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-222222222222/full",
       denyAuth: true,
     });
 
@@ -341,6 +400,39 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
 
     expect(result.statusCode).toBe(403);
+  });
+
+  it("rejects Control UI read tokens with self-declared session ownership", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+
+    const unbound = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "device-token" },
+      headers: { authorization: "Bearer paired-read-token" },
+    });
+    expect(unbound.result.statusCode).toBe(403);
+
+    const wrongSession = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "device-token" },
+      headers: {
+        authorization: "Bearer paired-read-token",
+        "x-openclaw-requester-session-key": "agent:other:main",
+      },
+    });
+    expect(wrongSession.result.statusCode).toBe(403);
+
+    const bound = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      headers: {
+        authorization: "Bearer paired-read-token",
+        "x-openclaw-requester-session-key": sessionKey,
+      },
+    });
+    expect(bound.result.statusCode).toBe(403);
   });
 
   it("serves owner trusted-proxy requests with admin scope", async () => {

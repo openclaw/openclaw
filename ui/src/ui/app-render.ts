@@ -17,6 +17,7 @@ import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
   renderTab,
+  resolveAssistantAttachmentAuthTokens,
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
@@ -3916,6 +3917,7 @@ export function renderApp(state: AppViewState) {
                   embedSandboxMode: state.embedSandboxMode,
                   allowExternalEmbedUrls: state.allowExternalEmbedUrls,
                   assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
+                  assistantAttachmentAuthTokens: resolveAssistantAttachmentAuthTokens(state),
                   basePath: state.basePath ?? "",
                 }),
             )

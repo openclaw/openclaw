@@ -22,7 +22,7 @@ import {
 } from "./chat/session-controls.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./chat/session-message-cache.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
-import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates, resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import type { ChatState } from "./controllers/chat.ts";
 import {
@@ -91,6 +91,12 @@ export function resolveAssistantAttachmentAuthToken(
   state: Pick<AppViewState, "hello" | "settings" | "password">,
 ) {
   return resolveControlUiAuthToken(state);
+}
+
+export function resolveAssistantAttachmentAuthTokens(
+  state: Pick<AppViewState, "hello" | "settings" | "password">,
+) {
+  return resolveControlUiAuthCandidates(state);
 }
 
 export function resolveDashboardHeaderContext(

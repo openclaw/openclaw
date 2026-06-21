@@ -305,6 +305,10 @@ Grouped chat messages use a readable default max-width. Wide-monitor deployments
 
 The value is validated before it reaches the browser. Supported values include plain lengths and percentages such as `960px` or `82%`, plus constrained `min(...)`, `max(...)`, `clamp(...)`, `calc(...)`, and `fit-content(...)` width expressions.
 
+## Chat image thumbnails
+
+Generated and managed chat images render as authenticated thumbnails in the Control UI timeline. Open, Download, and Copy actions still use the original full-size image.
+
 ## Tailnet access (recommended)
 
 <Tabs>

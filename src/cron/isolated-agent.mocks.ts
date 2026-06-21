@@ -21,6 +21,10 @@ vi.mock("../agents/model-selection.js", async () => {
   };
 });
 
+vi.mock("../agents/model-selection-cli.js", () => ({
+  isCliProvider: vi.fn(() => false),
+}));
+
 vi.mock("../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));

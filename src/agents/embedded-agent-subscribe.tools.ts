@@ -519,12 +519,17 @@ export function filterToolResultMediaUrls(
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
+  const trustedRegisteredTool = isToolResultMediaTrusted(
+    toolName,
+    result,
+    trustedLocalMediaToolNames,
+  );
   const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(
     toolName,
     result,
     trustedLocalMediaToolNames,
   );
-  if (isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames)) {
+  if (trustedRegisteredTool) {
     // When the current run provides its exact trusted local-media tool names,
     // require the raw emitted tool name to match one of them before allowing
     // local media paths.
@@ -533,12 +538,14 @@ export function filterToolResultMediaUrls(
     // registered tool's media trust. TTS-generated local files carry a
     // separate trusted-media flag from the owned tool result, so they can
     // survive runs whose exact trusted set omitted the raw tts name.
-    if (trustedLocalMediaToolNames !== undefined) {
-      if (!trustedOwnedTtsLocalMedia) {
-        const registeredName = toolName?.trim();
-        if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
-          return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
-        }
+    if (
+      trustedRegisteredTool &&
+      trustedLocalMediaToolNames !== undefined &&
+      !trustedOwnedTtsLocalMedia
+    ) {
+      const registeredName = toolName?.trim();
+      if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
+        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
       }
     }
     return mediaUrls;
