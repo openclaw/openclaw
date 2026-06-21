@@ -8,8 +8,10 @@ import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
 import {
   type ExecSecurity,
+  maxAsk,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
 import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
 import {
@@ -36,8 +38,6 @@ import {
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
-
-export type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 
 const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
 
@@ -130,7 +130,20 @@ export async function executeNodeHostCommand(
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
     autoReviewArgv,
+    allowAlwaysPersistence,
   } = approvalAnalysis;
+  const approvalDecisionAsk =
+    nodeApprovalPolicyKnown && nodeAsk !== undefined ? maxAsk(hostAsk, nodeAsk) : "always";
+  const allowedDecisions = resolveExecApprovalAllowedDecisions({
+    ask: approvalDecisionAsk,
+    allowAlwaysPersistence,
+  });
+  const unavailableDecisions = resolveExecApprovalUnavailableDecisions({
+    ask: approvalDecisionAsk,
+    allowAlwaysPersistence,
+  });
+  const unavailableDecisionRequestParams =
+    unavailableDecisions.length > 0 ? { unavailableDecisions } : {};
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -159,11 +172,15 @@ export async function executeNodeHostCommand(
       nodeId: target.nodeId,
       security: hostSecurity,
       ask: hostAsk,
+      ...unavailableDecisionRequestParams,
       commandHighlighting: params.commandHighlighting,
       ...buildExecApprovalRequesterContext({
         agentId: prepared.agentId,
         sessionKey: prepared.sessionKey,
       }),
+      approvalReviewerDeviceIds: params.approvalReviewerDeviceId
+        ? [params.approvalReviewerDeviceId]
+        : undefined,
       ...(options.requireDeliveryRoute !== undefined
         ? { requireDeliveryRoute: options.requireDeliveryRoute }
         : {}),
@@ -438,7 +455,7 @@ export async function executeNodeHostCommand(
           initiatingSurface,
           sentApproverDms,
           unavailableReason,
-          allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
+          allowedDecisions,
           nodeId: target.nodeId,
         });
       }

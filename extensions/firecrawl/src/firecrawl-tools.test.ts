@@ -110,6 +110,18 @@ describe("firecrawl tools", () => {
       throw new Error("expected Firecrawl plugin entry");
     }
     expect(pluginEntry.enabled).toBe(true);
+    expect(applied.tools?.web?.fetch?.provider).toBe("firecrawl");
+
+    const preservedFetchProvider = provider.applySelectionConfig({
+      tools: {
+        web: {
+          fetch: {
+            provider: "other",
+          },
+        },
+      },
+    } as OpenClawConfig);
+    expect(preservedFetchProvider.tools?.web?.fetch?.provider).toBe("other");
   });
 
   it("parses scrape payloads into wrapped external-content results", () => {
@@ -239,6 +251,72 @@ describe("firecrawl tools", () => {
 
     const authHeader = new Headers(capturedInit?.headers).get("Authorization");
     expect(authHeader).toBe("Bearer firecrawl-test-key");
+  });
+
+  it("omits Firecrawl authorization for keyless scrape requests", async () => {
+    let capturedInit: RequestInit | undefined;
+    global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            markdown: "# Keyless",
+            metadata: {
+              sourceURL: "https://example.com/keyless-firecrawl",
+              statusCode: 200,
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    await runActualFirecrawlScrape({
+      cfg: {
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  baseUrl: "https://api.firecrawl.dev",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      url: "https://example.com/keyless-firecrawl",
+      extractMode: "markdown",
+      access: "keyless",
+    });
+
+    expect(new Headers(capturedInit?.headers).has("Authorization")).toBe(false);
+  });
+
+  it("requires credentials for direct scrape requests", async () => {
+    await expect(
+      runActualFirecrawlScrape({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        url: "https://example.com/direct-scrape",
+        extractMode: "markdown",
+      }),
+    ).rejects.toThrow("firecrawl_scrape needs a Firecrawl API key");
   });
 
   it("blocks private and non-http scrape targets before Firecrawl requests", () => {
@@ -402,6 +480,7 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
+    expect(provider.requiresCredential).toBe(false);
     const pluginEntry = applied.plugins?.entries?.firecrawl;
     if (!pluginEntry) {
       throw new Error("expected Firecrawl fetch plugin entry");
@@ -430,6 +509,7 @@ describe("firecrawl tools", () => {
       cfg: { test: true },
       url: "https://docs.openclaw.ai",
       extractMode: "markdown",
+      access: "keyless",
       maxChars: 1500,
       proxy: "stealth",
       storeInCache: false,
@@ -454,6 +534,7 @@ describe("firecrawl tools", () => {
       cfg: { test: true },
       url: "https://docs.openclaw.ai",
       extractMode: "markdown",
+      access: "keyless",
       maxChars: 1500,
     });
     await expect(

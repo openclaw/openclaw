@@ -10,7 +10,7 @@ import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -297,7 +297,7 @@ export const AgentContextLimitsSchema = z
   .object({
     memoryGetMaxChars: z.number().int().min(1).max(250_000).optional(),
     memoryGetDefaultLines: z.number().int().min(1).max(5_000).optional(),
-    toolResultMaxChars: z.number().int().min(1).max(250_000).optional(),
+    toolResultMaxChars: z.number().int().min(1).max(1_000_000).optional(),
     postCompactionMaxChars: z.number().int().min(1).max(50_000).optional(),
   })
   .strict()
@@ -904,7 +904,6 @@ export const MemorySearchSchema = z
     store: z
       .object({
         driver: z.literal("sqlite").optional(),
-        path: z.string().optional(),
         fts: z
           .object({
             tokenizer: z.union([z.literal("unicode61"), z.literal("trigram")]).optional(),
@@ -1013,13 +1012,6 @@ const AgentRuntimeSchema = z
       })
       .strict(),
   ])
-  .optional();
-
-export const AgentEmbeddedHarnessSchema = z
-  .object({
-    runtime: z.string().optional(),
-  })
-  .strict()
   .optional();
 
 export const AgentRuntimePolicySchema = z

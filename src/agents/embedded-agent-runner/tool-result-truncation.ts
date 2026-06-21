@@ -41,8 +41,8 @@ const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
  * request-local ceiling so oversized tool output cannot dominate the next turn.
  */
 export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
-export const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
-export const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
+const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
+const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
 const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
 const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
 
@@ -63,7 +63,6 @@ const DEFAULT_SUFFIX = (truncatedChars: number) =>
   formatContextLimitTruncationNotice(truncatedChars);
 const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
-export const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
 
 function resolveSuffixFactory(
   suffix: ToolResultTruncationOptions["suffix"],
@@ -339,17 +338,22 @@ export function truncateOversizedToolResultsInMessages(
   messages: AgentMessage[],
   contextWindowTokens: number,
   maxCharsOverride?: number,
-  aggregateMaxCharsOverride?: number,
+  aggregateMaxCharsOverride?: number | null,
 ): { messages: AgentMessage[]; truncatedCount: number } {
   const maxChars = Math.max(
     1,
     maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
   );
-  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
-    contextWindowTokens,
-    maxChars,
-    aggregateMaxCharsOverride,
-  );
+  // Live prompt assembly disables aggregate rewriting so unchanged history stays byte-stable
+  // for provider prefix caches; recovery and persisted-session callers keep the aggregate guard.
+  const aggregateBudgetChars =
+    aggregateMaxCharsOverride === null
+      ? Number.POSITIVE_INFINITY
+      : calculateRecoveryAggregateToolResultChars(
+          contextWindowTokens,
+          maxChars,
+          aggregateMaxCharsOverride,
+        );
   const branch = messages.map((message, index) => ({
     id: `message-${index}`,
     type: "message",
@@ -386,7 +390,7 @@ function calculateRecoveryAggregateToolResultChars(
   );
 }
 
-export type ToolResultReductionPotential = {
+type ToolResultReductionPotential = {
   maxChars: number;
   aggregateBudgetChars: number;
   toolResultCount: number;
@@ -818,6 +822,9 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   }
 }
 
+/**
+ * Truncates a named transcript file artifact.
+ */
 export async function truncateOversizedToolResultsInSession(params: {
   sessionFile: string;
   contextWindowTokens: number;
@@ -853,24 +860,6 @@ export async function truncateOversizedToolResultsInSession(params: {
   } finally {
     await sessionLock?.release();
   }
-}
-
-/**
- * Check if a tool result message exceeds the size limit for a given context window.
- */
-export function isOversizedToolResult(
-  msg: AgentMessage,
-  contextWindowTokens: number,
-  maxCharsOverride?: number,
-): boolean {
-  if ((msg as { role?: string }).role !== "toolResult") {
-    return false;
-  }
-  const maxChars = Math.max(
-    1,
-    maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
-  );
-  return getToolResultTextLength(msg) > maxChars;
 }
 
 export function sessionLikelyHasOversizedToolResults(params: {

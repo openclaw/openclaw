@@ -10,7 +10,7 @@ import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
-import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
@@ -106,6 +106,7 @@ export type FollowupRun = {
     senderE164?: string;
     senderIsOwner?: boolean;
     traceAuthorized?: boolean;
+    approvalReviewerDeviceId?: string;
     sessionFile: string;
     workspaceDir: string;
     /** Task working directory for runtime execution. Defaults to workspaceDir. */

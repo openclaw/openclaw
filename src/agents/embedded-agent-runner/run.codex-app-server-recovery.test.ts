@@ -235,6 +235,11 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
     expect(result.meta.timeoutPhase).toBe("provider");
     expect(result.meta.providerStarted).toBe(true);
+    expect(result.meta.error).toEqual({
+      kind: "incomplete_turn",
+      message: CODEX_MISSING_TERMINAL_MESSAGE,
+      fallbackSafe: false,
+    });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
@@ -263,6 +268,11 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(result.payloads?.[0]).toMatchObject({
       isError: true,
       text: CODEX_MISSING_TERMINAL_MESSAGE,
+    });
+    expect(result.meta.error).toEqual({
+      kind: "incomplete_turn",
+      message: CODEX_MISSING_TERMINAL_MESSAGE,
+      fallbackSafe: false,
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
@@ -316,6 +326,12 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
     expect(result.meta.replayInvalid).toBe(true);
     expect(result.meta.livenessState).toBe("abandoned");
+    expect(result.meta.error).toEqual({
+      kind: "incomplete_turn",
+      message:
+        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+      fallbackSafe: false,
+    });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });

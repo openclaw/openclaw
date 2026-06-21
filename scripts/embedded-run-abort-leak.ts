@@ -34,6 +34,14 @@ type Options = {
   quiet: boolean;
 };
 
+function readValue(raw: string | undefined, flag: string): string {
+  const value = raw?.trim() ?? "";
+  if (!value || value.startsWith("--")) {
+    fail(`${flag} requires a value`);
+  }
+  return value;
+}
+
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
     iters: 50,
@@ -58,7 +66,7 @@ function parseArgs(argv: string[]): Options {
         i += 1;
         break;
       case "--snap-dir":
-        opts.snapDir = next ?? opts.snapDir;
+        opts.snapDir = readValue(next, arg);
         i += 1;
         break;
       case "--mode":

@@ -9,7 +9,11 @@ import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.j
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { updateSessionStoreEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { appendSessionTranscriptMessage } from "./transcript-append.js";
+import {
+  appendSessionTranscriptEvent,
+  appendSessionTranscriptMessage,
+} from "./transcript-append.js";
+import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 import {
   bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
@@ -282,7 +286,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(events).toEqual(["lock", "lock", "lock"]);
+    expect(events).toEqual(["lock"]);
   });
 
   it("keeps matching owned transcript appends locked from bound callbacks", async () => {
@@ -1191,6 +1195,82 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("separates message and event appends from an unterminated transcript entry", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "existing",
+          parentId: null,
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "user", content: "existing" },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "appended message" },
+    });
+    fs.writeFileSync(sessionFile, fs.readFileSync(sessionFile, "utf8").trimEnd(), "utf8");
+    await appendSessionTranscriptEvent({
+      transcriptPath: sessionFile,
+      event: { type: "custom", id: "event", parentId: null },
+    });
+
+    const entries = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string });
+    expect(entries.map((entry) => entry.type)).toEqual(["session", "message", "message", "custom"]);
+  });
+
+  it("serializes transcript events before inspecting the append separator", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    const replacementHeader = JSON.stringify({
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: "2026-06-15T00:00:00.000Z",
+      cwd: fixture.sessionsDir(),
+    });
+    fs.writeFileSync(sessionFile, `${replacementHeader}\n`, "utf8");
+
+    await appendSessionTranscriptEvent({
+      transcriptPath: sessionFile,
+      event: {
+        type: "custom",
+        toJSON() {
+          fs.writeFileSync(sessionFile, replacementHeader, "utf8");
+          return { type: "custom", id: "serialized-first", parentId: null };
+        },
+      },
+    });
+
+    const entries = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; id?: string });
+    expect(entries).toEqual([
+      expect.objectContaining({ type: "session", id: sessionId }),
+      { type: "custom", id: "serialized-first", parentId: null },
+    ]);
+  });
+
   it("requires explicit idempotency scanning for direct transcript appends", async () => {
     const uncheckedSessionFile = resolveSessionTranscriptPathInDir(
       "unchecked-idempotency-session",
@@ -1272,6 +1352,388 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       .find((record) => record.type === "message");
 
     expect(message?.timestamp).toBe("2026-05-30T12:00:00.000Z");
+  });
+
+  it("appends after the target selected by a leaf control record", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "leaf-target-transcript-session",
+      fixture.sessionsDir(),
+    );
+    const rootEntry = {
+      type: "message",
+      id: "root-user",
+      parentId: null,
+      timestamp: "2026-05-30T12:00:00.000Z",
+      message: { role: "user", content: "root question" },
+    };
+    const abandonedEntry = {
+      type: "message",
+      id: "abandoned-assistant",
+      parentId: rootEntry.id,
+      timestamp: "2026-05-30T12:00:01.000Z",
+      message: { role: "assistant", content: "abandoned answer" },
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "leaf-1",
+      parentId: abandonedEntry.id,
+      timestamp: "2026-05-30T12:00:02.000Z",
+      targetId: rootEntry.id,
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "leaf-target-transcript-session",
+          timestamp: "2026-05-30T12:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        },
+        rootEntry,
+        abandonedEntry,
+        leafEntry,
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "replacement answer" },
+    });
+
+    const appendedEntry = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null })
+      .find((entry) => entry.id === appended.messageId);
+    expect(appendedEntry?.parentId).toBe(rootEntry.id);
+  });
+
+  it("appends after an explicit opaque append parent on a leaf control", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "leaf-append-parent-transcript-session",
+      fixture.sessionsDir(),
+    );
+    const rootEntry = {
+      type: "message",
+      id: "root-user",
+      parentId: null,
+      timestamp: "2026-05-30T12:00:00.000Z",
+      message: { role: "user", content: "root question" },
+    };
+    const metadata = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: rootEntry.id,
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "leaf-append-parent-transcript-session",
+          timestamp: "2026-05-30T12:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        },
+        rootEntry,
+        metadata,
+        {
+          type: "leaf",
+          id: "leaf-1",
+          parentId: metadata.id,
+          timestamp: "2026-05-30T12:00:02.000Z",
+          targetId: rootEntry.id,
+          appendParentId: metadata.id,
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "replacement answer" },
+    });
+
+    const appendedEntry = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null })
+      .find((entry) => entry.id === appended.messageId);
+    expect(appendedEntry?.parentId).toBe(metadata.id);
+  });
+
+  it("marks transcript-only messages that consume a side append cursor", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "side-append-mode-transcript-session",
+      fixture.sessionsDir(),
+    );
+    const activeEntry = {
+      type: "message",
+      id: "active-entry",
+      parentId: null,
+      timestamp: "2026-05-30T12:00:00.000Z",
+      message: { role: "user", content: "active question" },
+    };
+    const sideEntry = {
+      type: "message",
+      id: "side-entry",
+      parentId: activeEntry.id,
+      timestamp: "2026-05-30T12:00:01.000Z",
+      message: { role: "assistant", content: "first side delivery" },
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "side-append-mode-transcript-session",
+          timestamp: "2026-05-30T12:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        },
+        activeEntry,
+        sideEntry,
+        {
+          type: "leaf",
+          id: "side-leaf",
+          parentId: sideEntry.id,
+          timestamp: "2026-05-30T12:00:02.000Z",
+          targetId: activeEntry.id,
+          appendParentId: sideEntry.id,
+          appendMode: "side",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: "second side delivery",
+      },
+    });
+
+    const appendedEntry = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            id?: string;
+            parentId?: string | null;
+            appendMode?: string;
+          },
+      )
+      .find((entry) => entry.id === appended.messageId);
+    expect(appendedEntry).toMatchObject({
+      parentId: sideEntry.id,
+      appendMode: "side",
+    });
+
+    const nextUser = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "user", content: "next question" },
+    });
+    const finalRecords = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(finalRecords.find((entry) => entry.id === nextUser.messageId)).toMatchObject({
+      parentId: appended.messageId,
+    });
+    expect(finalRecords.find((entry) => entry.id === nextUser.messageId)).not.toHaveProperty(
+      "appendMode",
+    );
+    expect(
+      selectSessionTranscriptLeafControlledPath(finalRecords)?.map((entry) => entry.id),
+    ).toEqual([activeEntry.id, nextUser.messageId]);
+  });
+
+  it("ignores dangling leaf references when choosing the direct append parent", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "invalid-leaf-append-parent-transcript-session",
+      fixture.sessionsDir(),
+    );
+    const rootEntry = {
+      type: "message",
+      id: "root-user",
+      parentId: null,
+      timestamp: "2026-05-30T12:00:00.000Z",
+      message: { role: "user", content: "root question" },
+    };
+    const metadata = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: rootEntry.id,
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "invalid-leaf-append-parent-transcript-session",
+          timestamp: "2026-05-30T12:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        },
+        rootEntry,
+        metadata,
+        {
+          type: "leaf",
+          id: "missing-target",
+          parentId: metadata.id,
+          timestamp: "2026-05-30T12:00:01.000Z",
+          targetId: "missing",
+        },
+        {
+          type: "leaf",
+          id: "missing-append",
+          parentId: "missing-target",
+          timestamp: "2026-05-30T12:00:02.000Z",
+          targetId: rootEntry.id,
+          appendParentId: "missing",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "replacement answer" },
+    });
+
+    const appendedEntry = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null })
+      .find((entry) => entry.id === appended.messageId);
+    expect(appendedEntry?.parentId).toBe(metadata.id);
+  });
+
+  it("rejects append targets that reference an earlier invalid leaf control", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "nested-invalid-leaf-append-parent-transcript-session",
+      fixture.sessionsDir(),
+    );
+    const rootEntry = {
+      type: "message",
+      id: "root-user",
+      parentId: null,
+      timestamp: "2026-05-30T12:00:00.000Z",
+      message: { role: "user", content: "root question" },
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "nested-invalid-leaf-append-parent-transcript-session",
+          timestamp: "2026-05-30T12:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        },
+        rootEntry,
+        {
+          type: "leaf",
+          id: "invalid-leaf",
+          parentId: rootEntry.id,
+          timestamp: "2026-05-30T12:00:01.000Z",
+          targetId: "missing",
+        },
+        {
+          type: "leaf",
+          id: "nested-invalid-leaf",
+          parentId: "invalid-leaf",
+          timestamp: "2026-05-30T12:00:02.000Z",
+          targetId: "invalid-leaf",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "replacement answer" },
+    });
+
+    const appendedEntry = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null })
+      .find((entry) => entry.id === appended.messageId);
+    expect(appendedEntry?.parentId).toBe(rootEntry.id);
+  });
+
+  it("recognizes parentless canonical rows selected by a later leaf control", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "parentless-leaf-target-transcript-session",
+      fixture.sessionsDir(),
+    );
+    const activeEntry = {
+      type: "message",
+      id: "active-entry",
+      timestamp: "2026-05-30T12:00:00.000Z",
+      message: { role: "user", content: "active question" },
+    };
+    const sideEntry = {
+      type: "message",
+      id: "side-entry",
+      parentId: activeEntry.id,
+      timestamp: "2026-05-30T12:00:01.000Z",
+      message: { role: "assistant", content: "side delivery" },
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "parentless-leaf-target-transcript-session",
+          timestamp: "2026-05-30T12:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        },
+        activeEntry,
+        sideEntry,
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: sideEntry.id,
+          timestamp: "2026-05-30T12:00:02.000Z",
+          targetId: activeEntry.id,
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "active replacement" },
+    });
+
+    const appendedEntry = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null })
+      .find((entry) => entry.id === appended.messageId);
+    expect(appendedEntry?.parentId).toBe(activeEntry.id);
   });
 
   it("redacts structured message content before transcript persistence", async () => {

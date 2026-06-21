@@ -69,9 +69,26 @@ resolve_unique_remote_ref() {
   local -a matches=()
   for refspec in "$@"; do
     [[ -n "$refspec" ]] || continue
-    mapfile -t matches < <(
-      git ls-remote "$REMOTE_URL" "$refspec" | awk '{print $1}' | awk '!seen[$0]++'
-    )
+    local raw=""
+    local stderr_file=""
+    local status=0
+    stderr_file="$(mktemp)"
+    set +e
+    raw="$(git ls-remote "$REMOTE_URL" "$refspec" 2>"$stderr_file")"
+    status="$?"
+    set -e
+    if [[ "$status" -ne 0 ]]; then
+      local stderr=""
+      stderr="$(cat "$stderr_file")"
+      rm -f "$stderr_file"
+      if [[ "$refspec" == *"^{}" && "$stderr" == *"fatal: no tag message?"* ]]; then
+        continue
+      fi
+      [[ -z "$stderr" ]] || printf '%s\n' "$stderr" >&2
+      return 3
+    fi
+    rm -f "$stderr_file"
+    mapfile -t matches < <(printf '%s\n' "$raw" | awk 'NF {print $1}' | awk '!seen[$0]++')
     if [[ "${#matches[@]}" -eq 0 ]]; then
       continue
     fi
@@ -82,6 +99,32 @@ resolve_unique_remote_ref() {
     return 0
   done
   return 1
+}
+
+read_remote_matches() {
+  local -n output_array="$1"
+  shift
+  local output=""
+  local status=0
+  output_array=()
+  set +e
+  output="$(resolve_unique_remote_ref "$@")"
+  status="$?"
+  set -e
+  case "$status" in
+    0)
+      mapfile -t output_array <<< "$output"
+      ;;
+    1)
+      ;;
+    2)
+      echo "Ref resolved to multiple remote matches." >&2
+      exit 1
+      ;;
+    *)
+      exit 1
+      ;;
+  esac
 }
 
 REF="$(trim "$REF")"
@@ -109,14 +152,14 @@ fi
 
 declare -a matches=()
 if [[ "$REF" == refs/heads/* ]]; then
-  mapfile -t matches < <(resolve_unique_remote_ref "$REF" || true)
+  read_remote_matches matches "$REF"
 elif [[ "$REF" == refs/tags/* ]]; then
-  mapfile -t matches < <(resolve_unique_remote_ref "${REF}^{}" "$REF" || true)
+  read_remote_matches matches "${REF}^{}" "$REF"
 elif [[ "$REF" == refs/* ]]; then
-  mapfile -t matches < <(resolve_unique_remote_ref "$REF" || true)
+  read_remote_matches matches "$REF"
 else
-  mapfile -t branch_matches < <(resolve_unique_remote_ref "refs/heads/${REF}" || true)
-  mapfile -t tag_matches < <(resolve_unique_remote_ref "refs/tags/${REF}^{}" "refs/tags/${REF}" || true)
+  read_remote_matches branch_matches "refs/heads/${REF}"
+  read_remote_matches tag_matches "refs/tags/${REF}^{}" "refs/tags/${REF}"
   match_count=$(( ${#branch_matches[@]} + ${#tag_matches[@]} ))
   if [[ "$match_count" -eq 1 ]]; then
     if [[ "${#branch_matches[@]}" -eq 1 ]]; then

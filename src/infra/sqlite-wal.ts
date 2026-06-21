@@ -15,13 +15,19 @@ export const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
  */
 export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS;
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
+const LINUX_SMB_SUPER_MAGIC = 0x517b;
+const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
+const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
+const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
 
 type IntervalHandle = ReturnType<typeof setInterval> & {
   unref?: () => void;
 };
 
 type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
+type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
+type MountEntry = { mountPoint: string; fsType: string; source?: string };
 
 export type SqliteWalMaintenance = {
   checkpoint: () => boolean;
@@ -38,6 +44,12 @@ export type SqliteWalMaintenanceOptions = {
   onCheckpointError?: (error: unknown) => void;
 };
 
+export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
+  busyTimeoutMs?: number;
+  foreignKeys?: boolean;
+  synchronous?: "NORMAL";
+};
+
 function normalizeNonNegativeInteger(value: number, label: string): number {
   if (!Number.isInteger(value) || value < 0) {
     throw new Error(`${label} must be a non-negative integer`);
@@ -45,19 +57,27 @@ function normalizeNonNegativeInteger(value: number, label: string): number {
   return value;
 }
 
-function findExistingVolumePath(targetPath: string): string | null {
+function findExistingVolumePaths(
+  targetPath: string,
+): { canonicalPath: string; originalPath: string } | null {
   let current = path.resolve(targetPath);
   while (true) {
+    let stats: ReturnType<typeof fs.statSync>;
     try {
-      const stats = fs.statSync(current);
-      return stats.isDirectory() ? current : path.dirname(current);
+      stats = fs.statSync(current);
     } catch {
       const parent = path.dirname(current);
       if (parent === current) {
         return null;
       }
       current = parent;
+      continue;
     }
+    const existingPath = fs.realpathSync(current);
+    return {
+      canonicalPath: stats.isDirectory() ? existingPath : path.dirname(existingPath),
+      originalPath: stats.isDirectory() ? current : path.dirname(current),
+    };
   }
 }
 
@@ -67,10 +87,8 @@ function decodeMountPath(value: string): string {
   );
 }
 
-function parseProcMountInfoEntries(
-  contents: string,
-): Array<{ mountPoint: string; fsType: string }> {
-  const entries: Array<{ mountPoint: string; fsType: string }> = [];
+function parseProcMountInfoEntries(contents: string): MountEntry[] {
+  const entries: MountEntry[] = [];
   for (const line of contents.split("\n")) {
     const separator = line.indexOf(" - ");
     if (separator === -1) {
@@ -81,34 +99,38 @@ function parseProcMountInfoEntries(
     const mountPoint = fields[4];
     const fsType = suffixFields[0];
     if (mountPoint && fsType) {
-      entries.push({ mountPoint: decodeMountPath(mountPoint), fsType });
+      entries.push({
+        mountPoint: decodeMountPath(mountPoint),
+        fsType,
+        ...(suffixFields[1] ? { source: decodeMountPath(suffixFields[1]) } : {}),
+      });
     }
   }
   return entries;
 }
 
-function parseMountCommandEntries(contents: string): Array<{ mountPoint: string; fsType: string }> {
-  const entries: Array<{ mountPoint: string; fsType: string }> = [];
+function parseMountCommandEntries(contents: string): MountEntry[] {
+  const entries: MountEntry[] = [];
   for (const line of contents.split("\n")) {
-    const linuxMatch = /^.* on (.+) type ([^,\s)]+) \(/.exec(line);
+    const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
     if (linuxMatch) {
-      entries.push({ mountPoint: linuxMatch[1], fsType: linuxMatch[2] });
+      entries.push({ source: linuxMatch[1], mountPoint: linuxMatch[2], fsType: linuxMatch[3] });
       continue;
     }
-    const bsdMatch = /^.* on (.+) \(([^,\s)]+)/.exec(line);
+    const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
     if (bsdMatch) {
-      entries.push({ mountPoint: bsdMatch[1], fsType: bsdMatch[2] });
+      entries.push({ source: bsdMatch[1], mountPoint: bsdMatch[2], fsType: bsdMatch[3] });
     }
   }
   return entries;
 }
 
-function readMountEntries(): Array<{ mountPoint: string; fsType: string }> {
+function readMountEntries(): MountEntry[] {
   try {
     return parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8"));
   } catch {
     // macOS/BSD expose filesystem type names in `mount` output instead of
-    // Linux superblock magic, so keep this fallback for non-Linux NFS mounts.
+    // Linux superblock magic, so keep this fallback for named filesystem types.
   }
   try {
     return parseMountCommandEntries(String(childProcess.execFileSync("mount", [])));
@@ -127,33 +149,107 @@ function isPathWithinMount(targetPath: string, mountPoint: string): boolean {
   );
 }
 
-function isNfsMountType(fsType: string): boolean {
-  return fsType.toLowerCase().startsWith("nfs");
-}
-
-function isNfsMountEntryPath(targetPath: string): boolean {
-  const mountEntry = readMountEntries()
-    .filter((entry) => isPathWithinMount(targetPath, entry.mountPoint))
-    .toSorted((a, b) => b.mountPoint.length - a.mountPoint.length)[0];
-  return mountEntry ? isNfsMountType(mountEntry.fsType) : false;
-}
-
-function isNfsBackedPath(targetPath: string): boolean {
-  if (typeof fs.statfsSync !== "function") {
-    return isNfsMountEntryPath(targetPath);
-  }
-  const checkedPath = findExistingVolumePath(targetPath);
-  if (!checkedPath) {
+function isSshfsMountSource(source: string | undefined): boolean {
+  if (!source) {
     return false;
   }
+  const normalized = source.toLowerCase();
+  return (
+    normalized === "sshfs" ||
+    normalized.startsWith("sshfs#") ||
+    normalized.startsWith("sshfs@") ||
+    /^(?:[^/\s:]+@)?[^/\s:]+:.*/u.test(source)
+  );
+}
+
+function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJournalPolicy {
+  const normalized = entry.fsType.toLowerCase();
+  if (normalized.startsWith("nfs") || NETWORK_FILESYSTEM_TYPES.has(normalized)) {
+    return "rollback";
+  }
+  if (normalized === "fuse.sshfs") {
+    return "unsupported";
+  }
+  if ((normalized === "macfuse" || normalized === "osxfuse") && isSshfsMountSource(entry.source)) {
+    return "unsupported";
+  }
+  return "wal";
+}
+
+function resolveMountEntryJournalPolicy(
+  targetPath: string,
+  mountEntries: MountEntry[],
+): SqliteFilesystemJournalPolicy {
+  const mountEntry = mountEntries
+    .filter((entry) => isPathWithinMount(targetPath, entry.mountPoint))
+    .toSorted((a, b) => b.mountPoint.length - a.mountPoint.length)[0];
+  return mountEntry ? resolveMountTypeJournalPolicy(mountEntry) : "wal";
+}
+
+function combineMountEntryJournalPolicies(
+  targetPaths: readonly string[],
+): SqliteFilesystemJournalPolicy {
+  const mountEntries = readMountEntries();
+  const policies = new Set(
+    targetPaths.map((targetPath) => resolveMountEntryJournalPolicy(targetPath, mountEntries)),
+  );
+  if (policies.has("unsupported")) {
+    return "unsupported";
+  }
+  return policies.has("rollback") ? "rollback" : "wal";
+}
+
+function isWindowsUncPath(targetPath: string): boolean {
+  return (
+    /^\\\\\?\\UNC\\[^\\]+\\[^\\]+/i.test(targetPath) ||
+    /^\\\\(?![?.]\\)[^\\]+\\[^\\]+/.test(targetPath)
+  );
+}
+
+function isWindowsDrivePath(targetPath: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(targetPath) || /^\\\\\?\\[A-Za-z]:[\\/]/i.test(targetPath);
+}
+
+function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPolicy {
+  if (process.platform === "win32") {
+    const normalizedTargetPath = path.win32.normalize(targetPath);
+    if (isWindowsUncPath(normalizedTargetPath)) {
+      return "rollback";
+    }
+    if (isWindowsDrivePath(normalizedTargetPath)) {
+      try {
+        return isWindowsUncPath(path.win32.normalize(fs.realpathSync.native(targetPath)))
+          ? "rollback"
+          : "wal";
+      } catch {
+        // Windows can deny SMB path normalization when parent components are
+        // unreadable. Treat an unclassifiable opened database as network-backed.
+        return "rollback";
+      }
+    }
+  }
+  const checkedPaths = findExistingVolumePaths(targetPath);
+  if (!checkedPaths) {
+    return "wal";
+  }
+  const mountLookupPaths = [checkedPaths.originalPath, checkedPaths.canonicalPath];
+  if (typeof fs.statfsSync !== "function") {
+    return combineMountEntryJournalPolicies(mountLookupPaths);
+  }
   try {
-    if (fs.statfsSync(checkedPath).type === LINUX_NFS_SUPER_MAGIC) {
-      return true;
+    const filesystemType = fs.statfsSync(checkedPaths.canonicalPath).type;
+    if (
+      filesystemType === LINUX_NFS_SUPER_MAGIC ||
+      filesystemType === LINUX_SMB_SUPER_MAGIC ||
+      filesystemType === LINUX_CIFS_SUPER_MAGIC ||
+      filesystemType === LINUX_SMB2_SUPER_MAGIC
+    ) {
+      return "rollback";
     }
   } catch {
-    return isNfsMountEntryPath(checkedPath);
+    return combineMountEntryJournalPolicies(mountLookupPaths);
   }
-  return isNfsMountEntryPath(checkedPath);
+  return combineMountEntryJournalPolicies(mountLookupPaths);
 }
 
 function readJournalModeResult(row: unknown): string | null {
@@ -173,12 +269,20 @@ function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintena
     const location = options.databasePath ? ` at ${options.databasePath}` : "";
     const actual = journalMode ?? "unknown";
     throw new Error(
-      `${label}${location} is on an NFS-backed volume but SQLite kept journal_mode=${actual}; refusing to continue with WAL on NFS.`,
+      `${label}${location} is on a network-backed volume but SQLite kept journal_mode=${actual}; refusing to continue with WAL on network storage.`,
     );
   }
 }
 
-/** Configure WAL pragmas and return a handle for checkpoint/close maintenance. */
+function refuseUnsupportedFilesystem(options: SqliteWalMaintenanceOptions): never {
+  const label = options.databaseLabel ?? "sqlite database";
+  const location = options.databasePath ? ` at ${options.databasePath}` : "";
+  throw new Error(
+    `${label}${location} is on SSHFS, which cannot safely coordinate SQLite writes across mounts; refusing to open the database.`,
+  );
+}
+
+/** Configure safe journaling pragmas and return a handle for checkpoint/close maintenance. */
 export function configureSqliteWalMaintenance(
   db: DatabaseSync,
   options: SqliteWalMaintenanceOptions = {},
@@ -194,7 +298,13 @@ export function configureSqliteWalMaintenance(
   const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
   const periodicCheckpointMode = options.checkpointMode ?? "PASSIVE";
-  if (options.databasePath && isNfsBackedPath(options.databasePath)) {
+  const journalPolicy = options.databasePath
+    ? resolvePathJournalPolicy(options.databasePath)
+    : "wal";
+  if (journalPolicy === "unsupported") {
+    refuseUnsupportedFilesystem(options);
+  }
+  if (journalPolicy === "rollback") {
     requireRollbackJournalMode(db, options);
     return {
       checkpoint: () => true,
@@ -235,4 +345,25 @@ export function configureSqliteWalMaintenance(
       return checkpoint();
     },
   };
+}
+
+/** Configure per-connection SQLite pragmas in the safe lock-retry/WAL order. */
+export function configureSqliteConnectionPragmas(
+  db: DatabaseSync,
+  options: SqliteConnectionPragmaOptions = {},
+): SqliteWalMaintenance {
+  const { busyTimeoutMs, foreignKeys, synchronous, ...walOptions } = options;
+  if (busyTimeoutMs !== undefined) {
+    db.exec(
+      `PRAGMA busy_timeout = ${normalizeNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs")};`,
+    );
+  }
+  const maintenance = configureSqliteWalMaintenance(db, walOptions);
+  if (synchronous) {
+    db.exec(`PRAGMA synchronous = ${synchronous};`);
+  }
+  if (foreignKeys) {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+  return maintenance;
 }

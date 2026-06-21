@@ -16,7 +16,10 @@ import {
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
-import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn.js";
+import {
+  hasAttemptTerminalState,
+  isIncompleteTerminalAssistantTurn,
+} from "./embedded-agent-runner/run/incomplete-turn.js";
 import {
   consumePendingToolMediaReply,
   hasAssistantVisibleReply,
@@ -69,10 +72,38 @@ export function handleAgentEnd(
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
     hasAcceptedSessionSpawn(ctx.state.acceptedSessionSpawns) ||
     (ctx.state.successfulCronAdds ?? 0) > 0;
+  const deferredMediaUrls = ctx.state.deferredBlockReplies.flatMap(
+    (payload) => payload.mediaUrls ?? [],
+  );
+  const hasTerminalOutput = hasAttemptTerminalState({
+    yieldDetected: ctx.state.yielded,
+    didSendDeterministicApprovalPrompt: ctx.state.deterministicApprovalPromptSent,
+    heartbeatToolResponse: ctx.state.heartbeatToolResponse,
+    lastToolError: ctx.state.lastToolError,
+    toolMediaUrls: [...ctx.state.pendingToolMediaUrls, ...deferredMediaUrls],
+    toolAudioAsVoice:
+      ctx.state.pendingToolAudioAsVoice ||
+      ctx.state.deferredBlockReplies.some((payload) => payload.audioAsVoice),
+    toolTrustedLocalMedia:
+      ctx.state.pendingToolTrustedLocalMedia ||
+      ctx.state.deferredBlockReplies.some((payload) => payload.trustedLocalMedia),
+    hasToolMediaBlockReply: ctx.state.hasToolMediaBlockReply,
+    didDeliverSourceReplyViaMessageTool:
+      ctx.state.messageToolOnlySourceReplyDelivered ||
+      ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true,
+    messagingToolSourceReplyPayloads: ctx.state.messagingToolSourceReplyPayloads,
+    messagingToolSentTexts: ctx.state.messagingToolSentTexts,
+    messagingToolSentMediaUrls: ctx.state.messagingToolSentMediaUrls,
+    messagingToolSentTargets: ctx.state.messagingToolSentTargets,
+    successfulCronAdds: ctx.state.successfulCronAdds,
+    acceptedSessionSpawns: ctx.state.acceptedSessionSpawns,
+    toolMetas: ctx.state.toolMetas,
+  });
   const hadBeforeFinalizeSideEffect =
     hadLivenessPreservingSideEffect || ctx.state.replayState.hadPotentialSideEffects;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,
+    hasTerminalOutput,
     lastAssistant: isAssistantMessage(lastAssistant) ? lastAssistant : null,
   });
   const replayInvalid =
@@ -153,38 +184,9 @@ export function handleAgentEnd(
         : {}),
       ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
     };
-    if (isError) {
-      emitAgentEvent({
-        runId: ctx.params.runId,
-        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
-        ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
-        ...(ctx.params.lifecycleGeneration
-          ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
-          : {}),
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT,
-          ...terminalMeta,
-          ...(livenessState ? { livenessState } : {}),
-          ...(replayInvalid ? { replayInvalid } : {}),
-          endedAt: Date.now(),
-        },
-      });
-      void ctx.params.onAgentEvent?.({
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT,
-          ...terminalMeta,
-          ...(livenessState ? { livenessState } : {}),
-          ...(replayInvalid ? { replayInvalid } : {}),
-        },
-      });
-      return;
-    }
-    const successPhase = ctx.params.terminalLifecyclePhase ?? "end";
+    const phase =
+      ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end";
+    const errorData = isError ? { error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT } : {};
     emitAgentEvent({
       runId: ctx.params.runId,
       ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
@@ -195,7 +197,8 @@ export function handleAgentEnd(
         : {}),
       stream: "lifecycle",
       data: {
-        phase: successPhase,
+        phase,
+        ...errorData,
         ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
@@ -205,7 +208,8 @@ export function handleAgentEnd(
     void ctx.params.onAgentEvent?.({
       stream: "lifecycle",
       data: {
-        phase: successPhase,
+        phase,
+        ...errorData,
         ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
@@ -232,7 +236,11 @@ export function handleAgentEnd(
     if (ctx.params.onBlockReply) {
       const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
       if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
+        const visibleReplyCountBefore = ctx.state.visibleBlockReplyCount;
         ctx.emitBlockReply(pendingToolMediaReply);
+        if (ctx.state.visibleBlockReplyCount > visibleReplyCountBefore) {
+          ctx.state.hasToolMediaBlockReply = true;
+        }
       }
     }
 

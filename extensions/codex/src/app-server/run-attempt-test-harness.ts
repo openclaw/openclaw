@@ -203,6 +203,21 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
+export function getMockServerVersion() {
+  return "0.132.0";
+}
+
+export function getMockRuntimeIdentity() {
+  return { serverVersion: getMockServerVersion() };
+}
+
+export function mockClientRuntimeMethods() {
+  return {
+    getRuntimeIdentity: getMockRuntimeIdentity,
+    getServerVersion: getMockServerVersion,
+  };
+}
+
 export function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
@@ -297,7 +312,7 @@ export function createAppServerHarness(
   setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
     options.onStart?.(authProfileId, agentDir);
     return {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
       addNotificationHandler: (
         handler: (notification: CodexServerNotification) => Promise<void>,

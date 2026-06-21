@@ -23,7 +23,7 @@ function makeScenario(
     },
     objective: "exercise tool",
     successCriteria: ["tool is exercised"],
-    sourcePath: `qa/scenarios/runtime/tools/${tool}.md`,
+    sourcePath: `qa/scenarios/runtime/tools/${tool}.yaml`,
     execution: {
       kind: "flow",
       config: {
@@ -92,6 +92,35 @@ describe("qa tool coverage report", () => {
     expect(renderQaToolCoverageMarkdownReport(report)).toContain(
       "| read | codex-native-workspace | codex-native-workspace | codex-native-workspace | yes | 1 | not-run | not-run | not-run |",
     );
+  });
+
+  it("escapes freeform metadata in the markdown table", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-read", "read|file", {
+          toolCoverage: {
+            bucket: "codex-native-workspace",
+            expectedLayer: "codex-native-workspace",
+            capabilityLayer: "codex-native-workspace",
+            required: true,
+            tracking: "#80236",
+            reason: "tracked | runtime drift",
+            codexDefaultImpact: "P2 | default",
+            qaImpact: "P1 | confidence",
+            action: "fix | backfill",
+          },
+        }),
+      ],
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    const markdown = renderQaToolCoverageMarkdownReport(report);
+
+    expect(markdown).toContain("read\\|file");
+    expect(markdown).toContain("P2 \\| default");
+    expect(markdown).toContain("P1 \\| confidence");
+    expect(markdown).toContain("fix \\| backfill");
+    expect(markdown).toContain("#80236 tracked \\| runtime drift");
   });
 
   it("uses runtime parity summary rows and allows tracked known-broken drift", () => {

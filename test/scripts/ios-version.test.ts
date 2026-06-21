@@ -1,10 +1,12 @@
 // Ios Version tests cover ios version script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   extractChangelogSection,
   normalizeGatewayVersionToPinnedIosVersion,
+  normalizePinnedIosVersion,
   renderIosReleaseNotes,
   renderIosVersionXcconfig,
   resolveGatewayVersionForIosRelease,
@@ -15,6 +17,61 @@ import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-su
 installIosFixtureCleanup();
 
 describe("resolveIosVersion", () => {
+  it("rejects missing CLI option values before reading version files", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/ios-version.ts", "--field"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("Missing value for --field.\n");
+  });
+
+  it("prints selected fields from the CLI", () => {
+    const rootDir = writeIosFixture({
+      version: "2026.4.6",
+      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
+    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/ios-version.ts",
+        "--root",
+        rootDir,
+        "--field",
+        "canonicalVersion",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2026.4.6\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects missing iOS sync CLI root values before reading version files", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/ios-sync-versioning.ts", "--root", "--check"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("Missing value for --root.\n");
+  });
+
   it("parses pinned release versions and derives Apple marketing fields", () => {
     const rootDir = writeIosFixture({
       version: "2026.4.6",
@@ -53,6 +110,15 @@ describe("resolveIosVersion", () => {
       "Expected pinned release version like 2026.6.5",
     );
   });
+
+  it("rejects impossible pinned release versions", () => {
+    expect(() => normalizePinnedIosVersion("2026.13.6")).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
+    expect(() => normalizePinnedIosVersion("2026.4.9007199254740993")).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
+  });
 });
 
 describe("gateway version normalization", () => {
@@ -70,6 +136,15 @@ describe("gateway version normalization", () => {
 
   it("strips fallback correction suffixes when pinning from gateway version", () => {
     expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-3")).toBe("2026.4.6");
+  });
+
+  it("rejects impossible gateway release versions", () => {
+    expect(() => normalizeGatewayVersionToPinnedIosVersion("2026.13.6-alpha.1")).toThrow(
+      "Expected YYYY.M.PATCH",
+    );
+    expect(() =>
+      normalizeGatewayVersionToPinnedIosVersion("2026.4.6-alpha.9007199254740993"),
+    ).toThrow("Expected YYYY.M.PATCH");
   });
 
   it("reads and normalizes the root package version for iOS releases", () => {

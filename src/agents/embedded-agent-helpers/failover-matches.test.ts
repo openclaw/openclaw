@@ -103,6 +103,19 @@ describe("Z.ai vendor error codes (#48988)", () => {
   });
 });
 
+describe("Chinese provider overload messages", () => {
+  const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
+
+  it("classifies the Zhipu GLM overload body as overloaded", () => {
+    expect(isOverloadedErrorMessage(ZHIPU_OVERLOAD)).toBe(true);
+  });
+
+  it("does not misclassify the GLM overload body as rate limit or auth", () => {
+    expect(isRateLimitErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+    expect(isAuthErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+  });
+});
+
 describe("Volcengine Coding Plan subscription errors", () => {
   it("classifies InvalidSubscription JSON body as billing", () => {
     const raw =

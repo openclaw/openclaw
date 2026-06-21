@@ -37,6 +37,28 @@ function readMockedBody(call: EndpointCall | undefined): unknown {
   return JSON.parse(call.init.body);
 }
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 import { testing } from "../test-api.js";
 import { createParallelWebSearchProvider as createContractParallelWebSearchProvider } from "../web-search-contract-api.js";
 import { createParallelWebSearchProvider } from "./parallel-web-search-provider.js";
@@ -527,6 +549,38 @@ describe("parallel web search provider", () => {
     // OpenClaw's web_search default is 5 results; Parallel's own default is 10.
     // Sending an explicit max_results keeps result volume consistent across providers.
     expect(body.advanced_settings?.max_results).toBe(5);
+  });
+
+  it("bounds Parallel API error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"parallel upstream unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "Content-Type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    endpointMockState.responses.push(tracked.response);
+    const provider = createParallelWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { parallel: { apiKey: "par-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const error = await tool
+      .execute({
+        objective: `parallel-error-body-${Date.now()}`,
+        search_queries: ["openclaw"],
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(
+      /Parallel API error \(503\): parallel upstream unavailable/,
+    );
+    expect((error as Error).message).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("does not surface a Parallel-generated sessionId on a cache hit", async () => {

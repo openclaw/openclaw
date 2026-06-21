@@ -29,7 +29,7 @@ export type AgentCommandResultMetaOverrides = {
 };
 
 /** ACP turn source markers accepted by trusted command callsites. */
-export type AcpTurnSource = "manual_spawn";
+type AcpTurnSource = "manual_spawn";
 
 /** Channel/account/thread context carried into an agent run. */
 export type AgentRunContext = {
@@ -90,6 +90,8 @@ export type AgentCommandOpts = {
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
   /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */

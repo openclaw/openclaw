@@ -8,6 +8,7 @@ import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-f
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
+import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SERVICE_KIND,
@@ -80,10 +81,6 @@ function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): bo
   }
   const configuredLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
   return Boolean(configuredLabel && label === configuredLabel);
-}
-
-export function isOpenClawUpdateLaunchdLabel(label: unknown): label is string {
-  return normalizeOpenClawUpdateLaunchdLabel(label) !== null;
 }
 
 function resolveCurrentOpenClawUpdateLaunchdJobLabel(
@@ -291,7 +288,7 @@ async function execLaunchctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const isWindows = process.platform === "win32";
-  const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
+  const file = isWindows ? getWindowsCmdExePath() : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
 }
@@ -337,15 +334,6 @@ export async function findStaleOpenClawUpdateLaunchdJobs(
   return parseLaunchctlListOpenClawUpdateJobs(result.stdout).filter(
     (job) => !isCurrentGatewayLaunchdLabel(job.label, env),
   );
-}
-
-export async function removeOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
-  const normalizedLabel = normalizeOpenClawUpdateLaunchdLabel(label);
-  if (process.platform !== "darwin" || !normalizedLabel) {
-    return false;
-  }
-  const result = await execLaunchctl(["remove", assertValidLaunchAgentLabel(normalizedLabel)]);
-  return result.code === 0;
 }
 
 export async function disableOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
@@ -550,15 +538,6 @@ export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<
   const label = resolveLaunchAgentLabel({ env: args.env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   return res.code === 0;
-}
-
-export async function isLaunchAgentListed(args: GatewayServiceEnvArgs): Promise<boolean> {
-  const label = resolveLaunchAgentLabel({ env: args.env });
-  const res = await execLaunchctl(["list"]);
-  if (res.code !== 0) {
-    return false;
-  }
-  return res.stdout.split(/\r?\n/).some((line) => line.trim().split(/\s+/).at(-1) === label);
 }
 
 export async function launchAgentPlistExists(env: GatewayServiceEnv): Promise<boolean> {

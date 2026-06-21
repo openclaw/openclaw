@@ -580,6 +580,15 @@ EOF
 }
 
 run_pnpm() {
+  if [[ ${#PNPM_CMD[@]} -eq 2 && "${PNPM_CMD[1]}" == "pnpm" ]] && [[ "${1:-}" == "-C" && -n "${2:-}" ]]; then
+    local repo_dir="$2"
+    shift 2
+    if ! (cd "$repo_dir" && "${PNPM_CMD[@]}" --version >/dev/null 2>&1); then
+      ensure_pnpm
+    fi
+    (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
+    return
+  fi
   if ! pnpm_cmd_is_ready; then
     ensure_pnpm
   fi
@@ -739,6 +748,10 @@ activate_repo_pnpm_version() {
   if [[ -n "$corepack_cmd" ]]; then
     log "Activating repo pnpm ${version}"
     "$corepack_cmd" prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
+    if [[ "$(cd "$repo_dir" && "$corepack_cmd" pnpm --version 2>/dev/null || true)" == "$version" ]]; then
+      set_pnpm_cmd "$corepack_cmd" pnpm
+      return 0
+    fi
     detect_pnpm_cmd || true
   fi
 }

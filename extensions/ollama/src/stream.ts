@@ -18,6 +18,7 @@ import type {
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeProviderId,
@@ -54,6 +55,7 @@ export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -653,6 +655,13 @@ function estimateTokensFromChars(chars: number): number {
   return Math.max(1, Math.round(chars / CHARS_PER_TOKEN_ESTIMATE));
 }
 
+function resolveOllamaStopReason(response: OllamaChatResponse) {
+  if (response.message.tool_calls?.length) {
+    return "toolUse" as const;
+  }
+  return response.done_reason === "length" ? ("length" as const) : ("stop" as const);
+}
+
 function estimateOllamaPromptTokens(params: {
   messages: OllamaChatMessage[];
   tools: OllamaTool[];
@@ -1061,7 +1070,7 @@ export function buildAssistantMessage(
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason: toolCalls && toolCalls.length > 0 ? "toolUse" : "stop",
+    stopReason: resolveOllamaStopReason(response),
     usage: buildUsageWithNoCost({
       input: resolveUsageCount(response.prompt_eval_count, usageFallback?.input),
       output: resolveUsageCount(response.eval_count, usageFallback?.output),
@@ -1204,7 +1213,10 @@ function createRawOllamaStreamFn(
 
         try {
           if (!response.ok) {
-            const errorText = await response.text().catch(() => "unknown error");
+            const errorText = await readResponseTextLimited(
+              response,
+              OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
+            ).catch(() => "unknown error");
             throw new Error(`${response.status} ${errorText}`);
           }
           if (!response.body) {
@@ -1442,7 +1454,7 @@ function createRawOllamaStreamFn(
 
           stream.push({
             type: "done",
-            reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",
+            reason: resolveOllamaStopReason(finalResponse),
             message: assistantMessage,
           });
         } finally {

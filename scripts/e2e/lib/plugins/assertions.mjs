@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readBoundedResponseText } from "../bounded-response-text.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
   readPluginInstallIndex,
@@ -45,52 +46,11 @@ async function withTimeout(label, timeoutMs, run) {
     timeout.unref?.();
   });
   try {
-    return await Promise.race([run(controller.signal), timeoutPromise]);
+    return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
   } finally {
     if (timeout) {
       clearTimeout(timeout);
     }
-  }
-}
-
-function bodyTooLargeError(label, byteLimit) {
-  return Object.assign(new Error(`${label} response body exceeded ${byteLimit} bytes`), {
-    code: "ETOOBIG",
-  });
-}
-
-async function readBoundedResponseText(response, label, byteLimit) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw bodyTooLargeError(label, byteLimit);
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw bodyTooLargeError(label, byteLimit);
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
   }
 }
 
@@ -903,11 +863,12 @@ async function assertClawHubPreflight() {
     const body = await withTimeout(
       `ClawHub package preflight response for ${packageName}`,
       limits.timeoutMs,
-      () =>
+      (_signal, timeoutPromise) =>
         readBoundedResponseText(
           response,
           `ClawHub package preflight response for ${packageName}`,
           limits.bodyMaxBytes,
+          timeoutPromise,
         ),
     );
     throw new Error(
@@ -917,11 +878,12 @@ async function assertClawHubPreflight() {
   const rawDetail = await withTimeout(
     `ClawHub package preflight response for ${packageName}`,
     limits.timeoutMs,
-    () =>
+    (_signal, timeoutPromise) =>
       readBoundedResponseText(
         response,
         `ClawHub package preflight response for ${packageName}`,
         limits.bodyMaxBytes,
+        timeoutPromise,
       ),
   );
   const detail = await withTimeout(
@@ -990,13 +952,11 @@ function assertClawHubInstalled() {
   assertClawHubArtifactMetadata(record, pluginId);
 
   const installPath = resolveHomePath(record.installPath);
-  const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
-  if (!installPath.startsWith(`${extensionsRoot}${path.sep}`)) {
-    throw new Error(`ClawHub install path is outside managed extensions root: ${installPath}`);
-  }
   if (!fs.existsSync(installPath)) {
     throw new Error(`ClawHub install path missing on disk: ${installPath}`);
   }
+  const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
+  assertRealPathInside(extensionsRoot, installPath, "ClawHub install path");
   if (record.artifactKind === "npm-pack") {
     assertClawHubExternalInstallContract(installPath);
   }

@@ -31,6 +31,50 @@ type GraphChannel = {
 
 export type GraphResponse<T> = { value?: T[] };
 
+function responseWithRelease(response: Response, release: () => Promise<void>): Response {
+  let released = false;
+  const releaseOnce = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    await release();
+  };
+
+  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
+    void releaseOnce();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          controller.close();
+          await releaseOnce();
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (error) {
+        await releaseOnce();
+        throw error;
+      }
+    },
+    async cancel(reason) {
+      void reader.cancel(reason).catch(() => undefined);
+      await releaseOnce();
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 export function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";
 }
@@ -66,6 +110,7 @@ async function requestGraph(params: {
     },
     auditContext: "msteams.graph",
   });
+  let releaseInFinally = true;
   try {
     if (!response.ok) {
       throw await createMSTeamsHttpError(
@@ -73,14 +118,12 @@ async function requestGraph(params: {
         `${params.errorPrefix ?? "Graph"} ${params.path} failed`,
       );
     }
-    const body = NULL_BODY_STATUSES.has(response.status) ? null : await response.arrayBuffer();
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: new Headers(response.headers),
-    });
+    releaseInFinally = false;
+    return responseWithRelease(response, release);
   } finally {
-    await release();
+    if (releaseInFinally) {
+      await release();
+    }
   }
 }
 

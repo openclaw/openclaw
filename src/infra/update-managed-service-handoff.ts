@@ -4,7 +4,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveRestartSentinelPath } from "./restart-sentinel.js";
+import {
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
+} from "../daemon/constants.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
@@ -22,7 +27,7 @@ const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
 ] as const);
 
 const HANDOFF_SCRIPT = String.raw`
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -91,26 +96,6 @@ function readJsonFile(filePath) {
   }
 }
 
-function writeJsonFile(filePath, value) {
-  const dir = path.dirname(filePath);
-  const tempPath = path.join(
-    dir,
-    "." + path.basename(filePath) + "." + process.pid + "." + Date.now() + ".tmp",
-  );
-  try {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(tempPath, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
-    fs.renameSync(tempPath, filePath);
-  } catch (err) {
-    appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
-    try {
-      fs.rmSync(tempPath, { force: true });
-    } catch {
-      // Best effort only.
-    }
-  }
-}
-
 function isPendingUpdatePayload(payload) {
   const reason = payload && payload.stats && payload.stats.reason;
   return (
@@ -119,6 +104,170 @@ function isPendingUpdatePayload(payload) {
     payload.status === "skipped" &&
     (reason === "managed-service-handoff-started" || reason === "restart-health-pending")
   );
+}
+
+function openStateDatabase() {
+  if (!params.stateDatabasePath || typeof params.stateDatabasePath !== "string") {
+    return null;
+  }
+  try {
+    const sqlite = require("node:sqlite");
+    fs.mkdirSync(path.dirname(params.stateDatabasePath), { recursive: true, mode: 0o700 });
+    const db = new sqlite.DatabaseSync(params.stateDatabasePath);
+    db.exec([
+      "CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (",
+      "sentinel_key TEXT NOT NULL PRIMARY KEY,",
+      "version INTEGER NOT NULL,",
+      "kind TEXT NOT NULL,",
+      "status TEXT NOT NULL,",
+      "ts INTEGER NOT NULL,",
+      "session_key TEXT,",
+      "thread_id TEXT,",
+      "delivery_channel TEXT,",
+      "delivery_to TEXT,",
+      "delivery_account_id TEXT,",
+      "message TEXT,",
+      "continuation_json TEXT,",
+      "doctor_hint TEXT,",
+      "stats_json TEXT,",
+      "payload_json TEXT NOT NULL,",
+      "updated_at_ms INTEGER NOT NULL",
+      ");",
+      "CREATE INDEX IF NOT EXISTS idx_gateway_restart_sentinel_ts",
+      "ON gateway_restart_sentinel(ts DESC, sentinel_key);",
+    ].join(" "));
+    ensureGatewayRestartSentinelColumns(db);
+    hardenStateDatabaseFiles();
+    return db;
+  } catch (err) {
+    appendLog("failed to open restart sentinel database: " + (err && err.stack ? err.stack : String(err)));
+    return null;
+  }
+}
+
+function tableHasColumn(db, tableName, columnName) {
+  try {
+    return db.prepare("PRAGMA table_info(" + tableName + ")").all().some((row) => row && row.name === columnName);
+  } catch {
+    return false;
+  }
+}
+
+function ensureColumn(db, tableName, columnSql) {
+  const columnName = columnSql.trim().split(/\s+/, 1)[0];
+  if (!columnName || tableHasColumn(db, tableName, columnName)) {
+    return;
+  }
+  db.exec("ALTER TABLE " + tableName + " ADD COLUMN " + columnSql + ";");
+}
+
+function ensureGatewayRestartSentinelColumns(db) {
+  ensureColumn(db, "gateway_restart_sentinel", "delivery_channel TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "delivery_to TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "delivery_account_id TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "message TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
+}
+
+function hardenStateDatabaseFiles() {
+  if (!params.stateDatabasePath || typeof params.stateDatabasePath !== "string") {
+    return;
+  }
+  for (const filePath of [
+    params.stateDatabasePath,
+    params.stateDatabasePath + "-wal",
+    params.stateDatabasePath + "-shm",
+  ]) {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.chmodSync(filePath, 0o600);
+      }
+    } catch {
+      // Best effort only.
+    }
+  }
+}
+
+function readRestartSentinelPayload() {
+  const db = openStateDatabase();
+  if (!db) {
+    return null;
+  }
+  try {
+    const row = db
+      .prepare("SELECT version, payload_json FROM gateway_restart_sentinel WHERE sentinel_key = ?")
+      .get("current");
+    if (!row || row.version !== 1 || typeof row.payload_json !== "string") {
+      return null;
+    }
+    return JSON.parse(row.payload_json);
+  } catch {
+    return null;
+  } finally {
+    hardenStateDatabaseFiles();
+    try {
+      db.close();
+    } catch {}
+  }
+}
+
+function writeRestartSentinelPayload(payload) {
+  const db = openStateDatabase();
+  if (!db) {
+    return;
+  }
+  try {
+    const updatedAtMs = Date.now();
+    db.prepare(
+      [
+        "INSERT INTO gateway_restart_sentinel (",
+        "sentinel_key, version, kind, status, ts, session_key, thread_id,",
+        "delivery_channel, delivery_to, delivery_account_id, message, continuation_json,",
+        "doctor_hint, stats_json, payload_json, updated_at_ms",
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "ON CONFLICT(sentinel_key) DO UPDATE SET",
+        "version = excluded.version, kind = excluded.kind, status = excluded.status,",
+        "ts = excluded.ts, session_key = excluded.session_key, thread_id = excluded.thread_id,",
+        "delivery_channel = excluded.delivery_channel, delivery_to = excluded.delivery_to,",
+        "delivery_account_id = excluded.delivery_account_id, message = excluded.message,",
+        "continuation_json = excluded.continuation_json, doctor_hint = excluded.doctor_hint,",
+        "stats_json = excluded.stats_json, payload_json = excluded.payload_json,",
+        "updated_at_ms = excluded.updated_at_ms",
+      ].join(" "),
+    ).run(
+      "current",
+      1,
+      payload.kind,
+      payload.status,
+      payload.ts,
+      payload.sessionKey || null,
+      payload.threadId || null,
+      payload.deliveryContext && typeof payload.deliveryContext.channel === "string"
+        ? payload.deliveryContext.channel
+        : null,
+      payload.deliveryContext && typeof payload.deliveryContext.to === "string"
+        ? payload.deliveryContext.to
+        : null,
+      payload.deliveryContext && typeof payload.deliveryContext.accountId === "string"
+        ? payload.deliveryContext.accountId
+        : null,
+      payload.message || null,
+      payload.continuation ? JSON.stringify(payload.continuation) : null,
+      payload.doctorHint || null,
+      payload.stats ? JSON.stringify(payload.stats) : null,
+      JSON.stringify(payload),
+      updatedAtMs,
+    );
+  } catch (err) {
+    appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
+  } finally {
+    hardenStateDatabaseFiles();
+    try {
+      db.close();
+    } catch {}
+  }
 }
 
 function buildFallbackFailurePayload(reason) {
@@ -152,11 +301,7 @@ function buildFallbackFailurePayload(reason) {
 }
 
 function markUpdateSentinelFailureIfPending(reason) {
-  if (!params.sentinelPath) {
-    return;
-  }
-  const current = readJsonFile(params.sentinelPath);
-  let payload = current && current.version === 1 ? current.payload : null;
+  let payload = readRestartSentinelPayload();
   if (payload && (payload.kind !== "update" || !isPendingUpdatePayload(payload))) {
     return;
   }
@@ -171,7 +316,57 @@ function markUpdateSentinelFailureIfPending(reason) {
   } else {
     payload = buildFallbackFailurePayload(reason);
   }
-  writeJsonFile(params.sentinelPath, { version: 1, payload });
+  writeRestartSentinelPayload(payload);
+}
+
+function runServiceCommand(command, args) {
+  try {
+    const result = spawnSync(command, args, { stdio: "ignore", timeout: 30000 });
+    return typeof result.status === "number" ? result.status : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function startGatewayServiceBestEffort() {
+  const recovery = params.serviceRecovery;
+  if (!recovery || typeof recovery !== "object" || !recovery.kind) {
+    return;
+  }
+  let target = "";
+  let status = 1;
+  if (recovery.kind === "systemd") {
+    target = recovery.unit;
+    status = runServiceCommand("systemctl", ["--user", "start", recovery.unit]);
+  } else if (recovery.kind === "launchd") {
+    target = recovery.label;
+    const serviceTarget = "gui/" + recovery.uid + "/" + recovery.label;
+    status = runServiceCommand("launchctl", ["kickstart", serviceTarget]);
+    if (status !== 0) {
+      runServiceCommand("launchctl", ["enable", serviceTarget]);
+      status = runServiceCommand("launchctl", [
+        "bootstrap",
+        "gui/" + recovery.uid,
+        recovery.plistPath,
+      ]);
+      if (status !== 0) {
+        // Bootstrap can fail when the label is already loaded. Retry start-only
+        // so recovery does not bounce a gateway that is already running.
+        status = runServiceCommand("launchctl", ["kickstart", serviceTarget]);
+      }
+    }
+  } else if (recovery.kind === "schtasks") {
+    target = recovery.taskName;
+    status = runServiceCommand("schtasks.exe", ["/Run", "/TN", recovery.taskName]);
+  } else {
+    return;
+  }
+  appendLog(
+    "gateway service recovery " +
+      (status === 0 ? "succeeded" : "failed status=" + status) +
+      " target=" +
+      target,
+  );
 }
 
 (async () => {
@@ -215,6 +410,7 @@ function markUpdateSentinelFailureIfPending(reason) {
     if (exit && exit.error) {
       appendLog("managed update command failed to start: " + (exit.error && exit.error.stack ? exit.error.stack : String(exit.error)));
       markUpdateSentinelFailureIfPending("managed-service-handoff-spawn-failed");
+      startGatewayServiceBestEffort();
       process.exitCode = 1;
       return;
     }
@@ -226,9 +422,11 @@ function markUpdateSentinelFailureIfPending(reason) {
     );
     if (exit && typeof exit.code === "number" && exit.code !== 0) {
       markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
+      startGatewayServiceBestEffort();
       process.exitCode = exit.code;
     } else if (exit && exit.signal) {
       markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
+      startGatewayServiceBestEffort();
       process.exitCode = 1;
     }
   } finally {
@@ -244,6 +442,7 @@ function markUpdateSentinelFailureIfPending(reason) {
 })().catch((err) => {
   appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
   markUpdateSentinelFailureIfPending("managed-service-handoff-helper-failed");
+  startGatewayServiceBestEffort();
   cleanupSensitiveFiles();
   process.exitCode = 1;
 });
@@ -301,6 +500,44 @@ export function formatManagedServiceUpdateCommand(params?: {
     args.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
   }
   return args.join(" ");
+}
+
+type GatewayServiceRecovery =
+  | { kind: "systemd"; unit: string }
+  | { kind: "launchd"; uid: number; label: string; plistPath: string }
+  | { kind: "schtasks"; taskName: string };
+
+function resolveGatewayServiceRecovery(
+  supervisor: RespawnSupervisor | null | undefined,
+  env: NodeJS.ProcessEnv,
+): GatewayServiceRecovery | undefined {
+  if (supervisor === "systemd") {
+    const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+    const unit = override
+      ? override.endsWith(".service")
+        ? override
+        : `${override}.service`
+      : `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+    return { kind: "systemd", unit };
+  }
+  if (supervisor === "launchd") {
+    const label =
+      env.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+    const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+    const home = env.HOME?.trim() || os.homedir();
+    return {
+      kind: "launchd",
+      uid,
+      label,
+      plistPath: path.join(home, "Library", "LaunchAgents", `${label}.plist`),
+    };
+  }
+  if (supervisor === "schtasks") {
+    const taskName =
+      env.OPENCLAW_WINDOWS_TASK_NAME?.trim() || resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+    return { kind: "schtasks", taskName };
+  }
+  return undefined;
 }
 
 export function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -456,8 +693,9 @@ export async function startManagedServiceUpdateHandoff(params: {
     handoffId: params.handoffId,
     logPath,
     metaPath,
-    sentinelPath: resolveRestartSentinelPath(),
+    stateDatabasePath: resolveOpenClawStateSqlitePath(params.env ?? process.env),
     sensitivePaths: [scriptPath, paramsPath, metaPath],
+    serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, params.env ?? process.env),
   };
 
   await fs.writeFile(scriptPath, `${HANDOFF_SCRIPT}\n`, { mode: 0o700 });

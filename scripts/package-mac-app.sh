@@ -68,13 +68,13 @@ sparkle_framework_for_arch() {
 PNPM_CMD=()
 
 resolve_pnpm_cmd() {
-  if command -v pnpm >/dev/null 2>&1; then
-    PNPM_CMD=(pnpm)
+  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
+    PNPM_CMD=(corepack pnpm)
     return 0
   fi
 
-  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
-    PNPM_CMD=(corepack pnpm)
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
     return 0
   fi
 

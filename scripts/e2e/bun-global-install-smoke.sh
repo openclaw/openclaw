@@ -3,11 +3,26 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf "%s\n" "$((10#$value))"
+}
+
 BUN_BIN="${BUN_BIN:-bun}"
 HOST_BUILD="${OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD:-1}"
 DIST_IMAGE="${OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE:-}"
 PACKAGE_TGZ="${OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ:-}"
-COMMAND_TIMEOUT_MS="${OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS:-180000}"
+COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"
 DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
 SMOKE_DIR=""
 PACK_DIR=""
@@ -27,6 +42,29 @@ run_with_timeout() {
   local timeout_ms="$1"
   shift
   node scripts/e2e/lib/bun-global-install/assertions.mjs run-with-timeout "$timeout_ms" "$@"
+}
+
+resolve_pack_tarball_path() {
+  local pack_json_file="$1"
+  local pack_dir="$2"
+  node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const raw = fs.readFileSync(process.argv[1], "utf8") || "[]";
+const parsed = JSON.parse(raw);
+const last = Array.isArray(parsed) ? parsed.at(-1) : null;
+const filename = typeof last?.filename === "string" ? last.filename.trim() : "";
+if (
+  !filename.endsWith(".tgz") ||
+  filename.includes("\0") ||
+  filename !== path.basename(filename) ||
+  filename !== path.win32.basename(filename)
+) {
+  console.error(`ERROR: npm pack reported unsafe tarball filename ${JSON.stringify(filename)}`);
+  process.exit(1);
+}
+process.stdout.write(path.resolve(process.argv[2], filename));
+' "$pack_json_file" "$pack_dir"
 }
 
 restore_dist_from_image() {
@@ -122,17 +160,7 @@ resolve_package_tgz() {
 
   echo "==> Pack OpenClaw tarball"
   npm pack --ignore-scripts --json --pack-destination "$PACK_DIR" >"$pack_json_file"
-  PACKAGE_TGZ="$(
-    node -e '
-const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
-const parsed = JSON.parse(raw);
-const last = Array.isArray(parsed) ? parsed.at(-1) : null;
-if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
-  process.exit(1);
-}
-process.stdout.write(require("node:path").resolve(process.argv[2], last.filename));
-' "$pack_json_file" "$PACK_DIR"
-  )"
+  PACKAGE_TGZ="$(resolve_pack_tarball_path "$pack_json_file" "$PACK_DIR")"
   if [ -z "$PACKAGE_TGZ" ] || [ ! -f "$PACKAGE_TGZ" ]; then
     echo "missing packed OpenClaw tarball" >&2
     exit 1

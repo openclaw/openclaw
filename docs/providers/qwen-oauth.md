@@ -64,11 +64,11 @@ provider instead.
 - You need to test compatibility with the Qwen Portal endpoint specifically.
 
 Choose [Qwen](/providers/qwen) for new setup, broader endpoint choices, Standard
-ModelStudio, Coding Plan, and the full bundled Qwen catalog.
+ModelStudio, Coding Plan, and the full Qwen plugin catalog.
 
 ## Models
 
-The bundled catalog seeds the Qwen Portal default:
+The Qwen plugin catalog seeds the Qwen Portal default:
 
 - `qwen-oauth/qwen3.5-plus`
 

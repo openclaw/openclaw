@@ -2787,6 +2787,37 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
+  it("persists separate requester and executor agents for global cross-agent tasks", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      session: {
+        ...hoisted.state.cfg.session,
+        scope: "global",
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "research",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.createRunningTaskRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerKey: "global",
+        childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        agentId: "codex",
+        requesterAgentId: "research",
+      }),
+    );
+  });
+
   it("does not implicitly stream for subagent requester sessions when heartbeat is disabled", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,

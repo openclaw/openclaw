@@ -9,6 +9,7 @@ import {
   parseSessionArchiveTimestamp,
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
+import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
@@ -106,33 +107,7 @@ function classifySessionTranscriptCandidate(
   return transcriptSessionId === sessionId ? "current" : "stale";
 }
 
-function extractGeneratedTranscriptSessionId(sessionFile?: string): string | undefined {
-  const trimmed = sessionFile?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const base = path.basename(trimmed);
-  if (!base.endsWith(".jsonl")) {
-    return undefined;
-  }
-  const withoutExt = base.slice(0, -".jsonl".length);
-  const topicIndex = withoutExt.indexOf("-topic-");
-  if (topicIndex > 0) {
-    const topicSessionId = withoutExt.slice(0, topicIndex);
-    return looksLikeGeneratedSessionId(topicSessionId) ? topicSessionId : undefined;
-  }
-  const forkMatch = withoutExt.match(
-    /^(\d{4}-\d{2}-\d{2}T[\w-]+(?:Z|[+-]\d{2}(?:-\d{2})?)?)_(.+)$/,
-  );
-  if (forkMatch?.[2]) {
-    return looksLikeGeneratedSessionId(forkMatch[2]) ? forkMatch[2] : undefined;
-  }
-  return looksLikeGeneratedSessionId(withoutExt) ? withoutExt : undefined;
-}
-
-function looksLikeGeneratedSessionId(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
+export { extractGeneratedTranscriptSessionId };
 
 function canonicalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
@@ -502,17 +477,26 @@ export function resolveStableSessionEndTranscript(params: {
   return {};
 }
 
+export type SessionArchiveCleanupRule = {
+  reason: ArchiveFileReason;
+  olderThanMs: number;
+};
+
+// Store maintenance runs this on every session-store save. All retention rules
+// share one directory listing: a listing per reason would multiply READDIR
+// load on the per-save hot path, which is expensive on networked filesystems.
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
-  olderThanMs: number;
-  reason?: ArchiveFileReason;
+  rules: SessionArchiveCleanupRule[];
   nowMs?: number;
 }): Promise<{ removed: number; scanned: number }> {
-  if (!Number.isFinite(opts.olderThanMs) || opts.olderThanMs < 0) {
+  const rules = opts.rules.filter(
+    (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
+  );
+  if (rules.length === 0) {
     return { removed: 0, scanned: 0 };
   }
   const now = opts.nowMs ?? Date.now();
-  const reason: ArchiveFileReason = opts.reason ?? "deleted";
   const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
   let removed = 0;
   let scanned = 0;
@@ -520,21 +504,24 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   for (const dir of directories) {
     const entries = await fs.promises.readdir(dir).catch(() => []);
     for (const entry of entries) {
-      const timestamp = parseSessionArchiveTimestamp(entry, reason);
-      if (timestamp == null) {
-        continue;
+      for (const rule of rules) {
+        const timestamp = parseSessionArchiveTimestamp(entry, rule.reason);
+        if (timestamp == null) {
+          continue;
+        }
+        scanned += 1;
+        if (now - timestamp > rule.olderThanMs) {
+          const fullPath = path.join(dir, entry);
+          const stat = await fs.promises.stat(fullPath).catch(() => null);
+          if (stat?.isFile()) {
+            await fs.promises.rm(fullPath).catch(() => undefined);
+            removed += 1;
+          }
+        }
+        // An archive name carries exactly one `.{reason}.{timestamp}` suffix,
+        // so the first matching rule owns the entry.
+        break;
       }
-      scanned += 1;
-      if (now - timestamp <= opts.olderThanMs) {
-        continue;
-      }
-      const fullPath = path.join(dir, entry);
-      const stat = await fs.promises.stat(fullPath).catch(() => null);
-      if (!stat?.isFile()) {
-        continue;
-      }
-      await fs.promises.rm(fullPath).catch(() => undefined);
-      removed += 1;
     }
   }
 

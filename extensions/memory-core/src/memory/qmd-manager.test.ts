@@ -285,6 +285,10 @@ describe("QmdMemoryManager", () => {
     throw new Error(`expected missing path ${targetPath}`);
   }
 
+  function qmdIndexConfigPath(selectedAgentId = agentId): string {
+    return path.join(stateDir, "agents", selectedAgentId, "qmd", "xdg-config", "qmd", "index.yml");
+  }
+
   async function createManager(params?: {
     mode?: "full" | "status" | "cli";
     cfg?: OpenClawConfig;
@@ -345,7 +349,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
         },
@@ -430,7 +434,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: true, onSearch: false },
           },
         },
@@ -474,7 +478,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: true, onSearch: false },
           },
         },
@@ -529,7 +533,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -597,7 +601,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -644,7 +648,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -682,7 +686,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -1962,6 +1966,121 @@ describe("QmdMemoryManager", () => {
     expect(removeCalls).toEqual(["memory-root-main", "memory-dir-main"]);
     expect(addCalls).toEqual(["memory-root-main", "memory-dir-main"]);
     expectMockMessageContains(logWarnMock, "duplicate document constraint");
+
+    await manager.close();
+  });
+
+  it("refreshes qmd index config with quoted collection values during update repair", async () => {
+    const notesDir = path.join(workspaceDir, "Notes #1: blue");
+    await fs.mkdir(notesDir, { recursive: true });
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: notesDir, pattern: "**/* #tag: [draft].md", name: "notes" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let updateCalls = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        updateCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        if (updateCalls === 1) {
+          emitAndClose(
+            child,
+            "stderr",
+            "SQLiteError: UNIQUE constraint failed: documents.collection, documents.path",
+            1,
+          );
+          return child;
+        }
+        queueMicrotask(() => {
+          child.closeWith(0);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "status" });
+    await expect(manager.sync({ reason: "manual" })).resolves.toBeUndefined();
+
+    const indexConfig = await fs.readFile(qmdIndexConfigPath(), "utf8");
+    expect(indexConfig).toContain('  "notes-main":');
+    expect(indexConfig).toContain(`    path: ${JSON.stringify(notesDir)}`);
+    expect(indexConfig).toContain('    pattern: "**/* #tag: [draft].md"');
+    expect(updateCalls).toBe(2);
+
+    await manager.close();
+  });
+
+  it("forces repair remove/add even when managed collections are still listed", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    let updateCalls = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { name: "memory-root-main", path: workspaceDir, mask: "MEMORY.md" },
+            { name: "memory-dir-main", path: path.join(workspaceDir, "memory"), mask: "**/*.md" },
+          ]),
+        );
+        return child;
+      }
+      if (args[0] === "update") {
+        updateCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        if (updateCalls === 1) {
+          emitAndClose(
+            child,
+            "stderr",
+            "SQLiteError: UNIQUE constraint failed: documents.collection, documents.path",
+            1,
+          );
+          return child;
+        }
+        queueMicrotask(() => {
+          child.closeWith(0);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await expect(manager.sync({ reason: "manual" })).resolves.toBeUndefined();
+
+    const removeCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "collection" && args[1] === "remove")
+      .map((args) => args[2]);
+    const addCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "collection" && args[1] === "add")
+      .map((args) => args[args.indexOf("--name") + 1]);
+
+    expect(updateCalls).toBe(2);
+    expect(removeCalls).toEqual(["memory-root-main", "memory-dir-main"]);
+    expect(addCalls).toEqual(["memory-root-main", "memory-dir-main"]);
 
     await manager.close();
   });
@@ -5943,8 +6062,8 @@ describe("QmdMemoryManager", () => {
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(false);
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
-      ok: false,
-      error: "QMD semantic vectors are unavailable",
+      ok: true,
+      checked: false,
     });
     expect(spawnMock.mock.calls.length).toBe(baselineCalls);
     expect(manager.status().vector).toEqual({

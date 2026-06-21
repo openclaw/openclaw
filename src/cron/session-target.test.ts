@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   resolveCronCurrentSessionTarget,
   resolveCronDeliverySessionKey,
-  resolveCronFailureNotificationSessionKey,
   resolveCronNotificationSessionKey,
   resolveCronSessionTargetSessionKey,
 } from "./session-target.js";
@@ -65,8 +64,5 @@ describe("cron session target helpers", () => {
     expect(resolveCronNotificationSessionKey({ jobId: "job-1", sessionKey: " " })).toBe(
       "cron:job-1:failure",
     );
-    expect(
-      resolveCronFailureNotificationSessionKey({ id: "job-2", sessionTarget: "isolated" }),
-    ).toBe("cron:job-2:failure");
   });
 });

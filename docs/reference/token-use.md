@@ -54,7 +54,7 @@ for bounded runtime excerpts and injected runtime-owned blocks. They are
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
-`toolResultMaxChars` is an advanced ceiling. When it is unset, OpenClaw chooses
+`toolResultMaxChars` is an advanced ceiling (up to `1000000` characters). When it is unset, OpenClaw chooses
 the live tool-result cap from the effective model context window: `16000` chars
 below 100K tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+
 tokens, still bounded by the runtime context-share guard.
@@ -92,9 +92,11 @@ Usage surfaces normalize common provider-native field aliases before display.
 For OpenAI-family Responses traffic, that includes both `input_tokens` /
 `output_tokens` and `prompt_tokens` / `completion_tokens`, so transport-specific
 field names do not change `/status`, `/usage`, or session summaries.
-Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
-`stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
-used when the CLI omits an explicit `stats.input` field.
+Gemini CLI usage is normalized too: the default `stream-json` parser reads
+assistant `message` events, and `stats.cached` maps to `cacheRead` with
+`stats.input_tokens - stats.cached` used when the CLI omits an explicit
+`stats.input` field. Legacy JSON overrides still read reply text from
+`response`.
 For native OpenAI-family Responses traffic, WebSocket/SSE usage aliases are
 normalized the same way, and totals fall back to normalized input + output when
 `total_tokens` is missing or `0`.

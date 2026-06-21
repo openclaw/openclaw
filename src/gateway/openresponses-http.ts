@@ -48,6 +48,7 @@ import {
   authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
+  isGatewaySessionKeyOverrideError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
@@ -612,6 +613,14 @@ export async function handleOpenResponsesHttpRequest(
                     surroundContentWithNewlines: false,
                   }),
                 );
+              } else {
+                fileContexts.push(
+                  renderFileContextBlock({
+                    filename: file.filename,
+                    content: "[No extractable text]",
+                    surroundContentWithNewlines: false,
+                  }),
+                );
               }
               if (file.images && file.images.length > 0) {
                 images = images.concat(file.images);
@@ -659,7 +668,7 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });

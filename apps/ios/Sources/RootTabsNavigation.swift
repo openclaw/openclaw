@@ -7,7 +7,6 @@ extension RootTabs {
         980
     }
 
-    static let sidebarSplitMinimumWidth: CGFloat = 292
     static let sidebarSplitIdealWidth: CGFloat = 316
     static let sidebarSplitMaximumWidth: CGFloat = 340
     static let sidebarDrawerMaximumWidth: CGFloat = 340

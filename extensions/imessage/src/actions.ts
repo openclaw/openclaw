@@ -392,10 +392,22 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     edit: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
     unsend: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
-    reply: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
-    sendWithEffect: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    sendAttachment: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    "upload-file": { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    reply: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
+    sendWithEffect: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
+    sendAttachment: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
+    "upload-file": {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
     renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     addParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },

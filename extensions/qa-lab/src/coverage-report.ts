@@ -333,7 +333,7 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   );
   lines.push(`- Evidence refs: ${report.evidenceRefCount}`);
   lines.push(`- Scenario coverage IDs: ${report.scenarioCoverageIdCount}`);
-  lines.push(`- Unmapped scenario coverage IDs: ${report.unmappedCoverageIdCount}`);
+  lines.push(`- Unknown scenario coverage IDs: ${report.unknownCoverageIdCount}`);
   lines.push(`- Validation warnings: ${report.validationIssueCount}`, "");
 
   if (report.profiles.length > 0) {
@@ -346,7 +346,7 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   }
 
   if (report.categories.length > 0) {
-    lines.push("### Category Mapping", "");
+    lines.push("### Category Coverage", "");
     for (const category of report.categories) {
       const coverageIds =
         category.coverageIds.length > 0 ? category.coverageIds.join(", ") : "none";
@@ -361,7 +361,7 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
           : "none";
       const profiles = category.profiles.length > 0 ? category.profiles.join(", ") : "none";
       lines.push(
-        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.mappingStatus}): profiles: ${profiles}; coverage IDs: ${coverageIds}; evidence: ${evidence}`,
+        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.coverageStatus}): profiles: ${profiles}; coverage IDs: ${coverageIds}; evidence: ${evidence}`,
       );
     }
     lines.push("");
@@ -376,9 +376,9 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
     lines.push("");
   }
 
-  if (report.unmappedCoverageIds.length > 0) {
-    lines.push("### Unmapped Scenario Coverage IDs", "");
-    lines.push(report.unmappedCoverageIds.join(", "));
+  if (report.unknownCoverageIds.length > 0) {
+    lines.push("### Unknown Scenario Coverage IDs", "");
+    lines.push(report.unknownCoverageIds.join(", "));
     lines.push("");
   }
 }
@@ -465,7 +465,12 @@ function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
     group.push(match);
     groups.set(match.executionKind, group);
   }
-  const executionOrder: QaScenarioSearchMatch["executionKind"][] = ["flow", "vitest", "playwright"];
+  const executionOrder: QaScenarioSearchMatch["executionKind"][] = [
+    "flow",
+    "script",
+    "vitest",
+    "playwright",
+  ];
   return executionOrder.flatMap((executionKind) => {
     const group = groups.get(executionKind);
     return group && group.length > 0 ? [{ executionKind, matches: group }] : [];
@@ -505,7 +510,7 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
     lines.push(`  - surface: ${match.surfaces.join(", ")}`);
     lines.push(
       match.executionKind === "flow"
-        ? "  - execution: qa-flow"
+        ? "  - execution: flow"
         : `  - execution: ${match.executionKind} ${match.executionPath ?? "missing"}`,
     );
     lines.push(`  - coverage IDs: ${match.coverageIds.join(", ") || "none"}`);
