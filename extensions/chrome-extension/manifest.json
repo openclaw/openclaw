@@ -19,8 +19,6 @@
     "webNavigation",
     "sidePanel",
     "scripting",
-    "clipboardWrite",
-    "declarativeNetRequest",
     "tabGroups"
   ],
   "host_permissions": [
