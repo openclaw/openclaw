@@ -59,7 +59,7 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamValidation,
 } from "./agent-tools.read.js";
-import { cleanToolSchemaForGemini, normalizeToolParameters } from "./agent-tools.schema.js";
+import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -409,7 +409,6 @@ export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 
 /** Test-only access to internal tool assembly helpers. */
 export const testing = {
-  cleanToolSchemaForGemini,
   getToolParamsRecord,
   wrapToolParamValidation,
   assertRequiredParams,

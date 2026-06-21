@@ -195,6 +195,61 @@ describe("scripts/changed-lanes", () => {
     expect(result.stdout).not.toContain("[check:changed]");
   });
 
+  it("rejects unknown changed lane options before treating them as paths", () => {
+    const result = spawnSync(process.execPath, ["scripts/changed-lanes.mjs", "--jsno"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: createNestedGitEnv(),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown option: --jsno");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("rejects unknown changed check options before treating them as paths", () => {
+    const result = spawnSync(process.execPath, ["scripts/check-changed.mjs", "--dr-run"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...createNestedGitEnv(), OPENCLAW_TESTBOX: "1" },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown option: --dr-run");
+    expect(result.stderr).not.toContain("\n    at ");
+    expect(result.stderr).not.toContain("[check:changed]");
+  });
+
+  it("still accepts dash-prefixed explicit changed paths after the separator", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/changed-lanes.mjs", "--json", "--", "--github-output"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(parseChangedLaneOutput(result.stdout).paths).toEqual(["--github-output"]);
+  });
+
+  it("keeps changed check option-shaped paths intact after the separator", () => {
+    const args = buildChangedCheckCrabboxArgs(["--staged", "--", "--no-changes"], {
+      cwd: repoRoot,
+    });
+
+    expect(args.slice(args.indexOf("check:changed") + 1)).toEqual([
+      "--staged",
+      "--",
+      "--no-changes",
+    ]);
+  });
+
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
     git(dir, ["init", "-q", "--initial-branch=main"]);

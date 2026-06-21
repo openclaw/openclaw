@@ -11,7 +11,6 @@ import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime
 export const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 export const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_ID = "anthropic/claude-opus-4.6";
-export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = `${VERCEL_AI_GATEWAY_PROVIDER_ID}/${VERCEL_AI_GATEWAY_DEFAULT_MODEL_ID}`;
 export const VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW = 200_000;
 export const VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS = 128_000;
 export const VERCEL_AI_GATEWAY_DEFAULT_COST = {

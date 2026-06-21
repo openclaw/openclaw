@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveGatewayProbeAuthResolution } from "../commands/status.gateway-probe.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnv } from "../test-utils/env.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 import { resolveGatewayProbeAuth } from "./probe-auth.js";
@@ -40,33 +41,14 @@ function makeRemoteGatewayConfig(remote: { token?: string; password?: string }):
 }
 
 function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
-  const keys = [
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_GATEWAY_PASSWORD",
-    "OPENCLAW_SERVICE_KIND",
-  ] as const;
-  const previous = new Map<string, string | undefined>();
-  for (const key of keys) {
-    previous.set(key, process.env[key]);
-    const nextValue = env[key];
-    if (typeof nextValue === "string") {
-      process.env[key] = nextValue;
-    } else {
-      delete process.env[key];
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    for (const key of keys) {
-      const value = previous.get(key);
-      if (typeof value === "string") {
-        process.env[key] = value;
-      } else {
-        delete process.env[key];
-      }
-    }
-  }
+  return withEnv(
+    {
+      OPENCLAW_GATEWAY_TOKEN: env.OPENCLAW_GATEWAY_TOKEN,
+      OPENCLAW_GATEWAY_PASSWORD: env.OPENCLAW_GATEWAY_PASSWORD,
+      OPENCLAW_SERVICE_KIND: env.OPENCLAW_SERVICE_KIND,
+    },
+    fn,
+  );
 }
 
 describe("gateway credential precedence coverage", () => {
@@ -156,9 +138,8 @@ describe("gateway credential precedence coverage", () => {
       mode,
       env,
     });
-    const status = (
-      await withGatewayAuthEnv(env, () => resolveGatewayProbeAuthResolution(cfg))
-    ).auth;
+    const status = (await withGatewayAuthEnv(env, () => resolveGatewayProbeAuthResolution(cfg)))
+      .auth;
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
       env,

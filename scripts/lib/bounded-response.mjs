@@ -19,7 +19,7 @@ function parseContentLengthHeader(headers) {
     return undefined;
   }
   const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
+  return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
 async function readResponseChunk(reader, label, signal, markCanceled) {

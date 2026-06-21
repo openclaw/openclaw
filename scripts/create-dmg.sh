@@ -62,6 +62,8 @@ to_applescript_pair() {
 if [[ -z "$OUT_PATH" ]]; then
   OUT_PATH="$BUILD_DIR/$DMG_NAME"
 fi
+OUT_DIR="$(dirname "$OUT_PATH")"
+mkdir -p "$OUT_DIR"
 
 echo "Creating DMG: $OUT_PATH"
 

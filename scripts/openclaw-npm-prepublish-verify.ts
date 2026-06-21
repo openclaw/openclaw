@@ -19,6 +19,51 @@ type InstalledPackageJson = {
   version?: string;
 };
 
+export type OpenClawNpmPrepublishVerifyArgs =
+  | {
+      expectedVersion?: string;
+      help: false;
+      tarballPath: string;
+    }
+  | {
+      expectedVersion?: undefined;
+      help: true;
+      tarballPath: "";
+    };
+
+export function openClawNpmPrepublishVerifyUsage(): string {
+  return "Usage: node --import tsx scripts/openclaw-npm-prepublish-verify.ts <tarball.tgz> [expected-version]";
+}
+
+export function parseOpenClawNpmPrepublishVerifyArgs(
+  argv: readonly string[],
+): OpenClawNpmPrepublishVerifyArgs {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const tarballPath = args[0]?.trim() ?? "";
+  if (tarballPath === "--help" || tarballPath === "-h") {
+    return { help: true, tarballPath: "" };
+  }
+  if (!tarballPath) {
+    throw new Error(openClawNpmPrepublishVerifyUsage());
+  }
+  if (tarballPath.startsWith("-")) {
+    throw new Error(`Unknown openclaw npm prepublish verifier option: ${tarballPath}`);
+  }
+
+  const expectedVersion = args[1]?.trim();
+  if (expectedVersion?.startsWith("-")) {
+    throw new Error(`Unknown openclaw npm prepublish verifier option: ${expectedVersion}`);
+  }
+  const extraArg = args[2]?.trim();
+  if (extraArg) {
+    throw new Error(`Unexpected openclaw npm prepublish verifier argument: ${extraArg}`);
+  }
+
+  return expectedVersion
+    ? { expectedVersion, help: false, tarballPath }
+    : { help: false, tarballPath };
+}
+
 function npmExec(args: string[], cwd: string): string {
   const invocation = resolveNpmCommandInvocation({
     npmArgs: args,
@@ -30,13 +75,11 @@ function npmExec(args: string[], cwd: string): string {
   return runNpmVerifyCommand(invocation, cwd);
 }
 
-function main(): void {
-  const tarballPath = process.argv[2]?.trim();
-  const expectedVersion = process.argv[3]?.trim();
-  if (!tarballPath) {
-    throw new Error(
-      "Usage: node --import tsx scripts/openclaw-npm-prepublish-verify.ts <tarball.tgz> [expected-version]",
-    );
+function main(argv = process.argv.slice(2)): void {
+  const args = parseOpenClawNpmPrepublishVerifyArgs(argv);
+  if (args.help) {
+    console.log(openClawNpmPrepublishVerifyUsage());
+    return;
   }
 
   const workingDir = mkdtempSync(join(tmpdir(), "openclaw-prepublish-"));
@@ -48,7 +91,7 @@ function main(): void {
         "-g",
         "--prefix",
         prefixDir,
-        realpathSync(tarballPath),
+        realpathSync(args.tarballPath),
         "--no-fund",
         "--no-audit",
       ],
@@ -59,7 +102,7 @@ function main(): void {
     const pkg = JSON.parse(
       readFileSync(join(packageRoot, "package.json"), "utf8"),
     ) as InstalledPackageJson;
-    const resolvedExpectedVersion = expectedVersion || pkg.version?.trim() || "";
+    const resolvedExpectedVersion = args.expectedVersion || pkg.version?.trim() || "";
     const errors = collectInstalledPackageErrors({
       expectedVersion: resolvedExpectedVersion,
       installedVersion: pkg.version?.trim() ?? "",
