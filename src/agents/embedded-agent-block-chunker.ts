@@ -226,6 +226,8 @@ export class EmbeddedBlockChunker {
         reopenPrefix,
         source,
         start,
+        maxChars,
+        paragraphSeparator,
       });
       if (consumed === null) {
         continue;
@@ -253,8 +255,10 @@ export class EmbeddedBlockChunker {
     reopenPrefix: string;
     source: string;
     start: number;
+    maxChars: number;
+    paragraphSeparator: string;
   }): { start: number; reopenFence?: FenceSpan } | null {
-    const { breakResult, emit, reopenPrefix, source, start } = params;
+    const { breakResult, emit, reopenPrefix, source, start, maxChars, paragraphSeparator } = params;
     const breakIdx = breakResult.index;
     if (breakIdx <= 0) {
       return null;
@@ -272,6 +276,25 @@ export class EmbeddedBlockChunker {
         ? `${fenceSplit.closeFenceLine}\n`
         : `\n${fenceSplit.closeFenceLine}\n`;
       rawChunk = `${rawChunk}${closeFence}`;
+    }
+
+    // When this break consumed a genuine paragraph boundary (a blank line, i.e.
+    // "\n[ \t]*\n" follows in the source), re-attach the canonical "\n\n" separator the
+    // chunk just ended at — mirroring the non-forced paragraph fast path (~line 198) —
+    // so a downstream client concatenating successive separate deliveries reconstructs
+    // the separator (issue #42106). The size-split / force path (message_end flush,
+    // leftover-buffer flush) otherwise drops the boundary. Skipped for fence splits
+    // (they manage their own newline handling) and only applied when it stays within
+    // maxChars, preserving the #94216 delivery-bound invariant. emitBlockChunk strips
+    // this again on the terminal/final delivery, and the coalescer normalizes any
+    // trailing newline run, so it never compounds into 4+ newlines.
+    const endedAtParagraphBoundary =
+      !fenceSplit && /^\n[ \t]*\n/.test(source.slice(absoluteBreakIdx));
+    if (endedAtParagraphBoundary) {
+      const withSeparator = `${rawChunk.replace(/\s+$/, "")}${paragraphSeparator}`;
+      if (withSeparator.length <= maxChars) {
+        rawChunk = withSeparator;
+      }
     }
 
     emit(rawChunk);

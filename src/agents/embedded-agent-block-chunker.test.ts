@@ -84,7 +84,10 @@ describe("EmbeddedBlockChunker", () => {
 
     expect(chunks.length).toBe(1);
     expect(chunks[0]).toContain("console.log");
-    expect(chunks[0]).toMatch(/```\n?$/);
+    // The chunk still ends at the closed fence (never mid-fence), but now carries the
+    // trailing paragraph boundary it ended at so successive deliveries reconstruct the
+    // "\n\n" separator (issue #42106). The fence close is intact immediately before it.
+    expect(chunks[0]).toMatch(/```\n\n$/);
     expect(chunks[0]).not.toContain("After");
     expect(chunker.bufferedText).toMatch(/^After/);
   });
