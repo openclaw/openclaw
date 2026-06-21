@@ -664,7 +664,13 @@ function ensureGatewayHandshakeStarted(payload) {
       caps: [],
       commands: [],
       nonce: nonce || undefined,
-      auth: relayGatewayToken ? { token: relayGatewayToken } : undefined,
+      // Send the shared secret under both fields (token + password): the
+      // extension can't know the gateway's auth mode, and password-mode gateways
+      // reject the relay handshake if only the token is sent (matches the
+      // sidepanel.js gateway-connect handshake fix).
+      auth: relayGatewayToken
+        ? { token: relayGatewayToken, password: relayGatewayToken }
+        : undefined,
     },
   });
 }

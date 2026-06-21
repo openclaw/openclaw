@@ -4,6 +4,12 @@
           - "extensions/azure-speech/**"
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
+"plugin: browser":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/browser/**"
+          - "extensions/chrome-extension/**"
+          - "docs/plugins/copilot.md"
 "plugin: file-transfer":
   - changed-files:
       - any-glob-to-any-file:
