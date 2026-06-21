@@ -7,11 +7,14 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { parseReleaseVersion, resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
+import { validateStrictPublishPolicy } from "./lib/release-version-policy.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODE = "both";
 const DEFAULT_NPM_DIST_TAG = "beta";
+const DEFAULT_POLICY_MODE = "legacy";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
 const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
@@ -23,6 +26,8 @@ const WINDOWS_NODE_REQUIRED_ASSETS = [
   "OpenClawCompanion-Setup-arm64.exe",
 ];
 const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+const NPM_DIST_TAGS = new Set(["alpha", "beta", "latest"]);
+const RELEASE_SELECTORS = new Set(["alpha", "beta", "daily", "stable"]);
 
 function usage() {
   return `Usage: pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N [options]
@@ -46,7 +51,9 @@ Options:
   --provider <provider>               Full validation provider. Default: ${DEFAULT_PROVIDER}
   --mode <fresh|upgrade|both>         Full validation cross-OS mode. Default: ${DEFAULT_MODE}
   --release-profile <beta|stable|full> Default: beta for prereleases; stable otherwise.
-  --npm-dist-tag <alpha|beta|latest>  Default: ${DEFAULT_NPM_DIST_TAG}
+  --policy-mode <legacy|strict>       Default: ${DEFAULT_POLICY_MODE}
+  --release-selector <selector>       alpha|beta|daily|stable. Required in strict mode.
+  --npm-dist-tag <alpha|beta|latest>  Legacy default: ${DEFAULT_NPM_DIST_TAG}; omit for strict stable.
   --plugin-publish-scope <scope>      selected|all-publishable. Default: ${DEFAULT_PLUGIN_SCOPE}
   --plugins <names>                   Required when plugin scope is selected.
   --output-dir <dir>                  Evidence output dir. Default: .artifacts/release-candidate/<tag>
@@ -61,6 +68,95 @@ function requireValue(argv, index, flag) {
   return value;
 }
 
+function requireStringValue(argv, index, flag) {
+  const value = argv[index];
+  if (value === undefined || value.startsWith("-")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+function normalizeNpmDistTag(value) {
+  const normalized = value?.trim() ?? "";
+  if (!normalized) {
+    return null;
+  }
+  if (!NPM_DIST_TAGS.has(normalized)) {
+    throw new Error("--npm-dist-tag must be alpha, beta, or latest");
+  }
+  return normalized;
+}
+
+function versionFromTag(tag) {
+  return tag.startsWith("v") ? tag.slice(1) : tag;
+}
+
+function isStableReleaseClass(releaseClass) {
+  return releaseClass === "stable-base" || releaseClass === "stable-patch";
+}
+
+function applyReleasePolicy(options) {
+  if (!["legacy", "strict"].includes(options.policyMode)) {
+    throw new Error("--policy-mode must be legacy or strict");
+  }
+  if (options.releaseSelector !== null && !RELEASE_SELECTORS.has(options.releaseSelector)) {
+    throw new Error("--release-selector must be alpha, beta, daily, or stable");
+  }
+
+  const version = versionFromTag(options.tag);
+  if (options.policyMode === "legacy") {
+    if (options.releaseSelector !== null) {
+      throw new Error("--release-selector must be omitted in legacy policy mode");
+    }
+    const parsedVersion = parseReleaseVersion(version);
+    if (parsedVersion === null) {
+      throw new Error(`Unsupported release version "${version}".`);
+    }
+    if (isStableReleaseClass(parsedVersion.releaseClass)) {
+      throw new Error(
+        `legacy policy mode cannot publish stable release class ${parsedVersion.releaseClass}`,
+      );
+    }
+    const npmDistTag = normalizeNpmDistTag(
+      options.npmDistTag === undefined ? DEFAULT_NPM_DIST_TAG : options.npmDistTag,
+    );
+    if (npmDistTag === null) {
+      throw new Error("--npm-dist-tag must be alpha, beta, or latest");
+    }
+    options.releaseClass = parsedVersion.releaseClass;
+    options.npmDistTag = npmDistTag;
+    options.publishEligible = true;
+    return;
+  }
+
+  if (options.releaseSelector === null) {
+    throw new Error("--release-selector is required in strict policy mode");
+  }
+  const policy = validateStrictPublishPolicy({
+    version,
+    releaseSelector: options.releaseSelector,
+  });
+  const npmDistTag = normalizeNpmDistTag(options.npmDistTag);
+  const stable = isStableReleaseClass(policy.releaseClass);
+  if (stable) {
+    if (npmDistTag !== null) {
+      throw new Error(
+        "strict stable policy preflight requires --npm-dist-tag to be omitted or empty",
+      );
+    }
+  } else {
+    const expectedTag = resolveNpmPublishPlan(version).publishTag;
+    if (npmDistTag !== expectedTag) {
+      throw new Error(
+        `strict ${policy.releaseClass} publication requires --npm-dist-tag ${expectedTag}`,
+      );
+    }
+  }
+  options.releaseClass = policy.releaseClass;
+  options.npmDistTag = npmDistTag;
+  options.publishEligible = !stable;
+}
+
 /**
  * Parses release-candidate validation options and enforces publish-scope policy.
  */
@@ -70,8 +166,10 @@ export function parseArgs(argv) {
     repo: DEFAULT_REPO,
     provider: DEFAULT_PROVIDER,
     mode: DEFAULT_MODE,
+    policyMode: DEFAULT_POLICY_MODE,
     releaseProfile: "",
-    npmDistTag: DEFAULT_NPM_DIST_TAG,
+    releaseSelector: null,
+    npmDistTag: undefined,
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
     skipDispatch: false,
@@ -142,8 +240,14 @@ export function parseArgs(argv) {
       case "--release-profile":
         setOnce(arg, "releaseProfile", requireValue(args, ++index, arg));
         break;
+      case "--policy-mode":
+        setOnce(arg, "policyMode", requireValue(args, ++index, arg));
+        break;
+      case "--release-selector":
+        setOnce(arg, "releaseSelector", requireValue(args, ++index, arg));
+        break;
       case "--npm-dist-tag":
-        setOnce(arg, "npmDistTag", requireValue(args, ++index, arg));
+        setOnce(arg, "npmDistTag", requireStringValue(args, ++index, arg));
         break;
       case "--plugin-publish-scope":
         setOnce(arg, "pluginPublishScope", requireValue(args, ++index, arg));
@@ -165,6 +269,7 @@ export function parseArgs(argv) {
   if (!options.tag) {
     throw new Error("--tag is required");
   }
+  applyReleasePolicy(options);
   options.releaseProfile ||=
     options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
   if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
@@ -187,11 +292,13 @@ export function parseArgs(argv) {
   if (options.windowsNodeTag && !WINDOWS_NODE_TAG_PATTERN.test(options.windowsNodeTag)) {
     throw new Error("--windows-node-tag must be an explicit version tag, not latest");
   }
-  if (
-    !options.tag.includes("-alpha.") &&
-    !options.tag.includes("-beta.") &&
-    !options.windowsNodeTag
-  ) {
+  const legacyFinal =
+    options.policyMode === "legacy" &&
+    options.releaseClass !== "alpha" &&
+    options.releaseClass !== "beta";
+  const strictStable =
+    options.policyMode === "strict" && isStableReleaseClass(options.releaseClass);
+  if ((legacyFinal || strictStable) && !options.windowsNodeTag) {
     throw new Error("stable release candidates require --windows-node-tag");
   }
   if (!["mock-openai", "live-frontier"].includes(options.telegramProviderMode)) {
@@ -584,15 +691,63 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/gu, "'\\''")}'`;
 }
 
+function appendPolicyFields(fields, options, includeNpmDistTag) {
+  fields.policy_mode = options.policyMode;
+  if (options.releaseSelector !== null) {
+    fields.release_selector = options.releaseSelector;
+  }
+  if (includeNpmDistTag && options.npmDistTag !== null) {
+    fields.npm_dist_tag = options.npmDistTag;
+  }
+  return fields;
+}
+
+/**
+ * Builds the Full Validation dispatch fields without deriving publication intent
+ * from the independently selected validation profile.
+ */
+export function buildFullValidationDispatchFields(options) {
+  return appendPolicyFields(
+    {
+      ref: options.tag,
+      provider: options.provider,
+      mode: options.mode,
+      release_profile: options.releaseProfile,
+      run_release_soak:
+        options.releaseProfile === "stable" || options.releaseProfile === "full" ? "true" : "false",
+      rerun_group: "all",
+    },
+    options,
+    false,
+  );
+}
+
+/** Builds the npm policy/preflight dispatch fields. */
+export function buildNpmPreflightDispatchFields(options) {
+  return appendPolicyFields(
+    {
+      tag: options.tag,
+      preflight_only: "true",
+    },
+    options,
+    true,
+  );
+}
+
 /**
  * Builds the final release publish workflow command once validation evidence is ready.
  */
 export function buildPublishCommand(options) {
+  if (options.publishEligible === false) {
+    throw new Error("strict stable policy preflight is nonpublishable");
+  }
   const fields = [
     ["tag", options.tag],
     ["preflight_run_id", options.npmPreflightRunId],
     ["full_release_validation_run_id", options.fullReleaseRunId],
-    ["npm_dist_tag", options.npmDistTag],
+    ["policy_mode", options.policyMode],
+    ...(options.releaseSelector === null ? [] : [["release_selector", options.releaseSelector]]),
+    ...(options.npmDistTag === null ? [] : [["npm_dist_tag", options.npmDistTag]]),
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
     ["release_profile", "from-validation"],
@@ -752,24 +907,22 @@ async function main() {
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
-    options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
-      ref: options.tag,
-      provider: options.provider,
-      mode: options.mode,
-      release_profile: options.releaseProfile,
-      run_release_soak:
-        options.releaseProfile === "stable" || options.releaseProfile === "full" ? "true" : "false",
-      rerun_group: "all",
-    });
+    options.fullReleaseRunId = dispatchWorkflow(
+      options.repo,
+      workflowFile,
+      options.workflowRef,
+      buildFullValidationDispatchFields(options),
+    );
   }
 
   if (!options.npmPreflightRunId && !options.skipDispatch) {
     const workflowFile = "openclaw-npm-release.yml";
-    options.npmPreflightRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
-      tag: options.tag,
-      preflight_only: "true",
-      npm_dist_tag: options.npmDistTag,
-    });
+    options.npmPreflightRunId = dispatchWorkflow(
+      options.repo,
+      workflowFile,
+      options.workflowRef,
+      buildNpmPreflightDispatchFields(options),
+    );
   }
 
   const fullRun = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {
@@ -846,6 +999,10 @@ async function main() {
     targetSha,
     workflowRef: options.workflowRef,
     npmDistTag: options.npmDistTag,
+    policyMode: options.policyMode,
+    releaseSelector: options.releaseSelector,
+    releaseClass: options.releaseClass,
+    publishEligible: options.publishEligible,
     fullReleaseValidationRunId: options.fullReleaseRunId,
     npmPreflightRunId: options.npmPreflightRunId,
     windowsNodeTag: options.windowsNodeTag || undefined,

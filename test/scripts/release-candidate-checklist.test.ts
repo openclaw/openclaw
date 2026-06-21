@@ -1,6 +1,8 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildFullValidationDispatchFields,
+  buildNpmPreflightDispatchFields,
   buildPublishCommand,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
@@ -32,6 +34,235 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
+  it("preserves legacy defaults and keeps release validation depth independent", () => {
+    const options = parseArgs([
+      "--tag",
+      "v2026.7.32",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--release-profile",
+      "full",
+    ]);
+
+    expect(options).toMatchObject({
+      policyMode: "legacy",
+      releaseSelector: null,
+      releaseClass: "daily",
+      releaseProfile: "full",
+      npmDistTag: "beta",
+      publishEligible: true,
+    });
+  });
+
+  it("normalizes only supported legacy npm tags and preserves corrections", () => {
+    expect(
+      parseArgs([
+        "--tag",
+        "v2026.7.34-2",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--npm-dist-tag",
+        " latest ",
+      ]),
+    ).toMatchObject({
+      releaseClass: "historical-correction",
+      npmDistTag: "latest",
+      publishEligible: true,
+    });
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", "--npm-dist-tag", "stable"])).toThrow(
+      "--npm-dist-tag must be alpha, beta, or latest",
+    );
+  });
+
+  it("enforces closed policy modes and selector mode constraints", () => {
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", "--policy-mode", "required"])).toThrow(
+      "--policy-mode must be legacy or strict",
+    );
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", "--release-selector", "preview"])).toThrow(
+      "--release-selector must be alpha, beta, daily, or stable",
+    );
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", "--release-selector", "beta"])).toThrow(
+      "--release-selector must be omitted in legacy policy mode",
+    );
+  });
+
+  it.each(["--policy-mode", "--release-selector", "--npm-dist-tag"])(
+    "does not consume another option as the %s value",
+    (flag) => {
+      expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", flag, "--skip-parallels"])).toThrow(
+        `${flag} requires a value`,
+      );
+    },
+  );
+
+  it("rejects new stable finals but preserves correction publication in legacy mode", () => {
+    expect(() => parseArgs(["--tag", "v2026.7.33", "--windows-node-tag", "v0.6.3"])).toThrow(
+      "legacy policy mode cannot publish stable release class stable-base",
+    );
+    expect(() => parseArgs(["--tag", "v2026.7.34", "--windows-node-tag", "v0.6.3"])).toThrow(
+      "legacy policy mode cannot publish stable release class stable-patch",
+    );
+    expect(parseArgs(["--tag", "v2026.7.34-2", "--windows-node-tag", "v0.6.3"]).releaseClass).toBe(
+      "historical-correction",
+    );
+  });
+
+  it.each([
+    ["v2026.7.1-alpha.2", "alpha", "alpha", "alpha"],
+    ["v2026.7.1-beta.2", "beta", "beta", "beta"],
+    ["v2026.7.32", "daily", "latest", "daily"],
+  ] as const)(
+    "accepts strict %s with matching selector and downstream tag",
+    (tag, releaseSelector, npmDistTag, releaseClass) => {
+      expect(
+        parseArgs([
+          "--tag",
+          tag,
+          "--policy-mode",
+          "strict",
+          "--release-selector",
+          releaseSelector,
+          "--npm-dist-tag",
+          npmDistTag,
+          "--release-profile",
+          "full",
+        ]),
+      ).toMatchObject({
+        policyMode: "strict",
+        releaseSelector,
+        releaseClass,
+        releaseProfile: "full",
+        npmDistTag,
+        publishEligible: true,
+      });
+    },
+  );
+
+  it("requires strict selectors and exact downstream tags", () => {
+    expect(() =>
+      parseArgs(["--tag", "v2026.7.1-beta.2", "--policy-mode", "strict", "--npm-dist-tag", "beta"]),
+    ).toThrow("--release-selector is required in strict policy mode");
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.1-beta.2",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "daily",
+        "--npm-dist-tag",
+        "beta",
+      ]),
+    ).toThrow('Release selector "daily" does not match release class "beta"');
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.32",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "daily",
+        "--npm-dist-tag",
+        "beta",
+      ]),
+    ).toThrow("strict daily publication requires --npm-dist-tag latest");
+  });
+
+  it("rejects numeric corrections at strict candidate ingress", () => {
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.34-2",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "stable",
+      ]),
+    ).toThrow("Strict publication rejects numeric correction");
+  });
+
+  it("models strict stable as a nonpublishable policy-only preflight", () => {
+    for (const npmDistTagArgs of [[], ["--npm-dist-tag", ""]]) {
+      expect(
+        parseArgs([
+          "--tag",
+          "v2026.7.33",
+          "--windows-node-tag",
+          "v0.6.3",
+          "--policy-mode",
+          "strict",
+          "--release-selector",
+          "stable",
+          ...npmDistTagArgs,
+        ]),
+      ).toMatchObject({
+        releaseClass: "stable-base",
+        npmDistTag: null,
+        publishEligible: false,
+      });
+    }
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.33",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "stable",
+        "--npm-dist-tag",
+        "latest",
+      ]),
+    ).toThrow("strict stable policy preflight requires --npm-dist-tag to be omitted or empty");
+  });
+
+  it("propagates policy inputs unchanged into dispatch and publish fields", () => {
+    const strictDaily = parseArgs([
+      "--tag",
+      "v2026.7.32",
+      "--policy-mode",
+      "strict",
+      "--release-selector",
+      "daily",
+      "--npm-dist-tag",
+      "latest",
+    ]);
+
+    expect(buildFullValidationDispatchFields(strictDaily)).toMatchObject({
+      policy_mode: "strict",
+      release_selector: "daily",
+    });
+    expect(buildNpmPreflightDispatchFields(strictDaily)).toMatchObject({
+      policy_mode: "strict",
+      release_selector: "daily",
+      npm_dist_tag: "latest",
+    });
+    expect(buildPublishCommand({ ...strictDaily, workflowRef: "main" })).toContain(
+      "'policy_mode=strict' '-f' 'release_selector=daily' '-f' 'npm_dist_tag=latest'",
+    );
+
+    const strictStable = parseArgs([
+      "--tag",
+      "v2026.7.33",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--policy-mode",
+      "strict",
+      "--release-selector",
+      "stable",
+    ]);
+    expect(buildNpmPreflightDispatchFields(strictStable)).toEqual({
+      tag: "v2026.7.33",
+      preflight_only: "true",
+      policy_mode: "strict",
+      release_selector: "stable",
+    });
+    expect(() => buildPublishCommand({ ...strictStable, workflowRef: "main" })).toThrow(
+      "strict stable policy preflight is nonpublishable",
+    );
+  });
+
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
     expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
@@ -103,6 +334,8 @@ describe("release candidate checklist", () => {
       duplicateOption("--provider", "blacksmith-testbox", "crabbox"),
       duplicateOption("--mode", "fresh", "upgrade"),
       duplicateOption("--release-profile", "beta", "stable"),
+      duplicateOption("--policy-mode", "legacy", "strict"),
+      duplicateOption("--release-selector", "daily", "stable"),
       duplicateOption("--npm-dist-tag", "beta", "latest"),
       duplicateOption("--plugin-publish-scope", "all-publishable", "selected"),
       duplicateOption("--plugins", "telegram", "discord"),
