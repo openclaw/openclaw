@@ -289,6 +289,37 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedMaxTokens).toBe(32_000);
   });
 
+  it("maps compat reasoning efforts before sending request params", async () => {
+    let capturedReasoningEffort: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        reasoning: true,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+          reasoningEffortMap: {
+            xhigh: "high",
+          },
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "xhigh",
+        onPayload(payload) {
+          capturedReasoningEffort = (payload as { reasoning_effort?: unknown }).reasoning_effort;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedReasoningEffort).toBe("high");
+  });
+
   it("forwards simple stop sequences to request params", async () => {
     let capturedStop: unknown;
     const stream = streamSimpleOpenAICompletions(createModel(32_000), context, {
