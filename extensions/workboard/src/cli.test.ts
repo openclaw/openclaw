@@ -183,7 +183,7 @@ describe("registerWorkboardCli", () => {
     expect(output).toContain("archived-card");
   });
 
-  it("hides archived cards from JSON output by default", async () => {
+  it("preserves archived cards in JSON output by default", async () => {
     const store = new WorkboardStore(createMemoryStore());
     await store.create({ title: "active-card" });
     const archived = await store.create({ title: "archived-card" });
@@ -195,7 +195,7 @@ describe("registerWorkboardCli", () => {
     });
 
     expect(output).toContain("active-card");
-    expect(output).not.toContain("archived-card");
+    expect(output).toContain("archived-card");
   });
 
   it("shows archived cards in JSON output with --include-archived", async () => {

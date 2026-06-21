@@ -137,11 +137,13 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         options: JsonOptions & { board?: string; status?: string; includeArchived?: boolean },
       ) => {
         let cards = await params.store.list({ boardId: options.board });
-        if (!options.includeArchived) {
-          cards = cards.filter((card) => !card.metadata?.archivedAt);
-        }
         if (options.status) {
           cards = cards.filter((card) => card.status === options.status);
+        }
+        // Only filter archived cards from human-readable output; JSON is a
+        // backward-compatible machine contract that must keep returning all cards.
+        if (!options.json && !options.includeArchived) {
+          cards = cards.filter((card) => !card.metadata?.archivedAt);
         }
         writeCards(cards, options);
       },
