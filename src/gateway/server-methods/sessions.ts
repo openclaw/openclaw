@@ -917,14 +917,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = context.getRuntimeConfig();
     // Cross-agent visibility for child-spawned subagent sessions (issue #95295):
-    // when the caller asks for `configuredAgentsOnly: true` and does NOT pin a
-    // single `agentId`, every configured agent's store is loaded and the
-    // per-agent scope filter in `filterSessionEntries` is bypassed naturally
-    // (the filter only applies the strict agentId match when `agentId` is set).
-    // No new protocol flag is required — existing callers already express this
-    // shape by omitting `agentId` while keeping `configuredAgentsOnly: true`.
+    // the loader uses its default (all on-disk agent stores, both configured
+    // and discovered) so child sessions whose owning store lives under an
+    // unconfigured agent are still discovered when their parent belongs to a
+    // configured agent. `filterSessionStoreToConfiguredAgents` below then keeps
+    // the visible set to rows that belong to a configured agent or whose
+    // parent (`spawnedBy` / `parentSessionKey`) does — preserving configured-
+    // parent child rows even when the child agent itself isn't configured.
+    // Forwarding `configuredAgentsOnly` to the loader would skip on-disk
+    // stores of unconfigured agents and lose those child rows; do NOT add it.
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
-    const loadAgentId = p.agentId;
     const payload = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list",
       async () => {
@@ -932,8 +934,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           "gateway.sessions.list.store_load",
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
-              ...(loadAgentId ? { agentId: loadAgentId } : {}),
-              ...(configuredAgentsOnly ? { configuredAgentsOnly: true } : {}),
+              agentId: p.agentId,
             }),
           {
             config: cfg,
