@@ -921,7 +921,9 @@ describe("anthropic transport stream", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer sk-ant-oat-example");
     expect(headers.get("x-app")).toBe("cli");
-    expect(headers.get("user-agent")).toContain("claude-cli/");
+    // The OAuth user-agent must carry the resolved Claude Code version, not an
+    // empty or malformed value, so a stale hardcoded constant cannot regress.
+    expect(headers.get("user-agent")).toMatch(/^claude-cli\/\d+\.\d+\.\d+/);
     const firstCallParams = latestAnthropicRequest().payload;
     const system = requireArray(firstCallParams.system, "system");
     expect(
