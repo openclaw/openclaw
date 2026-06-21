@@ -249,10 +249,6 @@ function normalizeMemoryPromptLines(value: unknown): string[] {
   return value.filter((line): line is string => typeof line === "string");
 }
 
-export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {
-  return memoryPluginState.capability?.capability.promptBuilder;
-}
-
 export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
   return [...memoryPluginState.promptSupplements];
 }
@@ -274,10 +270,6 @@ export function resolveMemoryFlushPlan(params: {
   nowMs?: number;
 }): MemoryFlushPlan | null {
   return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;
-}
-
-export function getMemoryFlushPlanResolver(): MemoryFlushPlanResolver | undefined {
-  return memoryPluginState.capability?.capability.flushPlanResolver;
 }
 
 /** @deprecated Use registerMemoryCapability(pluginId, { runtime }) instead. */
@@ -356,5 +348,3 @@ export function clearMemoryPluginState(): void {
   memoryPluginState.corpusSupplements = [];
   memoryPluginState.promptSupplements = [];
 }
-
-export const resetMemoryPluginState = clearMemoryPluginState;

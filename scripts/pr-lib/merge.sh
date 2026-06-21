@@ -27,27 +27,33 @@ print_file_list_with_limit() {
 }
 
 mainline_drift_requires_sync() {
-  local prep_head_sha="$1"
+  local mainline_base="$1"
+  local prepared_head_sha="$2"
 
-  require_artifact .local/pr-meta.json
-
-  if ! git cat-file -e "${prep_head_sha}^{commit}" 2>/dev/null; then
-    echo "Mainline drift relevance: prep head $prep_head_sha is missing locally; require sync."
+  if ! git cat-file -e "${mainline_base}^{commit}" 2>/dev/null; then
+    echo "Mainline drift relevance: mainline base $mainline_base is missing locally; require sync."
+    return 0
+  fi
+  if ! git cat-file -e "${prepared_head_sha}^{commit}" 2>/dev/null; then
+    echo "Mainline drift relevance: prepared head $prepared_head_sha is missing locally; require sync."
     return 0
   fi
 
   local delta_file
-  local pr_files_file
+  local prepared_files_file
   local overlap_file
   local critical_file
   delta_file=$(mktemp)
-  pr_files_file=$(mktemp)
+  prepared_files_file=$(mktemp)
   overlap_file=$(mktemp)
   critical_file=$(mktemp)
 
-  git diff --name-only "${prep_head_sha}..origin/main" | sed '/^$/d' | sort -u > "$delta_file"
-  jq -r '.files[]?.path // empty' .local/pr-meta.json | sed '/^$/d' | sort -u > "$pr_files_file"
-  comm -12 "$delta_file" "$pr_files_file" > "$overlap_file" || true
+  # Compare only mainline commits since the prepared lineage base. The remote
+  # GraphQL commit has a different parent but its verified tree shares this
+  # lineage, so its PR files must not look like incoming mainline drift.
+  git diff --name-only "${mainline_base}..origin/main" | sed '/^$/d' | sort -u > "$delta_file"
+  git diff --name-only "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file"
+  comm -12 "$delta_file" "$prepared_files_file" > "$overlap_file" || true
 
   local path
   while IFS= read -r path; do
@@ -65,22 +71,22 @@ mainline_drift_requires_sync() {
   critical_count=$(wc -l < "$critical_file" | tr -d ' ')
 
   if [ "$delta_count" -eq 0 ]; then
-    echo "Mainline drift relevance: unable to enumerate drift files; require sync."
-    rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
-    return 0
+    echo "Mainline drift relevance: no mainline changes since the prepared base."
+    rm -f "$delta_file" "$prepared_files_file" "$overlap_file" "$critical_file"
+    return 1
   fi
 
   if [ "$overlap_count" -gt 0 ] || [ "$critical_count" -gt 0 ]; then
     echo "Mainline drift relevance: sync required before merge."
-    print_file_list_with_limit "Mainline files overlapping PR touched files" "$overlap_file"
+    print_file_list_with_limit "Mainline files overlapping prepared files" "$overlap_file"
     print_file_list_with_limit "Mainline files touching merge-critical infrastructure" "$critical_file"
-    rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
+    rm -f "$delta_file" "$prepared_files_file" "$overlap_file" "$critical_file"
     return 0
   fi
 
-  echo "Mainline drift relevance: no overlap with PR files and no critical infra drift."
+  echo "Mainline drift relevance: no overlap with prepared files and no critical infra drift."
   print_file_list_with_limit "Mainline-only drift files" "$delta_file"
-  rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
+  rm -f "$delta_file" "$prepared_files_file" "$overlap_file" "$critical_file"
   return 1
 }
 
@@ -91,7 +97,7 @@ merge_verify() {
   require_artifact .local/prep.env
   # shellcheck disable=SC1091
   source .local/prep.env
-  verify_prep_branch_matches_prepared_head "$pr" "$PREP_HEAD_SHA"
+  verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
 
   local json
   json=$(pr_meta_json "$pr")
@@ -154,7 +160,10 @@ merge_verify() {
   git fetch origin "pull/$pr/head:pr-$pr" --force
   if ! git merge-base --is-ancestor origin/main "pr-$pr"; then
     echo "PR branch is behind main."
-    if mainline_drift_requires_sync "$PREP_HEAD_SHA"; then
+    if mainline_drift_requires_sync \
+      "${PREP_MAINLINE_BASE_SHA:-${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}}" \
+      "$PREP_HEAD_SHA"
+    then
       echo "Merge verify failed: mainline drift is relevant to this PR; run scripts/pr prepare-sync-head $pr before merge."
       exit 1
     fi

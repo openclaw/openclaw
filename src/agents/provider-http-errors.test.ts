@@ -1,5 +1,5 @@
 // Verifies provider HTTP error parsing, redaction, and response-size limits.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertOkOrThrowProviderError,
   assertOkOrThrowHttpError,
@@ -9,6 +9,7 @@ import {
   ProviderHttpError,
   readProviderBinaryResponse,
   readProviderJsonResponse,
+  readResponseTextLimited,
 } from "./provider-http-errors.js";
 
 function createStreamingBinaryResponse(params: {
@@ -106,6 +107,46 @@ describe("provider error utils", () => {
       statusCode: 503,
       message: "Provider API error (503)",
     } satisfies Partial<ProviderHttpError>);
+  });
+
+  it("releases provider error body reader locks after bounded reads complete", async () => {
+    const releaseLock = vi.fn();
+    const cancel = vi.fn(async () => undefined);
+    const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
+      { done: false, value: new TextEncoder().encode("provider error") },
+      { done: true, value: undefined },
+    ];
+    const response = {
+      body: {
+        getReader: () => ({
+          read: async () => chunks.shift() ?? { done: true, value: undefined },
+          cancel,
+          releaseLock,
+        }),
+      },
+    } as unknown as Response;
+
+    await expect(readResponseTextLimited(response, 64)).resolves.toBe("provider error");
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels and releases provider error body readers after diagnostic truncation", async () => {
+    const releaseLock = vi.fn();
+    const cancel = vi.fn(async () => undefined);
+    const response = {
+      body: {
+        getReader: () => ({
+          read: async () => ({ done: false, value: new TextEncoder().encode("provider error") }),
+          cancel,
+          releaseLock,
+        }),
+      },
+    } as unknown as Response;
+
+    await expect(readResponseTextLimited(response, 8)).resolves.toBe("provider");
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("attaches structured provider error metadata", async () => {

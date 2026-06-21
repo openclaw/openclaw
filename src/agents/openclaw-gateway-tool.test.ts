@@ -185,6 +185,118 @@ describe("gateway tool", () => {
     }
   });
 
+  it("scopes config.get output to the requested path and keeps metadata compact", async () => {
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("call-config-get", {
+      action: "config.get",
+      path: "tools.exec",
+    });
+
+    expect(result.details).toEqual({ ok: true });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            ok: true,
+            result: {
+              hash: "hash-1",
+              path: "tools.exec",
+              config: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ]);
+  });
+
+  it("rejects config.get paths that do not exist", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-missing-config-path", {
+        action: "config.get",
+        path: "tools.missing",
+      }),
+    ).rejects.toThrow("config path not found: tools.missing");
+  });
+
+  it("rejects config.get paths with no segments", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-empty-config-path", {
+        action: "config.get",
+        path: "...",
+      }),
+    ).rejects.toThrow("config path not found: ...");
+  });
+
+  it("rejects config.get paths that resolve through the prototype chain", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-inherited-config-path", {
+        action: "config.get",
+        path: "constructor.prototype",
+      }),
+    ).rejects.toThrow("config path not found: constructor.prototype");
+  });
+
+  it("reads config.get paths with bracketed array indexes", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      config: {
+        agents: {
+          list: [{ id: "ops" }],
+        },
+      },
+    });
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("call-indexed-config-path", {
+      action: "config.get",
+      path: "agents.list[0].id",
+    });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            ok: true,
+            result: {
+              path: "agents.list[0].id",
+              config: "ops",
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ]);
+  });
+
+  it("requires a narrower config.get path for oversized output", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      config: { oversized: "x".repeat(100_000) },
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-large-config", {
+        action: "config.get",
+      }),
+    ).rejects.toThrow(
+      "config.get response is too large; use path to request a narrower config subtree",
+    );
+  });
+
   it("schedules SIGUSR1 restart", async () => {
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
     const restartSignalKillCalls = () =>

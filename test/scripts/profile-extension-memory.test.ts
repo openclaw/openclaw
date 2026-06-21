@@ -1,19 +1,65 @@
 // Profile Extension Memory tests cover profile extension memory script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mjs";
 
 const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mjs");
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+  throw new Error("timed out waiting for condition");
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
   return spawnSync(process.execPath, [SCRIPT_PATH, ...args], {
     cwd,
     encoding: "utf8",
   });
+}
+
+async function waitForChildExit(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 8_000,
+): Promise<{ status: number | null; signal: NodeJS.Signals | null }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      new Promise<{ status: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (status, signal) => resolve({ status, signal }));
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timed out waiting for child exit")), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 describe("scripts/profile-extension-memory", () => {
@@ -174,4 +220,125 @@ describe("scripts/profile-extension-memory", () => {
       timedOut: false,
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "cleans timeout descendants before resolving the case",
+    async () => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-timeout-"));
+      const hookPath = path.join(root, "rss-hook.mjs");
+      const descendantPidPath = path.join(root, "descendant.pid");
+      let descendantPid = 0;
+      try {
+        writeFileSync(hookPath, "", "utf8");
+        const descendantScript = [
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+        ].join("");
+        const body = [
+          "const childProcess = await import('node:child_process');",
+          "const fs = await import('node:fs');",
+          "const descendant = childProcess.spawn(process.execPath, [",
+          "  '--input-type=module',",
+          `  '--eval', ${JSON.stringify(descendantScript)},`,
+          "], { stdio: 'ignore' });",
+          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const resultPromise = runCase({
+          body,
+          env: process.env,
+          hookPath,
+          name: "timeout-descendant",
+          repoRoot: root,
+          timeoutMs: 1_000,
+        });
+
+        await waitForCondition(() => existsSync(descendantPidPath));
+        descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        await expect(resultPromise).resolves.toMatchObject({
+          name: "timeout-descendant",
+          signal: "SIGKILL",
+          timedOut: true,
+        });
+        await waitForCondition(() => !isProcessAlive(descendantPid));
+      } finally {
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "cleans active case descendants on parent signal",
+    async () => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-parent-signal-"));
+      const hookPath = path.join(root, "rss-hook.mjs");
+      const runnerPath = path.join(root, "parent-signal-runner.mjs");
+      const descendantPidPath = path.join(root, "descendant.pid");
+      let descendantPid = 0;
+      try {
+        writeFileSync(hookPath, "", "utf8");
+        const descendantScript = [
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+        ].join("");
+        const body = [
+          "const childProcess = await import('node:child_process');",
+          "const fs = await import('node:fs');",
+          "const descendant = childProcess.spawn(process.execPath, [",
+          "  '--input-type=module',",
+          `  '--eval', ${JSON.stringify(descendantScript)},`,
+          "], { stdio: 'ignore' });",
+          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        writeFileSync(
+          runnerPath,
+          [
+            `const { runCase } = await import(${JSON.stringify(
+              pathToFileURL(path.resolve("scripts/profile-extension-memory.mjs")).href,
+            )});`,
+            "void runCase({",
+            `  body: ${JSON.stringify(body)},`,
+            "  env: process.env,",
+            `  hookPath: ${JSON.stringify(hookPath)},`,
+            "  name: 'parent-signal-descendant',",
+            `  repoRoot: ${JSON.stringify(root)},`,
+            "  timeoutMs: 30000,",
+            "});",
+          ].join("\n"),
+          "utf8",
+        );
+        const runner = spawn(process.execPath, [runnerPath], {
+          stdio: "ignore",
+        });
+
+        try {
+          await waitForCondition(() => existsSync(descendantPidPath));
+          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+          expect(Number.isInteger(descendantPid)).toBe(true);
+          expect(isProcessAlive(descendantPid)).toBe(true);
+
+          const runnerExit = waitForChildExit(runner);
+          process.kill(runner.pid!, "SIGTERM");
+          await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
+          await waitForCondition(() => !isProcessAlive(descendantPid));
+        } finally {
+          if (runner.pid && isProcessAlive(runner.pid)) {
+            process.kill(runner.pid, "SIGKILL");
+          }
+        }
+      } finally {
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

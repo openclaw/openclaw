@@ -134,6 +134,32 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
 
+  it("reports command spawn errors instead of leaking unhandled child errors", async () => {
+    const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-spawn-fail-"));
+    cleanups.push(async () => {
+      await rm(tempParent, { recursive: true, force: true });
+    });
+    qaTempPathState.preferredTmpDir = tempParent;
+    const missingExecutable = path.join(tempParent, "missing-openclaw-node");
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: missingExecutable,
+          usePackagedPlugins: true,
+        },
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow(/gateway failed to spawn: .*ENOENT/u);
+
+    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
+  });
+
   it("keeps the slow-reply QA opt-out enabled under fast mode", () => {
     const env = buildQaRuntimeEnv({
       ...createParams(),
@@ -978,6 +1004,47 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+  it("does not trust an exited gateway wrapper while its process group is alive", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 12346,
+      exitCode: 0 as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn(),
+    });
+    let sawForceKill = false;
+    let postKillLivenessChecks = 0;
+    const processKill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === "SIGKILL") {
+        sawForceKill = true;
+        return true;
+      }
+      if (signal === 0 && sawForceKill) {
+        postKillLivenessChecks += 1;
+        if (postKillLivenessChecks >= 2) {
+          throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+        }
+      }
+      return true;
+    });
+
+    await testing.stopQaGatewayChildProcessTree(
+      child as unknown as Parameters<typeof testing.stopQaGatewayChildProcessTree>[0],
+      {
+        gracefulTimeoutMs: 1,
+        forceTimeoutMs: 50,
+      },
+    );
+
+    if (process.platform === "win32") {
+      expect(child.kill).not.toHaveBeenCalled();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-12346, "SIGTERM");
+      expect(processKill).toHaveBeenCalledWith(-12346, "SIGKILL");
+      expect(postKillLivenessChecks).toBe(2);
+      expect(child.kill).not.toHaveBeenCalled();
+    }
+  });
+
   it("treats bind collisions as retryable gateway startup errors", () => {
     expect(
       testing.isRetryableGatewayStartupError(
@@ -1046,14 +1113,27 @@ describe("buildQaRuntimeEnv", () => {
         "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=convex-maintainer-secret",
         "OPENCLAW_LIVE_CODEX_API_KEY=codex-live-secret",
         "botToken=12345:AbCdEfGhIjKl",
+        "--botToken=12345:flag-secret",
         '"driverToken":"12345:driver-secr3t"',
         "sutToken='12345:sut-secr3t'",
         "leaseToken=lease-12345",
+        '"apiKey":"secret-json-api-key"',
+        "clientSecret=secret-client-secret&secret-tail",
         "url=http://127.0.0.1:18789/#token=abc123",
+        "callback=https://gateway.example.test/callback?access_token=secret-access-token&ok=1",
       ].join("\n"),
       "utf8",
     );
-    await writeFile(stderrLogPath, "Authorization: Bearer secret+/token=123456", "utf8");
+    await writeFile(
+      stderrLogPath,
+      [
+        "Authorization: Bearer secret+/token=123456",
+        "Cookie: qa_session=secret-cookie; theme=dark",
+        "Set-Cookie: qa_session=secret-cookie; HttpOnly",
+        "x-api-key: secret-header-api-key",
+      ].join("\n"),
+      "utf8",
+    );
     await mkdir(path.join(tempRoot, "state"), { recursive: true });
     await writeFile(path.join(tempRoot, "state", "secret.txt"), "do-not-copy", "utf8");
 
@@ -1078,14 +1158,23 @@ describe("buildQaRuntimeEnv", () => {
         "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=<redacted>",
         "OPENCLAW_LIVE_CODEX_API_KEY=<redacted>",
         "botToken=<redacted>",
+        "--botToken=<redacted>",
         '"driverToken":"<redacted>"',
         "sutToken=<redacted>",
         "leaseToken=<redacted>",
+        '"apiKey":"<redacted>"',
+        "clientSecret=<redacted>",
         "url=http://127.0.0.1:18789/#token=<redacted>",
+        "callback=https://gateway.example.test/callback?access_token=<redacted>&ok=1",
       ].join("\n"),
     );
     await expect(readFile(path.join(artifactDir, "gateway.stderr.log"), "utf8")).resolves.toBe(
-      "Authorization: Bearer <redacted>",
+      [
+        "Authorization: Bearer <redacted>",
+        "Cookie: <redacted>",
+        "Set-Cookie: <redacted>",
+        "x-api-key: <redacted>",
+      ].join("\n"),
     );
     await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.toContain(
       "was not copied because it may contain credentials or auth tokens",

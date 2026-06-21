@@ -422,6 +422,30 @@ describe("crestodian.rescue", () => {
 });
 
 describe("diagnostics.otel.captureContent", () => {
+  it("accepts supported OTEL log exporters and rejects unknown values", () => {
+    for (const logsExporter of ["otlp", "stdout", "both"]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: {
+          otel: {
+            logs: true,
+            logsExporter,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+
+    const invalid = OpenClawSchema.safeParse({
+      diagnostics: {
+        otel: {
+          logs: true,
+          logsExporter: "stderr",
+        },
+      },
+    });
+    expect(invalid.success).toBe(false);
+  });
+
   it("accepts boolean and granular OTEL content capture config", () => {
     for (const captureContent of [
       true,

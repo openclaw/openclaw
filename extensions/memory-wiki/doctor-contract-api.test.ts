@@ -12,7 +12,6 @@ import { stateMigrations } from "./doctor-contract-api.js";
 import {
   createMemoryWikiImportRunStateStore,
   readMemoryWikiImportRunRecord,
-  resolveMemoryWikiImportRunRecordPath,
 } from "./src/import-runs-state.js";
 import {
   createMemoryWikiSourceSyncStateStore,
@@ -26,6 +25,10 @@ async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-doctor-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function resolveLegacyImportRunRecordPath(vaultRoot: string, runId: string): string {
+  return path.join(vaultRoot, ".openclaw-wiki", "import-runs", `${runId}.json`);
 }
 
 function migrationParams(params: { stateDir: string; vaultRoot: string }) {
@@ -120,7 +123,7 @@ describe("memory-wiki doctor source sync migration", () => {
   it("detects and migrates legacy import-run records into plugin state", async () => {
     const stateDir = await makeTempDir();
     const vaultRoot = path.join(stateDir, "vault");
-    const legacyPath = resolveMemoryWikiImportRunRecordPath(vaultRoot, "chatgpt-alpha");
+    const legacyPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-alpha");
     const snapshotPath = path.join(
       vaultRoot,
       ".openclaw-wiki",

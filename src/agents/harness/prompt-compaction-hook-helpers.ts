@@ -18,9 +18,11 @@ import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-cont
 const log = createSubsystemLogger("agents/harness");
 
 /** Prompt/developer-instruction pair after harness prompt-build hooks run. */
-export type AgentHarnessPromptBuildResult = {
+type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
+  /** Span within prompt containing the original prompt input. */
+  promptInputRange?: { start: number; end: number };
 };
 
 /** Runs before-prompt hooks and returns the adjusted prompt fields. */
@@ -29,12 +31,19 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   developerInstructions: string;
   messages: unknown[];
   ctx: AgentHarnessHookContext;
+  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 }): Promise<AgentHarnessPromptBuildResult> {
   const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_prompt_build") && !hookRunner?.hasHooks("before_agent_start")) {
+  const hasPrecomputedBeforeAgentStartResult = "beforeAgentStartResult" in params;
+  if (
+    !hasPrecomputedBeforeAgentStartResult &&
+    !hookRunner?.hasHooks("before_prompt_build") &&
+    !hookRunner?.hasHooks("before_agent_start")
+  ) {
     return {
       prompt: params.prompt,
       developerInstructions: params.developerInstructions,
+      promptInputRange: { start: 0, end: params.prompt.length },
     };
   }
   const hookCtx = buildAgentHookContext(params.ctx);
@@ -45,31 +54,48 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
 
   // Support the newer before_prompt_build hook plus the deprecated
   // before_agent_start hook during the prompt-build migration window.
-  const promptBuildResult = hookRunner.hasHooks("before_prompt_build")
+  const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
     ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
         log.warn(`before_prompt_build hook failed: ${String(error)}`);
         return undefined;
       })
     : undefined;
-  const beforeAgentStartResult = hookRunner.hasHooks("before_agent_start")
-    ? await hookRunner.runBeforeAgentStart(promptEvent, hookCtx).catch((error: unknown) => {
-        log.warn(`deprecated before_agent_start hook failed during prompt build: ${String(error)}`);
-        return undefined;
-      })
-    : undefined;
+  // The runner resolves before_agent_start during model selection. Reuse that
+  // result so legacy one-shot hooks do not run twice for the same turn.
+  const beforeAgentStartResult = hasPrecomputedBeforeAgentStartResult
+    ? params.beforeAgentStartResult
+    : hookRunner?.hasHooks("before_agent_start")
+      ? await hookRunner.runBeforeAgentStart(promptEvent, hookCtx).catch((error: unknown) => {
+          log.warn(
+            `deprecated before_agent_start hook failed during prompt build: ${String(error)}`,
+          );
+          return undefined;
+        })
+      : undefined;
 
   const systemPrompt = resolvePromptBuildSystemPrompt({
     developerInstructions: params.developerInstructions,
     promptBuildResult,
     beforeAgentStartResult,
   });
+  const promptPrefix = joinPresentTextSegments([
+    promptBuildResult?.prependContext,
+    beforeAgentStartResult?.prependContext,
+  ]);
+  const promptSuffix = joinPresentTextSegments([
+    promptBuildResult?.appendContext,
+    beforeAgentStartResult?.appendContext,
+  ]);
+  const prompt =
+    joinPresentTextSegments([promptPrefix, params.prompt, promptSuffix]) ?? params.prompt;
+  const promptInputStart =
+    params.prompt.length === 0
+      ? (promptPrefix?.length ?? 0)
+      : promptPrefix
+        ? promptPrefix.length + 2
+        : 0;
   return {
-    prompt:
-      joinPresentTextSegments([
-        promptBuildResult?.prependContext,
-        beforeAgentStartResult?.prependContext,
-        params.prompt,
-      ]) ?? params.prompt,
+    prompt,
     developerInstructions:
       joinPresentTextSegments([
         wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
@@ -78,6 +104,10 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
         wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
         wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
       ]) ?? systemPrompt,
+    promptInputRange: {
+      start: promptInputStart,
+      end: promptInputStart + params.prompt.length,
+    },
   };
 }
 
@@ -98,7 +128,7 @@ function resolvePromptBuildSystemPrompt(params: {
 /** Runs best-effort before-compaction hooks for a harness session. */
 export async function runAgentHarnessBeforeCompactionHook(params: {
   sessionFile: string;
-  messages: AgentMessage[];
+  messages?: AgentMessage[];
   ctx: AgentHarnessHookContext;
 }): Promise<void> {
   const hookRunner = getGlobalHookRunner();
@@ -108,8 +138,8 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
   try {
     await hookRunner.runBeforeCompaction(
       {
-        messageCount: params.messages.length,
-        messages: params.messages,
+        messageCount: params.messages?.length ?? -1,
+        ...(params.messages ? { messages: params.messages } : {}),
         sessionFile: params.sessionFile,
       },
       buildAgentHookContext(params.ctx),
@@ -122,7 +152,7 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
 /** Runs best-effort after-compaction hooks for a harness session. */
 export async function runAgentHarnessAfterCompactionHook(params: {
   sessionFile: string;
-  messages: AgentMessage[];
+  messages?: AgentMessage[];
   ctx: AgentHarnessHookContext;
   compactedCount: number;
 }): Promise<void> {
@@ -133,7 +163,7 @@ export async function runAgentHarnessAfterCompactionHook(params: {
   try {
     await hookRunner.runAfterCompaction(
       {
-        messageCount: params.messages.length,
+        messageCount: params.messages?.length ?? -1,
         compactedCount: params.compactedCount,
         sessionFile: params.sessionFile,
       },

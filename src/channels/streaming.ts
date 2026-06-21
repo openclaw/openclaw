@@ -411,6 +411,15 @@ function resolveCommandProgressCorrelationKey(input: { toolCallId?: string }): s
   return toolCallId ? `command:${toolCallId}` : undefined;
 }
 
+function isTerminalProgressStatus(status: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(status);
+  return (
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized?.startsWith("exit ") === true
+  );
+}
+
 function isEmptyReasoningProgressItem(
   input: Extract<ChannelProgressDraftLineInput, { event: "item" }>,
   meta: string | undefined,
@@ -1149,7 +1158,11 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
     return line;
   }
   const previousDetail = previous.detail?.trim();
-  if (!previousDetail || previousDetail === previous.status) {
+  if (
+    !previousDetail ||
+    previousDetail === previous.status ||
+    isTerminalProgressStatus(previous.status)
+  ) {
     return line;
   }
   const replacement = {

@@ -90,15 +90,3 @@ export function extractShortModelName(fullModel: string): string {
   // Strip date suffixes (YYYYMMDD format)
   return modelPart.replace(/-\d{8}$/, "").replace(/-latest$/, "");
 }
-
-/**
- * Check if a template string contains any template variables.
- */
-export function hasTemplateVariables(template: string | undefined): boolean {
-  if (!template) {
-    return false;
-  }
-  // Reset lastIndex since we're using a global regex
-  TEMPLATE_VAR_PATTERN.lastIndex = 0;
-  return TEMPLATE_VAR_PATTERN.test(template);
-}

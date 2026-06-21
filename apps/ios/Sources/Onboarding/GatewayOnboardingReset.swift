@@ -18,6 +18,7 @@ enum GatewayOnboardingReset {
         let deviceId = DeviceIdentityStore.loadOrCreate().deviceId
         DeviceAuthStore.clearToken(deviceId: deviceId, role: "node")
         DeviceAuthStore.clearToken(deviceId: deviceId, role: "operator")
+        DeviceAuthStore.clearAll(profile: .shareExtension)
 
         GatewaySettingsStore.clearLastGatewayConnection(defaults: defaults)
         GatewaySettingsStore.clearPreferredGatewayStableID(defaults: defaults)

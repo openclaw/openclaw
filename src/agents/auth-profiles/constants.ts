@@ -4,11 +4,7 @@
  * timing, and logging used by auth profile runtime modules.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-export {
-  AUTH_PROFILE_FILENAME,
-  AUTH_STATE_FILENAME,
-  LEGACY_AUTH_FILENAME,
-} from "./path-constants.js";
+export { AUTH_PROFILE_FILENAME } from "./path-constants.js";
 
 /** Current persisted auth profile store schema version. */
 export const AUTH_STORE_VERSION = 1;

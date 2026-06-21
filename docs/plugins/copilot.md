@@ -79,9 +79,9 @@ Pin one model (or one provider) to the harness:
 {
   agents: {
     defaults: {
-      model: "github-copilot/gpt-5.5",
+      model: "github-copilot/auto",
       models: {
-        "github-copilot/gpt-5.5": {
+        "github-copilot/auto": {
           agentRuntime: { id: "copilot" },
         },
       },
@@ -94,6 +94,10 @@ Both routes are equivalent. Use `agentRuntime.id` on a single model entry
 when only that model should be routed through the harness; set
 `agentRuntime.id` on a provider when every model under that provider should
 use it.
+
+`github-copilot/auto` is the portable starting point. Named Copilot models are
+account- and organization-policy-dependent, so only pin one after confirming
+that the authenticated Copilot CLI exposes it.
 
 ## Supported providers
 
@@ -169,8 +173,9 @@ The harness reads its config from per-attempt input
 - `infiniteSessionConfig` — optional override for the SDK
   `infiniteSessions` block driven by `harness.compact`. Defaults are safe to
   leave as-is.
-- `hooksConfig` — optional bridge config exposing OpenClaw
-  before/after-message-write hooks to the SDK loop.
+- `hooksConfig` — optional native Copilot SDK `SessionHooks` compatibility
+  config for tool/MCP, user-prompt, session, and error callbacks.
+  It is separate from OpenClaw's portable lifecycle hooks.
 - `permissionPolicy` — optional override for the SDK's
   `onPermissionRequest` handler used for built-in SDK tool kinds
   (`shell`, `write`, `read`, `url`, `mcp`, `memory`, `hook`). Defaults
@@ -179,8 +184,15 @@ The harness reads its config from per-attempt input
   registered with `overridesBuiltInTool: true` and
   `skipPermission: true` so 100% of tool calls flow through OpenClaw's
   wrapped `execute()`. See [Permissions and ask_user](#permissions-and-ask_user).
-- `enableSessionTelemetry` — opt-in OpenTelemetry routing via
-  `telemetry-bridge.ts`.
+- `enableSessionTelemetry` — optional SDK session telemetry flag.
+
+OpenClaw plugin hooks do not need Copilot-specific attempt configuration. The
+harness runs `before_prompt_build` (and the legacy `before_agent_start`
+compatibility hook), `llm_input`, `llm_output`, and `agent_end` through the
+standard harness helpers. Successful SDK compactions also run
+`before_compaction` and `after_compaction`. Bridged OpenClaw tools continue to
+run `before_tool_call` and report `after_tool_call`; `hooksConfig` remains for
+native SDK-only callbacks that have no portable equivalent.
 
 Nothing in the rest of OpenClaw needs to know about these fields. Other
 plugins, channels, and core code only see the standard
@@ -267,9 +279,7 @@ real Copilot CLI or touch the host fs.
   decisions from the initial prompt rather than asking clarifying
   questions mid-turn. A follow-up will port the codex pattern at
   `extensions/codex/src/app-server/user-input-bridge.ts` to route SDK
-  `UserInputRequest`s through the OpenClaw channel/TUI prompt path; the
-  dormant scaffolding in `extensions/copilot/src/user-input-bridge.ts`
-  is the surface that follow-up will wire.
+  `UserInputRequest`s through the OpenClaw channel/TUI prompt path.
 
 ## Permissions and ask_user
 

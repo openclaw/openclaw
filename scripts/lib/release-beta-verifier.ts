@@ -42,6 +42,11 @@ export type NpmViewFields = {
   tarball?: string;
 };
 
+type FetchWithRetryResult = {
+  response: Response;
+  signal: AbortSignal;
+};
+
 type WorkflowRunSummary = {
   id: string;
   label: string;
@@ -262,17 +267,19 @@ async function fetchWithRetry(
   url: string,
   options: RequestInit,
   attempts: number,
-): Promise<Response> {
+): Promise<FetchWithRetryResult> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
+      const signal = AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS);
       const response = await fetch(url, {
         ...options,
-        signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
+        signal,
       });
       if (response.status !== 429 && response.status < 500) {
-        return response;
+        return { response, signal };
       }
+      await cancelResponseBody(response);
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
       lastError = error;
@@ -287,25 +294,38 @@ async function fetchWithRetry(
   throw new Error(`${url} did not return a stable response: ${message}`);
 }
 
+async function cancelResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 async function fetchJsonWithRetry(url: string): Promise<unknown> {
-  const response = await fetchWithRetry(url, { headers: { accept: "application/json" } }, 5);
+  const { response, signal } = await fetchWithRetry(
+    url,
+    { headers: { accept: "application/json" } },
+    5,
+  );
   if (!response.ok) {
     throw new Error(`${url} returned HTTP ${response.status}.`);
   }
-  return await readBoundedJsonResponse(response, url);
+  return await readBoundedJsonResponse(response, url, undefined, { signal });
 }
 
 export async function readBoundedJsonResponse(
   response: Response,
   label: string,
   maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+  options: { signal?: AbortSignal } = {},
 ): Promise<unknown> {
-  return parseJson(await readBoundedResponseText(response, label, maxBytes), label);
+  return parseJson(await readBoundedResponseText(response, label, maxBytes, options), label);
 }
 
-async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
-  const response = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
-  return response.status;
+export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
+  const { response } = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
+  try {
+    return response.status;
+  } finally {
+    await cancelResponseBody(response);
+  }
 }
 
 async function verifyNpmPackage(
@@ -692,6 +712,8 @@ export async function verifyBetaRelease(
           pluginSelection: args.pluginSelection,
           openclawNpmIntegrity: openclawNpm.integrity,
           openclawNpmTarball: openclawNpm.tarball,
+          npmRegistrySignaturesVerified: args.skipPostpublish ? null : true,
+          npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
           githubReleaseUrl: releaseUrl ?? null,
           pluginNpmPackageCount: npmPlugins.length,
           clawHubPackageCount: clawHubPlugins.length,

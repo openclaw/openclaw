@@ -4,13 +4,13 @@
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { PluginHookModelFailoverEvent } from "../../../plugins/hook-types.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
-import { shouldAllowCooldownProbeForReason } from "../../failover-policy.js";
 import {
   buildApiErrorObservationFields,
   sanitizeForConsole,
   shouldSuppressRawErrorConsoleSuffix,
 } from "../../embedded-agent-error-observation.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
+import { shouldAllowCooldownProbeForReason } from "../../failover-policy.js";
 import { log } from "../logger.js";
 
 /** Minimal hook-runner interface needed for failover observation. */
@@ -23,7 +23,7 @@ export type FailoverHookRunner = {
 };
 
 /** Structured fields emitted whenever embedded run failover chooses an action. */
-export type FailoverDecisionLoggerInput = {
+type FailoverDecisionLoggerInput = {
   stage: "prompt" | "assistant";
   decision: "rotate_profile" | "fallback_model" | "surface_error";
   runId?: string;
@@ -47,6 +47,7 @@ export type FailoverDecisionLoggerExtra = Pick<FailoverDecisionLoggerInput, "sta
   targetModel?: string;
 };
 
+/** Stable context captured before a concrete failover decision is known. */
 export type FailoverDecisionLoggerBase = Omit<
   FailoverDecisionLoggerInput,
   "decision" | "status"

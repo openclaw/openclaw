@@ -256,6 +256,40 @@ describe("google prompt cache", () => {
     ]);
   });
 
+  it("cancels failed cache creation response bodies", async () => {
+    const now = 1_500_000;
+    const response = new Response("permission denied", { status: 403 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchMock = vi.fn(async () => response);
+    const entries: SessionCustomEntry[] = [];
+    const sessionManager = makeSessionManager(entries);
+    const innerStreamFn = vi.fn(() => "stream" as never);
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: "Follow policy.", messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamContext(innerStreamFn).systemPrompt).toBe("Follow policy.");
+    expect(entries[0]?.data).toMatchObject({
+      status: "failed",
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+    });
+  });
+
   it("reuses a persisted cache entry without creating a second cache", async () => {
     const now = 2_000_000;
     const entries: SessionCustomEntry[] = [];
@@ -392,6 +426,57 @@ describe("google prompt cache", () => {
     expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
     expect(typeof streamOptions(innerStreamFn)).toBe("object");
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-3");
+  });
+
+  it("cancels failed cache refresh response bodies", async () => {
+    const now = 3_500_000;
+    const expireSoon = new Date(now + 60_000).toISOString();
+    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
+    const entries: SessionCustomEntry[] = [
+      {
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date(now - 5_000).toISOString(),
+        type: "custom",
+        customType: "openclaw.google-prompt-cache",
+        data: {
+          status: "ready",
+          timestamp: now - 5_000,
+          provider: "google",
+          modelId: "gemini-3.1-pro-preview",
+          modelApi: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          systemPromptDigest,
+          cacheRetention: "long",
+          cachedContent: "cachedContents/system-cache-4",
+          expireTime: expireSoon,
+        },
+      },
+    ];
+    const response = new Response("refresh denied", { status: 403 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchMock = vi.fn(async () => response);
+    const sessionManager = makeSessionManager(entries);
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: "Follow policy.", messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(entries).toHaveLength(1);
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-4");
   });
 
   it("does not bypass failed-cache backoff when the process clock is invalid", async () => {

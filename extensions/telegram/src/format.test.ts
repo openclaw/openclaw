@@ -103,6 +103,37 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml(input)).toBe(input);
   });
 
+  it("converts raw HTML tables to code fallbacks in legacy HTML mode", () => {
+    const input = [
+      "<table>",
+      "<thead><tr><th>Name</th><th>Age</th></tr></thead>",
+      "<tbody><tr><td>Ada</td><td>37</td></tr></tbody>",
+      "</table>",
+    ].join("");
+
+    const html = renderTelegramHtmlText(input, { textMode: "html" });
+
+    expect(html).toBe("<pre><code>| Name | Age |\n| Ada  | 37  |</code></pre>\n\n");
+    expect(html).not.toContain("&lt;table");
+  });
+
+  it("keeps raw HTML tables escaped inside legacy HTML code blocks", () => {
+    expect(
+      renderTelegramHtmlText("<pre><code><table><tr><td>A</td></tr></table></code></pre>", {
+        textMode: "html",
+      }),
+    ).toBe(
+      "<pre><code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;A&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</code></pre>",
+    );
+  });
+
+  it("preserves supported raw rich HTML tables during sanitization", () => {
+    const input =
+      '<table bordered><caption>Scores</caption><tbody><tr><td>A</td><td align="right">1</td></tr></tbody></table>';
+
+    expect(sanitizeTelegramRichHtml(input)).toBe(input);
+  });
+
   it("isolates rich media tags as blocks", () => {
     const html = markdownToTelegramRichHtml(
       'One <img src="https://example.com/a.jpg" alt="A"> two https://example.com/page',
@@ -204,6 +235,28 @@ describe("markdownToTelegramHtml", () => {
     expect(
       markdownToTelegramRichHtml("[docs](https://example.com)", { skipEntityDetection: true }),
     ).toBe('<a href="https://example.com">docs</a>');
+  });
+
+  it("keeps unsupported markdown link hrefs as visible text in rich HTML", () => {
+    expect(
+      markdownToTelegramRichHtml(
+        "[scripts/yougile.py](/home/dankar/.openclaw/workspace-yougile/scripts/yougile.py#L41)",
+      ),
+    ).toBe("<code>scripts/yougile.py</code>");
+    expect(markdownToTelegramRichHtml("[config](./openclaw.json)")).toBe("config");
+    expect(markdownToTelegramRichHtml("[docs](https://example.com/docs)")).toBe(
+      '<a href="https://example.com/docs">docs</a>',
+    );
+    expect(markdownToTelegramRichHtml("[user](tg://user?id=123)")).toBe(
+      '<a href="tg://user?id=123">user</a>',
+    );
+    expect(markdownToTelegramRichHtml("[support](mailto:user@example.com)")).toBe(
+      '<a href="mailto:user@example.com">support</a>',
+    );
+    expect(markdownToTelegramRichHtml("[call](tel:+123456789)")).toBe(
+      '<a href="tel:+123456789">call</a>',
+    );
+    expect(markdownToTelegramRichHtml("[back](#top)")).toBe('<a href="#top">back</a>');
   });
 
   it("preserves Markdown heading levels in rich HTML", () => {
@@ -424,4 +477,47 @@ describe("markdownToTelegramHtml", () => {
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
   });
+
+  it("does not split an astral char across the chunk boundary", () => {
+    // Emoji surrogate pair straddles index 10 (limit): high at 9, low at 10.
+    const input = `${"A".repeat(9)}😀${"B".repeat(20)}`;
+    const chunks = splitTelegramHtmlChunks(input, 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(input);
+    for (const chunk of chunks) {
+      expect(containsLoneSurrogate(chunk)).toBe(false);
+    }
+  });
+
+  it("keeps an astral char whole when a positive limit starts on its pair", () => {
+    expect(splitTelegramHtmlChunks("A😀B", 1)).toEqual(["A", "😀", "B"]);
+  });
+
+  it("keeps astral chars whole in rendered Markdown chunks", () => {
+    const chunks = markdownToTelegramChunks("A😀B", 1);
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["A", "😀", "B"]);
+    for (const chunk of chunks) {
+      expect(containsLoneSurrogate(chunk.html)).toBe(false);
+      expect(containsLoneSurrogate(chunk.text)).toBe(false);
+    }
+  });
 });
+
+function containsLoneSurrogate(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    const isHigh = code >= 0xd800 && code <= 0xdbff;
+    const isLow = code >= 0xdc00 && code <= 0xdfff;
+    if (isHigh) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (isLow) {
+      return true;
+    }
+  }
+  return false;
+}

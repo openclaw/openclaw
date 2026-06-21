@@ -53,11 +53,17 @@ import {
   serializeSessionCleanupResult,
   resolveMainSessionKey,
   listConfiguredSessionStoreAgentIds,
+  deleteSessionEntryLifecycle,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
+import {
+  applySessionPatchProjection,
+  createSessionEntryWithTranscript,
+  preflightSessionTranscriptForManualCompact,
+  trimSessionTranscriptForManualCompact,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -94,12 +100,10 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
   readSessionMessageCountAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
 import {
-  archiveFileOnDisk,
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
@@ -116,7 +120,7 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
-import { applySessionsPatchToStore } from "../sessions-patch.js";
+import { applySessionsPatchToStore, projectSessionsPatchEntry } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
@@ -827,8 +831,9 @@ async function handleSessionSend(params: {
   const messageSeq =
     (await readSessionMessageCountAsync({
       agentId: requestedAgentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
       storePath,
     })) + 1;
   let sendAcked = false;
@@ -1170,8 +1175,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const items = readSessionPreviewItemsFromTranscript(
           {
             agentId: target.agentId,
-            sessionFile: entry.sessionFile,
+            sessionEntry: entry,
             sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
             storePath: target.storePath,
           },
           limit,
@@ -1529,8 +1535,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const messageSeq = initialMessage
       ? (await readSessionMessageCountAsync({
           agentId: target.agentId,
-          sessionFile: createdEntry.sessionFile,
+          sessionEntry: createdEntry,
           sessionId: createdEntry.sessionId,
+          sessionKey: target.canonicalKey,
           storePath: target.storePath,
         })) + 1
       : undefined;
@@ -2066,21 +2073,30 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
       agentId: requestedAgentId,
     });
-    const applied = await updateSessionStore(storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      return await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        agentId: requestedAgentId,
-        patch: p,
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      });
+    const applied = await applySessionPatchProjection({
+      storePath,
+      resolveTarget: ({ entries }) => {
+        const store = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key,
+          store,
+          agentId: requestedAgentId,
+        });
+        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      },
+      project: async ({ primaryKey, existingEntry, entries }) =>
+        await projectSessionsPatchEntry({
+          cfg,
+          entries,
+          existingEntry,
+          storeKey: primaryKey,
+          agentId: requestedAgentId,
+          patch: p,
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        }),
     });
     if (!applied.ok) {
       respond(false, undefined, applied.error);
@@ -2280,7 +2296,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
     const {
-      archiveSessionTranscriptsForSessionDetailed,
       cleanupSessionBeforeMutation,
       emitGatewaySessionEndPluginHook,
       emitSessionUnboundLifecycleEvent,
@@ -2305,31 +2320,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, mutationCleanupError);
       return;
     }
-    const sessionId = entry?.sessionId;
-    const deleted = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      const hadEntry = Boolean(store[primaryKey]);
-      if (hadEntry) {
-        delete store[primaryKey];
-      }
-      return hadEntry;
+    const deletion = await deleteSessionEntryLifecycle({
+      agentId: target.agentId,
+      archiveTranscript: deleteTranscript,
+      storePath,
+      target: {
+        canonicalKey: target.canonicalKey,
+        storeKeys: target.storeKeys,
+      },
     });
-
-    const archivedTranscripts =
-      deleted && deleteTranscript
-        ? archiveSessionTranscriptsForSessionDetailed({
-            sessionId,
-            storePath,
-            sessionFile: entry?.sessionFile,
-            agentId: target.agentId,
-            reason: "deleted",
-          })
-        : [];
+    const deleted = deletion.deleted;
+    const sessionId = deletion.deletedSessionId;
+    const sessionFile = deletion.deletedSessionFile;
+    const archivedTranscripts = deletion.archivedTranscripts;
     const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
     if (deleted) {
       emitGatewaySessionEndPluginHook({
@@ -2337,7 +2340,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sessionKey: target.canonicalKey ?? key,
         sessionId,
         storePath,
-        sessionFile: entry?.sessionFile,
+        sessionFile,
         agentId: target.agentId,
         reason: "deleted",
         archivedTranscripts,
@@ -2399,8 +2402,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
       {
         agentId: requestedAgent.agentId,
-        sessionFile: entry.sessionFile,
+        sessionEntry: entry,
         sessionId: entry.sessionId,
+        sessionKey: key,
         storePath,
       },
       {
@@ -2465,27 +2469,27 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const filePath = resolveSessionTranscriptCandidates(
-      sessionId,
-      storePath,
-      entry?.sessionFile,
-      target.agentId,
-    ).find((candidate) => fs.existsSync(candidate));
-    if (!filePath) {
-      respond(
-        true,
-        {
-          ok: true,
-          key: target.canonicalKey,
-          compacted: false,
-          reason: "no transcript",
-        },
-        undefined,
-      );
-      return;
-    }
-
     if (maxLines === undefined) {
+      const filePath = resolveSessionTranscriptCandidates(
+        sessionId,
+        storePath,
+        entry?.sessionFile,
+        target.agentId,
+      ).find((candidate) => fs.existsSync(candidate));
+      if (!filePath) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            reason: "no transcript",
+          },
+          undefined,
+        );
+        return;
+      }
+
       const interruptResult = await interruptSessionRunIfActive({
         req,
         context,
@@ -2617,45 +2621,101 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const tail = readRecentSessionTranscriptLines({
-      sessionId,
-      storePath,
-      sessionFile: entry?.sessionFile,
-      agentId: target.agentId,
-      maxLines,
-    });
-    const lines = tail?.lines ?? [];
-    const totalLines = tail?.totalLines ?? 0;
-    if (totalLines <= maxLines) {
-      respond(
-        true,
-        {
-          ok: true,
-          key: target.canonicalKey,
-          compacted: false,
-          kept: totalLines,
-        },
-        undefined,
-      );
+    const trimPreflight = await preflightSessionTranscriptForManualCompact(
+      {
+        sessionId,
+        storePath,
+        sessionKey: compactTarget.primaryKey,
+        agentId: target.agentId,
+      },
+      {
+        maxLines,
+        sessionFile: entry?.sessionFile,
+      },
+    );
+    if (!trimPreflight.compacted) {
+      if ("kept" in trimPreflight) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            kept: trimPreflight.kept,
+          },
+          undefined,
+        );
+      } else {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            reason: "no transcript",
+          },
+          undefined,
+        );
+      }
       return;
     }
 
-    const archived = archiveFileOnDisk(filePath, "bak");
-    fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf-8");
-
-    await updateSessionStore(storePath, (store) => {
-      const entryKey = compactTarget.primaryKey;
-      const entryToUpdate = store[entryKey];
-      if (!entryToUpdate) {
-        return;
-      }
-      delete entryToUpdate.inputTokens;
-      delete entryToUpdate.outputTokens;
-      delete entryToUpdate.totalTokens;
-      delete entryToUpdate.totalTokensFresh;
-      delete entryToUpdate.contextBudgetStatus;
-      entryToUpdate.updatedAt = Date.now();
+    // Active-run safety parity with the LLM-summarize branch above. The maxLines
+    // truncate path archives and overwrites the transcript, so once preflight
+    // proves a destructive trim is needed, interrupt before rereading and writing.
+    const truncateInterrupt = await interruptSessionRunIfActive({
+      req,
+      context,
+      client,
+      isWebchatConnect,
+      requestedKey: key,
+      canonicalKey: target.canonicalKey,
+      agentId: requestedAgentId,
+      sessionId,
     });
+    if (truncateInterrupt.error) {
+      respond(false, undefined, truncateInterrupt.error);
+      return;
+    }
+
+    const trimResult = await trimSessionTranscriptForManualCompact(
+      {
+        sessionId,
+        storePath,
+        sessionKey: compactTarget.primaryKey,
+        agentId: target.agentId,
+      },
+      {
+        maxLines,
+        sessionFile: entry?.sessionFile,
+      },
+    );
+    if (!trimResult.compacted) {
+      if ("kept" in trimResult) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            kept: trimResult.kept,
+          },
+          undefined,
+        );
+      } else {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            reason: "no transcript",
+          },
+          undefined,
+        );
+      }
+      return;
+    }
 
     respond(
       true,
@@ -2663,8 +2723,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ok: true,
         key: target.canonicalKey,
         compacted: true,
-        archived,
-        kept: lines.length,
+        archived: trimResult.archived,
+        kept: trimResult.kept,
       },
       undefined,
     );

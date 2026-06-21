@@ -42,31 +42,7 @@ function loadPrecomputedHelpText(
   return null;
 }
 
-export function loadPrecomputedRootHelpText(): string | null {
-  return loadPrecomputedHelpText("rootHelpText", precomputedRootHelpText, (value) => {
-    precomputedRootHelpText = value;
-  });
-}
-
-export function loadPrecomputedBrowserHelpText(): string | null {
-  return loadPrecomputedHelpText("browserHelpText", precomputedBrowserHelpText, (value) => {
-    precomputedBrowserHelpText = value;
-  });
-}
-
-export function loadPrecomputedSecretsHelpText(): string | null {
-  return loadPrecomputedHelpText("secretsHelpText", precomputedSecretsHelpText, (value) => {
-    precomputedSecretsHelpText = value;
-  });
-}
-
-export function loadPrecomputedNodesHelpText(): string | null {
-  return loadPrecomputedHelpText("nodesHelpText", precomputedNodesHelpText, (value) => {
-    precomputedNodesHelpText = value;
-  });
-}
-
-export function loadPrecomputedSubcommandHelpText(commandName: string): string | null {
+function loadPrecomputedSubcommandHelpText(commandName: string): string | null {
   if (!isPrecomputedSubcommandHelpName(commandName)) {
     return null;
   }
@@ -92,7 +68,9 @@ export function loadPrecomputedSubcommandHelpText(commandName: string): string |
 }
 
 export function outputPrecomputedRootHelpText(): boolean {
-  const rootHelpText = loadPrecomputedRootHelpText();
+  const rootHelpText = loadPrecomputedHelpText("rootHelpText", precomputedRootHelpText, (value) => {
+    precomputedRootHelpText = value;
+  });
   if (!rootHelpText) {
     return false;
   }
@@ -101,7 +79,13 @@ export function outputPrecomputedRootHelpText(): boolean {
 }
 
 export function outputPrecomputedBrowserHelpText(): boolean {
-  const browserHelpText = loadPrecomputedBrowserHelpText();
+  const browserHelpText = loadPrecomputedHelpText(
+    "browserHelpText",
+    precomputedBrowserHelpText,
+    (value) => {
+      precomputedBrowserHelpText = value;
+    },
+  );
   if (!browserHelpText) {
     return false;
   }
@@ -110,7 +94,13 @@ export function outputPrecomputedBrowserHelpText(): boolean {
 }
 
 export function outputPrecomputedSecretsHelpText(): boolean {
-  const secretsHelpText = loadPrecomputedSecretsHelpText();
+  const secretsHelpText = loadPrecomputedHelpText(
+    "secretsHelpText",
+    precomputedSecretsHelpText,
+    (value) => {
+      precomputedSecretsHelpText = value;
+    },
+  );
   if (!secretsHelpText) {
     return false;
   }
@@ -119,7 +109,13 @@ export function outputPrecomputedSecretsHelpText(): boolean {
 }
 
 export function outputPrecomputedNodesHelpText(): boolean {
-  const nodesHelpText = loadPrecomputedNodesHelpText();
+  const nodesHelpText = loadPrecomputedHelpText(
+    "nodesHelpText",
+    precomputedNodesHelpText,
+    (value) => {
+      precomputedNodesHelpText = value;
+    },
+  );
   if (!nodesHelpText) {
     return false;
   }
@@ -162,14 +158,3 @@ function setPrecomputedSubcommandHelpText(
     [commandName]: value,
   };
 }
-
-export const testing = {
-  resetPrecomputedRootHelpTextForTests(): void {
-    precomputedRootHelpText = undefined;
-    precomputedBrowserHelpText = undefined;
-    precomputedSecretsHelpText = undefined;
-    precomputedNodesHelpText = undefined;
-    precomputedSubcommandHelpText = undefined;
-  },
-};
-export { testing as __testing };

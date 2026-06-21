@@ -25,8 +25,8 @@ import {
   formatSessionGoalStatus,
   getSessionGoal,
   updateSessionGoalStatus,
-  updateSessionStore,
 } from "../config/sessions.js";
+import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import {
@@ -64,7 +64,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
-import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
+import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -450,8 +450,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
         ? await readSessionMessagesAsync(
             {
               agentId: sessionAgentId,
-              sessionFile: entry?.sessionFile,
+              sessionEntry: entry,
               sessionId,
+              sessionKey: canonicalKey,
               storePath,
             },
             {
@@ -545,21 +546,30 @@ export class EmbeddedTuiBackend implements TuiBackend {
       key: opts.key,
       agentId: opts.agentId,
     });
-    const applied = await updateSessionStore(target.storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key: opts.key,
-        store,
-        agentId: opts.agentId,
-      });
-      return await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        agentId: opts.agentId,
-        patch: opts,
-        loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
-      });
+    const applied = await applySessionPatchProjection({
+      storePath: target.storePath,
+      resolveTarget: ({ entries }) => {
+        const store = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key: opts.key,
+          store,
+          agentId: opts.agentId,
+        });
+        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      },
+      project: async ({ primaryKey, existingEntry, entries }) =>
+        await projectSessionsPatchEntry({
+          cfg,
+          entries,
+          existingEntry,
+          storeKey: primaryKey,
+          agentId: opts.agentId,
+          patch: opts,
+          loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
+        }),
     });
     if (!applied.ok) {
       throw new Error(applied.error.message);
