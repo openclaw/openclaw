@@ -232,6 +232,24 @@ describe("package-mac-dist plist validation", () => {
     expect(result.stderr).not.toContain("node reran after failed install");
   });
 
+  it("cleans the temporary notary zip when notarization exits early", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const notaryBlock = script.slice(
+      script.indexOf('if [[ "$NOTARIZE" == "1" ]]'),
+      script.indexOf('if [[ "$SKIP_DMG" != "1" ]]'),
+    );
+
+    expect(script).toContain("cleanup_notary_zip()");
+    expect(notaryBlock).toContain("NOTARY_ZIP_PENDING_CLEANUP=1");
+    expect(notaryBlock).toContain("trap cleanup_notary_zip EXIT");
+    expect(notaryBlock).toContain(
+      'STAPLE_APP_PATH="$APP" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$NOTARY_ZIP"',
+    );
+    expect(notaryBlock).toContain('rm -f "$NOTARY_ZIP"');
+    expect(notaryBlock).toContain("NOTARY_ZIP_PENDING_CLEANUP=0");
+    expect(notaryBlock).toContain("trap - EXIT");
+  });
+
   it("fails closed when required dSYM outputs are missing", () => {
     const script = readFileSync(scriptPath, "utf8");
     const dsymBlock = script.slice(script.indexOf('if [[ "$SKIP_DSYM" != "1" ]]'));

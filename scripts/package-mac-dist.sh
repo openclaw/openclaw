@@ -154,6 +154,13 @@ SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
 NOTARIZE=1
 SKIP_DSYM="${SKIP_DSYM:-0}"
 SKIP_DMG="${SKIP_DMG:-0}"
+NOTARY_ZIP_PENDING_CLEANUP=0
+
+cleanup_notary_zip() {
+  if [[ "$NOTARY_ZIP_PENDING_CLEANUP" == "1" ]]; then
+    rm -f "$NOTARY_ZIP"
+  fi
+}
 
 if [[ "$SKIP_NOTARIZE" == "1" ]]; then
   NOTARIZE=0
@@ -185,9 +192,13 @@ fi
 if [[ "$NOTARIZE" == "1" ]]; then
   echo "📦 Notary zip: $NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
+  NOTARY_ZIP_PENDING_CLEANUP=1
+  trap cleanup_notary_zip EXIT
   ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
   STAPLE_APP_PATH="$APP" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
+  NOTARY_ZIP_PENDING_CLEANUP=0
+  trap - EXIT
 fi
 
 echo "📦 Zip: $ZIP"

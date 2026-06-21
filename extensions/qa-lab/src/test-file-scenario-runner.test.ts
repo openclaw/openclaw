@@ -2,11 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import { readQaScenarioById, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import {
+  qaTestFileScenarioRunnerTesting,
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
 } from "./test-file-scenario-runner.js";
@@ -427,6 +428,29 @@ describe("qa test file scenario runner", () => {
         process.kill(descendantPid, "SIGKILL");
       }
     }
+  });
+
+  it("force-kills Windows scenario command trees when graceful taskkill fails", () => {
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ status: 1 })
+      .mockReturnValueOnce({ status: 0 });
+
+    expect(
+      qaTestFileScenarioRunnerTesting.killQaScenarioWindowsProcessTree(
+        12345,
+        "SIGTERM",
+        runTaskkill,
+      ),
+    ).toBe(true);
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/pid", "12345", "/T"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/pid", "12345", "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
   });
 
   it("fails script scenarios that exit cleanly after timeout termination", async () => {

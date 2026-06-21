@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -186,7 +186,13 @@ function formatCommand(step: QaScenarioCommandStep) {
   return [step.command, ...step.args].map(shellQuote).join(" ");
 }
 
-function killQaScenarioWindowsProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
+type QaScenarioTaskkillRunner = typeof spawnSync;
+
+function killQaScenarioWindowsProcessTree(
+  pid: number | undefined,
+  signal: NodeJS.Signals,
+  runTaskkill: QaScenarioTaskkillRunner = spawnSync,
+) {
   if (pid === undefined) {
     return false;
   }
@@ -194,17 +200,21 @@ function killQaScenarioWindowsProcessTree(pid: number | undefined, signal: NodeJ
   if (signal === "SIGKILL") {
     args.push("/F");
   }
-  try {
-    const killer = spawn("taskkill", args, {
+  const result = runTaskkill("taskkill", args, {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  if (!result.error && result.status === 0) {
+    return true;
+  }
+  if (signal !== "SIGKILL") {
+    const forceResult = runTaskkill("taskkill", [...args, "/F"], {
       stdio: "ignore",
       windowsHide: true,
     });
-    killer.on("error", () => undefined);
-    killer.unref();
-    return true;
-  } catch {
-    return false;
+    return !forceResult.error && forceResult.status === 0;
   }
+  return false;
 }
 
 function runQaScenarioCommand(
@@ -791,3 +801,7 @@ export async function runQaTestFileScenarios(
     results,
   };
 }
+
+export const qaTestFileScenarioRunnerTesting = {
+  killQaScenarioWindowsProcessTree,
+};

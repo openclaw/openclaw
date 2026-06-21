@@ -16,7 +16,6 @@ import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
-import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   buildAfterTurnRuntimeContext,
@@ -329,23 +328,6 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
-  });
-});
-
-describe("resolveBootstrapContextTargets", () => {
-  it("keeps BOOTSTRAP.md in system Project Context only for full bootstrap turns", () => {
-    expect(resolveBootstrapContextTargets({ bootstrapMode: "full" })).toEqual({
-      includeBootstrapInSystemContext: true,
-      includeBootstrapInRuntimeContext: false,
-    });
-    expect(resolveBootstrapContextTargets({ bootstrapMode: "limited" })).toEqual({
-      includeBootstrapInSystemContext: false,
-      includeBootstrapInRuntimeContext: false,
-    });
-    expect(resolveBootstrapContextTargets({ bootstrapMode: "none" })).toEqual({
-      includeBootstrapInSystemContext: false,
-      includeBootstrapInRuntimeContext: false,
-    });
   });
 });
 

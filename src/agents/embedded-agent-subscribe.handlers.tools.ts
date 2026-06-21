@@ -80,6 +80,7 @@ import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { readToolResultDetails } from "./tool-result-error.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -336,10 +337,6 @@ function emitAgentEventCallbackBestEffort(
   }
 }
 
-function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
-  return readRecordField(asOptionalObjectRecord(result)?.details);
-}
-
 function applyCurrentMessageProvider(
   toolName: string,
   args: Record<string, unknown>,
@@ -357,21 +354,21 @@ function applyCurrentMessageProvider(
 }
 
 function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
-  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+  const toolSend = readToolResultDetails(receiptResult)?.toolSend;
   if (toolSend === undefined) {
     return result;
   }
   return {
     ...readRecordField(result),
     details: {
-      ...readToolResultDetailsRecord(result),
+      ...readToolResultDetails(result),
       toolSend,
     },
   };
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   return details?.async === true && details.status === "started";
 }
 
@@ -379,7 +376,7 @@ function readAsyncStartedTaskIds(result: unknown): {
   asyncTaskRunId?: string;
   asyncTaskId?: string;
 } {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   if (!details) {
     return {};
   }
@@ -393,7 +390,7 @@ function readAsyncStartedTaskIds(result: unknown): {
 }
 
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   if (!details || typeof details.status !== "string") {
     return null;
   }
@@ -423,7 +420,7 @@ function capLiveExecResult(result: unknown): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return result;
   }
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   return {
     ...(result as Record<string, unknown>),
     details: {
@@ -474,7 +471,7 @@ function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): 
 }
 
 function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   const summary =
     details?.summary && typeof details.summary === "object" && !Array.isArray(details.summary)
       ? (details.summary as Record<string, unknown>)

@@ -474,6 +474,22 @@ describe("Parallels smoke model selection", () => {
     expect(existsSync(lockDir)).toBe(false);
   });
 
+  it("removes a just-created package lock when owner writing fails", async () => {
+    const parentDir = makeTempDir(tempDirs, "openclaw-parallels-package-lock-parent-");
+    const lockDir = join(parentDir, "package.lock");
+    const error = new Error("failed to write owner");
+
+    await expect(
+      packageArtifactTesting.acquirePackageLock(lockDir, "owner-token", {
+        writeOwner: async () => {
+          throw error;
+        },
+      }),
+    ).rejects.toBe(error);
+
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
   it("keeps JSON-mode progress off stdout", async () => {
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

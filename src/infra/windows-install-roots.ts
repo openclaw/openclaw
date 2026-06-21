@@ -234,6 +234,12 @@ export function getWindowsProgramFilesRoots(
   return result;
 }
 
+export function getWindowsCmdExePath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return path.win32.join(getWindowsInstallRoots(env).systemRoot, "System32", "cmd.exe");
+}
+
 export function resetWindowsInstallRootsForTests(
   overrides: WindowsInstallRootsTestOverrides = {},
 ): void {

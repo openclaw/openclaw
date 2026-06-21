@@ -5,9 +5,11 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
+  assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
   cleanPackedOpenClawTarballsForTest,
   downloadUrl,
@@ -19,8 +21,13 @@ import {
   readPackageBuildSourceSha,
   resolveNpmPackageCandidatePackRunner,
   runCommandForTest,
+  signalChildProcessTree,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 const tempDirs: string[] = [];
 
@@ -211,6 +218,75 @@ describe("resolve-openclaw-package-candidate", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("signals Windows package runner process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    signalChildProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows package runner process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("keeps npm pack filenames inside the package candidate output directory", async () => {
@@ -669,6 +745,60 @@ describe("resolve-openclaw-package-candidate", () => {
     ).rejects.toThrow("is not allowed by trusted package source enterprise-artifactory");
   });
 
+  it("does not forward trusted package auth headers to redirect hosts", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    const previousToken = process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN;
+    process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN = "token-123";
+    const trustedSource = {
+      allowPrivateNetwork: true,
+      auth: { type: "bearer" },
+      hosts: ["packages.internal"],
+      id: "enterprise-artifactory",
+      pathPrefixes: ["/artifactory/openclaw/"],
+      ports: [8443],
+      redirectHosts: ["packages.internal", "mirror.internal"],
+    };
+    const requestHeaders: Array<Record<string, string> | undefined> = [];
+
+    try {
+      await downloadUrl(
+        "https://packages.internal:8443/artifactory/openclaw/openclaw.tgz",
+        target,
+        {
+          fetchImpl: async (_url: URL, init?: RequestInit) => {
+            requestHeaders.push(init?.headers as Record<string, string> | undefined);
+            if (requestHeaders.length === 1) {
+              return new Response(null, {
+                headers: {
+                  location: "https://mirror.internal:8443/artifactory/openclaw/openclaw.tgz",
+                },
+                status: 302,
+              });
+            }
+            return new Response(new Uint8Array([4, 5, 6]), {
+              headers: { "content-length": "3" },
+              status: 200,
+            });
+          },
+          lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+          maxBytes: 3,
+          trustedSource,
+        },
+      );
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN;
+      } else {
+        process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN = previousToken;
+      }
+    }
+
+    expect(requestHeaders).toEqual([{ authorization: "Bearer token-123" }, undefined]);
+    await expect(readFile(target)).resolves.toEqual(Buffer.from([4, 5, 6]));
+  });
+
   it("validates redirects for package_url downloads", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
@@ -968,6 +1098,16 @@ describe("resolve-openclaw-package-candidate", () => {
       packageTrustedReason: "repository-branch-history",
       sha256: "a".repeat(64),
     });
+  });
+
+  it("accepts uppercase package artifact SHA-256 metadata", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-sha-"));
+    tempDirs.push(dir);
+    const file = path.join(dir, "openclaw.tgz");
+    await writeFile(file, "openclaw package bytes");
+    const digest = "ae0b98d18c80dbf9447fa48560a139195595db2d337ad33421ca2183b0dd3e99";
+
+    await expect(assertExpectedSha256ForTest(file, digest.toUpperCase())).resolves.toBe(digest);
   });
 
   it("rejects source artifact scans that exceed the filesystem entry limit", async () => {
