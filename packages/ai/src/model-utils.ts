@@ -97,7 +97,7 @@ function compatExplicitlySupportsExtendedThinkingLevel(
     return true;
   }
 
-  return false;
+  return normalizedMapped !== "" && supportedEfforts.has(normalizedMapped);
 }
 
 function compatSupportsThinkingLevel<TApi extends Api>(
