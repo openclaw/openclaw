@@ -23,6 +23,7 @@ import {
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
+  loadExtraBootstrapFilesWithDiagnostics,
   loadWorkspaceBootstrapFiles,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
@@ -893,6 +894,39 @@ describe("loadWorkspaceBootstrapFiles", () => {
         missing: true,
       });
       expect(sharedToolsEntries[0]?.content).toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects nested extra TOOLS_SHARED.md symlinks to sibling shared tools", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-shared-tools-"));
+    try {
+      const workspaceDir = path.join(rootDir, "jonathan");
+      const nestedDir = path.join(workspaceDir, "packages", "agent");
+      const sharedDir = path.join(rootDir, "shared");
+      await fs.mkdir(nestedDir, { recursive: true });
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.writeFile(path.join(sharedDir, DEFAULT_TOOLS_FILENAME), "shared tools", "utf-8");
+      await fs.symlink(
+        path.join("..", "..", "..", "shared", DEFAULT_TOOLS_FILENAME),
+        path.join(nestedDir, DEFAULT_TOOLS_SHARED_FILENAME),
+      );
+
+      const result = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        path.join("packages", "agent", DEFAULT_TOOLS_SHARED_FILENAME),
+      ]);
+
+      expect(result.files).toEqual([]);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          path: path.join(nestedDir, DEFAULT_TOOLS_SHARED_FILENAME),
+          reason: "security",
+        }),
+      ]);
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }

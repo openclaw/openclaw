@@ -10,7 +10,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
-import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
+import "./get-reply.test-mocks.js";
 
 const mocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn(async (..._args: unknown[]) => undefined),
@@ -21,8 +21,6 @@ const mocks = vi.hoisted(() => ({
   handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
 }));
-
-registerGetReplyCommonMocks();
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),

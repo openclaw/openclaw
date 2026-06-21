@@ -474,14 +474,16 @@ openclaw_e2e_probe_http() {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let exitCode = 1;
+    let response;
     try {
-      const response = await fetch(process.argv[1], { signal: controller.signal });
+      response = await fetch(process.argv[1], { signal: controller.signal });
       const passed = expected === "ok" ? response.ok : response.status === Number(expected);
       exitCode = passed ? 0 : 1;
     } catch {
       exitCode = 1;
     } finally {
       clearTimeout(timer);
+      await response?.body?.cancel?.().catch(() => undefined);
     }
     process.exit(exitCode);
   ' "$1" "${2:-ok}" "${3:-400}"

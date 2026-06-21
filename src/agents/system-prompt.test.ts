@@ -795,6 +795,28 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Bravo");
   });
 
+  it("keeps TOOLS_SHARED.md adjacent to TOOLS.md in project context ordering", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "MEMORY.md", content: "Memory" },
+        { path: "BOOTSTRAP.md", content: "Bootstrap" },
+        { path: "TOOLS_SHARED.md", content: "Shared tools" },
+        { path: "TOOLS.md", content: "Tools" },
+      ],
+    });
+
+    const toolsPos = prompt.indexOf("## TOOLS.md");
+    const sharedToolsPos = prompt.indexOf("## TOOLS_SHARED.md");
+    const bootstrapPos = prompt.indexOf("## BOOTSTRAP.md");
+    const memoryPos = prompt.indexOf("## MEMORY.md");
+
+    expect(toolsPos).toBeGreaterThan(-1);
+    expect(sharedToolsPos).toBeGreaterThan(toolsPos);
+    expect(bootstrapPos).toBeGreaterThan(sharedToolsPos);
+    expect(memoryPos).toBeGreaterThan(bootstrapPos);
+  });
+
   it("ignores context files with missing or blank paths", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

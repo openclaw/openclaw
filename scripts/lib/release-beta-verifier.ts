@@ -279,6 +279,7 @@ async function fetchWithRetry(
       if (response.status !== 429 && response.status < 500) {
         return { response, signal };
       }
+      await cancelResponseBody(response);
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
       lastError = error;
@@ -291,6 +292,10 @@ async function fetchWithRetry(
   }
   const message = lastError instanceof Error ? lastError.message : String(lastError);
   throw new Error(`${url} did not return a stable response: ${message}`);
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
 }
 
 async function fetchJsonWithRetry(url: string): Promise<unknown> {
@@ -314,9 +319,13 @@ export async function readBoundedJsonResponse(
   return parseJson(await readBoundedResponseText(response, label, maxBytes, options), label);
 }
 
-async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
+export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
   const { response } = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
-  return response.status;
+  try {
+    return response.status;
+  } finally {
+    await cancelResponseBody(response);
+  }
 }
 
 async function verifyNpmPackage(

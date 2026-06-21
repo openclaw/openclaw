@@ -97,6 +97,12 @@ function resolveChutesExpiresAt(value: unknown, now: number): number | undefined
   });
 }
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function fetchChutesUserInfo(params: {
   accessToken: string;
   fetchFn?: typeof fetch;
@@ -106,6 +112,7 @@ async function fetchChutesUserInfo(params: {
     headers: { Authorization: `Bearer ${params.accessToken}` },
   });
   if (!response.ok) {
+    await cancelUnreadResponseBody(response);
     return null;
   }
   const data = (await response.json()) as unknown;

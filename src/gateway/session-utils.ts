@@ -60,6 +60,7 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   buildGroupDisplayName,
   getSessionStoreCacheVersion,
+  isTerminalSessionStatus,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
@@ -107,7 +108,6 @@ import type {
   GatewayAgentRow,
   GatewaySessionRow,
   GatewaySessionsDefaults,
-  SessionRunStatus,
   SessionsListResult,
 } from "./session-utils.types.js";
 
@@ -421,10 +421,6 @@ const SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES = 64;
 
 function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function isTerminalSessionStatus(status: unknown): status is Exclude<SessionRunStatus, "running"> {
-  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
 }
 
 function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
@@ -886,8 +882,9 @@ function resolveTranscriptUsageFallback(params: {
   const snapshot = readScopedRecentSessionUsageFromTranscript(
     {
       agentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: params.key,
       storePath: params.storePath,
     },
     typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
@@ -1294,9 +1291,7 @@ export function listAgentsForGateway(
       .filter(Boolean),
   );
   const allowedIds = explicitIds.size > 0 ? new Set([...explicitIds, defaultId]) : null;
-  let agentIds = listGatewayAgentIds(cfg).filter((id) =>
-    allowedIds ? allowedIds.has(id) : true,
-  );
+  let agentIds = listGatewayAgentIds(cfg).filter((id) => (allowedIds ? allowedIds.has(id) : true));
   if (mainKey && !agentIds.includes(mainKey) && (!allowedIds || allowedIds.has(mainKey))) {
     agentIds = [...agentIds, mainKey];
   }
@@ -2162,8 +2157,9 @@ export function buildGatewaySessionRow(params: {
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
     const fields = readScopedSessionTitleFieldsFromTranscript({
       agentId: sessionAgentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: key,
       storePath,
     });
     if (params.includeDerivedTitles) {
@@ -2867,8 +2863,9 @@ export async function listSessionsFromStoreAsync(params: {
           (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
         const fields = await readScopedSessionTitleFieldsFromTranscriptAsync({
           agentId: sessionAgentId,
-          sessionFile: entry.sessionFile,
+          sessionEntry: entry,
           sessionId: entry.sessionId,
+          sessionKey: key,
           storePath,
         });
         if (includeDerivedTitles) {

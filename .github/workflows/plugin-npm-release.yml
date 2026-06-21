@@ -38,8 +38,8 @@ on:
         type: string
 
 concurrency:
-  group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
-  cancel-in-progress: false
+  group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

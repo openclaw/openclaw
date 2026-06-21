@@ -130,6 +130,22 @@ describe("containerCheck", () => {
     expectFirstFetchCall("http://localhost:8080/v1/about", "GET");
   });
 
+  it("cancels /v1/about response bodies after simple health checks", async () => {
+    const cancel = vi.fn(async () => undefined);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { cancel },
+    });
+
+    await expect(containerCheck("http://localhost:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("returns ok:false when /v1/about returns 404", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
@@ -635,9 +651,11 @@ describe("containerFetchAttachment", () => {
   });
 
   it("returns null on non-ok response", async () => {
+    const cancel = vi.fn(async () => undefined);
     mockFetch.mockResolvedValue({
       ok: false,
       status: 404,
+      body: { cancel },
     });
 
     const result = await containerFetchAttachment("attachment-123", {
@@ -645,6 +663,7 @@ describe("containerFetchAttachment", () => {
     });
 
     expect(result).toBeNull();
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("encodes attachment ID in URL", async () => {

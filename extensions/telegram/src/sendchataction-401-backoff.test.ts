@@ -301,4 +301,94 @@ describe("createTelegramSendChatActionHandler", () => {
     await handler.sendChatAction(444, "typing");
     expect(fn).toHaveBeenCalledTimes(3);
   });
+
+  it("treats a structured 429 with retry_after=401 as transient, not as a 401 suspension", async () => {
+    // grammY renders this as: "Call to 'sendChatAction' failed! (429: Too Many Requests: retry after 401)"
+    // The substring "401" in the message must NOT trigger the 401 suspension path.
+    const make429WithRetryAfter401 = () =>
+      Object.assign(
+        new Error("Call to 'sendChatAction' failed! (429: Too Many Requests: retry after 401)"),
+        { error_code: 429, parameters: { retry_after: 401 } },
+      );
+
+    let now = 0;
+    const fn = vi.fn().mockRejectedValue(make429WithRetryAfter401());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 3,
+      now: () => now,
+    });
+
+    // All calls should fail but as transient errors, NOT 401 errors
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("429");
+    // Advance past the transient cooldown (retry_after=401 → 401000ms)
+    now += 402_000;
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("429");
+    now += 402_000;
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("429");
+
+    // Handler must NOT be suspended — this is a transient 429, not a 401
+    expect(handler.isSuspended()).toBe(false);
+
+    // Must NOT have logged the CRITICAL token-deletion alarm
+    const criticalLogs = logger.mock.calls.filter(([msg]) => String(msg).includes("CRITICAL"));
+    expect(criticalLogs).toEqual([]);
+  });
+
+  it("detects a structured Telegram 401 error by error_code, not by message substring", async () => {
+    const makeStructured401 = () => Object.assign(new Error("Unauthorized"), { error_code: 401 });
+
+    const fn = vi.fn().mockRejectedValue(makeStructured401());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 2,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("Unauthorized");
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("Unauthorized");
+
+    expect(handler.isSuspended()).toBe(true);
+    expect(logger.mock.calls.at(-1)).toEqual([
+      "CRITICAL: sendChatAction suspended after 2 consecutive 401 errors. Bot token is likely invalid. Telegram may DELETE the bot if requests continue. Replace the token and restart: openclaw channels restart telegram",
+    ]);
+  });
+
+  it("does not misclassify a plain error whose message contains '401' as a 401 error", async () => {
+    // A plain Error (no error_code) with "401" in its message should NOT
+    // trigger the 401 path, since bare substring matching was the root cause
+    // of #94787. Only "unauthorized" is the fallback for non-Telegram errors.
+    const fn = vi.fn().mockRejectedValue(new Error("401 Too Many Requests: retry after"));
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 3,
+    });
+
+    // This is neither a recognized 401 nor a recognized transient → falls to
+    // the "else" branch (clears transient cooldown, re-throws).
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("401");
+    expect(handler.isSuspended()).toBe(false);
+  });
+
+  it("recognizes non-Telegram 401 via 'unauthorized' in message as a 401", async () => {
+    // A plain Error without error_code but with "unauthorized" should still
+    // be classified as 401 (this is the intentional fallback path).
+    const fn = vi.fn().mockRejectedValue(new Error("Unauthorized access"));
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 2,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("Unauthorized");
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("Unauthorized");
+
+    expect(handler.isSuspended()).toBe(true);
+  });
 });

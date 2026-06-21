@@ -98,6 +98,28 @@ function stubFetchOk(): ReturnType<typeof vi.fn> {
   return fetchWithSsrFGuardMock;
 }
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 // ============ Tests ============
 
 describe("media-chunked: UploadDailyLimitExceededError", () => {
@@ -254,6 +276,75 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     expect(last.totalParts).toBe(3);
     expect(last.uploadedBytes).toBe(FIXTURE_BUFFER.length);
     expect(last.totalBytes).toBe(FIXTURE_BUFFER.length);
+  });
+
+  it("bounds COS PUT error bodies without using response.text()", async () => {
+    const client = mockApiClient();
+    const tm = mockTokenManager();
+    const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+    client.request.mockImplementation(async (_token, _method, pathLocal) => {
+      if (pathLocal.endsWith("/upload_prepare")) {
+        return makePrepareResponse("uid-bounded", 1);
+      }
+      throw new Error(`unexpected path ${pathLocal}`);
+    });
+
+    const releases = [vi.fn(async () => {}), vi.fn(async () => {}), vi.fn(async () => {})];
+    const trackedResponses = releases.map((release) => {
+      const tracked = cancelTrackedResponse(`${"cos gateway unavailable ".repeat(1024)}tail`, {
+        status: 503,
+        statusText: "Service Unavailable",
+        headers: {
+          "content-type": "text/plain",
+          "x-cos-request-id": "req-bounded",
+        },
+      });
+      const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+      return {
+        response: tracked.response,
+        wasCanceled: tracked.wasCanceled,
+        release,
+        textSpy,
+      };
+    });
+    const pendingResponses = [...trackedResponses];
+
+    fetchWithSsrFGuardMock.mockImplementation(async () => {
+      const next = pendingResponses.shift();
+      if (!next) {
+        throw new Error("unexpected extra COS PUT attempt");
+      }
+      return {
+        response: next.response,
+        release: next.release,
+      };
+    });
+
+    const api = new ChunkedMediaApi(client, tm, { logger });
+    let error: unknown;
+    try {
+      await api.uploadChunked({
+        scope: "group",
+        targetId: "g1",
+        fileType: MediaFileType.FILE,
+        source: { kind: "buffer", buffer: Buffer.from("01234567"), fileName: "blob.bin" },
+        creds: { appId: "a", clientSecret: "s" },
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(String(error)).toContain("COS PUT failed: 503 Service Unavailable");
+    expect(String(error)).toContain("cos gateway unavailable");
+    expect(String(error)).not.toContain("tail");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
+    for (const tracked of trackedResponses) {
+      expect(tracked.wasCanceled()).toBe(true);
+      expect(tracked.textSpy).not.toHaveBeenCalled();
+      expect(tracked.release).toHaveBeenCalledTimes(1);
+    }
+    expect(JSON.stringify(logger.error.mock.calls)).toContain("cos gateway unavailable");
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain("tail");
   });
 
   it("maps UPLOAD_PREPARE_FALLBACK_CODE to UploadDailyLimitExceededError", async () => {

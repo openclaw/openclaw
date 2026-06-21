@@ -122,6 +122,10 @@ async function readWorkspaceBootstrapFileWithGuards(params: {
   // TOOLS_SHARED.md is the one supported cross-workspace bootstrap link:
   // <agent>/TOOLS_SHARED.md -> ../shared/TOOLS.md.
   try {
+    const rootSharedToolsPath = path.join(params.workspaceDir, DEFAULT_TOOLS_SHARED_FILENAME);
+    if (path.resolve(params.filePath) !== path.resolve(rootSharedToolsPath)) {
+      return loaded;
+    }
     const linkStat = await fs.lstat(params.filePath);
     if (!linkStat.isSymbolicLink()) {
       return loaded;
@@ -573,17 +577,13 @@ export async function hasRecentWorkspaceAttestation(
   }
 }
 
-export async function isWorkspaceAttestationMarker(attestationPath: string): Promise<boolean> {
-  return (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker";
-}
-
 export async function shouldRemoveWorkspaceAttestation(
   attestationPath: string,
   opts?: { trustUnknown?: boolean },
 ): Promise<boolean> {
   try {
     return (
-      (await isWorkspaceAttestationMarker(attestationPath)) ||
+      (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker" ||
       (await hasRecentWorkspaceAttestation(attestationPath, opts))
     );
   } catch {

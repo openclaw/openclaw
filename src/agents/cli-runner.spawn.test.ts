@@ -50,7 +50,7 @@ import {
   executePreparedCliRun,
   setCliRunnerExecuteTestDeps,
 } from "./cli-runner/execute.js";
-import { buildSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
+import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -391,7 +391,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("includes the OpenClaw skills prompt in CLI system prompts", () => {
-    const systemPrompt = buildSystemPrompt({
+    const systemPrompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp",
       modelDisplay: "claude-cli/sonnet",
       tools: [],
@@ -3710,7 +3710,7 @@ ${JSON.stringify({
       const { contextFiles } = await realResolveBootstrapContextForRun({
         workspaceDir,
       });
-      const allArgs = buildSystemPrompt({
+      const allArgs = buildCliAgentSystemPrompt({
         workspaceDir,
         modelDisplay: "claude-cli/sonnet",
         contextFiles,

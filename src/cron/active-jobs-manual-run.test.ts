@@ -27,7 +27,7 @@ import {
   isCronActiveJobMarkerCurrent,
   isCronJobActive,
   markCronJobActive,
-  resetCronActiveJobsForTests,
+  resetCronActiveJobs,
 } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import {
@@ -90,7 +90,7 @@ async function createManualRunHarness(jobId: string) {
 
 describe("cron activeJobIds — manual-run mark/clear", () => {
   beforeEach(() => {
-    resetCronActiveJobsForTests();
+    resetCronActiveJobs();
   });
 
   afterEach(() => {
@@ -155,7 +155,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
 
     expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
 
-    resetCronActiveJobsForTests();
+    resetCronActiveJobs();
 
     expect(isCronActiveJobMarkerCurrent(marker)).toBe(false);
     expect(isCronJobActive("manual-main-cutoff")).toBe(false);

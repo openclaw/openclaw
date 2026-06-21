@@ -149,8 +149,10 @@ describe("qa scenario catalog", () => {
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
+    const otelStdout = readQaScenarioById("otel-stdout-log-smoke");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
+    expect(otelStdout.gatewayRuntime?.preserveDebugArtifacts).toBe(true);
   });
 
   it("loads native test execution scenarios from YAML", () => {

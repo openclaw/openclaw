@@ -11,10 +11,7 @@ function resolveToolchainNpmRunner(params) {
   const npmCliPath = npmCliCandidates.find((candidate) => params.existsSync(candidate));
   if (npmCliPath) {
     return {
-      command:
-        params.platform === "win32"
-          ? params.pathImpl.join(params.nodeDir, "node.exe")
-          : params.pathImpl.join(params.nodeDir, "node"),
+      command: params.execPath,
       args: [npmCliPath, ...params.npmArgs],
       shell: false,
     };
@@ -57,6 +54,7 @@ export function resolveNpmRunner(params = {}) {
   const npmToolchain = resolveToolchainNpmRunner({
     comSpec,
     existsSync,
+    execPath,
     nodeDir,
     npmArgs,
     pathImpl,

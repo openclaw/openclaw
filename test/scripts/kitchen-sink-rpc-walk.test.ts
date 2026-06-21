@@ -1,4 +1,5 @@
 // Kitchen Sink Rpc Walk tests cover kitchen sink rpc walk script behavior.
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs, {
@@ -42,6 +43,7 @@ import {
   listKitchenSinkAuthorizationRpcProbeNames,
   listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
+  parseJsonOutput,
   parseGatewayCliRequestFailure,
   readPositiveInt,
   readBoundedResponseText,
@@ -55,6 +57,7 @@ import {
   tailFile,
   unwrapRpcPayload,
   usesBuiltOpenClawEntry,
+  validateCliArgs,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
@@ -114,6 +117,23 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(shouldPrintHelp(["--help"])).toBe(true);
     expect(shouldPrintHelp(["-h"])).toBe(true);
     expect(shouldPrintHelp([])).toBe(false);
+  });
+
+  it("rejects unknown CLI args before creating temp state", async () => {
+    expect(() => validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
+
+    const error = await runCommand(process.execPath, [
+      "scripts/e2e/kitchen-sink-rpc-walk.mjs",
+      "--wat",
+    ]).then(
+      () => undefined,
+      (caught: unknown) => caught as Error & { stderr?: string; stdout?: string },
+    );
+
+    expect(error).toBeDefined();
+    expect(error?.stdout).toBe("");
+    expect(error?.stderr?.trim()).toBe("Unknown argument: --wat");
+    expect(error?.stderr).not.toContain("temp root preserved");
   });
 
   it("rejects loose numeric env values before they bypass runtime guardrails", () => {
@@ -816,9 +836,96 @@ setInterval(() => {}, 1000);
       cleanupTempDirs(tempDirs);
     }
   });
+
+  posixIt("cleans active command process groups before parent signal exit", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-parent-signal-");
+    const runnerPath = path.join(root, "runner.mjs");
+    const scriptPath = path.join(root, "term-zero-grandchild.mjs");
+    const grandchildPidPath = path.join(root, "grandchild.pid");
+    const readyPath = path.join(root, "ready");
+    let grandchildPid = 0;
+    let runner: ReturnType<typeof spawn> | undefined;
+    const grandchildScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {});",
+      "process.on('SIGHUP', () => {});",
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+
+    writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}], {
+  stdio: "ignore",
+});
+fs.writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+    writeFileSync(
+      runnerPath,
+      `
+import { runCommand } from ${JSON.stringify(
+        new URL("../../scripts/e2e/kitchen-sink-rpc-walk.mjs", import.meta.url).href,
+      )};
+
+await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
+  timeoutKillGraceMs: 100,
+  timeoutMs: 30_000,
+});
+`,
+      "utf8",
+    );
+
+    try {
+      runner = spawn(process.execPath, [runnerPath], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      await waitFor(() => existsSync(readyPath) && existsSync(grandchildPidPath));
+      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+      expect(Number.isInteger(grandchildPid)).toBe(true);
+      expect(isProcessAlive(grandchildPid)).toBe(true);
+
+      runner.kill("SIGTERM");
+
+      await expect(waitForChildClose(runner, 5_000)).resolves.toEqual({
+        code: null,
+        signal: "SIGTERM",
+      });
+      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
+    } finally {
+      if (grandchildPid && isProcessAlive(grandchildPid)) {
+        process.kill(grandchildPid, "SIGKILL");
+      }
+      if (runner?.pid && isProcessAlive(runner.pid)) {
+        runner.kill("SIGKILL");
+      }
+      cleanupTempDirs(tempDirs);
+    }
+  });
 });
 
 describe("kitchen-sink RPC payload unwrapping", () => {
+  it("parses the final JSON record without accepting inline diagnostic objects", () => {
+    const parsed = parseJsonOutput(
+      [
+        'debug: ignored inline diagnostic {"ok":false,"result":{"stale":true}}',
+        JSON.stringify({ ok: true, result: { current: true } }, null, 2),
+        'warning: ignored trailing diagnostic {"ok":false,"result":{"stale":true}}',
+      ].join("\n"),
+    );
+
+    expect(parsed).toEqual({ ok: true, result: { current: true } });
+  });
+
   it("preserves explicit nullish JSON-RPC result fields", () => {
     expect(unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
     expect(unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();
@@ -839,6 +946,31 @@ describe("kitchen-sink RPC payload unwrapping", () => {
     expect(error.message).toContain("session store unavailable");
     expect(unwrapRpcPayload({ error: { message: "ignored" }, payload: { ok: true } })).toEqual({
       ok: true,
+    });
+  });
+
+  it("preserves gateway request error metadata from built RPC calls", () => {
+    const error = captureSyncError(() =>
+      unwrapRpcPayload({
+        ok: false,
+        error: {
+          type: "gateway_request_error",
+          code: "INVALID_REQUEST",
+          message: "unauthorized role: operator",
+          details: { method: "skills.bins" },
+          retryable: false,
+          retryAfterMs: 250,
+        },
+      }),
+    );
+
+    expect(error).toMatchObject({
+      name: "GatewayClientRequestError",
+      message: "unauthorized role: operator",
+      gatewayCode: "INVALID_REQUEST",
+      details: { method: "skills.bins" },
+      retryable: false,
+      retryAfterMs: 250,
     });
   });
 
@@ -964,6 +1096,19 @@ describe("kitchen-sink RPC command catalog assertions", () => {
           gatewayCode: "INVALID_REQUEST",
         });
       }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () =>
+        unwrapRpcPayload({
+          ok: false,
+          error: {
+            type: "gateway_request_error",
+            code: "INVALID_REQUEST",
+            message: "unauthorized role: operator",
+            retryable: false,
+          },
+        }),
+      ),
     ).resolves.toBeUndefined();
     await expect(
       assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => {
@@ -1739,6 +1884,25 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+  it("samples the POSIX gateway root when command-line needles match", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "darwin",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout:
+          " 4321     1  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback\n",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: 12.5,
+      processId: 4321,
+      rssMiB: 256,
+    });
+  });
+
   it("falls back to the POSIX gateway process title when the port arg is rewritten", async () => {
     const sample = await sampleProcess(4321, {
       platform: "darwin",
@@ -1904,6 +2068,21 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(response.text).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe decimal HTTP content lengths before reading", async () => {
+    const response = {
+      headers: new Headers({
+        "content-length": "9007199254740992",
+      }),
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
   it("streams HTTP probe responses with non-decimal content-length values", async () => {
     let readStarted = false;
     let canceled = false;
@@ -1942,6 +2121,30 @@ describe("kitchen-sink RPC process sampling", () => {
     );
   });
 
+  it("releases HTTP probe response stream readers after bounded reads", async () => {
+    const releaseLock = vi.fn();
+    const response = {
+      headers: new Headers(),
+      body: {
+        getReader() {
+          return {
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("ok") })
+              .mockResolvedValueOnce({ done: true }),
+            releaseLock,
+          };
+        },
+      },
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).resolves.toBe("ok");
+
+    expect(releaseLock).toHaveBeenCalledOnce();
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
   it("cancels stalled HTTP probe response streams when the timeout wins", async () => {
     let canceled = false;
     const timeoutError = Object.assign(new Error("fetch probe timed out"), {
@@ -1966,6 +2169,40 @@ describe("kitchen-sink RPC process sampling", () => {
       message: "fetch probe timed out",
     });
     expect(canceled).toBe(true);
+  });
+
+  it("cancels stalled HTTP probe response streams when the external signal fires", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const controller = new AbortController();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          pull() {
+            readStarted = true;
+            return new Promise(() => {});
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = fetchJson("http://127.0.0.1:19680/readyz", {
+      attempts: 1,
+      fetchImpl,
+      signal: controller.signal,
+      timeoutMs: 30_000,
+    });
+    const rejection = expect(result).rejects.toThrow("gateway exited before ready");
+
+    await waitFor(() => readStarted);
+    controller.abort(new Error("gateway exited before ready"));
+
+    await rejection;
+    await waitFor(() => canceled);
   });
 
   it("times out stalled HTTP probe response bodies", async () => {
@@ -2052,6 +2289,20 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
     }
     await delay(25);
   }
+}
+
+async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 3_000) {
+  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("child did not close before timeout"));
+      }, timeoutMs);
+      child.once("close", (code, signal) => {
+        clearTimeout(timeout);
+        resolve({ code, signal });
+      });
+    },
+  );
 }
 
 function isProcessAlive(pid: number) {

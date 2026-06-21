@@ -1409,9 +1409,13 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
-- Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
+- Block actions, shortcuts, and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
+  - global shortcuts: callback and actor metadata, routed to the actor's direct session
+  - message shortcuts: callback, actor, channel, thread, and selected-message context
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
+
+Define global or message shortcuts in your Slack app configuration and use any non-empty callback ID. OpenClaw acknowledges matching shortcut payloads, applies the same DM/channel sender policy as other Slack interactions, and queues the sanitized event for the routed agent session. Trigger IDs and response URLs are redacted from agent context.
 
 ## Configuration reference
 
