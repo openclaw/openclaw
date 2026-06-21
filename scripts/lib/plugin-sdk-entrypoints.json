@@ -105,7 +105,6 @@
   "security-runtime",
   "gateway-method-runtime",
   "gateway-runtime",
-  "node-gateway-events-internal",
   "cli-runtime",
   "cli-backend",
   "codex-mcp-projection",

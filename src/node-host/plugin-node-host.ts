@@ -1,6 +1,7 @@
 /** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { emitNodeGatewayEvent } from "./node-event-emitter.js";
 
 /**
  * Plugin node-host command registry bridge.
@@ -62,7 +63,7 @@ export async function runRegisteredNodeHostStartupHooks(params: {
       continue;
     }
     try {
-      await start();
+      await start({ emitNodeGatewayEvent });
     } catch (err) {
       params.onWarn(
         "node-host startup hook failed (" + entry.pluginId + ":" + entry.command.command + "): " + String(err),

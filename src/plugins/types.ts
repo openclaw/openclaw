@@ -2208,7 +2208,10 @@ export type OpenClawPluginNodeHostCommand = {
    * node-anchored services (e.g. the browser extension bridge) so they are up
    * before the first command dial. Must be idempotent and self-guarding.
    */
-  onNodeHostStart?: () => Promise<void>;
+  onNodeHostStart?: (ctx: {
+    /** Originate a node-attributed gateway event over this node's authenticated connection. */
+    emitNodeGatewayEvent: (event: string, payload: unknown) => Promise<void>;
+  }) => Promise<void>;
 };
 
 export type OpenClawPluginNodeInvokeTransportResult =

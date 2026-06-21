@@ -8,3 +8,4 @@ export { runBrowserProxyCommand } from "./src/node-host/invoke-browser.js";
 export { startBrowserControlServiceFromConfig } from "./src/control-service.js";
 export { createBrowserPluginService } from "./src/plugin-service.js";
 export { collectBrowserSecurityAuditFindings } from "./src/security-audit.js";
+export { setNodeGatewayEventEmitter } from "./src/browser/node-gateway-emitter.js";

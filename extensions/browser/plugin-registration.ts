@@ -159,11 +159,14 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
       const { runBrowserProxyCommand } = await loadBrowserRegistrationRuntimeModule();
       return await runBrowserProxyCommand(paramsJSON);
     },
-    onNodeHostStart: async () => {
+    onNodeHostStart: async (ctx) => {
       // Eagerly bring up the extension bridge at node-host start so the side panel
       // can dial it immediately (no-op unless a profile uses driver:"extension-bridge").
-      const { startBrowserControlServiceFromConfig } =
+      // Register the node-host's gateway-event emitter so the bridge can originate
+      // node-attributed turns without emitNodeGatewayEvent on the public plugin SDK.
+      const { startBrowserControlServiceFromConfig, setNodeGatewayEventEmitter } =
         await loadBrowserRegistrationRuntimeModule();
+      setNodeGatewayEventEmitter(ctx.emitNodeGatewayEvent);
       await startBrowserControlServiceFromConfig();
     },
   },

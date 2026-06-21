@@ -1,7 +1,7 @@
 /**
  * Browser server lifecycle helpers for relay setup and profile shutdown.
  */
-import { emitNodeGatewayEvent } from "openclaw/plugin-sdk/node-gateway-events-internal";
+import { emitNodeGatewayEvent } from "./node-gateway-emitter.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
@@ -39,7 +39,7 @@ export async function ensureExtensionRelayForProfiles(params: {
   // resolved.profiles holds raw BrowserProfileConfig drivers (the input literal),
   // not the mapped ResolvedBrowserProfile driver, so gate on the input "extension-bridge".
   const needsBridge = Object.values(profiles).some((p) => p?.driver === "extension-bridge");
-  if (!needsBridge) return;
+  if (!needsBridge) {return;}
   try {
     await ensureExtensionBridge({
       onWarn: params.onWarn,

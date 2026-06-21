@@ -566,10 +566,6 @@
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
     },
-    "./plugin-sdk/node-gateway-events-internal": {
-      "types": "./dist/plugin-sdk/node-gateway-events-internal.d.ts",
-      "default": "./dist/plugin-sdk/node-gateway-events-internal.js"
-    },
     "./plugin-sdk/cli-runtime": {
       "types": "./dist/plugin-sdk/cli-runtime.d.ts",
       "default": "./dist/plugin-sdk/cli-runtime.js"
