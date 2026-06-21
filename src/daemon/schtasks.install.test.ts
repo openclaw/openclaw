@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installScheduledTask, readScheduledTaskCommand } from "./schtasks.js";
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
+import { buildServiceEnvironment } from "./service-env.js";
 
 const schtasksCalls: string[][] = [];
 const schtasksResponses: { code: number; stdout: string; stderr: string }[] = [];
@@ -237,6 +238,40 @@ describe("installScheduledTask", () => {
       expect(schtasksCalls[2]?.slice(6)).toEqual(["/RU", "WORKSTATION\\alice", "/NP"]);
       expect(launcher).toContain("WScript.Shell");
       expect(launcher).toContain(scriptPath);
+      expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
+      expectTaskRunCall(3);
+    });
+  });
+
+  it("uses the hidden launcher for generated Windows gateway service installs", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
+      const gatewayEnv = buildServiceEnvironment({
+        env: {
+          ...env,
+          HOME: env.USERPROFILE,
+          USERDOMAIN: "WORKSTATION",
+          USERNAME: "alice",
+        },
+        port: 18789,
+        platform: "win32",
+      });
+
+      const { scriptPath } = await installDefaultGatewayTask(gatewayEnv as Record<string, string>);
+      const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+      const launcher = await fs.readFile(launcherPath, "utf8");
+
+      expect(schtasksCalls[2]?.slice(0, 5)).toEqual([
+        "/Create",
+        "/F",
+        "/TN",
+        "OpenClaw Gateway",
+        "/XML",
+      ]);
+      expect(schtasksCalls[2]).not.toContain("/RU");
+      const captured = xmlPayloadCaptures.find((entry) => entry.index === 2);
+      expect(captured?.xml).toContain("gateway.vbs</Command>");
+      expect(launcher).toContain("WScript.Shell");
       expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
       expectTaskRunCall(3);
     });
