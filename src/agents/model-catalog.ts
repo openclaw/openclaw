@@ -825,8 +825,7 @@ export async function loadModelCatalog(params?: {
   }
 
   const loadGeneration = modelCatalogGeneration;
-  let publishedPromise: Promise<ModelCatalogEntry[]>;
-  publishedPromise = loadCatalog().then((catalog) => {
+  const publishedPromise = loadCatalog().then((catalog) => {
     if (
       catalog.length > 0 &&
       modelCatalogGeneration === loadGeneration &&
