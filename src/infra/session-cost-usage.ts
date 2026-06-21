@@ -1294,6 +1294,13 @@ function isUsageSessionLineageFileName(fileName: string, sessionId: string): boo
   );
 }
 
+function parseUsageSessionLineageIdFromPath(filePath?: string): string | undefined {
+  if (!filePath) {
+    return undefined;
+  }
+  return parseUsageCountedSessionIdFromFileName(path.basename(filePath)) ?? undefined;
+}
+
 async function listUsageSessionLineageFileNames(
   sessionsDir: string,
   sessionId: string,
@@ -1339,7 +1346,7 @@ export function resolveExistingUsageSessionFile(params: {
     return candidate;
   }
 
-  const sessionId = params.sessionId?.trim();
+  const sessionId = parseUsageSessionLineageIdFromPath(candidate) ?? params.sessionId?.trim();
   if (!sessionId) {
     return candidate;
   }
@@ -1385,7 +1392,7 @@ async function resolveExistingUsageSessionFileForLineage(params: {
     return candidate;
   }
 
-  const sessionId = params.sessionId?.trim();
+  const sessionId = parseUsageSessionLineageIdFromPath(candidate) ?? params.sessionId?.trim();
   if (!sessionId) {
     return candidate;
   }
@@ -1438,8 +1445,7 @@ async function resolveUsageSessionLineageFiles(params: {
     return { sessionFile, files: [] };
   }
 
-  const sessionId =
-    params.sessionId?.trim() || parseUsageCountedSessionIdFromFileName(path.basename(sessionFile));
+  const sessionId = parseUsageSessionLineageIdFromPath(sessionFile) ?? params.sessionId?.trim();
   if (!sessionId) {
     return { sessionFile, files: [sessionFile] };
   }
@@ -2067,7 +2073,8 @@ export async function loadSessionCostSummariesFromCache(params: {
   };
   const lineages = await Promise.all(
     params.sessions.map(async (session) => {
-      const sessionId = session.sessionId?.trim();
+      const sessionId =
+        parseUsageSessionLineageIdFromPath(session.sessionFile) ?? session.sessionId?.trim();
       if (!sessionId) {
         return { sessionFile: session.sessionFile, files: [session.sessionFile] };
       }

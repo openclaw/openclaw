@@ -1447,6 +1447,56 @@ describe("session cost usage", () => {
     });
   });
 
+  it("uses the explicit sessionFile stem for cached lineage readers", async () => {
+    const root = await makeSessionCostRoot("cost-cache-explicit-stem-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const topicFile = path.join(sessionsDir, "sess-topic-topic-456.jsonl");
+    const topicArchive = path.join(
+      sessionsDir,
+      "sess-topic-topic-456.jsonl.reset.2026-02-05T12-30-00.000Z",
+    );
+    const canonicalConflict = path.join(sessionsDir, "sess-topic.jsonl");
+    const assistantMessage = (tokens: number, cost: number, timestamp: string) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: cost } },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(topicArchive, assistantMessage(12, 0.012, "2026-02-05T12:00:00.000Z"), "utf-8"),
+      fs.writeFile(topicFile, assistantMessage(18, 0.018, "2026-02-05T13:00:00.000Z"), "utf-8"),
+      fs.writeFile(
+        canonicalConflict,
+        assistantMessage(999, 0.999, "2026-02-05T14:00:00.000Z"),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [topicArchive, topicFile, canonicalConflict] });
+      const single = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-topic",
+        sessionFile: topicFile,
+        requestRefresh: false,
+      });
+      const batch = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: "sess-topic", sessionFile: topicFile }],
+        agentId: "main",
+        requestRefresh: false,
+      });
+
+      expect(single.summary?.sessionFile).toBe(topicFile);
+      expect(single.summary?.totalTokens).toBe(30);
+      expect(batch.summaries[0]?.sessionFile).toBe(topicFile);
+      expect(batch.summaries[0]?.totalTokens).toBe(30);
+    });
+  });
+
   it("returns a partial summary when a same-stem archive is not yet cached", async () => {
     const root = await makeSessionCostRoot("cost-cache-lineage-partial");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -2398,6 +2448,64 @@ describe("session cost usage", () => {
       expect(timeseries?.points.map((point) => point.totalTokens)).toEqual([12, 18]);
       expect(timeseries?.points.map((point) => point.cumulativeTokens)).toEqual([12, 30]);
       expect(logs?.map((log) => log.content)).toEqual(["archived answer", "active answer"]);
+    });
+  });
+
+  it("uses the explicit sessionFile stem for per-session detail lineage", async () => {
+    const root = await makeSessionCostRoot("session-explicit-stem-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const topicFile = path.join(sessionsDir, "sess-topic-topic-456.jsonl");
+    const topicArchive = path.join(
+      sessionsDir,
+      "sess-topic-topic-456.jsonl.reset.2026-02-12T10-30-00.000Z",
+    );
+    const canonicalConflict = path.join(sessionsDir, "sess-topic.jsonl");
+    const entry = (timestamp: string, totalTokens: number, content: string): string =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          content,
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(topicArchive, entry("2026-02-12T10:00:00.000Z", 12, "topic archive"), "utf-8"),
+      fs.writeFile(topicFile, entry("2026-02-12T11:00:00.000Z", 18, "topic active"), "utf-8"),
+      fs.writeFile(
+        canonicalConflict,
+        entry("2026-02-12T12:00:00.000Z", 999, "canonical conflict"),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({
+        sessionId: "sess-topic",
+        sessionFile: topicFile,
+      });
+      const timeseries = await loadSessionUsageTimeSeries({
+        sessionId: "sess-topic",
+        sessionFile: topicFile,
+      });
+      const logs = await loadSessionLogs({
+        sessionId: "sess-topic",
+        sessionFile: topicFile,
+      });
+
+      expect(summary?.sessionFile).toBe(topicFile);
+      expect(summary?.totalTokens).toBe(30);
+      expect(timeseries?.points.map((point) => point.totalTokens)).toEqual([12, 18]);
+      expect(logs?.map((log) => log.content)).toEqual(["topic archive", "topic active"]);
     });
   });
 
