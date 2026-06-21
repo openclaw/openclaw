@@ -3,6 +3,7 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
@@ -335,6 +336,34 @@ describe("SessionHistorySseState", () => {
 
     expect(appended).toBeNull();
     expect(state.snapshot().messages).toHaveLength(1);
+  });
+
+  test("requests refresh when a later assistant reply hides an inline stream-error sentinel", () => {
+    const state = newState([userTextMessage("hello", 1)]);
+
+    const sentinelAppended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: textContent(STREAM_ERROR_FALLBACK_TEXT),
+        stopReason: "error",
+        errorMessage: "provider failed before content",
+      },
+      messageSeq: 2,
+    });
+
+    expect(sentinelAppended?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+      __openclaw: { seq: 2 },
+    });
+
+    const appended = appendAssistantText(state, "actual fallback response", 3);
+
+    expect(appended).toEqual({ shouldRefresh: true });
+    expect(state.snapshot().messages).toEqual([
+      userTextMessage("hello", 1),
+      assistantTextMessage("actual fallback response", 3),
+    ]);
   });
 
   test("requests refresh when inline TTS supplement merges into an existing assistant message", () => {
