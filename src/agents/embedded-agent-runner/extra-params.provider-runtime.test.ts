@@ -4,6 +4,7 @@ import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stre
 import type { Model } from "../../llm/types.js";
 import {
   testing as extraParamsTesting,
+  applyExtraParamsToAgent,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
 } from "./extra-params.js";
@@ -16,6 +17,12 @@ beforeEach(() => {
     prepareProviderExtraParams: ({ context }) => context.extraParams,
     resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: ({ provider, context }) => {
+      if (provider === "openai" && context.extraParams?.nativeWebSearch !== undefined) {
+        const baseStreamFn = context.streamFn;
+        return baseStreamFn
+          ? (model, streamContext, options) => baseStreamFn(model, streamContext, options)
+          : undefined;
+      }
       if (provider !== "local-provider" || context.thinkingLevel !== "off") {
         return context.streamFn;
       }
@@ -135,5 +142,233 @@ describe("extra-params: provider runtime handoff", () => {
     }).payload as Record<string, unknown>;
 
     expect(payload.think).toBeUndefined();
+  });
+
+  it("rejects request-scoped native web search for unsupported model transports", () => {
+    expect(() =>
+      applyExtraParamsToAgent(
+        { streamFn: undefined },
+        undefined,
+        "anthropic",
+        "claude-sonnet-4.6",
+        { nativeWebSearch: {} },
+        undefined,
+        undefined,
+        undefined,
+        {
+          api: "anthropic",
+          provider: "anthropic",
+          id: "claude-sonnet-4.6",
+        } as never,
+      ),
+    ).toThrow(/web_search_options require native OpenAI\/Codex web_search/);
+  });
+
+  it("allows request-scoped native web search on direct OpenAI Responses models", () => {
+    expect(() =>
+      applyExtraParamsToAgent(
+        { streamFn: vi.fn() as never },
+        undefined,
+        "openai",
+        "gpt-5.4",
+        { nativeWebSearch: {} },
+        undefined,
+        undefined,
+        undefined,
+        {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "https://api.openai.com/v1",
+        } as never,
+      ),
+    ).not.toThrow();
+  });
+
+  it("allows request-scoped native web search on OpenAI ChatGPT Responses models", () => {
+    expect(() =>
+      applyExtraParamsToAgent(
+        { streamFn: vi.fn() as never },
+        undefined,
+        "openai",
+        "gpt-5.4",
+        { nativeWebSearch: {} },
+        undefined,
+        undefined,
+        undefined,
+        {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+        } as never,
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects request-scoped native web search on unowned ChatGPT Responses models", () => {
+    expect(() =>
+      applyExtraParamsToAgent(
+        { streamFn: vi.fn() as never },
+        undefined,
+        "gateway",
+        "gpt-5.4",
+        { nativeWebSearch: {} },
+        undefined,
+        undefined,
+        undefined,
+        {
+          api: "openai-chatgpt-responses",
+          provider: "gateway",
+          id: "gpt-5.4",
+        } as never,
+      ),
+    ).toThrow(/web_search_options require native OpenAI\/Codex web_search/);
+  });
+
+  it("allows request-scoped native web search on API-compatible providers with a wrapper", () => {
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: ({ context }) => context.extraParams,
+      resolveProviderExtraParamsForTransport: () => undefined,
+      wrapProviderStreamFn: ({ context }) => {
+        const baseStreamFn = context.streamFn;
+        return baseStreamFn
+          ? (model, streamContext, options) => baseStreamFn(model, streamContext, options)
+          : undefined;
+      },
+    });
+
+    expect(() =>
+      applyExtraParamsToAgent(
+        { streamFn: vi.fn() as never },
+        undefined,
+        "gateway",
+        "gpt-5.4",
+        { nativeWebSearch: {} },
+        undefined,
+        undefined,
+        undefined,
+        {
+          api: "openai-chatgpt-responses",
+          provider: "gateway",
+          id: "gpt-5.4",
+        } as never,
+      ),
+    ).not.toThrow();
+  });
+
+  it("allows request-scoped native web search on OpenAI Responses HTTP base URLs", () => {
+    expect(() =>
+      applyExtraParamsToAgent(
+        { streamFn: vi.fn() as never },
+        undefined,
+        "openai",
+        "gpt-5.4",
+        { nativeWebSearch: {} },
+        undefined,
+        undefined,
+        undefined,
+        {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "http://api.openai.com/v1",
+        } as never,
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects request-scoped native web search when global web search is disabled", () => {
+    expect(() =>
+      applyExtraParamsToAgent(
+        { streamFn: undefined },
+        {
+          tools: { web: { search: { enabled: false } } },
+        } as never,
+        "openai",
+        "gpt-5.4",
+        { nativeWebSearch: {} },
+        undefined,
+        undefined,
+        undefined,
+        {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "https://api.openai.com/v1",
+        } as never,
+      ),
+    ).toThrow(/web_search_options require native OpenAI\/Codex web_search/);
+  });
+
+  it("rejects request-scoped native web search when OpenAI native search provider is disabled", () => {
+    expect(() =>
+      applyExtraParamsToAgent(
+        { streamFn: undefined },
+        {
+          tools: { web: { search: { provider: "brave" } } },
+        } as never,
+        "openai",
+        "gpt-5.4",
+        { nativeWebSearch: {} },
+        undefined,
+        undefined,
+        undefined,
+        {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "https://api.openai.com/v1",
+        } as never,
+      ),
+    ).toThrow(/web_search_options require native OpenAI\/Codex web_search/);
+  });
+
+  it("passes request-scoped native web search to provider runtime wrappers", () => {
+    const wrapProviderStreamFn = vi.fn();
+    let wrapperExtraParams: Record<string, unknown> | undefined;
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: ({ context }) => context.extraParams,
+      resolveProviderExtraParamsForTransport: () => undefined,
+      wrapProviderStreamFn: ({ context }) => {
+        wrapperExtraParams = context.extraParams;
+        wrapProviderStreamFn();
+        const baseStreamFn = context.streamFn;
+        return baseStreamFn
+          ? (model, streamContext, options) => baseStreamFn(model, streamContext, options)
+          : undefined;
+      },
+    });
+
+    applyExtraParamsToAgent(
+      { streamFn: vi.fn() as never },
+      undefined,
+      "openai",
+      "gpt-5.4",
+      {
+        temperature: 0.4,
+        nativeWebSearch: {
+          searchContextSize: "high",
+          userLocation: { type: "approximate", country: "US" },
+        },
+      },
+      undefined,
+      undefined,
+      undefined,
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as never,
+    );
+
+    expect(wrapProviderStreamFn).toHaveBeenCalledOnce();
+    expect(wrapperExtraParams).toMatchObject({
+      temperature: 0.4,
+      nativeWebSearch: {
+        searchContextSize: "high",
+        userLocation: { type: "approximate", country: "US" },
+      },
+    });
   });
 });

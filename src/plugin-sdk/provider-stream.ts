@@ -12,6 +12,7 @@ import {
   createOpenAIStringContentWrapper,
   createOpenAITextVerbosityWrapper,
   createOpenAIThinkingLevelWrapper,
+  resolveNativeWebSearchToolOptions,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
@@ -132,6 +133,7 @@ export function buildProviderStreamFamilyHooks(
             agentDir: ctx.agentDir,
             agentId: ctx.agentId,
             nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
+            nativeWebSearch: resolveNativeWebSearchToolOptions(ctx.extraParams),
           });
           nextStreamFn = createOpenAIStringContentWrapper(nextStreamFn);
           return createOpenAIResponsesContextManagementWrapper(

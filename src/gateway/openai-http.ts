@@ -95,6 +95,7 @@ type OpenAiChatCompletionRequest = {
   tool_choice?: unknown;
   messages?: unknown;
   user?: unknown;
+  web_search_options?: unknown;
   max_tokens?: unknown;
   max_completion_tokens?: unknown;
   temperature?: unknown;
@@ -109,6 +110,18 @@ type OpenAiChatCompletionRequest = {
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
 const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
+const OPENAI_WEB_SEARCH_CONTEXT_SIZES = new Set(["low", "medium", "high"]);
+const OPENAI_WEB_SEARCH_OPTION_KEYS = new Set(["search_context_size", "user_location"]);
+const OPENAI_WEB_SEARCH_LOCATION_KEYS = new Set(["type", "approximate"]);
+const OPENAI_WEB_SEARCH_APPROXIMATE_LOCATION_FIELDS = [
+  "city",
+  "country",
+  "region",
+  "timezone",
+] as const;
+const OPENAI_WEB_SEARCH_APPROXIMATE_LOCATION_KEYS = new Set<string>(
+  OPENAI_WEB_SEARCH_APPROXIMATE_LOCATION_FIELDS,
+);
 const DEFAULT_OPENAI_IMAGE_LIMITS: InputImageLimits = {
   allowUrl: false,
   allowedMimes: new Set(DEFAULT_INPUT_IMAGE_MIMES),
@@ -838,6 +851,95 @@ function resolveResponseFormat(value: unknown): Record<string, unknown> | undefi
   return obj;
 }
 
+function resolveOpenAiChatWebSearchOptions(
+  value: unknown,
+): AgentStreamParams["nativeWebSearch"] | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("web_search_options must be an object");
+  }
+
+  const options = value as Record<string, unknown>;
+  const unsupportedKeys = Object.keys(options).filter(
+    (key) => !OPENAI_WEB_SEARCH_OPTION_KEYS.has(key),
+  );
+  if (unsupportedKeys.length > 0) {
+    throw new Error(`unsupported web_search_options field: ${unsupportedKeys[0]}`);
+  }
+
+  const nativeWebSearch: AgentStreamParams["nativeWebSearch"] = {};
+  const searchContextSize = options.search_context_size;
+  if (searchContextSize !== undefined) {
+    if (
+      typeof searchContextSize !== "string" ||
+      !OPENAI_WEB_SEARCH_CONTEXT_SIZES.has(searchContextSize)
+    ) {
+      throw new Error("web_search_options.search_context_size must be low, medium, or high");
+    }
+    nativeWebSearch.searchContextSize = searchContextSize as "low" | "medium" | "high";
+  }
+
+  const userLocation = options.user_location;
+  if (userLocation === null) {
+    nativeWebSearch.userLocation = null;
+  } else if (userLocation !== undefined) {
+    nativeWebSearch.userLocation = resolveOpenAiChatWebSearchUserLocation(userLocation);
+  }
+
+  return nativeWebSearch;
+}
+
+function resolveOpenAiChatWebSearchUserLocation(
+  value: unknown,
+): NonNullable<AgentStreamParams["nativeWebSearch"]>["userLocation"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("web_search_options.user_location must be an object");
+  }
+  const location = value as Record<string, unknown>;
+  const unsupportedKeys = Object.keys(location).filter(
+    (key) => !OPENAI_WEB_SEARCH_LOCATION_KEYS.has(key),
+  );
+  if (unsupportedKeys.length > 0) {
+    throw new Error(`unsupported web_search_options.user_location field: ${unsupportedKeys[0]}`);
+  }
+  if (location.type !== "approximate") {
+    throw new Error("web_search_options.user_location.type must be approximate");
+  }
+  const approximate = location.approximate;
+  if (!approximate || typeof approximate !== "object" || Array.isArray(approximate)) {
+    throw new Error("web_search_options.user_location.approximate must be an object");
+  }
+  const approximateLocation = approximate as Record<string, unknown>;
+  const approximateUnsupportedKeys = Object.keys(approximateLocation).filter(
+    (key) => !OPENAI_WEB_SEARCH_APPROXIMATE_LOCATION_KEYS.has(key),
+  );
+  if (approximateUnsupportedKeys.length > 0) {
+    throw new Error(
+      `unsupported web_search_options.user_location.approximate field: ${
+        approximateUnsupportedKeys[0]
+      }`,
+    );
+  }
+  const resolvedLocation: NonNullable<AgentStreamParams["nativeWebSearch"]>["userLocation"] = {
+    type: "approximate",
+  };
+  for (const key of OPENAI_WEB_SEARCH_APPROXIMATE_LOCATION_FIELDS) {
+    const locationValue = approximateLocation[key];
+    if (locationValue === undefined) {
+      continue;
+    }
+    if (typeof locationValue !== "string" || locationValue.trim() === "") {
+      throw new Error(
+        `web_search_options.user_location.approximate.${key} must be a non-empty string`,
+      );
+    }
+    resolvedLocation[key] = locationValue;
+  }
+  return resolvedLocation;
+}
+
 function resolveStopSequences(value: unknown): string[] | undefined {
   if (value == null) {
     return undefined;
@@ -929,6 +1031,18 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
+  let nativeWebSearch: AgentStreamParams["nativeWebSearch"] | undefined;
+  try {
+    nativeWebSearch = resolveOpenAiChatWebSearchOptions(payload.web_search_options);
+  } catch (err) {
+    sendJson(res, 400, {
+      error: {
+        message: `Invalid web_search_options: ${resolveErrorMessage(err)}`,
+        type: "invalid_request_error",
+      },
+    });
+    return true;
+  }
   let stop: string[] | undefined;
   try {
     stop = resolveStopSequences(payload.stop);
@@ -961,6 +1075,7 @@ export async function handleOpenAiHttpRequest(
     responseFormat !== undefined ||
     frequencyPenalty !== undefined ||
     presencePenalty !== undefined ||
+    nativeWebSearch !== undefined ||
     seed !== undefined ||
     stop !== undefined
       ? {
@@ -970,6 +1085,7 @@ export async function handleOpenAiHttpRequest(
           ...(responseFormat !== undefined ? { responseFormat } : {}),
           ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
           ...(presencePenalty !== undefined ? { presencePenalty } : {}),
+          ...(nativeWebSearch !== undefined ? { nativeWebSearch } : {}),
           ...(seed !== undefined ? { seed } : {}),
           ...(stop !== undefined ? { stop } : {}),
         }

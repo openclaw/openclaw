@@ -24,6 +24,7 @@ const ERROR_TYPE_BY_REASON: Partial<Record<FailoverReason, string>> = {
   session_expired: "invalid_request_error",
   timeout: "api_error",
 };
+const NATIVE_WEB_SEARCH_OPTIONS_ERROR_PREFIX = "web_search_options require native ";
 
 function statusForReason(reason: FailoverReason, status: number | undefined): number {
   if (reason === "server_error") {
@@ -54,6 +55,17 @@ function messageForReason(params: {
 
 /** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
+  const nativeWebSearchMessage = err instanceof Error ? err.message : undefined;
+  if (nativeWebSearchMessage?.startsWith(NATIVE_WEB_SEARCH_OPTIONS_ERROR_PREFIX)) {
+    return {
+      status: 400,
+      error: {
+        message: nativeWebSearchMessage,
+        type: "invalid_request_error",
+      },
+    };
+  }
+
   const described = describeFailoverError(err);
   const reason = described.reason;
   if (!reason) {

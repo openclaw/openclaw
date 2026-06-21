@@ -11,6 +11,7 @@ import {
   type CodexNativeSearchMode,
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
+import type { NativeWebSearchStreamParams } from "./command/shared-types.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
   resolveWebSearchToolPolicy,
@@ -40,6 +41,8 @@ export type NativeWebSearchToolPolicyParams = WebSearchToolPolicyParams;
 
 const OPENAI_AUTH_PROVIDER_IDS = ["openai"] as const;
 
+export type NativeWebSearchToolOptions = NativeWebSearchStreamParams;
+
 function isOpenAIAuthProviderId(provider: string | undefined): boolean {
   return OPENAI_AUTH_PROVIDER_IDS.some((candidate) => candidate === provider);
 }
@@ -50,15 +53,6 @@ export function isCodexNativeSearchEligibleModel(params: {
   modelApi?: string;
 }): boolean {
   return params.modelApi === "openai-chatgpt-responses";
-}
-
-function hasCodexNativeWebSearchTool(tools: unknown): boolean {
-  if (!Array.isArray(tools)) {
-    return false;
-  }
-  return tools.some(
-    (tool) => isRecord(tool) && typeof tool.type === "string" && tool.type === "web_search",
-  );
 }
 
 /** Checks whether OpenAI/Codex auth is available for native web search. */
@@ -206,6 +200,7 @@ export function isNativeWebSearchAllowedByToolPolicy(
 /** Builds the OpenAI Responses `web_search` tool payload from config. */
 export function buildCodexNativeWebSearchTool(
   config: OpenClawConfig | undefined,
+  nativeWebSearch?: NativeWebSearchToolOptions,
 ): Record<string, unknown> {
   const nativeConfig = resolveCodexNativeWebSearchConfig(config);
   const tool: Record<string, unknown> = {
@@ -219,36 +214,68 @@ export function buildCodexNativeWebSearchTool(
     };
   }
 
-  if (nativeConfig.contextSize) {
-    tool.search_context_size = nativeConfig.contextSize;
+  const searchContextSize = nativeWebSearch?.searchContextSize ?? nativeConfig.contextSize;
+  if (searchContextSize) {
+    tool.search_context_size = searchContextSize;
   }
 
-  if (nativeConfig.userLocation) {
-    tool.user_location = {
-      type: "approximate",
-      ...nativeConfig.userLocation,
-    };
+  const hasRequestUserLocation =
+    nativeWebSearch !== undefined && Object.hasOwn(nativeWebSearch, "userLocation");
+  const userLocation = hasRequestUserLocation
+    ? nativeWebSearch.userLocation
+    : nativeConfig.userLocation
+      ? {
+          type: "approximate",
+          ...nativeConfig.userLocation,
+        }
+      : undefined;
+  if (userLocation) {
+    tool.user_location = userLocation;
   }
 
   return tool;
+}
+
+function applyCodexNativeWebSearchOptions(
+  tool: Record<string, unknown>,
+  nativeWebSearch: NativeWebSearchToolOptions | undefined,
+): void {
+  if (!nativeWebSearch) {
+    return;
+  }
+  if (nativeWebSearch.searchContextSize) {
+    tool.search_context_size = nativeWebSearch.searchContextSize;
+  }
+  if (nativeWebSearch.userLocation === null) {
+    delete tool.user_location;
+  } else if (nativeWebSearch.userLocation) {
+    tool.user_location = nativeWebSearch.userLocation;
+  }
 }
 
 /** Injects a native Codex web-search tool into a mutable provider payload. */
 export function patchCodexNativeWebSearchPayload(params: {
   payload: unknown;
   config?: OpenClawConfig;
+  nativeWebSearch?: NativeWebSearchToolOptions;
 }): CodexNativeSearchPayloadPatchResult {
   if (!isRecord(params.payload)) {
     return { status: "payload_not_object" };
   }
 
   const payload = params.payload;
-  if (hasCodexNativeWebSearchTool(payload.tools)) {
+  const existingTool = Array.isArray(payload.tools)
+    ? payload.tools.find((tool): tool is Record<string, unknown> => {
+        return isRecord(tool) && tool.type === "web_search";
+      })
+    : undefined;
+  if (existingTool) {
+    applyCodexNativeWebSearchOptions(existingTool, params.nativeWebSearch);
     return { status: "native_tool_already_present" };
   }
 
   const tools = Array.isArray(payload.tools) ? [...payload.tools] : [];
-  tools.push(buildCodexNativeWebSearchTool(params.config));
+  tools.push(buildCodexNativeWebSearchTool(params.config, params.nativeWebSearch));
   payload.tools = tools;
   return { status: "injected" };
 }
