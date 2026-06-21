@@ -3022,6 +3022,97 @@ describe("exec approval handlers", () => {
     expect(manager.getSnapshot("approval-reviewer-runtime")?.decision).toBe("allow-once");
   });
 
+  it("allows admin clients to resolve reviewer-targeted runtime approvals", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const adminClient = createExecApprovalClient({
+      connId: "conn-admin",
+      clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      deviceId: "device-admin",
+      scopes: ["operator.admin"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime-admin",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime-admin",
+      respond: resolveRespond,
+      context,
+      client: adminClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-reviewer-runtime-admin")?.decision).toBe("allow-once");
+  });
+
+  it("allows the internal approval runtime to resolve reviewer-targeted runtime approvals", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime-requester",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime-requester",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const runtimeResolverClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime-resolver",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime-resolver",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime-runtime",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime-runtime",
+      respond: resolveRespond,
+      context,
+      client: runtimeResolverClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.decision).toBe("allow-once");
+  });
+
   it("does not allow reviewer devices without approval scope to resolve runtime approvals", async () => {
     const { manager, handlers, respond, context } = createExecApprovalFixture();
     const requesterClient = createExecApprovalClient({
