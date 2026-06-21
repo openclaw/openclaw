@@ -103,23 +103,30 @@ function classifyHarnessResult(params: {
   }
 }
 
-/** Maps provider error payloads to fallback-safe business reasons. */
-function classifyBusinessDenialErrorPayloadReason(
+/** Failover reasons that should trigger model fallback when detected in provider error payloads. */
+const FALLBACKABLE_PROVIDER_ERROR_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "billing",
+  "rate_limit",
+  "overloaded",
+  "server_error",
+  "timeout",
+]);
+
+/** Maps provider error payloads to fallback-eligible reasons. */
+function classifyFailoverErrorPayloadReason(
   errorText: string,
   provider: string,
-): Extract<FailoverReason, "auth" | "auth_permanent" | "billing"> | null {
+): FailoverReason | null {
   if (!errorText.trim()) {
     return null;
   }
   const failoverReason = classifyFailoverReason(errorText, { provider });
-  switch (failoverReason) {
-    case "auth":
-    case "auth_permanent":
-    case "billing":
-      return failoverReason;
-    default:
-      return null;
+  if (failoverReason && FALLBACKABLE_PROVIDER_ERROR_REASONS.has(failoverReason)) {
+    return failoverReason;
   }
+  return null;
 }
 
 /** Returns a fallback classification when an embedded run failed without user-visible output. */
@@ -189,7 +196,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     .filter((payload) => payload?.isError === true)
     .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
     .join("\n");
-  const failoverReason = classifyBusinessDenialErrorPayloadReason(errorText, params.provider);
+  const failoverReason = classifyFailoverErrorPayloadReason(errorText, params.provider);
   if (failoverReason) {
     return {
       message: `${params.provider}/${params.model} ended with a provider error: ${errorText}`,

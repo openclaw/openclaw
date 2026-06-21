@@ -137,7 +137,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry non-business transport error payloads", () => {
+  it("classifies transient server-error payloads as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "llama-3.1",
@@ -154,7 +154,58 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       },
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
+      reason: "timeout",
+      code: "embedded_error_payload",
+      rawError: "HTTP 500: internal server error",
+    });
+  });
+
+  it("classifies upstream request failed as fallback-worthy (#95519)", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "llama-3.1",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "Upstream request failed",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "custom/llama-3.1 ended with a provider error: Upstream request failed",
+      reason: "timeout",
+      code: "embedded_error_payload",
+      rawError: "Upstream request failed",
+    });
+  });
+
+  it("classifies upstream_error JSON payload as fallback-worthy (#95519)", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "llama-3.1",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: '{"error":{"message":"Upstream request failed","type":"upstream_error"}}',
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.reason).toBe("server_error");
   });
 
   it("keeps tool-authored incomplete summaries fallback-eligible", () => {
