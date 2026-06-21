@@ -49,6 +49,34 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies structured provider upstream_error payloads as fallback-worthy", () => {
+    const rawError =
+      '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}';
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai-compatible",
+      model: "primary-model",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: rawError,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `openai-compatible/primary-model ended with a provider error: ${rawError}`,
+      reason: "server_error",
+      code: "embedded_error_payload",
+      rawError,
+    });
+  });
+
   it("preserves hook block results with auth-like error payload text", () => {
     // Hook policy blocks are intentional local decisions, not provider failures
     // that should rotate models.
