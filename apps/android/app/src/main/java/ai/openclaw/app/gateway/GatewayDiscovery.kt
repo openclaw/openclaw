@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import android.annotation.TargetApi
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.DnsResolver
@@ -12,6 +11,7 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.os.CancellationSignal
 import android.util.Log
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -56,7 +56,7 @@ private fun createDnsResolver(context: Context): DnsResolver =
     createLegacyDnsResolver()
   }
 
-@TargetApi(Build.VERSION_CODES.CINNAMON_BUN)
+@RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
 private fun createContextDnsResolver(context: Context): DnsResolver = DnsResolver(context, null)
 
 @Suppress("DEPRECATION")
@@ -189,7 +189,7 @@ class GatewayDiscovery(
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+  @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
   private fun resolveWithServiceInfoCallback(serviceInfo: NsdServiceInfo) {
     val serviceName = BonjourEscapes.decode(serviceInfo.serviceName)
     val id = stableId(serviceName, "local.")
