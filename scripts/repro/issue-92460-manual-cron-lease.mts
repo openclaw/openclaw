@@ -143,15 +143,15 @@ async function main(): Promise<void> {
     assert.equal(
       capturedRunIds[0],
       MANUAL_RUN_ID,
-      `runIsolatedAgentJob received runId=${String(capturedRunIds[0])} but expected ${MANUAL_RUN_ID} — the resolver would have looked up the lease under the wrong id`,
+      `runIsolatedAgentJob received runId=${capturedRunIds[0]} but expected ${MANUAL_RUN_ID} — the resolver would have looked up the lease under the wrong id`,
     );
     console.log(
-      `PASS  2. runIsolatedAgentJob received runId=${String(capturedRunIds[0])} (matches manual: id, so the resolver can find the lease)`,
+      `PASS  2. runIsolatedAgentJob received runId=${capturedRunIds[0]} (matches manual: id, so the resolver can find the lease)`,
     );
 
     // Step 3: simulate the resolver's `getActiveTaskRouteLease(runId)`
     // call. With the correct runId, it recovers the lease.
-    const resolverLookup = getActiveTaskRouteLease(capturedRunIds[0]!);
+    const resolverLookup = getActiveTaskRouteLease(capturedRunIds[0]);
     assert(resolverLookup, "resolver-side lease lookup returned undefined");
     assert.equal(resolverLookup.requesterOrigin?.channel, "webchat");
     // And — looking up by the internal `cron:` id does NOT find a
