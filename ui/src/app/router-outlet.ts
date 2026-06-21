@@ -18,6 +18,10 @@ export type RouterOutletOptions<
   retryContext?: TLoadContext;
 };
 
+export type RouterOutletBoundaryOptions = {
+  onNotFound?: () => void;
+};
+
 export type RouterOutletSelection<
   TRouteId extends string = string,
   TModule = unknown,
@@ -115,10 +119,10 @@ export function renderRouterOutlet<
 ): unknown {
   const renderedMatch = selection.pending ?? selection.active;
   if (renderedMatch?.status === "notFound") {
-    return null;
+    return renderPending();
   }
   if (renderedMatch?.status === "redirected") {
-    return null;
+    return renderPending();
   }
   if (!renderedMatch) {
     return renderPending();
@@ -167,22 +171,28 @@ class RouterOutletDirective extends AsyncDirective {
   private context: unknown;
   private renderApp?: (selection: RouterOutletSelection, context: unknown) => unknown;
   private unsubscribe?: () => boolean;
+  private boundaryOptions?: RouterOutletBoundaryOptions;
+  private notFoundScheduled = false;
 
   override render(
     router: unknown,
     context: unknown,
+    boundaryOptions: RouterOutletBoundaryOptions,
     renderApp: (selection: RouterOutletSelection, context: unknown) => unknown,
   ) {
     const runtime = router as RouterOutletRuntime;
     this.updateSubscription(runtime);
     this.context = context;
+    this.boundaryOptions = boundaryOptions;
     this.renderApp = renderApp;
-    return renderApp(selectRouterOutletState(runtime.getState()), context);
+    return this.renderSelection(selectRouterOutletState(runtime.getState()));
   }
 
   override disconnected() {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.boundaryOptions = undefined;
+    this.notFoundScheduled = false;
   }
 
   override reconnected() {
@@ -201,11 +211,26 @@ class RouterOutletDirective extends AsyncDirective {
       selectRouterOutletState,
       (selection) => {
         if (this.isConnected && this.renderApp) {
-          this.setValue(this.renderApp(selection, this.context));
+          this.setValue(this.renderSelection(selection));
         }
       },
       equalRouterOutletState,
     );
+  }
+
+  private renderSelection(selection: RouterOutletSelection) {
+    if (selection.status === "notFound") {
+      if (!this.notFoundScheduled) {
+        this.notFoundScheduled = true;
+        queueMicrotask(() => {
+          this.notFoundScheduled = false;
+          this.boundaryOptions?.onNotFound?.();
+        });
+      }
+    } else {
+      this.notFoundScheduled = false;
+    }
+    return this.renderApp?.(selection, this.context);
   }
 }
 
@@ -214,12 +239,13 @@ const routerOutletDirective = directive(RouterOutletDirective);
 export function routerOutlet<TRouteId extends string, TLoadContext, TModule, TData, TContext>(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   context: TContext,
+  boundaryOptions: RouterOutletBoundaryOptions,
   render: (
     selection: RouterOutletSelection<TRouteId, TModule, TData>,
     context: TContext,
   ) => unknown,
 ): unknown {
-  return routerOutletDirective(router, context, (selection, value) =>
+  return routerOutletDirective(router, context, boundaryOptions, (selection, value) =>
     render(selection as RouterOutletSelection<TRouteId, TModule, TData>, value as TContext),
   );
 }

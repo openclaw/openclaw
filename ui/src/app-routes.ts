@@ -98,6 +98,10 @@ export function getVisibleRouteId(): RouteId | null {
   return state.pendingMatches[0]?.routeId ?? state.matches[0]?.routeId ?? null;
 }
 
+export function resolveAppNotFound(context: RouteLoadContext): Promise<void> {
+  return appRouter.navigate("chat", context, { history: "replace" });
+}
+
 export function startAppRouter(
   history: RouterHistory,
   basePath: string,
