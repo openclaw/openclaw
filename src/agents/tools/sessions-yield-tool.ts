@@ -19,7 +19,7 @@ export function createSessionsYieldTool(opts?: {
   return {
     label: "Yield",
     name: "sessions_yield",
-    description: "End current turn. Use after spawning subagents; results arrive as next message. Subagent-only — cron jobs do NOT resume the session. Use cron get <jobId> polling or sessions_spawn for cron workflows.",
+    description: "End current turn. Use after spawning subagents; results arrive as next message. Subagent-only — cron jobs do NOT resume the session. Use sessions_spawn for cron workflows, or openclaw cron run --wait / cron.runs to poll cron completion via CLI.",
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
