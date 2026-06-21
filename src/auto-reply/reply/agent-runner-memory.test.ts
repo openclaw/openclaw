@@ -105,6 +105,7 @@ type EmbeddedAgentParams = {
 type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
   authProfileId?: string;
+  abortSignal?: AbortSignal;
   contextTokenBudget?: number;
   sessionKey?: string;
   sandboxSessionKey?: string;
@@ -1060,6 +1061,37 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+  });
+
+  it("does not cap required preflight compaction with the reply operation abort signal", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 180_499,
+      totalTokensFresh: true,
+    };
+    const replyOperation = createReplyOperation();
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedAgentSessionCall();
+    expect(compactCall.abortSignal).toBeUndefined();
+    expect(compactCall.abortSignal).not.toBe(replyOperation.abortSignal);
   });
 
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {
