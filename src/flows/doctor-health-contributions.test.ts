@@ -58,7 +58,7 @@ const mocks = vi.hoisted(() => ({
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
-  resolveDefaultAgentId: vi.fn(() => "default"),
+  resolveDefaultAgentId: vi.fn((_cfg?: unknown) => "default"),
   note: vi.fn(),
   loadModelCatalog: vi.fn(async () => []),
   getModelRefStatus: vi.fn(() => ({ allowed: true, inCatalog: true, key: "openai/gpt-5.5" })),
@@ -216,10 +216,32 @@ vi.mock("../commands/doctor-browser.js", () => ({
   maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
-}));
+vi.mock("../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-scope.js")>();
+  return {
+    ...actual,
+    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+    resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+    resolveSessionAgentIds: (
+      params: {
+        agentId?: string;
+        config?: unknown;
+        sessionKey?: string;
+      } = {},
+    ) => {
+      const defaultAgentId = mocks.resolveDefaultAgentId(params.config);
+      const explicitAgentId = params.agentId?.trim().toLowerCase();
+      const sessionAgentId =
+        explicitAgentId ||
+        params.sessionKey
+          ?.trim()
+          .toLowerCase()
+          .match(/^agent:([^:]+):/)?.[1] ||
+        defaultAgentId;
+      return { defaultAgentId, sessionAgentId };
+    },
+  };
+});
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,

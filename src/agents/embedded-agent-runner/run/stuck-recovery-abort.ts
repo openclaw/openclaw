@@ -4,13 +4,13 @@ export type StuckRecoveryAbortClassification =
   | "external_abort";
 
 export function classifyStuckRecoveryAbort(params: {
-  modelCallStarted: boolean;
+  modelCallActive: boolean;
   activePotentialSideEffectToolExecutions: number;
 }): StuckRecoveryAbortClassification {
   if (params.activePotentialSideEffectToolExecutions > 0) {
     return "tool_execution_timeout";
   }
-  if (params.modelCallStarted) {
+  if (params.modelCallActive) {
     return "model_idle_timeout";
   }
   return "external_abort";

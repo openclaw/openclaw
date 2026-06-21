@@ -3148,7 +3148,7 @@ export async function runEmbeddedAttempt(
         );
       }
       let diagnosticModelCallSeq = 0;
-      let modelCallStartedForStuckRecovery = false;
+      let activeModelCallsForStuckRecovery = 0;
       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
         activeSession.agent.streamFn,
         {
@@ -3172,13 +3172,16 @@ export async function runEmbeddedAttempt(
           contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
           nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
           onStarted: () => {
-            modelCallStartedForStuckRecovery = true;
+            activeModelCallsForStuckRecovery += 1;
             params.onExecutionPhase?.({
               phase: "model_call_started",
               provider: params.provider,
               model: params.modelId,
               firstModelCallStarted: true,
             });
+          },
+          onEnded: () => {
+            activeModelCallsForStuckRecovery = Math.max(0, activeModelCallsForStuckRecovery - 1);
           },
         },
       );
@@ -3719,7 +3722,7 @@ export async function runEmbeddedAttempt(
       const abortActiveRunExternally = (reason?: EmbeddedAgentAbortReason) => {
         if (reason === "stuck_recovery") {
           const classification = classifyStuckRecoveryAbort({
-            modelCallStarted: modelCallStartedForStuckRecovery,
+            modelCallActive: activeModelCallsForStuckRecovery > 0,
             activePotentialSideEffectToolExecutions: countActivePotentialSideEffectToolExecutions(
               params.runId,
             ),
