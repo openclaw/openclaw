@@ -366,6 +366,14 @@ export async function projectSessionsPatchEntry(params: {
         : patch.label === null
           ? null
           : normalizeSessionTitleText(patch.label);
+    // Reject mixed null/string pairs: clearing one while setting the other
+    // is ambiguous and likely a client bug.
+    if (
+      (rawTitle === null && rawLabel !== undefined && rawLabel !== null) ||
+      (rawLabel === null && rawTitle !== undefined && rawTitle !== null)
+    ) {
+      return invalid("cannot clear title or label while setting the other");
+    }
     if (
       rawTitle !== undefined &&
       rawTitle !== null &&
