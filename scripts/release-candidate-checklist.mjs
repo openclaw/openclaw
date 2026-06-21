@@ -1030,7 +1030,7 @@ async function main() {
       .split("\n")
       .filter(Boolean)
       .map((filePath) => filePath.slice(npmDir.length + 1))
-      .sort();
+      .toSorted();
     const expectedPolicyOnlyFiles = [
       "preflight-manifest.json",
       "release-sha.txt",

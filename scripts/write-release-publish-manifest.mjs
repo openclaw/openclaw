@@ -146,7 +146,7 @@ export function buildReleasePublishManifest(params) {
   });
 }
 
-export function writeReleasePublishManifest(argv) {
+function writeReleasePublishManifest(argv) {
   const flags = parseFlags(argv);
   const releasePolicy = readJsonFile(flags["release-policy"], "release policy");
   const preflightManifest = readJsonFile(flags["preflight-manifest"], "preflight manifest");
