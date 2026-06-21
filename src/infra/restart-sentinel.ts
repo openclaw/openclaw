@@ -348,6 +348,14 @@ export function formatRestartSentinelMessage(
   return lines.join("\n");
 }
 
+function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): boolean {
+  return (
+    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
+    payload.status === "ok" &&
+    payload.stats?.requiresRestart === true
+  );
+}
+
 export function summarizeRestartSentinel(
   payload: RestartSentinelPayload,
   options?: RestartSentinelFormatOptions,
@@ -355,11 +363,7 @@ export function summarizeRestartSentinel(
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
   }
-  if (
-    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
-    payload.status === "ok" &&
-    payload.stats?.requiresRestart === true
-  ) {
+  if (isRestartRequiredConfigWriteSentinel(payload)) {
     const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
     if (options?.state === "completed") {
       return `Gateway restart completed${mode}`.trim();

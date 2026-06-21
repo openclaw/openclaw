@@ -297,6 +297,9 @@ describe("restart sentinel", () => {
       ].join("\n"),
     );
     expect(summarizeRestartSentinel(payload)).toBe("Gateway restart required (config.patch)");
+    expect(summarizeRestartSentinel(payload, { state: "pending" })).toBe(
+      "Gateway restart required (config.patch)",
+    );
     expect(summarizeRestartSentinel(payload, { state: "completed" })).toBe(
       "Gateway restart completed (config.patch)",
     );
