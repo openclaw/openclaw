@@ -726,16 +726,40 @@ export function wrapAnthropicStreamWithRecovery(
 
     const stream = innerStreamFn(model, context, options);
     if (stream instanceof Promise) {
-      return stream.catch((error: unknown) => {
-        if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
-          throw error;
-        }
-        requestMeta.recoveredAnthropicThinking = true;
-        log.warn(
-          `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
-        );
-        return wrapRetryStreamWithRecoveryNotification(retry(), notify);
-      }) as ReturnType<StreamFn>;
+      // When streamFn is async (e.g. wrapEmbeddedAgentStreamFn with authStorage),
+      // the return value is a Promise<AssistantMessageEventStreamLike>.
+      // The Promise branch must pump the resolved stream through
+      // pumpStreamWithRecovery so that mid-stream {type:"error"} events
+      // (e.g. Anthropic thinking-signature replay rejections) trigger
+      // recovery. The old code only caught Promise rejections and missed
+      // error events that arrive after the Promise resolves.
+      const outer = createAssistantMessageEventStream();
+      const finalResultPromise = stream
+        .then(
+          (resolved) =>
+            pumpStreamWithRecovery(
+              outer,
+              resolved as ReturnType<StreamFn>,
+              requestMeta,
+              retry,
+              notify,
+            ),
+          (error: unknown) => {
+            if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
+              throw error;
+            }
+            requestMeta.recoveredAnthropicThinking = true;
+            log.warn(
+              `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
+            );
+            return retryStreamWithoutThinking(outer, retry, notify);
+          },
+        )
+        .finally(() => {
+          outer.end();
+        });
+      outer.result = () => finalResultPromise;
+      return outer as unknown as ReturnType<StreamFn>;
     }
     const outer = createAssistantMessageEventStream();
     const finalResultPromise = pumpStreamWithRecovery(

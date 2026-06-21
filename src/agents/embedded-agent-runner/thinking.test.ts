@@ -493,20 +493,22 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session" },
     );
 
-    await expect(
-      wrapped(
-        {} as never,
-        {
-          messages: castAgentMessages([
-            {
-              role: "assistant",
-              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
-            },
-          ]),
-        } as never,
-        {} as never,
-      ),
-    ).rejects.toBe(anthropicThinkingError);
+    const response = wrapped(
+      {} as never,
+      {
+        messages: castAgentMessages([
+          {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+          },
+        ]),
+      } as never,
+      {} as never,
+    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    for await (const _ of response) {
+      void _;
+    }
+    await expect(response.result()).rejects.toBe(anthropicThinkingError);
     expect(callCount).toBe(2);
     const retryMessage = contexts[1]?.messages?.[0];
     if (!retryMessage || retryMessage.role !== "assistant") {
@@ -527,23 +529,25 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session" },
     );
 
-    await expect(
-      wrapped(
-        {} as never,
-        {
-          messages: castAgentMessages([
-            {
-              role: "assistant",
-              content: [
-                { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
-                { type: "text", text: "visible answer" },
-              ],
-            },
-          ]),
-        } as never,
-        {} as never,
-      ),
-    ).rejects.toBe(anthropicThinkingError);
+    const response = wrapped(
+      {} as never,
+      {
+        messages: castAgentMessages([
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
+              { type: "text", text: "visible answer" },
+            ],
+          },
+        ]),
+      } as never,
+      {} as never,
+    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    for await (const _ of response) {
+      void _;
+    }
+    await expect(response.result()).rejects.toBe(anthropicThinkingError);
 
     const retryMessage = contexts[1]?.messages?.[0];
     if (!retryMessage || retryMessage.role !== "assistant") {
@@ -622,20 +626,22 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session", onRecoveredAnthropicThinking: recovered },
     );
 
-    await expect(
-      wrapped(
-        {} as never,
-        {
-          messages: castAgentMessages([
-            {
-              role: "assistant",
-              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
-            },
-          ]),
-        } as never,
-        {} as never,
-      ),
-    ).rejects.toBe(retryError);
+    const response = wrapped(
+      {} as never,
+      {
+        messages: castAgentMessages([
+          {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+          },
+        ]),
+      } as never,
+      {} as never,
+    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    for await (const _ of response) {
+      void _;
+    }
+    await expect(response.result()).rejects.toBe(retryError);
     expect(recovered).not.toHaveBeenCalled();
   });
 
@@ -698,20 +704,22 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session" },
     );
 
-    await expect(
-      wrapped(
-        {} as never,
-        {
-          messages: castAgentMessages([
-            {
-              role: "assistant",
-              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "" }],
-            },
-          ]),
-        } as never,
-        {} as never,
-      ),
-    ).rejects.toBe(bedrockThinkingError);
+    const response = wrapped(
+      {} as never,
+      {
+        messages: castAgentMessages([
+          {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "" }],
+          },
+        ]),
+      } as never,
+      {} as never,
+    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    for await (const _ of response) {
+      void _;
+    }
+    await expect(response.result()).rejects.toBe(bedrockThinkingError);
     expect(callCount).toBe(2);
   });
 
@@ -759,9 +767,13 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         { id: "test-session" },
       );
 
-      await expect(wrapped({} as never, { messages: [] } as never, {} as never)).rejects.toBe(
-        providerError,
-      );
+      const response = wrapped({} as never, { messages: [] } as never, {} as never) as {
+        result: () => Promise<unknown>;
+      } & AsyncIterable<unknown>;
+      for await (const _ of response) {
+        void _;
+      }
+      await expect(response.result()).rejects.toBe(providerError);
       expect(callCount).toBe(2);
     },
   );
@@ -932,9 +944,13 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session" },
     );
 
-    await expect(wrapped({} as never, { messages: [] } as never, {} as never)).rejects.toBe(
-      rateLimitError,
-    );
+    const response = wrapped({} as never, { messages: [] } as never, {} as never) as {
+      result: () => Promise<unknown>;
+    } & AsyncIterable<unknown>;
+    for await (const _ of response) {
+      void _;
+    }
+    await expect(response.result()).rejects.toBe(rateLimitError);
     expect(callCount).toBe(1);
   });
 
@@ -956,12 +972,21 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ]),
     };
 
-    await expect(wrapped({} as never, context as never, {} as never)).rejects.toBe(
-      anthropicThinkingError,
-    );
-    await expect(wrapped({} as never, context as never, {} as never)).rejects.toBe(
-      anthropicThinkingError,
-    );
+    const response1 = wrapped({} as never, context as never, {} as never) as {
+      result: () => Promise<unknown>;
+    } & AsyncIterable<unknown>;
+    for await (const _ of response1) {
+      void _;
+    }
+    await expect(response1.result()).rejects.toBe(anthropicThinkingError);
+
+    const response2 = wrapped({} as never, context as never, {} as never) as {
+      result: () => Promise<unknown>;
+    } & AsyncIterable<unknown>;
+    for await (const _ of response2) {
+      void _;
+    }
+    await expect(response2.result()).rejects.toBe(anthropicThinkingError);
 
     expect(callCount).toBe(4);
   });
