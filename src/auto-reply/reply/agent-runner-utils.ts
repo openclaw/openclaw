@@ -275,26 +275,6 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
-/** Builds extra context payloads for embedded run execution. */
-export function buildEmbeddedRunContexts(params: {
-  run: FollowupRun["run"];
-  replyRoute?: EmbeddedReplyRoute;
-  sessionCtx: TemplateContext;
-  hasRepliedRef: { value: boolean } | undefined;
-  provider: string;
-}) {
-  return {
-    authProfile: resolveRunAuthProfile(params.run, params.provider),
-    embeddedContext: buildEmbeddedContextFromTemplate({
-      run: params.run,
-      replyRoute: params.replyRoute,
-      sessionCtx: params.sessionCtx,
-      hasRepliedRef: params.hasRepliedRef,
-    }),
-    senderContext: buildTemplateSenderContext(params.sessionCtx),
-  };
-}
-
 /** Builds execution-specific embedded run params for queued reply dispatch. */
 export function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
@@ -307,7 +287,14 @@ export function buildEmbeddedRunExecutionParams(params: {
   promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
-  const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
+  const authProfile = resolveRunAuthProfile(params.run, params.provider);
+  const embeddedContext = buildEmbeddedContextFromTemplate({
+    run: params.run,
+    replyRoute: params.replyRoute,
+    sessionCtx: params.sessionCtx,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+  const senderContext = buildTemplateSenderContext(params.sessionCtx);
   const runBaseParams = buildEmbeddedRunBaseParams({
     run: params.run,
     provider: params.provider,

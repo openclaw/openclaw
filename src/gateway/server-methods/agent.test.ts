@@ -2325,6 +2325,44 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("forwards admin caller ownership to ingress agent runs", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "owner tool check",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-admin-sender-owner",
+      },
+      {
+        reqId: "admin-sender-owner",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(true);
+
+    mocks.agentCommand.mockClear();
+    await invokeAgent(
+      {
+        message: "non-owner tool check",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-write-sender-owner",
+      },
+      {
+        reqId: "write-sender-owner",
+        client: backendGatewayClient(),
+      },
+    );
+
+    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(
+      false,
+    );
+  });
+
   it("rejects public transcriptMessage overrides", async () => {
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
     mocks.agentCommand.mockClear();

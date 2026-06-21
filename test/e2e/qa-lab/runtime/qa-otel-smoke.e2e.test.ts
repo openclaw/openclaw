@@ -135,6 +135,18 @@ describe("qa-otel-smoke receiver bounds", () => {
     });
   });
 
+  it.each([
+    ["--collector", ["--collector", "--logs-exporter"]],
+    ["--logs-exporter", ["--logs-exporter", "--collector"]],
+    ["--output-dir", ["--output-dir", "--collector"]],
+    ["--provider-mode", ["--provider-mode", "--collector"]],
+    ["--scenario", ["--scenario", "--collector"]],
+    ["--model", ["--model", "--collector"]],
+    ["--alt-model", ["--alt-model", "--collector"]],
+  ])("rejects missing values for %s before shifting parser state", (flag, args) => {
+    expect(() => testing.parseArgs(args)).toThrow(`${flag} requires a value`);
+  });
+
   it("selects the matching scenario for the requested log exporter", () => {
     expect(testing.parseArgs(["--logs-exporter", "otlp"]).scenarioId).toBe("otel-trace-smoke");
     expect(testing.parseArgs(["--logs-exporter", "stdout"]).scenarioId).toBe(
