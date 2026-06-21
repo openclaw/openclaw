@@ -627,20 +627,6 @@ async function dispatchDiscordCommandInteraction(params: {
     return { accepted: true, effectiveRoute };
   }
 
-  if (pickerCommandContext) {
-    await replyWithDiscordModelPickerProviders({
-      interaction,
-      cfg,
-      command: pickerCommandContext,
-      userId: user.id,
-      accountId,
-      threadBindings,
-      preferFollowUp,
-      safeInteractionCall: safeDiscordInteractionCall,
-    });
-    return { accepted: true };
-  }
-
   const interactionId = interaction.rawData.id;
   const routeState = await getNativeRouteState();
   if (await rejectUnavailableConfiguredBinding()) {

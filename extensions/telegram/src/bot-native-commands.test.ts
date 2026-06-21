@@ -15,6 +15,10 @@ import {
 } from "./bot-native-commands.menu-test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
+import {
+  buildTelegramModelsListChannelData,
+  buildTelegramModelsMenuButtons,
+} from "./command-ui.js";
 import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
@@ -449,6 +453,19 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstCall(sendMessage)[1]).toBe("Choose a model for /model.");
     expect(callbackData).toEqual(["mdl_prov"]);
+    expect(buildTelegramModelsMenuButtons({ providers: [{ id: "openrouter", count: 2 }] })).toEqual(
+      [[{ text: "openrouter (2)", callback_data: "mdl_list_openrouter_1" }]],
+    );
+    const modelListChannelData = buildTelegramModelsListChannelData({
+      provider: "openrouter",
+      models: ["short-model", longModel],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames: new Map([[`openrouter/${longModel}`, "Hermes 405B Extended"]]),
+    });
+    expect(modelListChannelData?.telegram?.buttons).toContainEqual([
+      { text: "Hermes 405B Extended", callback_data: `mdl_sel/${longModel}` },
+    ]);
     expect(dispatch?.mock.calls).toHaveLength(0);
   });
 
