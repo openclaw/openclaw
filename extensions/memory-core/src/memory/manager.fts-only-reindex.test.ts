@@ -236,18 +236,22 @@ describe("memory manager FTS-only reindex", () => {
     const downgradeDb = new DatabaseSync(indexPath);
     try {
       const metaRow = downgradeDb
-        .prepare(`SELECT value FROM meta WHERE key = 'memory_index_meta_v1'`)
+        .prepare(`SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`)
         .get() as { value: string } | undefined;
       const meta = JSON.parse(metaRow?.value ?? "{}") as Record<string, unknown>;
       delete meta.ftsTextFormat;
       downgradeDb
-        .prepare(`UPDATE meta SET value = ? WHERE key = 'memory_index_meta_v1'`)
+        .prepare(`UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'`)
         .run(JSON.stringify(meta));
-      const ftsRows = downgradeDb.prepare(`SELECT id, text FROM chunks_fts`).all() as Array<{
+      const ftsRows = downgradeDb
+        .prepare(`SELECT id, text FROM memory_index_chunks_fts`)
+        .all() as Array<{
         id: string;
         text: string;
       }>;
-      const stripPrefix = downgradeDb.prepare(`UPDATE chunks_fts SET text = ? WHERE id = ?`);
+      const stripPrefix = downgradeDb.prepare(
+        `UPDATE memory_index_chunks_fts SET text = ? WHERE id = ?`,
+      );
       const prefix = `memory/${filenameStem}.md\n`;
       for (const row of ftsRows) {
         const legacyText = row.text.startsWith(prefix) ? row.text.slice(prefix.length) : row.text;
@@ -274,14 +278,16 @@ describe("memory manager FTS-only reindex", () => {
     const verifyDb = new DatabaseSync(indexPath);
     try {
       const metaRow = verifyDb
-        .prepare(`SELECT value FROM meta WHERE key = 'memory_index_meta_v1'`)
+        .prepare(`SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`)
         .get() as { value: string } | undefined;
       const meta = JSON.parse(metaRow?.value ?? "{}") as Record<string, unknown>;
       expect(meta.ftsTextFormat).toBe("path-prefixed-v1");
       // FTS5 unicode61 splits on hyphens; query each token individually to confirm
       // the filename made it into chunks_fts.text after the rebuild.
       const ftsHit = verifyDb
-        .prepare(`SELECT COUNT(*) AS c FROM chunks_fts WHERE chunks_fts MATCH ?`)
+        .prepare(
+          `SELECT COUNT(*) AS c FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?`,
+        )
         .get("1649") as { c: number } | undefined;
       expect(ftsHit?.c ?? 0).toBeGreaterThan(0);
     } finally {
@@ -311,18 +317,22 @@ describe("memory manager FTS-only reindex", () => {
     const downgradeDb = new DatabaseSync(indexPath);
     try {
       const metaRow = downgradeDb
-        .prepare(`SELECT value FROM meta WHERE key = 'memory_index_meta_v1'`)
+        .prepare(`SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`)
         .get() as { value: string } | undefined;
       const meta = JSON.parse(metaRow?.value ?? "{}") as Record<string, unknown>;
       delete meta.ftsTextFormat;
       downgradeDb
-        .prepare(`UPDATE meta SET value = ? WHERE key = 'memory_index_meta_v1'`)
+        .prepare(`UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'`)
         .run(JSON.stringify(meta));
-      const ftsRows = downgradeDb.prepare(`SELECT id, text FROM chunks_fts`).all() as Array<{
+      const ftsRows = downgradeDb
+        .prepare(`SELECT id, text FROM memory_index_chunks_fts`)
+        .all() as Array<{
         id: string;
         text: string;
       }>;
-      const stripPrefix = downgradeDb.prepare(`UPDATE chunks_fts SET text = ? WHERE id = ?`);
+      const stripPrefix = downgradeDb.prepare(
+        `UPDATE memory_index_chunks_fts SET text = ? WHERE id = ?`,
+      );
       const prefix = `memory/${filenameStem}.md\n`;
       for (const row of ftsRows) {
         const legacyText = row.text.startsWith(prefix) ? row.text.slice(prefix.length) : row.text;
@@ -352,12 +362,14 @@ describe("memory manager FTS-only reindex", () => {
     const verifyDb = new DatabaseSync(indexPath);
     try {
       const metaRow = verifyDb
-        .prepare(`SELECT value FROM meta WHERE key = 'memory_index_meta_v1'`)
+        .prepare(`SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`)
         .get() as { value: string } | undefined;
       const meta = JSON.parse(metaRow?.value ?? "{}") as Record<string, unknown>;
       expect(meta.ftsTextFormat).toBe("path-prefixed-v1");
       const ftsHit = verifyDb
-        .prepare(`SELECT COUNT(*) AS c FROM chunks_fts WHERE chunks_fts MATCH ?`)
+        .prepare(
+          `SELECT COUNT(*) AS c FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?`,
+        )
         .get("1701") as { c: number } | undefined;
       expect(ftsHit?.c ?? 0).toBeGreaterThan(0);
     } finally {
