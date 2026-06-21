@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-// The per-node restriction is a post-filter on top of the existing policy
-// pipeline, keyed off the AUTHENTICATED hosting node (set in the node-id
-// registry at node-originated agent.request dispatch). We mock the heavyweight
-// collaborators so the test isolates the gateway.tools.byNode allow/deny logic.
+// gateway.tools.byNode is a RUN-SCOPED restriction enforced in the embedded
+// agent tool builder (createOpenClawCodingTools), where the authenticated hosting
+// node id is threaded through the run. resolveGatewayScopedTools serves non-node
+// MCP/HTTP callers (no hosting node), so byNode is a no-op here.
 
 type MockTool = { name: string; ownerOnly?: boolean };
 
@@ -52,10 +52,6 @@ vi.mock("../security/dangerous-tools.js", () => ({
   GATEWAY_OWNER_ONLY_CORE_TOOLS: [],
 }));
 
-import {
-  resetSessionHostingNodeIdsForTest,
-  setSessionHostingNodeId,
-} from "./session-node-id-registry.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const NODE = "node-abc";
@@ -69,58 +65,8 @@ function cfgWith(byNode: Record<string, { allow?: string[]; deny?: string[] }>) 
   return { gateway: { tools: { byNode } } } as never;
 }
 
-beforeEach(() => resetSessionHostingNodeIdsForTest());
-afterEach(() => resetSessionHostingNodeIdsForTest());
-
-describe("resolveGatewayScopedTools gateway.tools.byNode (authenticated-node restriction)", () => {
-  it("intersects the final tools to the hosting node's allow list", () => {
-    setSessionHostingNodeId(SESSION, NODE);
-    const result = resolveGatewayScopedTools({
-      cfg: cfgWith({ [NODE]: { allow: ["browser", "memory_search", "memory_get"] } }),
-      sessionKey: SESSION,
-    });
-    expect(names(result)).toEqual(["browser", "memory_get", "memory_search"]);
-  });
-
-  it("cannot escalate: an allow naming an unavailable tool yields nothing extra", () => {
-    setSessionHostingNodeId(SESSION, NODE);
-    const result = resolveGatewayScopedTools({
-      cfg: cfgWith({ [NODE]: { allow: ["browser", "not_a_tool"] } }),
-      sessionKey: SESSION,
-    });
-    expect(names(result)).toEqual(["browser"]);
-  });
-
-  it("treats an explicit empty allow as no tools (fail-closed)", () => {
-    setSessionHostingNodeId(SESSION, NODE);
-    const result = resolveGatewayScopedTools({
-      cfg: cfgWith({ [NODE]: { allow: [] } }),
-      sessionKey: SESSION,
-    });
-    expect(names(result)).toEqual([]);
-  });
-
-  it("extends the deny set with the node's deny list", () => {
-    setSessionHostingNodeId(SESSION, NODE);
-    const result = resolveGatewayScopedTools({
-      cfg: cfgWith({ [NODE]: { deny: ["nodes", "exec"] } }),
-      sessionKey: SESSION,
-    });
-    expect(names(result)).not.toContain("nodes");
-    expect(names(result)).not.toContain("exec");
-    expect(names(result)).toContain("browser");
-  });
-
-  it("is a no-op when no hosting node is recorded for the session", () => {
-    const result = resolveGatewayScopedTools({
-      cfg: cfgWith({ [NODE]: { allow: ["browser"] } }),
-      sessionKey: SESSION,
-    });
-    expect(names(result)).toEqual(ALL_TOOLS.map((t) => t.name).toSorted());
-  });
-
-  it("is a no-op when the hosting node has no byNode entry", () => {
-    setSessionHostingNodeId(SESSION, "some-other-node");
+describe("resolveGatewayScopedTools gateway.tools.byNode", () => {
+  it("is a no-op for non-node MCP/HTTP callers (run-scoped byNode is enforced in the embedded agent tool builder, not this resolver)", () => {
     const result = resolveGatewayScopedTools({
       cfg: cfgWith({ [NODE]: { allow: ["browser"] } }),
       sessionKey: SESSION,

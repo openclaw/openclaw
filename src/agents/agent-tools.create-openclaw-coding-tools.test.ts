@@ -8,10 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resetSessionHostingNodeIdsForTest,
-  setSessionHostingNodeId,
-} from "../gateway/session-node-id-registry.js";
+import { resetSessionHostingNodeIdsForTest } from "../gateway/session-node-id-registry.js";
 import {
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
@@ -1528,36 +1525,36 @@ describe("createOpenClawCodingTools", () => {
     }
 
     it("intersects the embedded toolset to the hosting node's allow list", () => {
-      setSessionHostingNodeId(SESSION, NODE);
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: NODE,
         config: byNodeConfig({ allow: ["read"] }),
       });
       expect(toolNameList(tools)).toEqual(["read"]);
     });
 
     it("cannot escalate: allowing an unavailable tool yields nothing extra", () => {
-      setSessionHostingNodeId(SESSION, NODE);
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: NODE,
         config: byNodeConfig({ allow: ["read", "totally_not_a_real_tool"] }),
       });
       expect(toolNameList(tools)).toEqual(["read"]);
     });
 
     it("treats an explicit empty allow as no tools (fail-closed)", () => {
-      setSessionHostingNodeId(SESSION, NODE);
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: NODE,
         config: byNodeConfig({ allow: [] }),
       });
       expect(toolNameList(tools)).toEqual([]);
     });
 
     it("removes the node's denied tools while leaving the rest", () => {
-      setSessionHostingNodeId(SESSION, NODE);
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: NODE,
         config: byNodeConfig({ deny: ["exec"] }),
       });
       const names = new Set(toolNameList(tools));
@@ -1576,9 +1573,9 @@ describe("createOpenClawCodingTools", () => {
     });
 
     it("is a no-op when the hosting node has no byNode entry", () => {
-      setSessionHostingNodeId(SESSION, "some-unconfigured-node");
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: "some-unconfigured-node",
         config: byNodeConfig({ allow: ["read"] }),
       });
       const names = new Set(toolNameList(tools));
