@@ -405,7 +405,6 @@ export function createRouter<
           return preloadLocation(error.location, context);
         }
         matches.removeCached(match.id);
-        return undefined;
       });
   };
 
