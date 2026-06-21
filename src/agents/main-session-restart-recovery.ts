@@ -547,7 +547,7 @@ async function writeUnresumableNoticeToTranscript(params: {
     // Non-stale: route through resolveSessionFilePath so relative/malformed paths get containment
     // checks and fall back to canonical if the stored value is outside the sessions directory.
     const extractedId = extractGeneratedTranscriptSessionId(existingSessionFile);
-    const isStaleGeneratedPath = !!extractedId && extractedId !== params.sessionId;
+    const isStaleGeneratedPath = extractedId !== undefined && extractedId !== params.sessionId;
     const sessionFile =
       existingSessionFile && !isStaleGeneratedPath
         ? resolveSessionFilePath(
