@@ -300,6 +300,14 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       }
       void handleInvoke(payload, client, skillBins);
     },
+    onHelloOk: () => {
+      // Re-register the node->gateway emitter on every (re)connect; onClose nulls it
+      // on disconnect, so without this a node-originated turn after a transient
+      // reconnect would strand on a null emitter (#93680 review).
+      registerNodeGatewayEventEmitter((event, payload) =>
+        client.request("node.event", buildNodeEventParams(event, payload)).then(() => undefined),
+      );
+    },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
       writeStderrLine(`node host gateway connect failed: ${err.message}`);
