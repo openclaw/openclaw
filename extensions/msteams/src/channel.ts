@@ -803,12 +803,22 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               },
             });
           }
-          // Only intercept send when the caller explicitly requests topLevel.
-          // Normal sends fall through to the outbound adapter so media, payloads,
-          // chunking, hooks, and receipts stay on the established delivery path.
+          // Per-call `topLevel: true` opens a new root post / thread in a channel,
+          // bypassing the static channel `replyStyle` config. Only meaningful for
+          // plain-text sends — card/presentation sends are explicitly rejected because
+          // the established card path does not currently accept replyStyleOverride.
+          // Normal sends without topLevel fall through to the outbound adapter so
+          // media, payloads, chunking, hooks, and receipts stay on the established
+          // delivery path.
           if (ctx.action === "send" && ctx.params.topLevel === true) {
+            if (presentation) {
+              return actionError(
+                "topLevel is not supported with presentation/card sends. " +
+                  "Use topLevel only with plain-text sends.",
+              );
+            }
             return await runWithRequiredActionTarget({
-              actionLabel: "Send",
+              actionLabel: "Send (top-level / new thread)",
               toolParams: ctx.params,
               run: async (to) => {
                 const { sendMessageMSTeams } = await loadMSTeamsChannelRuntime();
@@ -816,13 +826,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   to,
                   text: resolveActionContent(ctx.params),
-                  topLevel: ctx.params.topLevel === true ? true : undefined,
+                  mediaLocalRoots: ctx.mediaLocalRoots,
+                  mediaReadFile: ctx.mediaReadFile,
+                  replyStyleOverride: "top-level",
                 });
                 return jsonActionResultWithDetails(
                   {
                     ok: true,
                     channel: "msteams",
-                    action: "send",
+                    topLevel: true,
                     messageId: result.messageId,
                     conversationId: result.conversationId,
                   },

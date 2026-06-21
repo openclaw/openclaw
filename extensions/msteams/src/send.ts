@@ -6,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import {
+  loadOutboundMediaFromUrl,
+  type MSTeamsReplyStyle,
+  type OpenClawConfig,
+} from "../runtime-api.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -44,8 +48,13 @@ type SendMSTeamsMessageParams = {
   filename?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  /** Force a new root post in the channel (channel only; ignored for DMs/group chats) */
-  topLevel?: boolean;
+  /**
+   * Optional per-call override for the resolved reply style. When `"top-level"`
+   * is passed, the send opens a new root post / new thread in a channel
+   * regardless of the static channel `replyStyle` config. Ignored for DM and
+   * group-chat conversations. See `resolveMSTeamsSendContext`.
+   */
+  replyStyleOverride?: MSTeamsReplyStyle;
 };
 
 type SendMSTeamsMessageResult = {
@@ -131,7 +140,7 @@ type SendMSTeamsCardParams = {
   /** Adaptive Card JSON object */
   card: Record<string, unknown>;
   /** Force a new root post in the channel (channel only; ignored for DMs/group chats) */
-  topLevel?: boolean;
+  replyStyleOverride?: MSTeamsReplyStyle;
 };
 
 type SendMSTeamsCardResult = {
@@ -153,7 +162,8 @@ type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile, topLevel } = params;
+  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile, replyStyleOverride } =
+    params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
@@ -162,7 +172,7 @@ export async function sendMessageMSTeams(
   const ctx = await resolveMSTeamsSendContext({
     cfg,
     to,
-    replyStyleOverride: topLevel ? "top-level" : undefined,
+    replyStyleOverride,
   });
   const {
     app,
@@ -550,11 +560,11 @@ export async function sendPollMSTeams(
 export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
 ): Promise<SendMSTeamsCardResult> {
-  const { cfg, to, card, topLevel } = params;
+  const { cfg, to, card, replyStyleOverride } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
-    replyStyleOverride: topLevel ? "top-level" : undefined,
+    replyStyleOverride,
   });
 
   log.debug?.("sending adaptive card", {
