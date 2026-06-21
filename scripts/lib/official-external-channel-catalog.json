@@ -490,6 +490,56 @@
       }
     },
     {
+      "name": "@openclaw/raft",
+      "description": "OpenClaw Raft channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "raft",
+          "label": "Raft",
+          "selectionLabel": "Raft (CLI wake bridge)",
+          "docsPath": "/channels/raft",
+          "docsLabel": "raft",
+          "blurb": "Raft CLI wake bridge for human and agent collaboration.",
+          "order": 72
+        },
+        "channelConfigs": {
+          "raft": {
+            "label": "Raft",
+            "description": "Raft External Agent CLI wake bridge.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "enabled": { "type": "boolean" },
+                "profile": { "type": "string", "minLength": 1 },
+                "defaultAccount": { "type": "string" },
+                "accounts": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": { "type": "string" },
+                      "enabled": { "type": "boolean" },
+                      "profile": { "type": "string", "minLength": 1 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "install": {
+          "npmSpec": "@openclaw/raft",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tlon",
       "description": "OpenClaw Tlon/Urbit channel plugin",
       "source": "official",
