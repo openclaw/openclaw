@@ -749,6 +749,11 @@ describe("validateTasksListParams", () => {
         status: ["running", "completed"],
         agentId: "main",
         sessionKey: "agent:main:main",
+        metadata: {
+          repo: "openclaw/openclaw",
+          khalilAttentionNeeded: true,
+          priority: 2,
+        },
         limit: 50,
         cursor: "100",
       }),
@@ -757,6 +762,7 @@ describe("validateTasksListParams", () => {
 
   it("rejects internal task statuses and unknown fields", () => {
     expect(validateTasksListParams({ status: "succeeded" })).toBe(false);
+    expect(validateTasksListParams({ metadata: { nested: { nope: true } } })).toBe(false);
     expect(validateTasksCancelParams({ taskId: "task-1", force: true })).toBe(false);
   });
 });

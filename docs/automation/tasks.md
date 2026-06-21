@@ -146,6 +146,12 @@ Transitions happen automatically - when the associated agent run ends, the task 
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, and timeout or abort outcomes finalize as `timed_out`. If an operator already cancelled the task, or the runtime already recorded a stronger terminal state such as `failed`, `timed_out`, or `lost`, a later success signal does not downgrade that terminal status.
 
+Task rows also carry flat operational metadata in SQLite. Orchestrators should
+store repo, branch, PR URL, owner, next-action, and attention-needed flags on
+the task record itself instead of maintaining an editable worker-state file.
+`openclaw tasks list --metadata key=value` filters those records by exact
+metadata value.
+
 `lost` is runtime-aware:
 
 - ACP tasks: backing ACP child session metadata disappeared.
@@ -200,10 +206,11 @@ openclaw tasks notify <lookup> state_changes
 <AccordionGroup>
   <Accordion title="tasks list">
     ```bash
-    openclaw tasks list [--runtime <acp|subagent|cron|cli>] [--status <status>] [--json]
+    openclaw tasks list [--runtime <acp|subagent|cron|cli>] [--status <status>] [--metadata <key=value...>] [--json]
     ```
 
     Output columns: Task ID, Kind, Status, Delivery, Run ID, Child Session, Summary.
+    Metadata filters match flat task metadata stored on the SQLite task row.
 
   </Accordion>
   <Accordion title="tasks show">
@@ -211,7 +218,7 @@ openclaw tasks notify <lookup> state_changes
     openclaw tasks show <lookup>
     ```
 
-    The lookup token accepts a task ID, run ID, or session key. Shows the full record including timing, delivery state, error, and terminal summary.
+    The lookup token accepts a task ID, run ID, or session key. Shows the full record including timing, delivery state, metadata, error, and terminal summary.
 
   </Accordion>
   <Accordion title="tasks cancel">

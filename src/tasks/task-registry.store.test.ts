@@ -30,6 +30,7 @@ import {
   markTaskTerminalById,
   maybeDeliverTaskStateChangeUpdate,
   resetTaskRegistryForTests,
+  updateTaskMetadataByRunId,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
@@ -220,6 +221,51 @@ describe("task-registry store runtime", () => {
         );
 
         expect(() => loadTaskRegistryStateFromSqlite()).toThrow("Invalid persisted task status");
+      },
+    );
+  });
+
+  it("persists operational task metadata across sqlite create and updates", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-metadata-" },
+      async () => {
+        resetTaskRegistryForTests();
+        const created = createTaskRecord({
+          runtime: "subagent",
+          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey: "agent:worker:subagent:metadata",
+          runId: "run-worker-metadata",
+          task: "Inspect worker metadata",
+          status: "running",
+          deliveryStatus: "pending",
+          metadata: {
+            branch: "klaw/task-ledger-worker-state",
+            prUrl: "https://github.com/openclaw/openclaw/pull/95433",
+            khalilAttentionNeeded: true,
+          },
+        });
+
+        updateTaskMetadataByRunId({
+          runId: "run-worker-metadata",
+          metadata: {
+            nextAction: "parent-review",
+            khalilAttentionNeeded: false,
+          },
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+
+        expect(findTaskByRunId("run-worker-metadata")).toMatchObject({
+          taskId: created.taskId,
+          metadata: {
+            branch: "klaw/task-ledger-worker-state",
+            prUrl: "https://github.com/openclaw/openclaw/pull/95433",
+            nextAction: "parent-review",
+            khalilAttentionNeeded: false,
+          },
+        });
       },
     );
   });

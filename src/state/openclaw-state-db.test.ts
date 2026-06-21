@@ -176,6 +176,7 @@ describe("openclaw state database", () => {
       name?: string;
     }>;
     expect(columns.some((column) => column.name === "requester_agent_id")).toBe(true);
+    expect(columns.some((column) => column.name === "metadata_json")).toBe(true);
     expect(
       reopened.db
         .prepare(

@@ -44,7 +44,12 @@ import {
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
-import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
+import type {
+  TaskMetadata,
+  TaskMetadataValue,
+  TaskNotifyPolicy,
+  TaskRecord,
+} from "../tasks/task-registry.types.js";
 import {
   buildTaskSystemAuditFindings,
   type TaskSystemAuditCode,
@@ -72,6 +77,48 @@ function formatTaskLookupMiss(lookup: string): string {
 
 function formatTaskTimestamp(value: number | undefined): string {
   return timestampMsToIsoString(value) ?? "n/a";
+}
+
+function parseTaskMetadataFilterValue(value: string): TaskMetadataValue {
+  const trimmed = value.trim();
+  if (trimmed === "true") {
+    return true;
+  }
+  if (trimmed === "false") {
+    return false;
+  }
+  if (trimmed === "null") {
+    return null;
+  }
+  const numeric = Number(trimmed);
+  return trimmed !== "" && Number.isFinite(numeric) ? numeric : value;
+}
+
+function parseTaskMetadataFilters(filters: readonly string[] | undefined): TaskMetadata {
+  const metadata: TaskMetadata = {};
+  for (const filter of filters ?? []) {
+    const separator = filter.indexOf("=");
+    if (separator <= 0) {
+      throw new Error(`Invalid task metadata filter "${filter}". Use key=value.`);
+    }
+    const key = filter.slice(0, separator).trim();
+    if (!key) {
+      throw new Error(`Invalid task metadata filter "${filter}". Use key=value.`);
+    }
+    metadata[key] = parseTaskMetadataFilterValue(filter.slice(separator + 1));
+  }
+  return metadata;
+}
+
+function taskMatchesMetadata(task: TaskRecord, metadata: TaskMetadata): boolean {
+  const entries = Object.entries(metadata);
+  if (entries.length === 0) {
+    return true;
+  }
+  if (!task.metadata) {
+    return false;
+  }
+  return entries.every(([key, value]) => task.metadata?.[key] === value);
 }
 
 async function loadTaskCancelConfig() {
@@ -401,11 +448,12 @@ function toSystemAuditFindings(params: {
 
 /** Lists background tasks with optional runtime/status filters. */
 export async function tasksListCommand(
-  opts: { json?: boolean; runtime?: string; status?: string },
+  opts: { json?: boolean; runtime?: string; status?: string; metadata?: string[] },
   runtime: RuntimeEnv,
 ) {
   const runtimeFilter = opts.runtime?.trim();
   const statusFilter = opts.status?.trim();
+  const metadataFilter = parseTaskMetadataFilters(opts.metadata);
   const tasks = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -413,7 +461,7 @@ export async function tasksListCommand(
     if (statusFilter && task.status !== statusFilter) {
       return false;
     }
-    return true;
+    return taskMatchesMetadata(task, metadataFilter);
   });
 
   if (opts.json) {
@@ -423,6 +471,7 @@ export async function tasksListCommand(
           count: tasks.length,
           runtime: runtimeFilter ?? null,
           status: statusFilter ?? null,
+          metadata: Object.keys(metadataFilter).length > 0 ? metadataFilter : null,
           tasks,
         },
         null,
@@ -439,6 +488,15 @@ export async function tasksListCommand(
   }
   if (statusFilter) {
     runtime.log(info(`Status filter: ${statusFilter}`));
+  }
+  if (Object.keys(metadataFilter).length > 0) {
+    runtime.log(
+      info(
+        `Metadata filter: ${Object.entries(metadataFilter)
+          .map(([key, value]) => `${key}=${String(value)}`)
+          .join(", ")}`,
+      ),
+    );
   }
   if (tasks.length === 0) {
     runtime.log(
@@ -493,6 +551,7 @@ export async function tasksShowCommand(
     ...(task.error ? [`error: ${task.error}`] : []),
     ...(task.progressSummary ? [`progressSummary: ${task.progressSummary}`] : []),
     ...(task.terminalSummary ? [`terminalSummary: ${task.terminalSummary}`] : []),
+    ...(task.metadata ? [`metadata: ${JSON.stringify(task.metadata)}`] : []),
   ];
   for (const line of lines) {
     runtime.log(line);

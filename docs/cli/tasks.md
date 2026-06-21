@@ -34,19 +34,21 @@ openclaw tasks flow cancel <lookup>
 - `--json`: output JSON.
 - `--runtime <name>`: filter by kind: `subagent`, `acp`, `cron`, or `cli`.
 - `--status <name>`: filter by status: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `cancelled`, or `lost`.
+- `--metadata <key=value...>`: filter by flat task metadata stored on the SQLite task row. Repeat values after the flag, for example `--metadata repo=openclaw/openclaw khalilAttentionNeeded=true`.
 
 ## Subcommands
 
 ### `list`
 
 ```bash
-openclaw tasks list [--runtime <name>] [--status <name>] [--json]
+openclaw tasks list [--runtime <name>] [--status <name>] [--metadata <key=value...>] [--json]
 ```
 
 Lists tracked background tasks newest first.
 The list is reconciled against durable task/session truth before display, so a
 stale active worker row can appear as terminal even before maintenance writes
 the repaired state back to the ledger.
+Metadata filters exact-match the task row's flat operational metadata.
 
 ### `show`
 
@@ -54,7 +56,7 @@ the repaired state back to the ledger.
 openclaw tasks show <lookup> [--json]
 ```
 
-Shows one task by task ID, run ID, or session key.
+Shows one task by task ID, run ID, or session key, including operational metadata when present.
 
 ### `notify`
 

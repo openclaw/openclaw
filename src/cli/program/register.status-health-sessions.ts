@@ -441,6 +441,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "--status <name>",
       "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
     )
+    .option("--metadata <key=value...>", "Filter by task metadata key/value")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { tasksListCommand } = await loadTasksCommands();
@@ -449,6 +450,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             json: Boolean(opts.json),
             runtime: opts.runtime as string | undefined,
             status: opts.status as string | undefined,
+            metadata: opts.metadata as string[] | undefined,
           },
           defaultRuntime,
         );
@@ -465,12 +467,14 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "--status <name>",
       "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
     )
+    .option("--metadata <key=value...>", "Filter by task metadata key/value")
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as
         | {
             json?: boolean;
             runtime?: string;
             status?: string;
+            metadata?: string[];
           }
         | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -480,6 +484,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             json: Boolean(opts.json || parentOpts?.json),
             runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
             status: (opts.status as string | undefined) ?? parentOpts?.status,
+            metadata: (opts.metadata as string[] | undefined) ?? parentOpts?.metadata,
           },
           defaultRuntime,
         );

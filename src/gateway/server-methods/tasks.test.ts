@@ -181,6 +181,56 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.title).toBe("Done task");
   });
 
+  it("lists and gets tasks by durable task metadata", async () => {
+    const task = createTaskRecord({
+      runtime: "subagent",
+      taskKind: "klaw_worker",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:worker:subagent:metadata",
+      runId: "run-metadata-filter",
+      task: "Review worker PR",
+      status: "running",
+      deliveryStatus: "pending",
+      metadata: {
+        repo: "openclaw/openclaw",
+        branch: "klaw/task-ledger-worker-state",
+        prUrl: "https://github.com/openclaw/openclaw/pull/95433",
+        khalilAttentionNeeded: true,
+      },
+    });
+    createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:other:subagent:metadata",
+      runId: "run-metadata-filter-other",
+      task: "Review unrelated worker PR",
+      status: "running",
+      deliveryStatus: "pending",
+      metadata: {
+        repo: "openclaw/openclaw",
+        branch: "other",
+        khalilAttentionNeeded: false,
+      },
+    });
+
+    const { payload } = await runTaskHandler("tasks.list", {
+      metadata: {
+        repo: "openclaw/openclaw",
+        khalilAttentionNeeded: true,
+      },
+    });
+
+    expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
+    expect(payload?.tasks?.[0]?.metadata).toEqual(task.metadata);
+
+    const detail = await getTaskPayload(task.taskId);
+    expect(detail.payload?.task?.metadata).toEqual(task.metadata);
+  });
+
   it("reconciles stale running subagent tasks from session truth before listing", async () => {
     const staleAt = Date.now() - 10 * 60_000;
     const task = createTaskRecord({

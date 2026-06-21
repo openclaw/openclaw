@@ -18,6 +18,8 @@ import {
   parseTaskScopeKind,
   parseTaskStatus,
   type TaskDeliveryState,
+  type TaskMetadata,
+  type TaskMetadataValue,
   type TaskRecord,
 } from "./task-registry.types.js";
 
@@ -73,6 +75,7 @@ const TASK_RUN_SELECT_COLUMNS = [
   "progress_summary",
   "terminal_summary",
   "terminal_outcome",
+  "metadata_json",
 ] as const;
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
@@ -88,6 +91,33 @@ function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
 }
 
+function parseTaskMetadataJson(value: string | null): TaskMetadata | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid persisted task metadata: expected object");
+  }
+  const metadata: TaskMetadata = {};
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (!key.trim()) {
+      throw new Error("Invalid persisted task metadata: empty key");
+    }
+    if (
+      entry === null ||
+      typeof entry === "string" ||
+      typeof entry === "boolean" ||
+      (typeof entry === "number" && Number.isFinite(entry))
+    ) {
+      metadata[key] = entry as TaskMetadataValue;
+      continue;
+    }
+    throw new Error(`Invalid persisted task metadata value for ${key}`);
+  }
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const startedAt = normalizeNumber(row.started_at);
   const endedAt = normalizeNumber(row.ended_at);
@@ -95,6 +125,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const cleanupAfter = normalizeNumber(row.cleanup_after);
   const scopeKind = parseTaskScopeKind(row.scope_kind);
   const terminalOutcome = parseOptionalTaskTerminalOutcome(row.terminal_outcome);
+  const metadata = parseTaskMetadataJson(row.metadata_json);
   // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
   const requesterSessionKey =
     scopeKind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
@@ -126,6 +157,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(row.progress_summary ? { progressSummary: row.progress_summary } : {}),
     ...(row.terminal_summary ? { terminalSummary: row.terminal_summary } : {}),
     ...(terminalOutcome ? { terminalOutcome } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -168,6 +200,7 @@ function bindTaskRecordBase(record: TaskRecord): Insertable<TaskRunsTable> {
     progress_summary: record.progressSummary ?? null,
     terminal_summary: record.terminalSummary ?? null,
     terminal_outcome: record.terminalOutcome ?? null,
+    metadata_json: serializeJson(record.metadata),
   };
 }
 
@@ -257,6 +290,7 @@ function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {
           progress_summary: (eb) => eb.ref("excluded.progress_summary"),
           terminal_summary: (eb) => eb.ref("excluded.terminal_summary"),
           terminal_outcome: (eb) => eb.ref("excluded.terminal_outcome"),
+          metadata_json: (eb) => eb.ref("excluded.metadata_json"),
         }),
       ),
   );

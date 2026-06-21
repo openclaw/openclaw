@@ -10,6 +10,7 @@ export {
   getTaskById,
   hasActiveTaskForChildSessionKey,
   listFreshTasksForOwnerKey,
+  listTasksByMetadata,
   listTaskRecords,
   listTasksForFlowId,
   listTasksForOwnerKey,
@@ -28,6 +29,8 @@ export {
   setTaskRegistryDeliveryRuntimeForTests,
   setTaskCleanupAfterById,
   setTaskRunDeliveryStatusByRunId,
+  updateTaskMetadataById,
+  updateTaskMetadataByRunId,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
-export type { TaskRecord } from "./task-registry.types.js";
+export type { TaskMetadata, TaskRecord } from "./task-registry.types.js";

@@ -49,6 +49,8 @@ import type {
   TaskDeliveryStatus,
   TaskEventKind,
   TaskEventRecord,
+  TaskMetadata,
+  TaskMetadataValue,
   TaskNotifyPolicy,
   TaskRecord,
   TaskRegistrySummary,
@@ -191,7 +193,10 @@ function assertParentFlowLinkAllowed(params: {
 }
 
 function cloneTaskRecord(record: TaskRecord): TaskRecord {
-  return { ...record };
+  return {
+    ...record,
+    ...(record.metadata ? { metadata: { ...record.metadata } } : {}),
+  };
 }
 
 function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
@@ -479,6 +484,59 @@ function normalizeTaskTerminalOutcome(
   value: TaskTerminalOutcome | null | undefined,
 ): TaskTerminalOutcome | undefined {
   return value === "succeeded" || value === "blocked" ? value : undefined;
+}
+
+function normalizeTaskMetadataValue(value: unknown): TaskMetadataValue | undefined {
+  if (value === null) {
+    return null;
+  }
+  switch (typeof value) {
+    case "string":
+      return value;
+    case "number":
+      return Number.isFinite(value) ? value : undefined;
+    case "boolean":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeTaskMetadata(
+  metadata: TaskMetadata | null | undefined,
+): TaskMetadata | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  const normalized: TaskMetadata = {};
+  for (const [rawKey, rawValue] of Object.entries(metadata)) {
+    const key = rawKey.trim();
+    if (!key) {
+      continue;
+    }
+    const value = normalizeTaskMetadataValue(rawValue);
+    if (value !== undefined) {
+      normalized[key] = value;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function mergeTaskMetadata(
+  current: TaskMetadata | undefined,
+  patch: TaskMetadata | null | undefined,
+): TaskMetadata | undefined {
+  if (patch === null) {
+    return undefined;
+  }
+  const normalizedPatch = normalizeTaskMetadata(patch);
+  if (!normalizedPatch) {
+    return current ? { ...current } : undefined;
+  }
+  return normalizeTaskMetadata({
+    ...(current ?? {}),
+    ...normalizedPatch,
+  });
 }
 
 function shouldApplyRunScopedStatusUpdate(params: {
@@ -1720,6 +1778,7 @@ export function createTaskRecord(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  metadata?: TaskMetadata;
 }): TaskRecord | null {
   ensureTaskRegistryReady();
   const requesterSessionKey = resolveTaskRequesterSessionKey(params);
@@ -1809,6 +1868,7 @@ export function createTaskRecord(params: {
       status,
       terminalOutcome: params.terminalOutcome,
     }),
+    metadata: normalizeTaskMetadata(params.metadata),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
     record.cleanupAfter = resolveTaskCleanupAfter(record);
@@ -1854,6 +1914,7 @@ function updateTaskStateByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  metadata?: TaskMetadata | null;
   eventSummary?: string | null;
 }) {
   ensureTaskRegistryReady();
@@ -1901,6 +1962,9 @@ function updateTaskStateByRunId(params: {
         status: nextStatus,
         terminalOutcome: params.terminalOutcome,
       });
+    }
+    if (params.metadata !== undefined) {
+      patch.metadata = mergeTaskMetadata(current.metadata, params.metadata);
     }
     const eventSummary =
       normalizeTaskSummary(params.eventSummary) ??
@@ -1961,6 +2025,7 @@ export function markTaskRunningByRunId(params: {
   startedAt?: number;
   lastEventAt?: number;
   progressSummary?: string | null;
+  metadata?: TaskMetadata | null;
   eventSummary?: string | null;
 }) {
   return updateTaskStateByRunId({
@@ -1971,6 +2036,7 @@ export function markTaskRunningByRunId(params: {
     startedAt: params.startedAt,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
+    metadata: params.metadata,
     eventSummary: params.eventSummary,
   });
 }
@@ -1981,6 +2047,7 @@ export function recordTaskProgressByRunId(params: {
   sessionKey?: string;
   lastEventAt?: number;
   progressSummary?: string | null;
+  metadata?: TaskMetadata | null;
   eventSummary?: string | null;
 }) {
   return updateTaskStateByRunId({
@@ -1989,6 +2056,7 @@ export function recordTaskProgressByRunId(params: {
     sessionKey: params.sessionKey,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
+    metadata: params.metadata,
     eventSummary: params.eventSummary,
   });
 }
@@ -2005,6 +2073,7 @@ export function markTaskTerminalByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  metadata?: TaskMetadata | null;
 }) {
   return finalizeTaskRunByRunId(params);
 }
@@ -2021,6 +2090,7 @@ export function finalizeTaskRunByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  metadata?: TaskMetadata | null;
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
@@ -2034,7 +2104,40 @@ export function finalizeTaskRunByRunId(params: {
     progressSummary: params.progressSummary,
     terminalSummary: params.terminalSummary,
     terminalOutcome: params.terminalOutcome,
+    metadata: params.metadata,
   });
+}
+
+export function updateTaskMetadataById(params: {
+  taskId: string;
+  metadata: TaskMetadata | null;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const current = tasks.get(params.taskId.trim());
+  if (!current) {
+    return null;
+  }
+  return updateTask(current.taskId, {
+    metadata: mergeTaskMetadata(current.metadata, params.metadata),
+    lastEventAt: Date.now(),
+  });
+}
+
+export function updateTaskMetadataByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  metadata: TaskMetadata | null;
+}): TaskRecord[] {
+  ensureTaskRegistryReady();
+  return getTasksByRunScope(params)
+    .map((task) =>
+      updateTask(task.taskId, {
+        metadata: mergeTaskMetadata(task.metadata, params.metadata),
+        lastEventAt: Date.now(),
+      }),
+    )
+    .filter((task): task is TaskRecord => Boolean(task));
 }
 
 export function setTaskRunDeliveryStatusByRunId(params: {
@@ -2301,6 +2404,17 @@ export function listTasksForAgentId(agentId: string): TaskRecord[] {
   return snapshotTaskRecords(tasks)
     .filter((task) => task.agentId?.trim() === lookup)
     .toSorted(compareTasksNewestFirst);
+}
+
+export function listTasksByMetadata(metadata: TaskMetadata): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const normalized = normalizeTaskMetadata(metadata);
+  if (!normalized) {
+    return listTaskRecords();
+  }
+  return listTaskRecords().filter((task) =>
+    Object.entries(normalized).every(([key, value]) => task.metadata?.[key] === value),
+  );
 }
 
 export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined {

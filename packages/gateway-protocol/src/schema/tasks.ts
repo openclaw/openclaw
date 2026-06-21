@@ -19,6 +19,13 @@ export const TaskLedgerStatusSchema = Type.Union([
 ]);
 
 const TimestampSchema = Type.Union([Type.String(), Type.Integer({ minimum: 0 })]);
+const TaskMetadataValueSchema = Type.Union([
+  Type.String(),
+  Type.Number(),
+  Type.Boolean(),
+  Type.Null(),
+]);
+const TaskMetadataSchema = Type.Record(Type.String(), TaskMetadataValueSchema);
 
 /** Public task summary returned by task list/get/cancel responses. */
 export const TaskSummarySchema = Type.Object(
@@ -44,6 +51,7 @@ export const TaskSummarySchema = Type.Object(
     progressSummary: Type.Optional(Type.String()),
     terminalSummary: Type.Optional(Type.String()),
     error: Type.Optional(Type.String()),
+    metadata: Type.Optional(TaskMetadataSchema),
   },
   { additionalProperties: false },
 );
@@ -54,6 +62,7 @@ export const TasksListParamsSchema = Type.Object(
     status: Type.Optional(Type.Union([TaskLedgerStatusSchema, Type.Array(TaskLedgerStatusSchema)])),
     agentId: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(NonEmptyString),
+    metadata: Type.Optional(TaskMetadataSchema),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
     cursor: Type.Optional(Type.String()),
   },

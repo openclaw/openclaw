@@ -26,6 +26,8 @@ export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 /** Semantic success detail for required-completion task outcomes. */
 export type TaskTerminalOutcome = "succeeded" | "blocked";
 export type TaskScopeKind = "session" | "system";
+export type TaskMetadataValue = string | number | boolean | null;
+export type TaskMetadata = Record<string, TaskMetadataValue>;
 
 export type TaskStatusCounts = Record<TaskStatus, number>;
 export type TaskRuntimeCounts = Record<TaskRuntime, number>;
@@ -143,6 +145,7 @@ export type TaskRecord = {
   progressSummary?: string;
   terminalSummary?: string;
   terminalOutcome?: TaskTerminalOutcome;
+  metadata?: TaskMetadata;
 };
 
 export type TaskRegistrySnapshot = {

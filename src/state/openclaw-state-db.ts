@@ -816,6 +816,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
   runSqliteImmediateTransactionSync(db, () => {
     const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
+    ensureColumn(db, "task_runs", "metadata_json TEXT");
     if (addedTaskRequesterAgentId) {
       repairLegacyTaskAgentAttribution(db);
     }

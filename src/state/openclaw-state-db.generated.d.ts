@@ -844,6 +844,7 @@ export interface TaskRuns {
   error: string | null;
   label: string | null;
   last_event_at: number | null;
+  metadata_json: string | null;
   notify_policy: string;
   owner_key: string;
   parent_flow_id: string | null;

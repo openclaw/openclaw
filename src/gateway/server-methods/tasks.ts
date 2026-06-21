@@ -91,6 +91,7 @@ function mapTaskSummary(task: TaskRecord): TaskSummary {
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    ...(task.metadata ? { metadata: { ...task.metadata } } : {}),
   };
 }
 
@@ -130,6 +131,16 @@ function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolea
   return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
     (candidate) => parseAgentSessionKey(candidate)?.agentId === normalized,
   );
+}
+
+function taskMatchesMetadata(task: TaskRecord, metadata: TasksListParams["metadata"]): boolean {
+  if (!metadata || Object.keys(metadata).length === 0) {
+    return true;
+  }
+  if (!task.metadata) {
+    return false;
+  }
+  return Object.entries(metadata).every(([key, value]) => task.metadata?.[key] === value);
 }
 
 // Cursor strings are offsets, not opaque tokens; reject malformed values so a
@@ -175,7 +186,11 @@ export const tasksHandlers: GatewayRequestHandlers = {
       if (statusFilter && !statusFilter.has(task.status)) {
         return false;
       }
-      return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey);
+      return (
+        taskMatchesAgent(task, params.agentId) &&
+        taskMatchesSession(task, params.sessionKey) &&
+        taskMatchesMetadata(task, params.metadata)
+      );
     });
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;

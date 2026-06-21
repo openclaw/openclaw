@@ -33,6 +33,7 @@ import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,
+  TaskMetadata,
   TaskNotifyPolicy,
   TaskRecord,
   TaskRegistrySummary,
@@ -153,6 +154,7 @@ export function startTaskRunByRunId(params: {
   startedAt?: number;
   lastEventAt?: number;
   progressSummary?: string | null;
+  metadata?: TaskMetadata | null;
   eventSummary?: string | null;
 }) {
   return markTaskRunningByRunId(params);
@@ -164,6 +166,7 @@ export function recordTaskRunProgressByRunId(params: {
   sessionKey?: string;
   lastEventAt?: number;
   progressSummary?: string | null;
+  metadata?: TaskMetadata | null;
   eventSummary?: string | null;
 }) {
   return recordTaskProgressByRunId(params);
@@ -178,6 +181,7 @@ export function completeTaskRunByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  metadata?: TaskMetadata | null;
 }) {
   return finalizeTaskRunByRunId({
     ...params,
@@ -199,6 +203,7 @@ export function failTaskRunByRunId(params: {
   error?: string;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  metadata?: TaskMetadata | null;
 }) {
   return finalizeTaskRunByRunId({
     ...params,

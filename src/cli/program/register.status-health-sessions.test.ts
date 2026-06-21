@@ -418,12 +418,23 @@ describe("registerStatusHealthSessionsCommands", () => {
   });
 
   it("runs tasks list from the parent command", async () => {
-    await runCli(["tasks", "--json", "--runtime", "acp", "--status", "running"]);
+    await runCli([
+      "tasks",
+      "--json",
+      "--runtime",
+      "acp",
+      "--status",
+      "running",
+      "--metadata",
+      "repo=openclaw/openclaw",
+      "khalilAttentionNeeded=true",
+    ]);
 
     expectCommandOptions(tasksListCommand, {
       json: true,
       runtime: "acp",
       status: "running",
+      metadata: ["repo=openclaw/openclaw", "khalilAttentionNeeded=true"],
     });
   });
 
