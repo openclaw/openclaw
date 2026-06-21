@@ -106,6 +106,56 @@ describe("registerWorkboardCli", () => {
     expect(showOutput).toContain("[redacted]");
   });
 
+  it("hides archived cards by default in list output", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const activeCard = await store.create({ title: "Active card", status: "todo" });
+    const archivedCard = await store.create({ title: "Archived card", status: "done" });
+    await store.update(archivedCard.id, {
+      metadata: { archivedAt: Date.now() },
+    });
+    const program = createProgram(store);
+
+    const listOutput = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list"], { from: "user" });
+    });
+
+    expect(listOutput).toContain("Active card");
+    expect(listOutput).not.toContain("Archived card");
+  });
+
+  it("includes archived cards with --include-archived flag", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const activeCard = await store.create({ title: "Active card", status: "todo" });
+    const archivedCard = await store.create({ title: "Archived card", status: "done" });
+    await store.update(archivedCard.id, {
+      metadata: { archivedAt: Date.now() },
+    });
+    const program = createProgram(store);
+
+    const listOutput = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--include-archived"], { from: "user" });
+    });
+
+    expect(listOutput).toContain("Active card");
+    expect(listOutput).toContain("Archived card");
+  });
+
+  it("filters archived cards in JSON output by default", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const archivedCard = await store.create({ title: "Archived JSON card", status: "done" });
+    await store.update(archivedCard.id, {
+      metadata: { archivedAt: Date.now() },
+    });
+    const program = createProgram(store);
+
+    const listOutput = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--json"], { from: "user" });
+    });
+
+    const parsed = JSON.parse(listOutput);
+    expect(parsed.cards).toHaveLength(0);
+  });
+
   it("does not fall back to local dispatch for explicit gateway targets", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Remote target", status: "ready" });
