@@ -6,6 +6,7 @@ import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
@@ -421,12 +422,13 @@ export function signalNodeStep(
     if (signal === "SIGKILL") {
       args.push("/F");
     }
-    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
     if (!result?.error && result?.status === 0) {
       return;
     }
     if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill("taskkill", [...args, "/F"], { stdio: "ignore" });
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
       if (!forceResult?.error && forceResult?.status === 0) {
         return;
       }

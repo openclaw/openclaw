@@ -106,6 +106,7 @@ export type FollowupRun = {
     senderE164?: string;
     senderIsOwner?: boolean;
     traceAuthorized?: boolean;
+    approvalReviewerDeviceId?: string;
     sessionFile: string;
     workspaceDir: string;
     /** Task working directory for runtime execution. Defaults to workspaceDir. */

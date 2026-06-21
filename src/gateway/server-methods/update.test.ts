@@ -49,7 +49,7 @@ type UpdateRunPayload = {
   ok: boolean;
   result?: { status?: string; reason?: string; mode?: string };
   handoff?: { status?: string; command?: string; message?: string };
-  sentinel?: { path?: string | null };
+  sentinel?: { persisted?: boolean };
   restart?: unknown;
 };
 
@@ -97,7 +97,6 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
     ...(actual as Record<string, unknown>),
     writeRestartSentinel: async (payload: RestartSentinelPayload) => {
       capturedPayload = payload;
-      return "/tmp/sentinel.json";
     },
   };
 });
@@ -462,7 +461,7 @@ describe("update.run restart scheduling", () => {
       pid: 12345,
       command: "openclaw update --yes --timeout 1800",
     });
-    expect(payload?.sentinel?.path).toBe("/tmp/sentinel.json");
+    expect(payload?.sentinel?.persisted).toBe(true);
     const sentinel = readCapturedPayload();
     expect(sentinel.kind).toBe("update");
     expect(sentinel.status).toBe("skipped");

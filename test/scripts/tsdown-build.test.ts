@@ -5,6 +5,7 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
@@ -24,6 +25,10 @@ const NO_MEMORY_LIMIT = {
   cgroupMemoryLimitPaths: [],
   procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
 };
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 async function expectPathMissing(targetPath: string) {
   let statError: unknown;
@@ -671,7 +676,7 @@ describe("runTsdownBuildInvocation", () => {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
       stdio: "ignore",
     });
 
@@ -679,9 +684,14 @@ describe("runTsdownBuildInvocation", () => {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "123", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(childKill).not.toHaveBeenCalled();
   });
 
@@ -697,12 +707,17 @@ describe("runTsdownBuildInvocation", () => {
       runTaskkill,
     });
 
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
       stdio: "ignore",
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "123", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(childKill).not.toHaveBeenCalled();
   });
 

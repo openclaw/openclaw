@@ -23,9 +23,14 @@ import {
   startLocalSut,
   waitForLog,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
 const tempDirs: string[] = [];
 const posixIt = process.platform === "win32" ? it.skip : it;
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-proof-"));
@@ -364,17 +369,27 @@ setInterval(() => {}, 1000);
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
 
     signalCommandTree(child, "SIGKILL", {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
   });
 
@@ -393,12 +408,22 @@ setInterval(() => {}, 1000);
       runTaskkill,
     });
 
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
   });
 

@@ -1,7 +1,7 @@
 // Runs child commands with process-group signal forwarding and Windows shell normalization.
 import { spawn, spawnSync } from "node:child_process";
 import { constants as osConstants } from "node:os";
-import { buildCmdExeCommandLine } from "../windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../windows-cmd-helpers.mjs";
 import { resolveWindowsTaskkillPath } from "./windows-taskkill.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -276,7 +276,7 @@ export function createManagedCommandInvocation({
   if (platform === "win32" && shell && args.length > 0) {
     return {
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(bin, args)],
-      command: comSpec ?? env?.ComSpec ?? env?.COMSPEC ?? process.env.ComSpec ?? "cmd.exe",
+      command: comSpec ?? resolveWindowsCmdExePath(env ?? process.env),
       shell: false,
       windowsVerbatimArguments: true,
     };

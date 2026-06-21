@@ -397,11 +397,7 @@ function parseArgs(argv: string[]): {
       continue;
     }
     if (arg === "--limit") {
-      const value = Number(argv[index + 1]);
-      if (!Number.isInteger(value) || value < 0) {
-        throw new Error("--limit expects a non-negative integer");
-      }
-      limit = value;
+      limit = readNonNegativeIntArg(argv[index + 1]);
       index += 1;
       continue;
     }
@@ -418,6 +414,17 @@ function parseArgs(argv: string[]): {
   }
 
   return { help, includeAllowed, json, limit, repoRoot };
+}
+
+function readNonNegativeIntArg(raw: string | undefined): number {
+  if (!raw || raw.startsWith("--") || !/^\d+$/u.test(raw)) {
+    throw new Error("--limit expects a non-negative integer");
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error("--limit expects a non-negative integer");
+  }
+  return value;
 }
 
 function printHelp(): void {

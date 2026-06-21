@@ -16,7 +16,7 @@ on a model or provider entry; `auto` never picks it. PI remains the default
 embedded runtime.
 
 See [GitHub Copilot agent runtime](../../docs/plugins/copilot.md) for
-configuration, doctor probes, transcript mirroring, compaction, side
+configuration, the doctor contract, transcript mirroring, compaction, side
 questions, replay, and the supported-surface contract.
 See [qa/copilot-capabilities.md](../../qa/copilot-capabilities.md)
 for the SDK capability inventory the harness is pinned to.

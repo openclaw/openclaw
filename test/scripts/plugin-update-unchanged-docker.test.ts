@@ -78,6 +78,7 @@ describe("plugin update unchanged Docker E2E", () => {
     const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
 
     expect(script).toContain("OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS");
+    expect(script).toContain("node scripts/e2e/lib/plugin-update/registry-server.mjs");
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS 180",
     );

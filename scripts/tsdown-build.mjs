@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
   isSourceCheckoutRoot,
@@ -578,7 +579,7 @@ export function resolveTsdownBuildInvocation(params = {}) {
     pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec ?? env.ComSpec,
+    comSpec: params.comSpec,
     platform: params.platform ?? process.platform,
   });
   return {
@@ -598,7 +599,7 @@ function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {
   if (signal === "SIGKILL") {
     args.push("/F");
   }
-  const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
   return !result?.error && result?.status === 0;
 }
 

@@ -843,11 +843,16 @@ describe("createTelegramDraftStream", () => {
 describe("draft stream initial message debounce", () => {
   const createMockApi = () => createMockDraftApi(async () => ({ message_id: 42 }));
 
-  function createDebouncedStream(api: ReturnType<typeof createMockApi>, minInitialChars = 30) {
+  function createDebouncedStream(
+    api: ReturnType<typeof createMockApi>,
+    minInitialChars = 30,
+    minInitialDelayMs?: number,
+  ) {
     return createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
       minInitialChars,
+      minInitialDelayMs,
     });
   }
 
@@ -914,6 +919,36 @@ describe("draft stream initial message debounce", () => {
       await stream.flush();
 
       expect(api.sendMessage).toHaveBeenCalled();
+    });
+
+    it("materializes a short first message after the initial delay", async () => {
+      const api = createMockApi();
+      const stream = createDebouncedStream(api, 30, 5000);
+
+      stream.update("Processing");
+      await stream.flush();
+      expect(api.sendMessage).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expectPreviewSend(api, "Processing");
+    });
+
+    it("cancels a delayed first message when clear() removes the draft", async () => {
+      const api = createMockApi();
+      const stream = createDebouncedStream(api, 30, 5000);
+
+      stream.update("Processing");
+      await stream.flush();
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await stream.clear();
+      expect(vi.getTimerCount()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(api.editMessageText).not.toHaveBeenCalled();
     });
 
     it("works with longer text above threshold", async () => {

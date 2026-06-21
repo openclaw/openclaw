@@ -21,8 +21,13 @@ import {
   redactHomePath,
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
 const tempDirs: string[] = [];
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -476,7 +481,7 @@ describe("script-specific dev tooling hardening", () => {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
       stdio: "ignore",
     });
 
@@ -484,9 +489,14 @@ describe("script-specific dev tooling hardening", () => {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "123", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(childKill).not.toHaveBeenCalled();
   });
 
@@ -502,12 +512,17 @@ describe("script-specific dev tooling hardening", () => {
       runTaskkill,
     });
 
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
       stdio: "ignore",
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "123", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(childKill).not.toHaveBeenCalled();
   });
 

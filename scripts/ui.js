@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -35,7 +35,6 @@ export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
  */
 export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   const platform = params.platform ?? process.platform;
-  const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
   const options = {
     cwd: params.cwd ?? uiDir,
     stdio: "inherit",
@@ -44,6 +43,7 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   };
 
   if (shouldUseCmdExeForCommand(cmd, platform)) {
+    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(options.env);
     return {
       command: comSpec,
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(cmd, args)],
@@ -74,7 +74,7 @@ export function resolvePnpmSpawnCall(pnpmArgs, envOverride, params = {}) {
     pnpmArgs,
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec ?? env.ComSpec,
+    comSpec: params.comSpec,
     platform,
   });
   return {
