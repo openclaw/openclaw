@@ -507,6 +507,7 @@ import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
+import { clearToolActivityRun, notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -1758,6 +1759,22 @@ export async function runEmbeddedAttempt(
       sessionId: params.sessionId,
     });
     effectiveTools = [...toolSearchSchemaProjection.tools];
+    effectiveTools = effectiveTools.map((tool) => {
+      const originalExecute = tool.execute;
+      return {
+        ...tool,
+        execute: (async (...args: Parameters<typeof originalExecute>) => {
+          try {
+            const result = await originalExecute(...args);
+            notifyToolActivity(params.runId);
+            return result;
+          } catch (error) {
+            notifyToolActivity(params.runId);
+            throw error;
+          }
+        }) as typeof originalExecute,
+      };
+    });
     if (toolSearch.compacted && !toolSearch.catalogReused) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
@@ -3136,6 +3153,7 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
+          params.runId,
         );
       }
       let diagnosticModelCallSeq = 0;
@@ -3685,6 +3703,7 @@ export async function runEmbeddedAttempt(
             result,
             timestamp: Date.now(),
           });
+          notifyToolActivity(params.runId);
           return result;
         } catch (error) {
           const message = formatErrorMessage(error);
@@ -3700,6 +3719,7 @@ export async function runEmbeddedAttempt(
             isError: true,
             timestamp: Date.now(),
           });
+          notifyToolActivity(params.runId);
           throw error;
         }
       };
@@ -5777,6 +5797,7 @@ export async function runEmbeddedAttempt(
     }
   } finally {
     removeExternalAbortSignalListener?.();
+    clearToolActivityRun(params.runId);
     if (!sessionCleanupOwnsEmbeddedResources) {
       try {
         await cleanupEmbeddedPrepResourcesAfterEarlyExit();

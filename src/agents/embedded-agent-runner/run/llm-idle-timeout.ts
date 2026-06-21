@@ -13,6 +13,7 @@ import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import type { EmbeddedRunTrigger } from "./params.js";
+import { getLastToolActivityMs, onToolActivity } from "./tool-activity-heartbeat.js";
 
 /**
  * Default idle timeout for LLM streaming responses in milliseconds.
@@ -204,12 +205,23 @@ export function resolveLlmIdleTimeoutMs(params?: {
  * Wraps a stream function with idle timeout detection for both stream creation
  * and iterator progress. Each successful `next()` resets the timer; a timeout
  * aborts the provider request and surfaces the same Error to the caller.
+ *
+ * Tool-activity heartbeat subscriptions are made once at the wrapper level (not
+ * per-call) so that tool completions between LLM turns reset the idle timer for
+ * the next stream. A wrapper-scoped `lastToolActivityMs` timestamp bridges
+ * activity across provider-stream boundaries without relying on per-stream
+ * closure state.
  */
 export function streamWithIdleTimeout(
   baseFn: StreamFn,
   timeoutMs: number,
   onIdleTimeout?: (error: Error) => void,
+  runId?: string,
 ): StreamFn {
+  if (runId) {
+    onToolActivity(runId, () => {});
+  }
+
   return (model, context, options) => {
     const createIdleTimeoutError = () =>
       new Error(`LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`);
@@ -265,6 +277,12 @@ export function streamWithIdleTimeout(
           let idleTimer: NodeJS.Timeout | null = null;
           let waitingForProvider = false;
           let rejectIdleTimeout: ((error: Error) => void) | undefined;
+          let firstArmPending = true;
+          // Pre-stream tool timestamps are consumed after the first bridged wait
+          // so that subsequent provider chunk progress restores a full idle budget.
+          // Without this guard a stale pre-stream timestamp would shorten every
+          // per-chunk wait, eventually aborting a legitimately slow active stream.
+          let streamFirstArmDone = false;
 
           const clearTimer = () => {
             if (idleTimer) {
@@ -277,13 +295,24 @@ export function streamWithIdleTimeout(
             if (!waitingForProvider) {
               return;
             }
+            const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
+            const recentActivity = activeToolMs > 0 && Date.now() - activeToolMs < timeoutMs;
+            const isFirstStreamArm = firstArmPending && !streamFirstArmDone;
+            const effectiveTimeout =
+              isFirstStreamArm && recentActivity
+                ? Math.max(1, timeoutMs - Math.max(0, Date.now() - activeToolMs))
+                : timeoutMs;
+            firstArmPending = false;
+            if (isFirstStreamArm) {
+              streamFirstArmDone = true;
+            }
             idleTimer = setTimeout(() => {
               idleTimer = null;
               const error = createIdleTimeoutError();
               abortStream(error);
               onIdleTimeout?.(error);
               rejectIdleTimeout?.(error);
-            }, timeoutMs);
+            }, effectiveTimeout);
             idleTimer.unref?.();
           };
           const stopWaiting = () => {
@@ -291,10 +320,15 @@ export function streamWithIdleTimeout(
             rejectIdleTimeout = undefined;
             clearTimer();
           };
-          const unsubscribeActivity = onLlmRequestActivity(streamAbortController.signal, armTimer);
+          const unsubscribeLlmActivity = onLlmRequestActivity(
+            streamAbortController.signal,
+            armTimer,
+          );
+          const unsubscribeStreamToolActivity = runId ? onToolActivity(runId, armTimer) : undefined;
           const cleanupIterator = () => {
             stopWaiting();
-            unsubscribeActivity();
+            unsubscribeLlmActivity();
+            unsubscribeStreamToolActivity?.();
             cleanupSourceSignal();
           };
 
@@ -305,6 +339,7 @@ export function streamWithIdleTimeout(
               try {
                 const timeoutPromise = new Promise<never>((_, reject) => {
                   rejectIdleTimeout = reject;
+                  firstArmPending = true;
                   armTimer();
                 });
                 const result = await Promise.race([streamIterator.next(), timeoutPromise]);
