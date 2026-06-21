@@ -60,6 +60,7 @@ describe("parseReleaseVersion", () => {
       patch: 10,
       alphaNumber: undefined,
       betaNumber: undefined,
+      releaseClass: "daily",
     });
   });
 
@@ -73,6 +74,7 @@ describe("parseReleaseVersion", () => {
       patch: 10,
       alphaNumber: undefined,
       betaNumber: 2,
+      releaseClass: "beta",
     });
   });
 
@@ -86,6 +88,7 @@ describe("parseReleaseVersion", () => {
       patch: 10,
       alphaNumber: 2,
       betaNumber: undefined,
+      releaseClass: "alpha",
     });
   });
 
@@ -100,6 +103,7 @@ describe("parseReleaseVersion", () => {
       alphaNumber: undefined,
       betaNumber: undefined,
       correctionNumber: 1,
+      releaseClass: "historical-correction",
     });
   });
 
@@ -298,6 +302,10 @@ describe("compareReleaseVersions", () => {
 
   it("orders stable correction releases after the base stable release", () => {
     expect(compareReleaseVersions("2026.3.29-2", "2026.3.29")).toBe(1);
+  });
+
+  it("orders June stable patches before the next daily month", () => {
+    expect(compareReleaseVersions("2026.6.34", "2026.7.1")).toBe(-1);
   });
 
   it("returns null when either version is not release-shaped", () => {
