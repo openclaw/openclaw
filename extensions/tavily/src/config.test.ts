@@ -45,7 +45,7 @@ describe("resolveTavilyApiKey", () => {
       );
       return {
         ...actual,
-        resolveSecretInputString: (params: { value: unknown; path: string; mode: string }) => {
+        resolveSecretInputString: (params: Parameters<typeof actual.resolveSecretInputString>[0]) => {
           if (params.mode === "inspect") {
             // Mimic the runtime returning "configured_unavailable" for an
             // env SecretRef that targets TAVILY_API_KEY.
