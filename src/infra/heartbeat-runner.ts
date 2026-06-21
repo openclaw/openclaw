@@ -77,9 +77,12 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  applySessionEntryLifecycleMutation,
+  type SessionEntryLifecycleRemoval,
+} from "../config/sessions/session-accessor.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import {
-  archiveRemovedSessionTranscripts,
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "../config/sessions/store.js";
@@ -1644,49 +1647,52 @@ export async function runHeartbeatOnce(opts: {
       });
       return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
     }
-    const removedSessionFiles = new Map<string, string | undefined>();
-    let referencedSessionIds = new Set<string>();
-    await updateSessionStore(isolatedStorePath, (store) => {
-      const cronSession = resolveCronSession({
-        cfg,
-        sessionKey: isolatedSessionKey,
-        agentId,
-        nowMs: startedAt,
-        forceNew: true,
-        store,
-      });
-      if (staleIsolatedSessionKey) {
-        const staleEntry = store[staleIsolatedSessionKey];
-        if (staleEntry?.sessionId) {
-          removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
-        }
-        delete store[staleIsolatedSessionKey];
-      }
-      store[isolatedSessionKey] = {
-        ...cronSession.sessionEntry,
-        heartbeatIsolatedBaseSessionKey: isolatedBaseSessionKey,
-      };
-      referencedSessionIds = new Set(
-        Object.values(store)
-          .map((sessionEntry) => sessionEntry?.sessionId)
-          .filter((sessionId): sessionId is string => Boolean(sessionId)),
-      );
+    const isolatedStore = loadSessionStore(isolatedStorePath, { skipCache: true });
+    const staleIsolatedEntry = staleIsolatedSessionKey
+      ? isolatedStore[staleIsolatedSessionKey]
+      : undefined;
+    const removals: SessionEntryLifecycleRemoval[] = staleIsolatedSessionKey
+      ? [
+          {
+            sessionKey: staleIsolatedSessionKey,
+            ...(staleIsolatedEntry ? { expectedEntry: staleIsolatedEntry } : {}),
+            ...(staleIsolatedEntry?.sessionId
+              ? { expectedSessionId: staleIsolatedEntry.sessionId }
+              : {}),
+            archiveRemovedTranscript: true,
+          },
+        ]
+      : [];
+    const lifecycleResult = await applySessionEntryLifecycleMutation({
+      storePath: isolatedStorePath,
+      removals,
+      upserts: [
+        {
+          sessionKey: isolatedSessionKey,
+          buildEntry: ({ store }) => {
+            const cronSession = resolveCronSession({
+              cfg,
+              sessionKey: isolatedSessionKey,
+              agentId,
+              nowMs: startedAt,
+              forceNew: true,
+              store,
+            });
+            return {
+              ...cronSession.sessionEntry,
+              heartbeatIsolatedBaseSessionKey: isolatedBaseSessionKey,
+            };
+          },
+        },
+      ],
+      restrictArchivedTranscriptsToStoreDir: true,
+      captureArtifactCleanupError: true,
     });
-    if (removedSessionFiles.size > 0) {
-      try {
-        await archiveRemovedSessionTranscripts({
-          removedSessionFiles,
-          referencedSessionIds,
-          storePath: isolatedStorePath,
-          reason: "deleted",
-          restrictToStoreDir: true,
-        });
-      } catch (err) {
-        log.warn("heartbeat: failed to archive stale isolated session transcript", {
-          err: String(err),
-          sessionKey: staleIsolatedSessionKey,
-        });
-      }
+    if (lifecycleResult.artifactCleanupError) {
+      log.warn("heartbeat: failed to archive stale isolated session transcript", {
+        err: formatErrorMessage(lifecycleResult.artifactCleanupError),
+        sessionKey: staleIsolatedSessionKey,
+      });
     }
     runSessionKey = isolatedSessionKey;
     outboundPolicySessionKey = isolatedBaseSessionKey;

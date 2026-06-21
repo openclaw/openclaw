@@ -1343,6 +1343,7 @@ describe("createTelegramBot", () => {
     replySpy.mockClear();
     editMessageTextSpy.mockClear();
 
+    const storePath = `/tmp/openclaw-telegram-model-display-names-${process.pid}-${Date.now()}.json`;
     const buildModelsProviderDataMock =
       telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
     buildModelsProviderDataMock.mockResolvedValueOnce({
@@ -1367,52 +1368,60 @@ describe("createTelegramBot", () => {
           allowFrom: ["*"],
         },
       },
+      session: {
+        store: storePath,
+      },
     } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-    if (!callbackHandler) {
-      throw new Error("Expected Telegram callback_query handler");
-    }
-
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-model-display-names-1",
-        data: "mdl_list_openai_1",
-        from: { id: 9, first_name: "Ada", username: "ada_bot" },
-        message: {
-          chat: { id: 1234, type: "private" },
-          date: 1736380800,
-          message_id: 23,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const params = firstEditMessageTextArg(3);
-    const inlineKeyboard = (
-      params as {
-        reply_markup?: {
-          inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
-        };
+    await rm(storePath, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
       }
-    ).reply_markup?.inline_keyboard;
 
-    expect(inlineKeyboard).toStrictEqual([
-      [{ text: "GPT 4.1 Bridge", callback_data: "mdl_sel_openai/gpt-4.1" }],
-      [{ text: "GPT Five Bridge ✓", callback_data: "mdl_sel_openai/gpt-5" }],
-      [{ text: "<< Back", callback_data: "mdl_back" }],
-    ]);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-display-names-1",
+          data: "mdl_list_openai_1",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 23,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      const params = firstEditMessageTextArg(3);
+      const inlineKeyboard = (
+        params as {
+          reply_markup?: {
+            inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+          };
+        }
+      ).reply_markup?.inline_keyboard;
+
+      expect(inlineKeyboard).toStrictEqual([
+        [{ text: "GPT 4.1 Bridge", callback_data: "mdl_sel_openai/gpt-4.1" }],
+        [{ text: "GPT Five Bridge ✓", callback_data: "mdl_sel_openai/gpt-5" }],
+        [{ text: "<< Back", callback_data: "mdl_back" }],
+      ]);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
   });
 
   it("resets overrides when selecting the configured default model", async () => {

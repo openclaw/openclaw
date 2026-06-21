@@ -83,7 +83,7 @@ export type AgentHarnessDeliveryDefaults = {
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
-export type AgentHarnessRunCapability = {
+type AgentHarnessRunCapability = {
   id: string;
   label: string;
   pluginId?: string;
@@ -98,22 +98,22 @@ export type AgentHarnessRunCapability = {
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
 };
 
-export type AgentHarnessSideQuestionCapability = {
+type AgentHarnessSideQuestionCapability = {
   runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
 };
 
-export type AgentHarnessClassificationCapability = {
+type AgentHarnessClassificationCapability = {
   classify?(
     result: AgentHarnessAttemptResult,
     ctx: AgentHarnessAttemptParams,
   ): AgentHarnessResultClassification | undefined;
 };
 
-export type AgentHarnessCompactionCapability = {
+type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
 };
 
-export type AgentHarnessSessionLifecycleCapability = {
+type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
   dispose?(): Promise<void> | void;
 };

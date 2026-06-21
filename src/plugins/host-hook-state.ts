@@ -398,26 +398,6 @@ export async function drainPluginNextTurnInjectionContext(params: {
   };
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Session-extension JSON reads are caller-typed by namespace.
-export function getPluginSessionExtensionSync<T extends PluginJsonValue = PluginJsonValue>(params: {
-  cfg: OpenClawConfig;
-  pluginId: string;
-  sessionKey?: string;
-  namespace: string;
-}): T | undefined {
-  const pluginId = params.pluginId.trim();
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  const namespace = normalizeNamespace(params.namespace);
-  if (!pluginId || !sessionKey || !namespace) {
-    return undefined;
-  }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
-  const value = loaded.entry?.pluginExtensions?.[pluginId]?.[namespace] as
-    | PluginJsonValue
-    | undefined;
-  return value as T | undefined;
-}
-
 export function getPluginSessionExtensionStateSync(params: {
   cfg: OpenClawConfig;
   pluginId: string;

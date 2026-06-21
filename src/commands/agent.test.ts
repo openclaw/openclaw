@@ -93,12 +93,14 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
     emitAcpLifecycleEnd: vi.fn(),
     emitAcpLifecycleError: vi.fn(),
     emitAcpLifecycleStart: vi.fn(),
-    persistAcpTurnTranscript: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
-    persistCliTurnTranscript: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
+    persistAcpTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
+      kind: "persisted",
+      sessionEntry: params.sessionEntry,
+    })),
+    persistCliTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
+      kind: "persisted",
+      sessionEntry: params.sessionEntry,
+    })),
     runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
       const opts = params.opts as Record<string, unknown>;
       const runContext = params.runContext as Record<string, unknown>;

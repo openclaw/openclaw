@@ -30,10 +30,10 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /** Coarse session category used by session list/status tools. */
-export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
 /** Delivery target metadata attached to session rows. */
-export type SessionListDeliveryContext = {
+type SessionListDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;

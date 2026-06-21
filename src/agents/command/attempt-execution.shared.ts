@@ -15,7 +15,7 @@ import {
 import type { AgentCommandOpts } from "./types.js";
 
 /** Parameters for merging and persisting a session entry update. */
-export type PersistSessionEntryParams = {
+type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath: string;

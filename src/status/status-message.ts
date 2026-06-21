@@ -40,17 +40,19 @@ import type {
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
+  resolveFreshSessionTotalTokens,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
-  resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -62,14 +64,13 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
-  formatTokenCount as formatTokenCountShared,
+  formatTokenCount,
   formatUsd,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { formatFastModeLabel } from "./status-labels.js";
 
 /**
  * RFC §6.3 Continuation row formatter for /status.
@@ -124,8 +125,6 @@ type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults
 type AgentConfig = Partial<AgentDefaults> & {
   model?: AgentDefaults["model"] | string;
 };
-
-export const formatTokenCount = formatTokenCountShared;
 
 type QueueStatus = {
   mode?: string;
@@ -380,8 +379,10 @@ const readUsageFromSessionLog = (
     const snapshot = readRecentSessionUsageFromTranscript(
       {
         agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
-        sessionFile: sessionEntry?.sessionFile,
+        sessionEntry,
+        sessionFile: logPath,
         sessionId,
+        sessionKey,
         storePath,
       },
       256 * 1024,
@@ -956,8 +957,18 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
 
   const updatedAt = entry?.updatedAt;
+  const sessionStartedAt = resolveSessionLifecycleTimestamps({
+    entry,
+    agentId: args.agentId,
+    storePath: args.sessionStorePath,
+  }).sessionStartedAt;
+  const sessionDuration =
+    typeof sessionStartedAt === "number"
+      ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
+      : undefined;
   const sessionLine = [
     `Session: ${args.sessionKey ?? "unknown"}`,
+    sessionDuration ? `duration ${sessionDuration}` : null,
     typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)
@@ -1014,7 +1025,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Execution: ${execution.label}`,
     `Runtime: ${agentRuntimeLabel}`,
     `Think: ${thinkLevel}`,
-    formatFastModeLabel(fastMode),
+    `Fast: ${fastMode ? "on" : "off"}`,
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,

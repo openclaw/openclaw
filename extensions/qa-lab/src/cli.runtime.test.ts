@@ -75,6 +75,7 @@ vi.mock("./model-selection.runtime.js", () => ({
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import {
   runQaLabSelfCheckCommand,
+  runQaCredentialsAddCommand,
   runQaDockerBuildImageCommand,
   runQaDockerScaffoldCommand,
   runQaDockerUpCommand,
@@ -472,11 +473,11 @@ describe("qa cli runtime", () => {
       expect(evidence.scorecard).not.toHaveProperty("kind");
       expect(evidence.scorecard).not.toHaveProperty("taxonomy");
       expect(evidence.scorecard).not.toHaveProperty("profile");
-      expect(evidence.scorecard?.features?.fulfilled).toBe(1);
+      expect(evidence.scorecard?.features?.fulfilled).toBe(0);
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
         id: "agent-runtime-and-provider-execution.agent-turn-execution",
         features: {
-          fulfilled: 1,
+          fulfilled: 0,
         },
       });
       expect(evidence.entries?.[0]).not.toHaveProperty("execution");
@@ -2186,6 +2187,30 @@ describe("qa cli runtime", () => {
 
     expect(stop).toHaveBeenCalledOnce();
     expectWriteContains(stdoutWrite, "QA self-check report: /tmp/failed-report.md");
+  });
+
+  it("rejects oversized credential payload files before broker setup", async () => {
+    const previousMaxBytes = process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES;
+    const payloadPath = path.join(suiteArtifactsDir, "oversized-credential.json");
+    await fs.writeFile(payloadPath, JSON.stringify({ blob: "x".repeat(64) }), "utf8");
+    process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = "32";
+
+    try {
+      await expect(
+        runQaCredentialsAddCommand({
+          kind: "telegram",
+          payloadFile: payloadPath,
+        }),
+      ).rejects.toThrow(
+        "Payload file exceeds OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES (32 bytes).",
+      );
+    } finally {
+      if (previousMaxBytes === undefined) {
+        delete process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES;
+      } else {
+        process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = previousMaxBytes;
+      }
+    }
   });
 
   it("resolves docker scaffold paths relative to the explicit repo root", async () => {

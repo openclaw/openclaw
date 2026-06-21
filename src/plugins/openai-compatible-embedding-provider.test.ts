@@ -1,6 +1,6 @@
 // Covers OpenAI-compatible embedding provider plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
@@ -113,6 +113,53 @@ async function startEmbeddingServer(params?: {
   return {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requests,
+  };
+}
+
+async function startHangingErrorEmbeddingServer(): Promise<{
+  baseUrl: string;
+  closed: Promise<void>;
+}> {
+  const sockets = new Set<Socket>();
+  let resolveClosed: () => void = () => undefined;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      await readJsonBody(req);
+      res.on("close", resolveClosed);
+      res.writeHead(502, { "content-type": "text/plain" });
+      res.write("x".repeat(12_000));
+    })();
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  });
+
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    closed,
   };
 }
 
@@ -253,6 +300,42 @@ describe("openai-compatible generic embedding provider", () => {
       input: ["a", "abcd"],
       dimensions: 1024,
     });
+  });
+
+  it("bounds and cancels non-ok embedding error bodies", async () => {
+    const server = await startHangingErrorEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    const outcome = await Promise.race([
+      provider.embed("hello").then(
+        () => ({ type: "resolved" as const }),
+        (error: unknown) => ({ type: "rejected" as const, error }),
+      ),
+      new Promise<{ type: "timed-out" }>((resolve) => {
+        setTimeout(() => resolve({ type: "timed-out" }), 1_000);
+      }),
+    ]);
+
+    if (outcome.type !== "rejected") {
+      throw new Error(`expected embedding request to reject, got ${outcome.type}`);
+    }
+    expect(outcome.error).toBeInstanceOf(Error);
+    expect((outcome.error as Error).message).toBe(
+      `openai-compatible embeddings failed: HTTP 502: ${"x".repeat(1_000)}... [truncated]`,
+    );
+    await expect(
+      Promise.race([
+        server.closed.then(() => "closed" as const),
+        new Promise<"open">((resolve) => {
+          setTimeout(() => resolve("open"), 1_000);
+        }),
+      ]),
+    ).resolves.toBe("closed");
   });
 
   it("resolves env SecretRef API keys on the memory search secret surface", async () => {

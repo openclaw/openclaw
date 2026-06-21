@@ -57,6 +57,7 @@ import {
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
+  formatMattermostDirectMessageDropLog,
   normalizeMattermostAllowEntry,
   resolveMattermostMonitorInboundAccess,
 } from "./monitor-auth.js";
@@ -292,20 +293,6 @@ export function canFinalizeMattermostPreviewInPlace(params: {
       replyToId: params.replyToId,
     }) === params.previewRootId?.trim()
   );
-}
-
-export function shouldClearMattermostDraftPreview(params: {
-  finalizedViaPreviewPost: boolean;
-  finalReplyDelivered: boolean;
-}): boolean {
-  return params.finalReplyDelivered && !params.finalizedViaPreviewPost;
-}
-
-export function shouldFinalizeMattermostPreviewAfterDispatch(params: {
-  finalCount: number;
-  canFinalizeInPlace: boolean;
-}): boolean {
-  return params.finalCount === 1 && params.canFinalizeInPlace;
 }
 
 type MattermostDraftPreviewState = {
@@ -1391,7 +1378,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
               return;
             }
-            logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
+            logVerboseMessage(
+              formatMattermostDirectMessageDropLog({
+                senderId,
+                dmPolicy,
+                reasonCode: accessDecision.senderAccess.reasonCode,
+              }),
+            );
             return;
           }
           if (accessDecision.ingress.reasonCode === "group_policy_disabled") {

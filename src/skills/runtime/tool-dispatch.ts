@@ -13,6 +13,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagent-capabilities.js";
+import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -240,6 +241,11 @@ export function resolveSkillDispatchTools(params: {
       { policy: subagentPolicy, label: "subagent tools.allow" },
       { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
+    declaredToolAllowlist: buildDeclaredToolAllowlistContext({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      toolDenylist: explicitDenylist,
+    }),
   });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);

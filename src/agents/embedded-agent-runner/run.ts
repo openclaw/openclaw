@@ -239,6 +239,7 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
+const EMBEDDED_RUN_LANE_HEARTBEAT_MS = EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS / 2;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
@@ -639,6 +640,8 @@ async function runEmbeddedAgentInternal(
   };
   const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  const laneTaskAbortController = new AbortController();
+  const laneTaskReleaseController = new AbortController();
   let laneTaskProgressAtMs = Date.now();
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
@@ -663,6 +666,9 @@ async function runEmbeddedAgentInternal(
       {
         ...opts,
         taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+        taskTimeoutAbortSignal: laneTaskAbortController.signal,
+        taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+        taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
       },
       laneTaskTimeoutMs,
     );
@@ -1489,6 +1495,7 @@ async function runEmbeddedAgentInternal(
         const verdict = postCompactionGuard.observe(observation);
         if (verdict.shouldAbort) {
           postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+          laneTaskAbortController.abort(postCompactionAbortError);
           postCompactionAbortController?.abort(postCompactionAbortError);
         }
       };
@@ -1855,6 +1862,7 @@ async function runEmbeddedAgentInternal(
           postCompactionAbortController = attemptAbortController;
           const parentAbortSignal = params.abortSignal;
           const relayParentAbort = (): void => {
+            laneTaskAbortController.abort(parentAbortSignal?.reason);
             attemptAbortController.abort(parentAbortSignal?.reason);
           };
           if (parentAbortSignal?.aborted) {
@@ -1862,6 +1870,48 @@ async function runEmbeddedAgentInternal(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+          // Native attempts start the heartbeat only after their own timeout
+          // watchdog is armed, keeping preflight inside the requested deadline.
+          let progressInterval: ReturnType<typeof setInterval> | undefined;
+          const stopLaneProgressHeartbeat = () => {
+            if (progressInterval) {
+              clearInterval(progressInterval);
+              progressInterval = undefined;
+            }
+            attemptAbortController.signal.removeEventListener("abort", stopLaneProgressHeartbeat);
+          };
+          const startLaneProgressHeartbeat = () => {
+            if (progressInterval || attemptAbortController.signal.aborted) {
+              return;
+            }
+            progressInterval = setInterval(
+              () => noteLaneTaskProgress(),
+              EMBEDDED_RUN_LANE_HEARTBEAT_MS,
+            );
+            progressInterval.unref?.();
+            attemptAbortController.signal.addEventListener("abort", stopLaneProgressHeartbeat, {
+              once: true,
+            });
+          };
+          // Timeout recovery can continue after an attempt returns, but a native
+          // transport that ignores its timeout releases the lane after one grace.
+          let timeoutReleaseTimer: ReturnType<typeof setTimeout> | undefined;
+          const clearAttemptTimeoutRelease = () => {
+            if (timeoutReleaseTimer) {
+              clearTimeout(timeoutReleaseTimer);
+              timeoutReleaseTimer = undefined;
+            }
+          };
+          const armAttemptTimeoutRelease = (reason: Error) => {
+            if (timeoutReleaseTimer) {
+              return;
+            }
+            timeoutReleaseTimer = setTimeout(
+              () => laneTaskReleaseController.abort(reason),
+              EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+            );
+            timeoutReleaseTimer.unref?.();
+          };
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -1978,6 +2028,16 @@ async function runEmbeddedAgentInternal(
             runId: params.runId,
             lifecycleGeneration,
             abortSignal: attemptAbortController.signal,
+            onAttemptTimeoutArmed: pluginHarnessOwnsTransport
+              ? undefined
+              : startLaneProgressHeartbeat,
+            onAttemptTimeout: pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
+            onAttemptAbort: pluginHarnessOwnsTransport
+              ? undefined
+              : () => {
+                  stopLaneProgressHeartbeat();
+                  laneTaskAbortController.abort();
+                },
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -2033,6 +2093,8 @@ async function runEmbeddedAgentInternal(
               throw postCompactionAbortError ?? err;
             })
             .finally(() => {
+              clearAttemptTimeoutRelease();
+              stopLaneProgressHeartbeat();
               parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
               if (postCompactionAbortController === attemptAbortController) {
                 postCompactionAbortController = undefined;

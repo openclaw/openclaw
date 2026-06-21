@@ -1500,18 +1500,6 @@ async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
-      if (
-        params.expectsCompletionMessage &&
-        expectedMediaUrls.length === 0 &&
-        !requiresMessageToolDelivery
-      ) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "completion_handoff_pending",
-          error: "completion agent handoff is still pending",
-        };
-      }
       return {
         delivered: true,
         path: "direct",

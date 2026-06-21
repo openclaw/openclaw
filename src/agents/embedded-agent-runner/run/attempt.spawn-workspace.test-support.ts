@@ -824,6 +824,13 @@ vi.mock("../utils.js", () => ({
 }));
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
+  hasActiveCompactionRetryWork: ({
+    isCompactionInFlight,
+    isSessionStreaming,
+  }: {
+    isCompactionInFlight: boolean;
+    isSessionStreaming: boolean;
+  }) => isCompactionInFlight || isSessionStreaming,
   waitForCompactionRetryWithAggregateTimeout: async () => ({
     timedOut: false,
     aborted: false,

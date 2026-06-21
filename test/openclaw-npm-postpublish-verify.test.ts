@@ -1,8 +1,9 @@
+import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -11,12 +12,43 @@ import {
   collectInstalledPluginSdkZodArtifactErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
+  fetchRegistryJson,
   normalizeInstalledBinaryVersion,
+  openClawNpmPostpublishVerifyUsage,
+  parseOpenClawNpmPostpublishVerifyArgs,
   resolveInstalledBinaryCommandInvocation,
   resolveInstalledBinaryPath,
+  retryNpmRegistryProvenanceRead,
+  verifyNpmProvenanceAttestation,
+  verifyNpmRegistrySignatures,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
+
+describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
+  it("supports help and package-manager separators", () => {
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["--help"])).toEqual({
+      help: true,
+      version: "",
+    });
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["--", "2026.3.23"])).toEqual({
+      help: false,
+      version: "2026.3.23",
+    });
+  });
+
+  it("rejects missing, option-like, and extra arguments before verification", () => {
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs([])).toThrow(
+      openClawNpmPostpublishVerifyUsage(),
+    );
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["--tag"])).toThrow(
+      "Unknown openclaw npm postpublish verifier option: --tag",
+    );
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", "extra"])).toThrow(
+      "Unexpected openclaw npm postpublish verifier argument: extra",
+    );
+  });
+});
 
 function writeDistJavaScriptFiles(packageRoot: string, count: number): void {
   const distDir = join(packageRoot, "dist");
@@ -50,6 +82,267 @@ describe("buildPublishedInstallScenarios", () => {
         expectedVersion: "2026.3.23-2",
       },
     ]);
+  });
+});
+
+describe("npm registry provenance verification", () => {
+  const packageName = "openclaw";
+  const version = "2026.3.23";
+  const integrity = `sha512-${Buffer.from("registry integrity", "utf8").toString("base64")}`;
+  const provenancePayload = {
+    subject: [
+      {
+        name: `pkg:npm/${packageName}@${version}`,
+        digest: {
+          sha512: Buffer.from(integrity.slice("sha512-".length), "base64").toString("hex"),
+        },
+      },
+    ],
+    predicate: {
+      buildDefinition: {
+        externalParameters: {
+          workflow: {
+            repository: "https://github.com/openclaw/openclaw",
+            path: ".github/workflows/openclaw-npm-release.yml",
+            ref: "refs/heads/release/2026.3.23",
+          },
+        },
+      },
+      runDetails: {
+        builder: {
+          id: "https://github.com/actions/runner/github-hosted",
+        },
+      },
+    },
+  };
+
+  it("fetches npm registry JSON with bounded response handling", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init).toMatchObject({
+        headers: {
+          Accept: "application/json",
+        },
+        redirect: "error",
+        signal: expect.any(AbortSignal),
+      });
+      return new Response(JSON.stringify({ ok: true }));
+    });
+
+    await expect(
+      fetchRegistryJson("https://registry.example/openclaw", {
+        fetchImpl,
+        timeoutMs: 1234,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("bounds oversized npm registry response bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response("x".repeat(65), {
+        headers: { "content-length": "65" },
+      });
+    });
+
+    await expect(
+      fetchRegistryJson("https://registry.example/openclaw", {
+        fetchImpl,
+        maxBodyBytes: 64,
+        timeoutMs: 1234,
+      }),
+    ).rejects.toThrow(
+      "npm registry https://registry.example/openclaw response body exceeded 64 bytes",
+    );
+  });
+
+  it("keeps npm registry timeouts active while reading response bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }));
+    });
+
+    await expect(
+      fetchRegistryJson("https://registry.example/openclaw", {
+        fetchImpl,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow(
+      "npm registry request timed out after 5ms: https://registry.example/openclaw",
+    );
+  });
+
+  it("verifies an npm registry signature against the matching public key", () => {
+    const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const payload = `${packageName}@${version}:${integrity}`;
+    const signature = sign("sha256", Buffer.from(payload, "utf8"), keys.privateKey).toString(
+      "base64",
+    );
+
+    expect(() =>
+      verifyNpmRegistrySignatures({
+        packageName,
+        version,
+        integrity,
+        signatures: [{ keyid: "test-key", sig: signature }],
+        keys: [
+          {
+            keyid: "test-key",
+            key: keys.publicKey.export({ format: "der", type: "spki" }).toString("base64"),
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("requires a trusted GitHub release identity for the exact SLSA provenance attestation", async () => {
+    let verificationPolicy:
+      | {
+          certificateIdentityURI: string;
+          certificateIssuer: string;
+        }
+      | undefined;
+
+    await expect(
+      verifyNpmProvenanceAttestation({
+        packageName,
+        version,
+        integrity,
+        attestations: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              dsseEnvelope: {
+                payload: Buffer.from(JSON.stringify(provenancePayload), "utf8").toString("base64"),
+              },
+            },
+          },
+        ],
+        verifyBundle: async (_bundle, policy) => {
+          verificationPolicy = policy;
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(verificationPolicy).toEqual({
+      certificateIssuer: "https://token.actions.githubusercontent.com",
+      certificateIdentityURI:
+        "https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@refs/heads/release/2026.3.23",
+    });
+
+    await expect(
+      verifyNpmProvenanceAttestation({
+        packageName,
+        version,
+        integrity,
+        attestations: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              dsseEnvelope: {
+                payload: Buffer.from(
+                  JSON.stringify({
+                    ...provenancePayload,
+                    subject: [{ name: "pkg:npm/openclaw@2026.3.24", digest: {} }],
+                  }),
+                  "utf8",
+                ).toString("base64"),
+              },
+            },
+          },
+        ],
+        verifyBundle: async () => undefined,
+      }),
+    ).rejects.toThrow("does not match");
+  });
+
+  it("rejects matching provenance from an untrusted source before Sigstore verification", async () => {
+    let verificationCalls = 0;
+
+    await expect(
+      verifyNpmProvenanceAttestation({
+        packageName,
+        version,
+        integrity,
+        attestations: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              dsseEnvelope: {
+                payload: Buffer.from(
+                  JSON.stringify({
+                    ...provenancePayload,
+                    predicate: {
+                      ...provenancePayload.predicate,
+                      buildDefinition: {
+                        externalParameters: {
+                          workflow: {
+                            ...provenancePayload.predicate.buildDefinition.externalParameters
+                              .workflow,
+                            ref: "refs/heads/feature/untrusted",
+                          },
+                        },
+                      },
+                    },
+                  }),
+                  "utf8",
+                ).toString("base64"),
+              },
+            },
+          },
+        ],
+        verifyBundle: async () => {
+          verificationCalls += 1;
+        },
+      }),
+    ).rejects.toThrow("does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow");
+    expect(verificationCalls).toBe(0);
+  });
+
+  it("rejects a matching provenance payload when Sigstore cannot verify its bundle", async () => {
+    await expect(
+      verifyNpmProvenanceAttestation({
+        packageName,
+        version,
+        integrity,
+        attestations: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              dsseEnvelope: {
+                payload: Buffer.from(JSON.stringify(provenancePayload), "utf8").toString("base64"),
+              },
+            },
+          },
+        ],
+        verifyBundle: async () => {
+          throw new Error("forged bundle");
+        },
+      }),
+    ).rejects.toThrow("failed Sigstore verification");
+  });
+
+  it("retries incomplete registry metadata while npm publish propagates", async () => {
+    let attempts = 0;
+    const delays: number[] = [];
+
+    await expect(
+      retryNpmRegistryProvenanceRead(
+        async () => {
+          attempts += 1;
+          if (attempts < 3) {
+            throw new Error(
+              "npm registry provenance metadata is incomplete for openclaw@2026.3.23.",
+            );
+          }
+          return "verified";
+        },
+        {
+          attempts: 3,
+          delay: async (delayMs) => {
+            delays.push(delayMs);
+          },
+        },
+      ),
+    ).resolves.toBe("verified");
+    expect(attempts).toBe(3);
+    expect(delays).toEqual([1000, 2000]);
   });
 });
 

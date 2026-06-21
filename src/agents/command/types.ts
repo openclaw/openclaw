@@ -30,7 +30,7 @@ export type AgentCommandResultMetaOverrides = {
 };
 
 /** ACP turn source markers accepted by trusted command callsites. */
-export type AcpTurnSource = "manual_spawn";
+type AcpTurnSource = "manual_spawn";
 
 /** Channel/account/thread context carried into an agent run. */
 export type AgentRunContext = {

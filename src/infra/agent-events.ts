@@ -54,15 +54,6 @@ export type AgentItemEventData = {
   approvalSlug?: string;
 };
 
-/** Plan update payload emitted when an agent publishes or revises its task list. */
-export type AgentPlanEventData = {
-  phase: "update";
-  title: string;
-  explanation?: string;
-  steps?: string[];
-  source?: string;
-};
-
 /** Approval event phase for request/resolution transitions. */
 export type AgentApprovalEventPhase = "requested" | "resolved";
 /** Approval status after routing, user action, or delivery failure. */
@@ -490,20 +481,6 @@ export function emitAgentItemEvent(params: {
   emitAgentEvent({
     runId: params.runId,
     stream: "item",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-/** Emits a plan update event on the shared agent event bus. */
-export function emitAgentPlanEvent(params: {
-  runId: string;
-  data: AgentPlanEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "plan",
     data: params.data as unknown as Record<string, unknown>,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
   });

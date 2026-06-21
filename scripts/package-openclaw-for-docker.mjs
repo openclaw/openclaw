@@ -14,6 +14,8 @@ const DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PACKAGE_TARBALL_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
+const POST_FORCE_KILL_WAIT_MS = 1_000;
 const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
@@ -208,6 +210,18 @@ function run(command, args, cwd, options = {}) {
         return error?.code === "EPERM";
       }
     };
+    const waitForProcessGroupExit = async (timeoutMs) => {
+      const deadlineAt = Date.now() + timeoutMs;
+      while (Date.now() < deadlineAt) {
+        if (!processGroupAlive()) {
+          return true;
+        }
+        await new Promise((resolvePoll) => {
+          setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+        });
+      }
+      return !processGroupAlive();
+    };
     const terminateChild = () => {
       killChild("SIGTERM");
       forceKillTimeout = setTimeout(() => {
@@ -228,6 +242,16 @@ function run(command, args, cwd, options = {}) {
             terminateChild();
           }, options.timeoutMs);
     timeout?.unref?.();
+    const finishAfterTeardown = async (error, value = "") => {
+      if (processGroupAlive()) {
+        await waitForProcessGroupExit(options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS);
+      }
+      if (processGroupAlive()) {
+        killChild("SIGKILL");
+        await waitForProcessGroupExit(POST_FORCE_KILL_WAIT_MS);
+      }
+      finish(error, value);
+    };
     if (options.captureStdout) {
       child.stdout.on("data", (chunk) => {
         if (outputLimitExceeded) {
@@ -250,11 +274,13 @@ function run(command, args, cwd, options = {}) {
     child.on("error", (error) => finish(error));
     child.on("close", (status, signal) => {
       if (timedOut) {
-        finish(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        void finishAfterTeardown(
+          new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`),
+        );
         return;
       }
       if (outputLimitExceeded) {
-        finish(
+        void finishAfterTeardown(
           new Error(
             `${command} ${args.join(" ")} exceeded captured stdout limit (${maxCapturedStdoutBytes} bytes)`,
           ),
@@ -331,6 +357,30 @@ async function newestOpenClawTarball(outputDir, packOutput) {
   return path.join(outputDir, packed);
 }
 
+async function cleanPackedOpenClawTarballs(outputDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(outputDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      entries = [];
+    } else {
+      throw error;
+    }
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawFileName(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
+      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
+  );
+}
+
 export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
   const runCaptureImpl = options.runCaptureImpl ?? runCapture;
   const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
@@ -339,6 +389,7 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   await prepareChangelog(sourceDir);
   let packOutput;
   try {
+    await cleanPackedOpenClawTarballs(outputDir);
     packOutput = await runCaptureImpl(
       "npm",
       ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],

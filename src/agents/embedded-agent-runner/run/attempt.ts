@@ -457,7 +457,10 @@ import {
   TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES,
 } from "./attempt.tool-search-run-plan.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
-import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
+import {
+  hasActiveCompactionRetryWork,
+  waitForCompactionRetryWithAggregateTimeout,
+} from "./compaction-retry-aggregate-timeout.js";
 import {
   resolveRunTimeoutDuringCompaction,
   selectCompactionTimeoutSnapshot,
@@ -1292,6 +1295,7 @@ export async function runEmbeddedAttempt(
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
+            messageChannel: params.messageChannel,
             exec: {
               ...params.execOverrides,
               config: params.config,
@@ -3431,7 +3435,9 @@ export async function runEmbeddedAttempt(
           }
         }
         if (isTimeout) {
-          runAbortController.abort(reason ?? makeTimeoutAbortReason());
+          const timeoutReason = reason instanceof Error ? reason : makeTimeoutAbortReason();
+          params.onAttemptTimeout?.(timeoutReason);
+          runAbortController.abort(timeoutReason);
         } else {
           runAbortController.abort(reason);
         }
@@ -3742,6 +3748,7 @@ export async function runEmbeddedAttempt(
 
       const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
         externalAbort = true;
+        params.onAttemptAbort?.();
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
       const queueHandle: EmbeddedAgentQueueHandle & {
@@ -3837,6 +3844,7 @@ export async function runEmbeddedAttempt(
         );
       };
       scheduleAbortTimer(params.timeoutMs, "initial");
+      params.onAttemptTimeoutArmed?.();
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
@@ -4982,7 +4990,11 @@ export async function runEmbeddedAttempt(
                 waitForCompactionRetry,
                 abortable,
                 aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
-                isCompactionStillInFlight: isCompactionInFlight,
+                isCompactionRetryStillActive: () =>
+                  hasActiveCompactionRetryWork({
+                    isCompactionInFlight: isCompactionInFlight(),
+                    isSessionStreaming: activeSession.isStreaming,
+                  }),
               });
           if (compactionRetryWait.timedOut) {
             timedOutDuringCompaction = true;

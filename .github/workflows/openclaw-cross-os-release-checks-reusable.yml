@@ -332,7 +332,7 @@ jobs:
           esac
 
       - name: Checkout workflow repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
           ref: ${{ steps.workflow_ref.outputs.value }}
@@ -342,7 +342,7 @@ jobs:
 
       - name: Checkout public source ref
         if: inputs.candidate_artifact_name == ''
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
           ref: ${{ inputs.ref }}
@@ -352,7 +352,7 @@ jobs:
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -379,14 +379,14 @@ jobs:
 
       - name: Download current-run candidate artifact
         if: inputs.candidate_artifact_name != '' && inputs.candidate_artifact_run_id == ''
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.candidate_artifact_name }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
 
       - name: Download previous-run candidate artifact
         if: inputs.candidate_artifact_name != '' && inputs.candidate_artifact_run_id != ''
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.candidate_artifact_name }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
@@ -510,7 +510,7 @@ jobs:
           NODE
 
       - name: Upload candidate artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package/${{ steps.candidate_metadata.outputs.file_name }}
@@ -518,7 +518,7 @@ jobs:
 
       - name: Upload baseline artifact
         if: ${{ inputs.mode != 'fresh' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/${{ steps.baseline_metadata.outputs.file_name }}
@@ -558,7 +558,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout workflow repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
           ref: ${{ needs.prepare.outputs.workflow_ref }}
@@ -567,7 +567,7 @@ jobs:
           persist-credentials: true
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -582,14 +582,14 @@ jobs:
       - name: Download candidate artifact
         id: download_candidate
         continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
 
       - name: Retry candidate artifact download
         if: ${{ steps.download_candidate.outcome == 'failure' }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
@@ -598,14 +598,14 @@ jobs:
         if: ${{ matrix.suite == 'packaged-upgrade' }}
         id: download_baseline
         continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
 
       - name: Retry baseline artifact download
         if: ${{ matrix.suite == 'packaged-upgrade' && steps.download_baseline.outcome == 'failure' }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
@@ -684,7 +684,7 @@ jobs:
 
       - name: Upload release-check artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-cross-os-release-checks-${{ matrix.artifact_name }}-${{ matrix.suite }}-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}

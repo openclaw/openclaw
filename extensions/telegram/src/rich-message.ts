@@ -402,21 +402,6 @@ export function splitTelegramRichMarkdownChunks(
   );
 }
 
-export function splitTelegramRichTextChunks(params: {
-  text: string;
-  textLimit: number;
-  textMode: TelegramRichTextMode;
-  chunkMode: ChunkMode;
-}): string[] {
-  return params.textMode === "html"
-    ? splitTelegramHtmlChunks(
-        prepareTelegramRichHtml(params.text),
-        params.textLimit,
-        TELEGRAM_RICH_HTML_CHUNK_LIMITS,
-      )
-    : splitTelegramRichMarkdownChunks(params.text, params.textLimit, params.chunkMode);
-}
-
 export function splitTelegramRichMessageTextChunks(params: {
   text: string;
   textLimit: number;

@@ -8,6 +8,7 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "openrouter";
@@ -23,6 +24,7 @@ export const OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD = "S256";
 
 const OPENROUTER_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const OPENROUTER_OAUTH_FETCH_TIMEOUT_MS = 30 * 1000;
+const OPENROUTER_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const OPENROUTER_OAUTH_PROFILE_ID = "openrouter:default";
 
 type OpenRouterOAuthCallbackResult = {
@@ -72,7 +74,11 @@ function extractOpenRouterError(value: unknown): string | undefined {
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
-  const text = await response.text();
+  const text = response.ok
+    ? await response.text()
+    : await readResponseTextLimited(response, OPENROUTER_OAUTH_ERROR_BODY_LIMIT_BYTES).catch(
+        () => "",
+      );
   if (!text.trim()) {
     return null;
   }

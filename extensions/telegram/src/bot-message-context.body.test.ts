@@ -2,9 +2,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
 
-const { transcribeFirstAudioMock, triggerInternalHookMock } = vi.hoisted(() => ({
+const {
+  resolveStickerVisionSupportRuntimeMock,
+  transcribeFirstAudioMock,
+  triggerInternalHookMock,
+} = vi.hoisted(() => ({
+  resolveStickerVisionSupportRuntimeMock: vi.fn(async (_params: unknown) => false),
   transcribeFirstAudioMock: vi.fn(),
   triggerInternalHookMock: vi.fn<(event: unknown) => Promise<void>>(async () => undefined),
+}));
+
+vi.mock("./sticker-vision.runtime.js", () => ({
+  resolveStickerVisionSupportRuntime: (params: unknown) =>
+    resolveStickerVisionSupportRuntimeMock(params),
 }));
 
 vi.mock("./media-understanding.runtime.js", () => ({
@@ -279,6 +289,38 @@ describe("resolveTelegramInboundBody", () => {
 
     expect(result?.bodyText).toBe("[Sticker] Cached description\nWhat is this?");
     expect(result?.stickerCacheHit).toBe(true);
+  });
+
+  it("keeps cached sticker media available when the active model supports vision", async () => {
+    resolveStickerVisionSupportRuntimeMock.mockResolvedValueOnce(true);
+
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 8,
+        date: 1_700_000_008,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        sticker: {
+          file_id: "sticker-3",
+          file_unique_id: "sticker-u3",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          stickerMetadata: { cachedDescription: "Cached description" },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe("<media:image>");
+    expect(result?.stickerCacheHit).toBe(false);
   });
 
   it("lets catch-all mention patterns activate captionless group photos", async () => {

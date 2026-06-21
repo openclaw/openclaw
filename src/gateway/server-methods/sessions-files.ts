@@ -1,5 +1,6 @@
 // Gateway methods expose files referenced by one session transcript.
 import path from "node:path";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -60,10 +61,6 @@ function sessionFilesError(type: string, message: string, details?: Record<strin
   });
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function normalizePathValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -115,9 +112,9 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
     return;
   }
   for (const changeValue of changes) {
-    const change = asRecord(changeValue);
+    const change = asOptionalObjectRecord(changeValue);
     addTouchedFile(files, normalizePathValue(change?.path), "modified");
-    const kind = asRecord(change?.kind);
+    const kind = asOptionalObjectRecord(change?.kind);
     addTouchedFile(
       files,
       normalizePathValue(kind?.move_path) ?? normalizePathValue(kind?.movePath),
@@ -140,17 +137,20 @@ function isToolCallBlockType(value: unknown): boolean {
 }
 
 function collectTouchedFilesFromMessage(message: unknown, files: Map<string, TouchedFile>) {
-  const record = asRecord(message);
+  const record = asOptionalObjectRecord(message);
   if (record?.role !== "assistant" || !Array.isArray(record.content)) {
     return;
   }
   for (const blockValue of record.content) {
-    const block = asRecord(blockValue);
+    const block = asOptionalObjectRecord(blockValue);
     if (!block || !isToolCallBlockType(block.type)) {
       continue;
     }
     const toolName = normalizeOptionalString(block.name)?.toLowerCase();
-    const args = asRecord(block.arguments) ?? asRecord(block.input) ?? asRecord(block.args);
+    const args =
+      asOptionalObjectRecord(block.arguments) ??
+      asOptionalObjectRecord(block.input) ??
+      asOptionalObjectRecord(block.args);
     if (!toolName || !args) {
       continue;
     }
@@ -604,8 +604,9 @@ async function loadSessionFiles(params: {
   await visitSessionMessagesAsync(
     {
       agentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
       storePath,
     },
     (message) => collectTouchedFilesFromMessage(message, files),

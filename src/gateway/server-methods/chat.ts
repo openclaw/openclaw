@@ -150,7 +150,7 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import type { ChatRunTiming } from "../server-chat-state.js";
+import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
@@ -537,6 +537,22 @@ export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
+  "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
+
+/**
+ * A minimal, metadata-free notice returned when even a single oversized
+ * placeholder cannot fit the chat-history byte budget. Returning this instead
+ * of an empty array guarantees the dashboard never renders a blank transcript,
+ * which otherwise reads to the operator as total history loss.
+ */
+function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
+  return {
+    role: "assistant",
+    timestamp: Date.now(),
+    content: [{ type: "text", text: CHAT_HISTORY_UNAVAILABLE_SENTINEL }],
+  };
+}
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryPlaceholderEmitCount = 0;
@@ -1653,7 +1669,11 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
   if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
     return { messages: [placeholder], placeholderCount: 1 };
   }
-  return { messages: [], placeholderCount: 0 };
+  // The oversized placeholder still does not fit (e.g. the source message
+  // carried very large metadata). Never return an empty history — that renders
+  // as a blank transcript and reads as data loss even though the on-disk
+  // transcript is intact. Fall back to a small metadata-free sentinel.
+  return { messages: [buildChatHistoryUnavailableSentinel()], placeholderCount: 1 };
 }
 
 function resolveTranscriptPath(params: {
@@ -2531,7 +2551,8 @@ function readChatHistoryMessageId(message: unknown): string | undefined {
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
   storePath: string | undefined;
-  sessionFile: string | undefined;
+  sessionEntry?: { sessionFile?: string; sessionId?: string };
+  sessionKey: string;
   agentId?: string;
   messageId: string;
   sessionStartedAt?: number;
@@ -2543,8 +2564,9 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   const messages = await readSessionMessagesAsync(
     {
       agentId: params.agentId,
-      sessionFile: params.sessionFile,
+      sessionEntry: params.sessionEntry,
       sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
       storePath: params.storePath,
     },
     {
@@ -2663,8 +2685,9 @@ async function handleChatHistoryRequest({
       ? await readRecentSessionMessagesAsync(
           {
             agentId: sessionAgentId,
-            sessionFile: entry?.sessionFile,
+            sessionEntry: entry,
             sessionId,
+            sessionKey: canonicalKey,
             storePath,
           },
           {
@@ -2856,8 +2879,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const resolved = await readSessionMessageByIdAsync(
       {
         agentId: sessionAgentId,
-        sessionFile: entry?.sessionFile,
+        sessionEntry: entry,
         sessionId,
+        sessionKey,
         storePath,
       },
       messageId,
@@ -2870,7 +2894,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const visible = await isChatMessageIdVisibleAfterHistoryFilters({
       sessionId,
       storePath,
-      sessionFile: entry?.sessionFile,
+      sessionEntry: entry,
+      sessionKey,
       agentId: sessionAgentId,
       messageId,
       sessionStartedAt:
@@ -3306,8 +3331,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const abortedAt = context.chatAbortedRuns.get(clientRunId);
-    if (abortedAt !== undefined) {
+    const abortMarker = context.chatAbortedRuns.get(clientRunId);
+    if (abortMarker !== undefined) {
+      const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
       const payload = buildAbortedChatSendPayload({
         runId: clientRunId,
         endedAt: abortedAt,

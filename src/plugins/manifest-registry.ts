@@ -65,7 +65,7 @@ import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import type { PluginDependencySpecMap } from "./status-dependencies.js";
+import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 function resolvePluginSourcePath(sourcePath: string): string {
   if (fs.existsSync(sourcePath)) {

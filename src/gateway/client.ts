@@ -82,6 +82,8 @@ export type GatewayReconnectPausedInfo = {
 
 export type GatewayClientCloseInfo = {
   phase: "pre-hello" | "post-hello";
+  socketOpened: boolean;
+  transportValidated: boolean;
   transientPreHelloCleanClose: boolean;
 };
 
@@ -188,7 +190,7 @@ function createOpenClawGatewayClientHostDeps(
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
   return baseResolveGatewayClientConnectChallengeTimeoutMs(opts);

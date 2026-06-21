@@ -27,7 +27,7 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
 
 type ErrorPayload = Record<string, unknown>;
 
-export type ApiErrorInfo = {
+type ApiErrorInfo = {
   httpCode?: string;
   type?: string;
   message?: string;

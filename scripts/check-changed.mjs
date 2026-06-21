@@ -46,7 +46,9 @@ const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
 const ANDROID_VERSION_SYNC_PATHS = new Set([
+  "apps/android/CHANGELOG.md",
   "apps/android/Config/Version.properties",
+  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
   "apps/android/version.json",
 ]);
 let corepackPnpmShimDir;
@@ -563,6 +565,10 @@ function printSummary(timings, options) {
 }
 
 function parseArgs(argv) {
+  const separatorIndex = argv.indexOf("--");
+  const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  const explicitPaths =
+    separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizeChangedPath);
   const args = {
     base: "origin/main",
     head: "HEAD",
@@ -573,8 +579,8 @@ function parseArgs(argv) {
     help: false,
     paths: [],
   };
-  return parseFlagArgs(
-    argv,
+  const parsed = parseFlagArgs(
+    flagArgv,
     args,
     [
       stringFlag("--base", "base"),
@@ -588,14 +594,16 @@ function parseArgs(argv) {
     ],
     {
       onUnhandledArg(arg, target) {
-        if (arg === "--") {
-          return "handled";
+        if (arg.startsWith("-")) {
+          throw new Error(`Unknown option: ${arg}`);
         }
         target.paths.push(normalizeChangedPath(arg));
         return "handled";
       },
     },
   );
+  parsed.paths.push(...explicitPaths);
+  return parsed;
 }
 
 function printUsage() {
@@ -622,7 +630,13 @@ function isDirectRun() {
 
 if (isDirectRun()) {
   const argv = process.argv.slice(2);
-  const args = parseArgs(argv);
+  let args;
+  try {
+    args = parseArgs(argv);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   if (args.help) {
     printUsage();
     process.exitCode = 0;

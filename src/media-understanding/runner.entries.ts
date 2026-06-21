@@ -31,18 +31,22 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
+import {
+  estimateBase64Size,
+  resolveVideoMaxBase64Bytes,
+} from "../../packages/media-understanding-common/src/video.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
-import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
-import { extractGeminiResponse } from "./output-extract.js";
 import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
@@ -53,7 +57,6 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
-import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;

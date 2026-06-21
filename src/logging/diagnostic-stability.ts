@@ -545,6 +545,14 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.level = event.level;
       record.source = event.loggerName;
       break;
+    case "security.event":
+      record.source = event.category;
+      record.action = event.action;
+      record.outcome = event.outcome;
+      record.level = event.severity;
+      record.target = event.target?.name ?? event.target?.kind;
+      assignReasonCode(record, event.reason ?? event.policy?.reason);
+      break;
     case "diagnostic.memory.sample":
       record.memory = copyMemory(event.memory);
       break;

@@ -104,6 +104,7 @@ export const MessageActionParamsSchema = Type.Object(
     action: NonEmptyString,
     params: Type.Record(Type.String(), Type.Unknown()),
     accountId: Type.Optional(Type.String()),
+    requesterAccountId: Type.Optional(Type.String()),
     requesterSenderId: Type.Optional(Type.String()),
     // Honored only when the RPC caller has the full operator scope set
     // (shared-secret bearer or `operator.admin`). For narrowly-scoped

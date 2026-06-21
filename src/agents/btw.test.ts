@@ -676,6 +676,65 @@ describe("runBtwSideQuestion", () => {
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
+  it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: (ctx) =>
+        ctx.provider === "openai"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "openai only" },
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:user@example.test");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai-codex:user@example.test"],
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        },
+      } as never,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    const sideQuestionParams = mockArg(codexSideQuestionMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+    };
+    expect(sideQuestionParams.provider).toBe("openai");
+    expect(sideQuestionParams.authProfileId).toBe("openai-codex:user@example.test");
+    const authArgs = mockArg(resolveSessionAuthProfileOverrideMock, 0, 0) as {
+      provider?: string;
+      acceptedProviderIds?: string[];
+    };
+    expect(authArgs.provider).toBe("openai");
+    expect(authArgs.acceptedProviderIds).toEqual(["openai"]);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
   it("prepares deny-all sender policy before calling a plugin side-question hook", async () => {
     const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Policy answer." });
     registerAgentHarness({
@@ -690,7 +749,6 @@ describe("runBtwSideQuestion", () => {
       id: "gpt-5.5",
       api: "openai-responses",
     });
-
     await runSideQuestion({
       cfg: {
         channels: {
@@ -997,6 +1055,59 @@ describe("runBtwSideQuestion", () => {
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.executionMode).toBe("side-question");
     expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves auto-selected session CLI BTW routing before resolving runtime auth", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const sessionEntry = createSessionEntry({
+      authProfileOverride: "anthropic:auto-cli",
+      authProfileOverrideSource: "auto",
+    });
+    const sessionStore = { [DEFAULT_SESSION_KEY]: sessionEntry };
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Session Claude CLI answer." });
+    resolveSessionAuthProfileOverrideMock.mockImplementation(
+      async (params: { sessionEntry?: SessionEntry }) => {
+        if (params.sessionEntry) {
+          params.sessionEntry.authProfileOverride = "anthropic:api";
+          params.sessionEntry.authProfileOverrideSource = "auto";
+        }
+        return "anthropic:api";
+      },
+    );
+    mockDoneAnswer("Generic fallback answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:api"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:auto-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry,
+      sessionStore,
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Session Claude CLI answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+      executionMode?: string;
+    };
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(streamSimpleMock).not.toHaveBeenCalled();

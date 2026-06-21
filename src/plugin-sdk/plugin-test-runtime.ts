@@ -17,6 +17,7 @@ export { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 export {
   emitDiagnosticEventWithTrustedTraceContext,
   emitInternalDiagnosticEvent as emitInternalDiagnosticEventForTest,
+  emitTrustedSecurityEvent,
 } from "../infra/diagnostic-events.js";
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";

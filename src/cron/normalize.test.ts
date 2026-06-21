@@ -5,7 +5,8 @@ import {
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
-import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
+
+const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function expectNormalizedAtSchedule(scheduleInput: Record<string, unknown>) {
   const normalized = normalizeCronJobCreate({

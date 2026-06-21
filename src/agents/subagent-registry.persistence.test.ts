@@ -17,7 +17,7 @@ import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime.js";
-import { captureEnv, withEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
@@ -149,7 +149,7 @@ describe("subagent registry persistence", () => {
     // Each persisted-registry fixture gets its own state dir so session stores
     // and registry files are tested through the same paths production resolves.
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     await fs.mkdir(path.dirname(registryPath), { recursive: true });
     await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
@@ -258,7 +258,7 @@ describe("subagent registry persistence", () => {
 
   it("persists completed subagent timing into the child session entry", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
 
     const now = Date.now();
     const startedAt = now;
@@ -488,7 +488,7 @@ describe("subagent registry persistence", () => {
 
   it("skips cleanup when cleanupHandled was persisted", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
 
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     const persisted = {
@@ -669,7 +669,7 @@ describe("subagent registry persistence", () => {
 
   it("returns empty maps for unchanged invalid persisted registry snapshots", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     await fs.mkdir(path.dirname(registryPath), { recursive: true });
     await fs.writeFile(registryPath, "{invalid", "utf8");
@@ -716,7 +716,7 @@ describe("subagent registry persistence", () => {
 
     resetSubagentRegistryForTests({ persist: false });
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
 
     vi.mocked(callGateway).mockResolvedValueOnce({
       status: "pending",
@@ -993,7 +993,7 @@ describe("subagent registry persistence", () => {
 
   it("removes attachments when pruning orphaned restored runs", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const attachmentsRootDir = path.join(tempStateDir, "attachments");
     const attachmentsDir = path.join(attachmentsRootDir, "ghost");
     await fs.mkdir(attachmentsDir, { recursive: true });
@@ -1125,7 +1125,7 @@ describe("subagent registry persistence", () => {
 
   it("resume guard prunes orphan runs before announce retry", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const runId = "run-orphan-resume-guard";
     const childSessionKey = "agent:main:subagent:ghost-resume";
     const now = Date.now();
@@ -1161,7 +1161,7 @@ describe("subagent registry persistence", () => {
   });
 
   it("uses isolated temp state when OPENCLAW_STATE_DIR is unset in tests", () => {
-    delete process.env.OPENCLAW_STATE_DIR;
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
     const registryPath = resolveSubagentRegistryPath();
     expect(registryPath).toContain(path.join(os.tmpdir(), "openclaw-test-state"));
   });

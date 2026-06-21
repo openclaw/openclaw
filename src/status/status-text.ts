@@ -57,7 +57,6 @@ import {
 } from "../tasks/task-status.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
-export type { BuildStatusTextParams } from "./status-text.types.js";
 
 // Status text assembly gathers runtime/model/session/task facts, then delegates
 // final formatting to status-message.runtime through lazy imports.
@@ -313,7 +312,7 @@ function formatStatusUptimeDuration(ms: number): string {
   return formatDurationCompact(ms, { spaced: true }) ?? "0s";
 }
 
-export function buildStatusUptimeLine(): string {
+function buildStatusUptimeLine(): string {
   const gatewayUptimeMs = Math.max(0, Math.round(process.uptime() * 1000));
   const systemUptimeMs = Math.max(0, Math.round(os.uptime() * 1000));
   return `⏱️ Uptime: gateway ${formatStatusUptimeDuration(gatewayUptimeMs)} · system ${formatStatusUptimeDuration(systemUptimeMs)}`;

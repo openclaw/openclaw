@@ -232,11 +232,6 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
-/** Returns whether the allowlist requires any built-in coding/OpenClaw tools. */
-export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
-  return resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }).includeCoreTools;
-}
-
 /**
  * Decides whether the bundled MCP runtime is needed for this attempt. Bundle
  * runtime creation follows explicit bundle/plugin allowlist names rather than

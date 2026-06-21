@@ -64,6 +64,7 @@ import {
   DEFAULT_GIT_CHANNEL,
   DEFAULT_PACKAGE_CHANNEL,
   normalizeUpdateChannel,
+  UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "../../infra/update-channels.js";
 import {
   compareSemverStrings,
@@ -94,6 +95,10 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
+import {
+  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
+  type PreUpdateConfigRestoreInput,
+} from "../../infra/update-post-core-context.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
@@ -166,7 +171,6 @@ const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
 const POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH";
-const POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH";
 const POST_CORE_UPDATE_STARTED_AT_ENV = "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS";
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -220,11 +224,6 @@ const UPDATE_QUIPS = [
 type PostCorePluginUpdateResult = NonNullable<
   NonNullable<UpdateRunResult["postUpdate"]>["plugins"]
 >;
-
-type PreUpdateConfigRestoreInput = {
-  sourceConfig: OpenClawConfig;
-  authoredConfig: OpenClawConfig;
-};
 
 type MissingPluginInstallPayload = {
   pluginId: string;
@@ -2469,14 +2468,19 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
 
   const root = await resolveUpdateRoot();
   let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-  const preFinalizeConfig = configSnapshot.valid
-    ? {
-        sourceConfig: configSnapshot.sourceConfig,
-        authoredConfig: isRecord(configSnapshot.parsed)
-          ? (configSnapshot.parsed as OpenClawConfig)
-          : configSnapshot.sourceConfig,
-      }
-    : undefined;
+  const preFinalizeConfig =
+    (await readPostCorePreUpdateSourceConfig({
+      sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
+      currentSnapshot: configSnapshot,
+    })) ??
+    (configSnapshot.valid
+      ? {
+          sourceConfig: configSnapshot.sourceConfig,
+          authoredConfig: isRecord(configSnapshot.parsed)
+            ? (configSnapshot.parsed as OpenClawConfig)
+            : configSnapshot.sourceConfig,
+        }
+      : undefined);
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
     defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
@@ -2486,7 +2490,14 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   const storedChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
     : null;
-  const channel = requestedChannel ?? storedChannel ?? DEFAULT_PACKAGE_CHANNEL;
+  // Effective channel the core update actually ran on (e.g. git/dev for an
+  // unconfigured source update), passed by the caller via env. Used only as a
+  // convergence fallback; it is never persisted (that stays gated on
+  // `requestedChannel`), so a default source update does not write update.channel.
+  const effectiveChannel = normalizeUpdateChannel(
+    process.env[UPDATE_EFFECTIVE_CHANNEL_ENV]?.trim(),
+  );
+  const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
   if (requestedChannel) {
     configSnapshot = await persistRequestedUpdateChannel({
       configSnapshot,
@@ -2514,7 +2525,11 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
       : null;
     const postDoctorChannel =
-      requestedChannel ?? postDoctorStoredChannel ?? storedChannel ?? DEFAULT_PACKAGE_CHANNEL;
+      requestedChannel ??
+      postDoctorStoredChannel ??
+      storedChannel ??
+      effectiveChannel ??
+      DEFAULT_PACKAGE_CHANNEL;
     const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
     return await runPostCorePluginUpdate({
       root,

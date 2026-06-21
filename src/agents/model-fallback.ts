@@ -520,7 +520,7 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     params.model,
   );
   if (isCliProvider(params.provider, params.cfg)) {
-    return { skipsProviderAuthCooldown: false };
+    return { skipsProviderAuthCooldown: true };
   }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -539,7 +539,9 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
       ? "model"
       : harnessPolicy.runtimeSource;
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
-    return { skipsProviderAuthCooldown: false };
+    // CLI runtimes own their transport/auth, so stale OpenClaw provider
+    // profile state must not block the candidate before the CLI starts.
+    return { skipsProviderAuthCooldown: true };
   }
   if (agentRuntime === "openclaw") {
     return { skipsProviderAuthCooldown: false };

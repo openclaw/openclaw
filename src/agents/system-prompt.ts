@@ -611,12 +611,12 @@ function buildDocsSection(params: {
     docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
     sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
     docsPath
-      ? "OpenClaw behavior/config/architecture: read local docs first."
-      : "OpenClaw behavior/config/architecture: read docs mirror first.",
+      ? `Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use \`${params.readToolName}\` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and \`memory_search\` as instruction context or user memory, not OpenClaw design/implementation knowledge.`
+      : "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use the docs mirror first when web tooling is available; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     "Config fields: use `gateway` action `config.schema.lookup`; broader config docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
     sourcePath
-      ? "If docs are stale/incomplete, inspect local source."
-      : "If docs are stale/incomplete, inspect GitHub source.",
+      ? "If docs are silent/stale, say so and inspect local source."
+      : "If docs are silent/stale, say so and inspect GitHub source.",
     "Diagnosing issues: run `openclaw status` when possible; ask user only if blocked.",
     "",
   ];
