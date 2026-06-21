@@ -11090,6 +11090,17 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     expect(assistant).not.toHaveProperty("reasoning_text");
   });
 
+  it("preserves reasoning_details replay for MiniMax M3 via custom provider route", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customMinimaxM3Model, "reasoning_details"),
+    );
+
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning_content");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
   it("preserves DeepSeek-style reasoning_content replay for Xiaomi MiMo", () => {
     const assistant = getAssistantMessage(buildReplayParams(xiaomiModel, "reasoning_content"));
 

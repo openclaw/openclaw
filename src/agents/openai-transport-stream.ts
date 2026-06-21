@@ -4006,7 +4006,15 @@ function sanitizeReasoningContentReplayFields(record: Record<string, unknown>): 
   if ("reasoning_content" in record && typeof record.reasoning_content !== "string") {
     delete record.reasoning_content;
   }
-  delete record.reasoning_details;
+  const reasoningDetails = record.reasoning_details;
+  if (typeof reasoningDetails === "string") {
+    if (reasoningDetails.length > 0 && typeof record.reasoning !== "string") {
+      record.reasoning = reasoningDetails;
+    }
+    delete record.reasoning_details;
+  } else if (reasoningDetails !== undefined && !Array.isArray(reasoningDetails)) {
+    delete record.reasoning_details;
+  }
   if ("reasoning" in record && typeof record.reasoning !== "string") {
     delete record.reasoning;
   }
