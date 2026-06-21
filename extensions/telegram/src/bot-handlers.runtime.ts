@@ -139,6 +139,7 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
+  isTelegramSessionBoundaryCommandText,
   resolveTelegramMessageCacheScope,
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
@@ -167,6 +168,23 @@ import {
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
 import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
+
+type TelegramPromptContextMessageForDedupe = {
+  body?: unknown;
+  timestamp_ms?: unknown;
+};
+
+function resolvePromptContextTextDedupeKey(
+  message: TelegramPromptContextMessageForDedupe,
+): string | undefined {
+  if (typeof message.body !== "string" || !message.body.trim()) {
+    return undefined;
+  }
+  if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
+    return undefined;
+  }
+  return `${message.timestamp_ms}:${message.body.trim()}`;
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -1230,30 +1248,29 @@ export const registerTelegramHandlers = ({
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
     const sessionBeforeTimestampMs =
       options?.receivedAtMs ?? (msg.date ? msg.date * 1000 : undefined);
-    const sessionPromptMessages = isGroup
-      ? []
-      : await buildTelegramSessionTranscriptPromptMessages({
-          ...resolveTelegramSessionState({
-            chatId: msg.chat.id,
-            isGroup: false,
-            isForum: false,
-            messageThreadId: msg.message_thread_id,
-            botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
-            senderId: msg.from?.id,
-          }),
-          limit: 10,
-          ...(sessionBeforeTimestampMs !== undefined
-            ? { beforeTimestampMs: sessionBeforeTimestampMs }
-            : {}),
-          ...(options?.promptContextMinTimestampMs !== undefined
-            ? { minTimestampMs: options.promptContextMinTimestampMs }
-            : {}),
-        }).catch((error: unknown) => {
-          logVerbose(
-            `telegram: failed to read session transcript prompt context: ${String(error)}`,
-          );
-          return [];
-        });
+    const isSessionBoundaryMessage = isTelegramSessionBoundaryCommandText(
+      getTelegramTextParts(msg).text,
+    );
+    const sessionPromptMessages =
+      isGroup || isSessionBoundaryMessage
+        ? []
+        : await buildTelegramSessionTranscriptPromptMessages({
+            ...resolveTelegramSessionState({
+              chatId: msg.chat.id,
+              isGroup: false,
+              isForum: false,
+              messageThreadId: msg.message_thread_id,
+              botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+              senderId: msg.from?.id,
+            }),
+            limit: 10,
+            ...(sessionBeforeTimestampMs !== undefined
+              ? { beforeTimestampMs: sessionBeforeTimestampMs }
+              : {}),
+            ...(options?.promptContextMinTimestampMs !== undefined
+              ? { minTimestampMs: options.promptContextMinTimestampMs }
+              : {}),
+          });
     const conversationContext = await buildTelegramConversationContext({
       cache: messageCache,
       messageId,
@@ -1261,7 +1278,7 @@ export const registerTelegramHandlers = ({
       chatId: msg.chat.id,
       ...(Number.isFinite(threadId) ? { threadId } : {}),
       replyChainNodes,
-      recentLimit: isGroup || sessionPromptMessages.length === 0 ? 10 : 0,
+      recentLimit: 10,
       replyTargetWindowSize: 2,
       ...(options?.promptContextMinTimestampMs !== undefined
         ? { minTimestampMs: options.promptContextMinTimestampMs }
@@ -1277,14 +1294,23 @@ export const registerTelegramHandlers = ({
         entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
       ),
     );
-    const promptMessages = [...sessionPromptMessages, ...cachePromptMessages].toSorted(
+    const cacheTextKeys = new Set(
+      cachePromptMessages
+        .map((message) => resolvePromptContextTextDedupeKey(message))
+        .filter((key) => key !== undefined),
+    );
+    const sessionOnlyPromptMessages = sessionPromptMessages.filter((message) => {
+      const key = resolvePromptContextTextDedupeKey(message);
+      return key === undefined || !cacheTextKeys.has(key);
+    });
+    const promptMessages = [...sessionOnlyPromptMessages, ...cachePromptMessages].toSorted(
       (left, right) => (left.timestamp_ms ?? 0) - (right.timestamp_ms ?? 0),
     );
     return promptMessages.length > 0
       ? [
           {
             label: "Conversation context",
-            source: isGroup || sessionPromptMessages.length === 0 ? "telegram" : "session",
+            source: sessionOnlyPromptMessages.length > 0 ? "session" : "telegram",
             type: "chat_window",
             payload: {
               order: "chronological",

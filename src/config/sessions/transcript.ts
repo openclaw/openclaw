@@ -10,7 +10,7 @@ import {
 } from "../../shared/chat-message-content.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveDefaultSessionStorePath, resolveSessionTranscriptPathInDir } from "./paths.js";
+import { resolveDefaultSessionStorePath, resolveSessionFilePath } from "./paths.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
@@ -220,12 +220,10 @@ function resolveSessionConversationTranscriptPath(params: {
   if (!entry?.sessionId) {
     return undefined;
   }
-  if (entry.sessionFile) {
-    return path.isAbsolute(entry.sessionFile)
-      ? entry.sessionFile
-      : path.join(path.dirname(storePath), entry.sessionFile);
-  }
-  return resolveSessionTranscriptPathInDir(entry.sessionId, path.dirname(storePath));
+  return resolveSessionFilePath(entry.sessionId, entry, {
+    sessionsDir: path.dirname(storePath),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
 }
 
 export async function readRecentUserAssistantTextFromSessionTranscript(

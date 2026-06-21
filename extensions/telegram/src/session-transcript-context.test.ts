@@ -1,5 +1,4 @@
 import { readRecentUserAssistantTextForSession } from "openclaw/plugin-sdk/session-store-runtime";
-// Telegram session transcript context tests cover shared direct-session prompt context mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
 

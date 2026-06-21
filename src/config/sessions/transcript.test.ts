@@ -682,6 +682,50 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ]);
   });
 
+  it("ignores stored session files outside the sessions directory for recent context", async () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-outside-"));
+    try {
+      const outsideFile = path.join(outsideDir, "outside.jsonl");
+      fs.writeFileSync(
+        fixture.storePath(),
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId,
+            chatType: "direct",
+            sessionFile: outsideFile,
+          },
+        }),
+        "utf-8",
+      );
+      await appendSessionTranscriptMessage({
+        transcriptPath: outsideFile,
+        message: { role: "user", content: "outside text", timestamp: 1_000 },
+      });
+      const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+      await appendSessionTranscriptMessage({
+        transcriptPath: sessionFile,
+        message: { role: "user", content: "contained text", timestamp: 2_000 },
+      });
+
+      await expect(
+        readRecentUserAssistantTextForSession({
+          sessionKey,
+          storePath: fixture.storePath(),
+          beforeTimestampMs: 3_000,
+        }),
+      ).resolves.toEqual([
+        {
+          id: expect.any(String),
+          role: "user",
+          text: "contained text",
+          timestamp: 2_000,
+        },
+      ]);
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips transcript-only OpenClaw assistant entries when reading latest assistant text", async () => {
     writeTranscriptStore();
 

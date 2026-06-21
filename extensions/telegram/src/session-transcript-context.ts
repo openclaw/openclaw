@@ -1,4 +1,3 @@
-// Telegram plugin module maps shared session transcript turns into prompt context.
 import {
   readRecentUserAssistantTextForSession,
   type SessionRecentConversationText,

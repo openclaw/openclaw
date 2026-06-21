@@ -55,7 +55,7 @@ describe("plugin SDK surface report", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("public callable exports 5187 > 5186");
+    expect(result.stderr).toContain("public callable exports 5188 > 5186");
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {
