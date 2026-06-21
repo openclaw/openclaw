@@ -178,7 +178,16 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
         reason: params.failoverReason,
       };
     }
-    if (params.harnessOwnsTransport && params.failoverReason === "timeout") {
+    // Harness-owned transports (Ollama, OpenRouter, ...) implement their own
+    // retry envelope, so a timeout should not double-rotate the auth profile.
+    // It must still honor an explicitly configured model fallback, though:
+    // falling back switches to a different model the operator chose for
+    // resilience, which is exactly what a prompt timeout should trigger.
+    if (
+      params.harnessOwnsTransport &&
+      params.failoverReason === "timeout" &&
+      !(params.fallbackConfigured && params.failoverFailure)
+    ) {
       return {
         action: "surface_error",
         reason: params.failoverReason,

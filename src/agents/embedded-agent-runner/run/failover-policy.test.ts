@@ -245,6 +245,42 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("falls back on prompt harness-owned transport timeout when fallback is configured (#95574)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        harnessOwnsTransport: true,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
+  it("surfaces error on prompt harness-owned transport timeout when no fallback is configured (#95574)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        harnessOwnsTransport: true,
+        fallbackConfigured: false,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
   it("does not rotate or fallback assistant timeouts that fired during tool execution (#52147)", () => {
     expect(
       resolveRunFailoverDecision({
@@ -520,7 +556,7 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("surfaces harness-owned prompt timeouts instead of falling back", () => {
+  it("falls back on harness-owned prompt timeout when fallback is configured (#95574)", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
@@ -533,7 +569,7 @@ describe("resolveRunFailoverDecision", () => {
         profileRotated: true,
       }),
     ).toEqual({
-      action: "surface_error",
+      action: "fallback_model",
       reason: "timeout",
     });
   });
