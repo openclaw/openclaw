@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
+  correctHallucinatedFileExtension,
   getToolParamsRecord,
   stripMalformedXmlArgValueSuffix,
   wrapToolParamValidation,
@@ -252,5 +253,60 @@ describe("assertRequiredParams", () => {
         "write",
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("correctHallucinatedFileExtension", () => {
+  it("corrects .docodex to .docx", () => {
+    expect(correctHallucinatedFileExtension("report.docodex")).toBe("report.docx");
+  });
+
+  it("corrects .docxcodex to .docx", () => {
+    expect(correctHallucinatedFileExtension("notes.docxcodex")).toBe("notes.docx");
+  });
+
+  it("corrects .pptcodex to .pptx", () => {
+    expect(correctHallucinatedFileExtension("slides.pptcodex")).toBe("slides.pptx");
+  });
+
+  it("corrects .xlscodex to .xlsx", () => {
+    expect(correctHallucinatedFileExtension("data.xlscodex")).toBe("data.xlsx");
+  });
+
+  it("corrects hallucinated extension in a path with directory prefix", () => {
+    expect(correctHallucinatedFileExtension("/home/user/docs/report.docodex")).toBe(
+      "/home/user/docs/report.docx",
+    );
+  });
+
+  it("handles case-insensitive extension matching", () => {
+    expect(correctHallucinatedFileExtension("REPORT.DOCODEX")).toBe("REPORT.docx");
+  });
+
+  it("leaves normal .docx path unchanged", () => {
+    expect(correctHallucinatedFileExtension("report.docx")).toBe("report.docx");
+  });
+
+  it("leaves normal .pptx path unchanged", () => {
+    expect(correctHallucinatedFileExtension("slides.pptx")).toBe("slides.pptx");
+  });
+
+  it("leaves normal .xlsx path unchanged", () => {
+    expect(correctHallucinatedFileExtension("data.xlsx")).toBe("data.xlsx");
+  });
+
+  it("leaves unrelated file extensions unchanged", () => {
+    expect(correctHallucinatedFileExtension("script.ts")).toBe("script.ts");
+    expect(correctHallucinatedFileExtension("main.go")).toBe("main.go");
+    expect(correctHallucinatedFileExtension("index.html")).toBe("index.html");
+    expect(correctHallucinatedFileExtension("image.png")).toBe("image.png");
+  });
+
+  it("leaves empty string unchanged", () => {
+    expect(correctHallucinatedFileExtension("")).toBe("");
+  });
+
+  it("leaves string without extension unchanged", () => {
+    expect(correctHallucinatedFileExtension("Makefile")).toBe("Makefile");
   });
 });

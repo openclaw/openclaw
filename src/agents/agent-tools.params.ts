@@ -1,7 +1,8 @@
 /**
  * Shared validation for model-supplied tool parameters.
  * Converts malformed file-tool arguments into retryable errors and fixes the
- * specific XML suffix corruption seen in path arguments.
+ * specific XML suffix corruption and model-hallucinated document extensions
+ * seen in path arguments.
  */
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
@@ -15,6 +16,22 @@ export type RequiredParamGroup = {
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>+$/;
 const XML_ARG_VALUE_PATH_PARAM_KEYS = new Set(["path"]);
+
+/**
+ * Known model-hallucinated document extensions and their corrections.
+ * Models blending "codex" into office-document extensions produce these
+ * (e.g. GPT-5.4 via Codex runtime: .docx → .docodex, .pptx → .pptcodex).
+ */
+const HALLUCINATED_EXTENSION_MAP: ReadonlyMap<string, string> = new Map([
+  [".docodex", ".docx"],
+  [".docxcodex", ".docx"],
+  [".pptcodex", ".pptx"],
+  [".pptxcodex", ".pptx"],
+  [".xlscodex", ".xlsx"],
+  [".xlstcodex", ".xlsx"],
+  [".xlstxcodex", ".xlsx"],
+  [".xltxcodex", ".xlsx"],
+]);
 
 function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
@@ -110,7 +127,16 @@ export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
-/** Strip malformed XML suffixes from selected string fields without mutating input. */
+/** Correct model-hallucinated document extensions in a file path (e.g. .docodex → .docx). */
+export function correctHallucinatedFileExtension(value: string): string {
+  const dotIndex = value.lastIndexOf(".");
+  if (dotIndex === -1) return value;
+  const ext = value.slice(dotIndex).toLowerCase();
+  const correction = HALLUCINATED_EXTENSION_MAP.get(ext);
+  return correction ? value.slice(0, dotIndex) + correction : value;
+}
+
+/** Strip malformed XML suffixes and correct hallucinated extensions from selected string fields without mutating input. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,
   keys: readonly string[],
@@ -121,10 +147,11 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
     if (typeof value !== "string") {
       continue;
     }
-    const stripped = stripMalformedXmlArgValueSuffix(value);
-    if (stripped !== value) {
+    let corrected = stripMalformedXmlArgValueSuffix(value);
+    corrected = correctHallucinatedFileExtension(corrected);
+    if (corrected !== value) {
       normalized ??= { ...record };
-      normalized[key as keyof T] = stripped as T[keyof T];
+      normalized[key as keyof T] = corrected as T[keyof T];
     }
   }
   return normalized ?? record;
