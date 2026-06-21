@@ -2865,7 +2865,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(progressDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Shelling\n\n`🛠️ Exec`" }),
+      expect.objectContaining({
+        parseMode: "HTML",
+        text: "<b>Shelling</b><br><b>🛠️ Exec</b>",
+      }),
     );
     expect(progressDraftStream.updatePreview).not.toHaveBeenCalledWith(
       expect.objectContaining({ text: "I am checking the logs and will report back shortly." }),
