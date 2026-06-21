@@ -444,6 +444,17 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       accountId,
       payload,
     }),
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+  },
+  renderPresentation: async ({ payload, presentation, ctx }) => {
+    const { slackOutbound } = await loadSlackOutboundAdapterModule();
+    return slackOutbound.renderPresentation?.({ payload, presentation, ctx }) ?? null;
+  },
   sendPayload: async (ctx) => {
     const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
       cfg: ctx.cfg,
