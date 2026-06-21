@@ -5,6 +5,7 @@
  * endpoints for the browser control server.
  */
 import { redactCdpUrl } from "../cdp.helpers.js";
+import { toPublicProfileDriver } from "../profile-driver-display.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
@@ -194,7 +195,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
   return {
     enabled: current.resolved.enabled,
     profile: profileCtx.profile.name,
-    driver: profileCtx.profile.driver,
+    driver: toPublicProfileDriver(profileCtx.profile.driver),
     transport: capabilities.usesChromeMcp ? ("chrome-mcp" as const) : ("cdp" as const),
     running: cdpReady,
     cdpReady,
