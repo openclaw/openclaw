@@ -32,12 +32,16 @@ vi.mock("../../auto-reply/continuation/config.js", () => ({
     costCapTokens: 500_000,
     maxDelegatesPerTurn: 5,
   }),
-  // Mirror the real clampDelayMs semantics: default-fill, then symmetric clamp.
+  // Mirror the real clampDelayMs semantics: default-fill, preserve an explicit
+  // zero as the immediate sentinel (#1075), then clamp positive delays.
   clampDelayMs: (
     rawMs: number | undefined,
     config: { defaultDelayMs: number; minDelayMs: number; maxDelayMs: number },
   ) => {
     const requested = rawMs ?? config.defaultDelayMs;
+    if (requested <= 0) {
+      return 0;
+    }
     return Math.max(config.minDelayMs, Math.min(config.maxDelayMs, requested));
   },
 }));

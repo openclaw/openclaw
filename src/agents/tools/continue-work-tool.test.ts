@@ -31,6 +31,9 @@ vi.mock("../../auto-reply/continuation/config.js", () => ({
     config: { defaultDelayMs: number; minDelayMs: number; maxDelayMs: number },
   ) => {
     const requested = rawMs ?? config.defaultDelayMs;
+    if (requested <= 0) {
+      return 0;
+    }
     return Math.max(config.minDelayMs, Math.min(config.maxDelayMs, requested));
   },
 }));
