@@ -1,4 +1,5 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildFullValidationDispatchFields,
@@ -218,6 +219,7 @@ describe("release candidate checklist", () => {
   });
 
   it("propagates policy inputs unchanged into dispatch and publish fields", () => {
+    const externalContractRevision = "a".repeat(40);
     const strictDaily = parseArgs([
       "--tag",
       "v2026.7.32",
@@ -227,11 +229,14 @@ describe("release candidate checklist", () => {
       "daily",
       "--npm-dist-tag",
       "latest",
+      "--external-contract-revision",
+      externalContractRevision,
     ]);
 
     expect(buildFullValidationDispatchFields(strictDaily)).toMatchObject({
       policy_mode: "strict",
       release_selector: "daily",
+      external_contract_revision: externalContractRevision,
     });
     expect(buildNpmPreflightDispatchFields(strictDaily)).toMatchObject({
       policy_mode: "strict",
@@ -261,6 +266,48 @@ describe("release candidate checklist", () => {
     expect(() => buildPublishCommand({ ...strictStable, workflowRef: "main" })).toThrow(
       "strict stable policy preflight is nonpublishable",
     );
+  });
+
+  it("requires an exact external workflow revision before strict Full Validation dispatch", () => {
+    const strictDaily = parseArgs([
+      "--tag",
+      "v2026.7.32",
+      "--policy-mode",
+      "strict",
+      "--release-selector",
+      "daily",
+      "--npm-dist-tag",
+      "latest",
+    ]);
+    expect(() => buildFullValidationDispatchFields(strictDaily)).toThrow(
+      "strict Full Release Validation requires --external-contract-revision",
+    );
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.32",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "daily",
+        "--npm-dist-tag",
+        "latest",
+        "--external-contract-revision",
+        "ABC",
+      ]),
+    ).toThrow("--external-contract-revision must be 40 lowercase hexadecimal characters");
+  });
+
+  it("finishes policy-only stable candidates without deriving publish artifacts", () => {
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    expect(source).toContain(
+      "const publishCommand = options.publishEligible ? buildPublishCommand(options) : null",
+    );
+    expect(source).toContain("tarball: none (policy-only stable preflight)");
+    expect(source).toContain(
+      "policy-only stable preflight artifact must contain exactly three files",
+    );
+    expect(source).toContain("policy-only stable preflight complete; no publish command emitted");
   });
 
   it("infers validation profiles from candidate tags", () => {

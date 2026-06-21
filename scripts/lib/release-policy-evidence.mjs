@@ -147,6 +147,8 @@ export function writeCanonicalJsonExclusive(path, value) {
     `.${basename(outputPath)}.${process.pid}.${Date.now()}.tmp`,
   );
   let descriptor;
+  let directoryDescriptor;
+  let installed = false;
   try {
     descriptor = openSync(temporaryPath, "wx", 0o600);
     writeFileSync(descriptor, canonicalJsonWithNewline(value), "utf8");
@@ -154,21 +156,28 @@ export function writeCanonicalJsonExclusive(path, value) {
     closeSync(descriptor);
     descriptor = undefined;
     linkSync(temporaryPath, outputPath);
+    installed = true;
+    unlinkSync(temporaryPath);
+    directoryDescriptor = openSync(dirname(outputPath), "r");
+    fsyncSync(directoryDescriptor);
+    closeSync(directoryDescriptor);
+    directoryDescriptor = undefined;
   } catch (error) {
     if (descriptor !== undefined) {
       closeSync(descriptor);
     }
+    if (directoryDescriptor !== undefined) {
+      closeSync(directoryDescriptor);
+    }
     try {
       unlinkSync(temporaryPath);
     } catch {}
+    if (installed) {
+      try {
+        unlinkSync(outputPath);
+      } catch {}
+    }
     throw error;
-  }
-  unlinkSync(temporaryPath);
-  const directoryDescriptor = openSync(dirname(outputPath), "r");
-  try {
-    fsyncSync(directoryDescriptor);
-  } finally {
-    closeSync(directoryDescriptor);
   }
 }
 
@@ -604,9 +613,6 @@ export function validatePublishManifest(value, path = "publishManifest") {
   }
   if (changelog.sourceRef !== policy.authorizedSourceRef) {
     fail(`${path}.changelogEvidence.sourceRef`, "does not match release policy");
-  }
-  if (execution.runId.length === 0) {
-    fail(`${path}.execution.runId`, "required");
   }
   return manifest;
 }

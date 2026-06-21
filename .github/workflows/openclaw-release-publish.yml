@@ -149,23 +149,24 @@ jobs:
           process.stdout.write(validateStrictPublishPolicy({ version, releaseSelector }).releaseClass);
           NODE
             )"
-            case "$release_class" in
-              alpha) expected_dist_tag="alpha" ;;
-              beta) expected_dist_tag="beta" ;;
-              daily) expected_dist_tag="latest" ;;
-              stable-base|stable-patch)
-                if [[ -n "$npm_dist_tag" ]]; then
-                  echo "Strict stable policy requires an empty npm_dist_tag." >&2
-                  exit 1
-                fi
-                echo "Strict stable policy is nonpublishable and policy-only preflight cannot be promoted by the release orchestrator." >&2
+            if [[ "$release_class" == "stable-base" || "$release_class" == "stable-patch" ]]; then
+              if [[ -n "$npm_dist_tag" ]]; then
+                echo "Strict stable policy requires an empty npm_dist_tag." >&2
                 exit 1
-                ;;
-              *)
-                echo "Strict release class is not publishable." >&2
-                exit 1
-                ;;
-            esac
+              fi
+              echo "Strict stable policy is nonpublishable and policy-only preflight cannot be promoted by the release orchestrator." >&2
+              exit 1
+            fi
+            expected_dist_tag="$(node --input-type=module - "$policy_root" "$release_version" <<'NODE'
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [policyRoot, version] = process.argv.slice(2);
+          const { resolveNpmPublishPlan } = await import(
+            pathToFileURL(path.join(policyRoot, "scripts/lib/npm-publish-plan.mjs")).href
+          );
+          process.stdout.write(resolveNpmPublishPlan(version).publishTag);
+          NODE
+            )"
             if [[ "$npm_dist_tag" != "$expected_dist_tag" ]]; then
               echo "Strict npm_dist_tag does not match the existing downstream plan." >&2
               exit 1
@@ -650,14 +651,6 @@ jobs:
           }
           NODE
 
-          if [[ "$preflight_payload_sha256" != "$(sha256sum "$preflight_manifest" | awk '{print $1}')" ]]; then
-            echo "preflight payload digest mismatch" >&2
-            exit 1
-          fi
-          if [[ "$full_validation_payload_sha256" != "$(sha256sum "$full_validation_manifest" | awk '{print $1}')" ]]; then
-            echo "Full Validation payload digest mismatch" >&2
-            exit 1
-          fi
           {
             echo "preflight_run_attempt=$preflight_run_attempt"
             echo "preflight_payload_sha256=$preflight_payload_sha256"
@@ -1698,6 +1691,17 @@ jobs:
               publish_descriptor="$STRICT_EVIDENCE_ROOT/publish-descriptor.json"
               postpublish_input="$STRICT_EVIDENCE_ROOT/postpublish-operation.json"
               postpublish_verification="$STRICT_EVIDENCE_ROOT/release-operation-verifier-v1-postpublish.json"
+              postpublish_source="$RUNNER_TEMP/openclaw-release-postpublish-source"
+              rm -rf "$postpublish_source"
+              git init --quiet "$postpublish_source"
+              git -C "$postpublish_source" remote add origin "https://github.com/openclaw/openclaw.git"
+              git -C "$postpublish_source" fetch --quiet --no-tags --no-recurse-submodules origin \
+                "+refs/tags/${RELEASE_TAG}:refs/verify/target"
+              git -C "$postpublish_source" checkout --quiet --detach refs/verify/target
+              if [[ "$(git -C "$postpublish_source" rev-parse HEAD^{commit})" != "$TARGET_SHA" ]]; then
+                echo "Strict postpublish source checkout does not match the authenticated publish target." >&2
+                exit 1
+              fi
               jq -cnS \
                 --arg runId "$GITHUB_RUN_ID" \
                 --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
@@ -1718,7 +1722,7 @@ jobs:
                 --publish-manifest "$publish_manifest" \
                 --publish-descriptor "$publish_descriptor" \
                 --changelog-evidence "$STRICT_EVIDENCE_ROOT/changelog-evidence.json" \
-                --source-dir "$GITHUB_WORKSPACE" \
+                --source-dir "$postpublish_source" \
                 --source-sha "$TARGET_SHA" \
                 --release-publish-run-id "$GITHUB_RUN_ID" \
                 --release-publish-run-attempt "$GITHUB_RUN_ATTEMPT" \

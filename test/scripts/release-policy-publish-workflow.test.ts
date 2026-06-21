@@ -75,6 +75,8 @@ describe("OpenClaw release publish policy workflow", () => {
     expect(policy.permissions).toEqual({ actions: "read", contents: "read" });
     const gate = step("release_policy", "Validate release publication policy");
     expect(gate.run).toContain("validateStrictPublishPolicy");
+    expect(gate.run).toContain("resolveNpmPublishPlan");
+    expect(gate.run).not.toContain('alpha) expected_dist_tag="alpha"');
     expect(gate.run).toContain("Strict stable policy is nonpublishable");
     expect(gate.run).toContain("Legacy publication rejects uncorrected final patch 33 and greater");
     expect(job("resolve_release_target").needs).toEqual(["release_policy"]);
@@ -95,8 +97,8 @@ describe("OpenClaw release publish policy workflow", () => {
     expect(validate.run).toContain("publishEligible !== true");
     expect(validate.run).toContain(".run_attempt");
     expect(validate.run).toContain(".path == $path");
-    expect(validate.run).toContain("preflight payload digest mismatch");
-    expect(validate.run).toContain("Full Validation payload digest mismatch");
+    expect(validate.run).toContain('preflight_payload_sha256="$(sha256sum');
+    expect(validate.run).toContain('full_validation_payload_sha256="$(sha256sum');
   });
 
   it("writes, uploads, verifies, and dispatches one attempt-qualified publish manifest", () => {
@@ -157,12 +159,22 @@ describe("OpenClaw release publish policy workflow", () => {
     const dispatch = step("publish", "Dispatch publish workflows");
     expect(dispatch.run).toContain('.operation = "postpublish"');
     expect(dispatch.run).toContain("write-release-postpublish-evidence.mjs");
-    expect(dispatch.run).toContain('--source-dir "$GITHUB_WORKSPACE"');
+    expect(dispatch.run).toContain(
+      'postpublish_source="$RUNNER_TEMP/openclaw-release-postpublish-source"',
+    );
+    expect(dispatch.run).toContain('--source-dir "$postpublish_source"');
     expect(dispatch.run).toContain('--source-sha "$TARGET_SHA"');
     expect(dispatch.run).toContain('--release-publish-run-attempt "$GITHUB_RUN_ATTEMPT"');
 
     const writerIndex = dispatch.run?.indexOf("write-release-postpublish-evidence.mjs") ?? -1;
     expect(writerIndex).toBeGreaterThan(-1);
     expect(dispatch.run?.slice(writerIndex)).not.toMatch(/jq[^\n]*releasePublishRunId/);
+
+    const upload = step("publish", "Upload postpublish evidence");
+    expect(upload.if).toBe("${{ success() }}");
+    expect(upload.with?.path).toBe(
+      "${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-evidence.json",
+    );
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
   });
 });

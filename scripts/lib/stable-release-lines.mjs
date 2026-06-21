@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-const MONTH_PATTERN = /^([1-9]\d{3,})\.(1[0-2]|[1-9])$/u;
-const VERSION_PATTERN = /^([1-9]\d{3,})\.(1[0-2]|[1-9])\.([1-9]\d*)$/u;
+const MONTH_PATTERN = /^([1-9]\d{3})\.(1[0-2]|[1-9])$/u;
+const VERSION_PATTERN = /^([1-9]\d{3})\.(1[0-2]|[1-9])\.([1-9]\d*)$/u;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const LINE_STATUSES = new Set(["planned", "active", "retired"]);

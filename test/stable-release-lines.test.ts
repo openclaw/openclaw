@@ -7,6 +7,8 @@ import {
   StableReleaseLinesError,
   applyStableReleaseLinesTransition,
   deriveStableReleaseLinesState,
+  parseStableMonth,
+  parseStableVersion,
   serializeCanonicalJson,
   serializeStableReleaseLines,
   stableReleaseLinesSha256,
@@ -41,7 +43,11 @@ function createRepo(packageVersion: string): string {
   return repo;
 }
 
-function commitMetadata(repo: string, message: string): void {
+function commitMetadata(repo: string, message: string, metadata?: unknown): void {
+  if (metadata !== undefined) {
+    mkdirSync(path.join(repo, "release"), { recursive: true });
+    writeFileSync(path.join(repo, "release/stable-lines.json"), serializeCanonicalJson(metadata));
+  }
   git(repo, ["add", "release/stable-lines.json", "package.json"]);
   git(repo, ["commit", "--quiet", "-m", message]);
 }
@@ -78,6 +84,11 @@ describe("stable release line validation", () => {
       /^\{"lastTransition":.*,"lines":\[.*\],"version":1\}\n$/u,
     );
     expect(stableReleaseLinesSha256(planned)).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("requires exactly four-digit years", () => {
+    expect(() => parseStableMonth("10000.1")).toThrow("month must be YYYY.M");
+    expect(() => parseStableVersion("10000.1.33")).toThrow("version must be YYYY.M.PATCH");
   });
 
   it("rejects unknown fields and non-contiguous publication history", () => {
@@ -647,6 +658,53 @@ describe("stable release lines CLI", () => {
     expect(invalid.status).not.toBe(0);
     expect(invalid.stdout).toBe("");
     expect(readFileSync(path.join(missingRepo, "release/stable-lines.json"), "utf8")).toBe(before);
+  });
+
+  it("reports an existing planned line before invalid plan flags", () => {
+    const repo = createRepo("2026.7.1");
+    const planned = transition(null, "2026.7", {
+      operation: "plan",
+      month: "2026.6",
+      effectiveDate: "2026-06-30",
+      rotationDate: "2026-07-31",
+    });
+    commitMetadata(repo, "plan stable line", planned);
+
+    const result = runCli(repo, ["plan", "--unknown"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toEqual({
+      schemaVersion: 1,
+      error: {
+        code: "planned-line-exists",
+        reason: "a planned stable line already exists",
+      },
+    });
+  });
+
+  it("holds an exclusive transition lock across verify and write", () => {
+    const repo = createRepo("2026.7.1");
+    mkdirSync(path.join(repo, "release"), { recursive: true });
+    writeFileSync(path.join(repo, "release/.stable-lines.lock"), "other writer\n");
+
+    const result = runCli(repo, [
+      "plan",
+      "--month",
+      "2026.6",
+      "--effective-date",
+      "2026-06-30",
+      "--rotation-date",
+      "2026-07-31",
+      "--write",
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      error: {
+        code: "transition-not-allowed",
+        reason: "another stable-lines transition is already in progress",
+      },
+    });
+    expect(() => readFileSync(path.join(repo, "release/stable-lines.json"))).toThrow();
   });
 
   it("uses the closed error type for transition failures", () => {

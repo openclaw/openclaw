@@ -8,6 +8,12 @@ import { fileURLToPath } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parseReleaseVersion, resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
+import {
+  canonicalJson,
+  releasePolicySha256,
+  validateFullValidationManifest as validateReleaseFullValidationManifest,
+  validatePreflightManifest as validateReleasePreflightManifest,
+} from "./lib/release-policy-evidence.mjs";
 import { validateStrictPublishPolicy } from "./lib/release-version-policy.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
@@ -53,6 +59,7 @@ Options:
   --release-profile <beta|stable|full> Default: beta for prereleases; stable otherwise.
   --policy-mode <legacy|strict>       Default: ${DEFAULT_POLICY_MODE}
   --release-selector <selector>       alpha|beta|daily|stable. Required in strict mode.
+  --external-contract-revision <sha>  Exact openclaw/releases protected default-branch revision. Required for strict dispatch.
   --npm-dist-tag <alpha|beta|latest>  Legacy default: ${DEFAULT_NPM_DIST_TAG}; omit for strict stable.
   --plugin-publish-scope <scope>      selected|all-publishable. Default: ${DEFAULT_PLUGIN_SCOPE}
   --plugins <names>                   Required when plugin scope is selected.
@@ -169,6 +176,7 @@ export function parseArgs(argv) {
     policyMode: DEFAULT_POLICY_MODE,
     releaseProfile: "",
     releaseSelector: null,
+    externalContractRevision: "",
     npmDistTag: undefined,
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
@@ -246,6 +254,9 @@ export function parseArgs(argv) {
       case "--release-selector":
         setOnce(arg, "releaseSelector", requireValue(args, ++index, arg));
         break;
+      case "--external-contract-revision":
+        options.externalContractRevision = requireValue(args, ++index, arg);
+        break;
       case "--npm-dist-tag":
         setOnce(arg, "npmDistTag", requireStringValue(args, ++index, arg));
         break;
@@ -270,6 +281,15 @@ export function parseArgs(argv) {
     throw new Error("--tag is required");
   }
   applyReleasePolicy(options);
+  if (
+    options.externalContractRevision &&
+    !/^[0-9a-f]{40}$/u.test(options.externalContractRevision)
+  ) {
+    throw new Error("--external-contract-revision must be 40 lowercase hexadecimal characters");
+  }
+  if (options.policyMode === "legacy" && options.externalContractRevision) {
+    throw new Error("--external-contract-revision is only valid in strict policy mode");
+  }
   options.releaseProfile ||=
     options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
   if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
@@ -707,6 +727,9 @@ function appendPolicyFields(fields, options, includeNpmDistTag) {
  * from the independently selected validation profile.
  */
 export function buildFullValidationDispatchFields(options) {
+  if (options.policyMode === "strict" && !options.externalContractRevision) {
+    throw new Error("strict Full Release Validation requires --external-contract-revision");
+  }
   return appendPolicyFields(
     {
       ref: options.tag,
@@ -716,6 +739,9 @@ export function buildFullValidationDispatchFields(options) {
       run_release_soak:
         options.releaseProfile === "stable" || options.releaseProfile === "full" ? "true" : "false",
       rerun_group: "all",
+      ...(options.externalContractRevision
+        ? { external_contract_revision: options.externalContractRevision }
+        : {}),
     },
     options,
     false,
@@ -796,12 +822,49 @@ function validatePreflightManifest(manifest, params) {
       `npm preflight dist-tag mismatch: expected ${params.npmDistTag}, got ${manifest.npmDistTag}`,
     );
   }
+  if (params.policyMode === "strict") {
+    const strictManifest = validateReleasePreflightManifest(manifest);
+    if (
+      strictManifest.version !== 2 ||
+      strictManifest.releasePolicy.releaseVersion !== versionFromTag(params.tag) ||
+      strictManifest.releasePolicy.releaseSelector !== params.releaseSelector ||
+      strictManifest.releasePolicy.publishEligible !== params.publishEligible ||
+      strictManifest.releasePolicySha256 !== releasePolicySha256(strictManifest.releasePolicy)
+    ) {
+      throw new Error("strict npm preflight policy identity mismatch");
+    }
+  }
+  if (params.publishEligible === false) {
+    if (
+      manifest.version !== 2 ||
+      manifest.releasePolicy?.publishEligible !== false ||
+      manifest.tarballName !== null ||
+      manifest.tarballSha256 !== null ||
+      manifest.dependencyEvidenceDir !== null ||
+      manifest.dependencyEvidenceManifest !== null
+    ) {
+      throw new Error("policy-only stable preflight manifest contains publishable artifacts");
+    }
+    return;
+  }
   if (!manifest.tarballName || !manifest.tarballSha256) {
     throw new Error("npm preflight manifest missing tarball metadata");
   }
 }
 
 export function validateFullManifest(manifest, params) {
+  if (params.policyMode === "strict") {
+    const strictManifest = validateReleaseFullValidationManifest(manifest);
+    if (
+      strictManifest.version !== 3 ||
+      strictManifest.releasePolicy.releaseVersion !== params.releaseVersion ||
+      strictManifest.releasePolicy.releaseSelector !== params.releaseSelector ||
+      strictManifest.releasePolicy.publishEligible !== params.publishEligible ||
+      strictManifest.releasePolicySha256 !== releasePolicySha256(strictManifest.releasePolicy)
+    ) {
+      throw new Error("strict Full Release Validation policy identity mismatch");
+    }
+  }
   if (manifest.workflowName !== "Full Release Validation") {
     throw new Error(`full validation workflow mismatch: ${manifest.workflowName}`);
   }
@@ -961,38 +1024,75 @@ async function main() {
     join(fullDir, "full-release-validation-manifest.json"),
     "full validation manifest",
   );
+  if (options.publishEligible === false) {
+    const policyOnlyFiles = run("find", [npmDir, "-type", "f", "-print"], { capture: true })
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((filePath) => filePath.slice(npmDir.length + 1))
+      .sort();
+    const expectedPolicyOnlyFiles = [
+      "preflight-manifest.json",
+      "release-sha.txt",
+      "release-tag.txt",
+    ];
+    if (JSON.stringify(policyOnlyFiles) !== JSON.stringify(expectedPolicyOnlyFiles)) {
+      throw new Error("policy-only stable preflight artifact must contain exactly three files");
+    }
+  }
   validatePreflightManifest(npmManifest, {
     tag: options.tag,
     targetSha,
     npmDistTag: options.npmDistTag,
+    publishEligible: options.publishEligible,
+    policyMode: options.policyMode,
+    releaseSelector: options.releaseSelector,
   });
   validateFullManifest(fullManifest, {
     targetSha,
     releaseProfile: options.releaseProfile,
+    policyMode: options.policyMode,
+    releaseVersion: versionFromTag(options.tag),
+    releaseSelector: options.releaseSelector,
+    publishEligible: options.publishEligible,
   });
-  const tarballPath = join(npmDir, npmManifest.tarballName);
-  if (!existsSync(tarballPath)) {
-    throw new Error(`prepared tarball missing: ${tarballPath}`);
+  if (
+    options.policyMode === "strict" &&
+    (canonicalJson(npmManifest.releasePolicy) !== canonicalJson(fullManifest.releasePolicy) ||
+      npmManifest.releasePolicySha256 !== fullManifest.releasePolicySha256)
+  ) {
+    throw new Error("strict predecessor release policies are not identical");
   }
-  const actualTarballSha = sha256(tarballPath);
-  if (actualTarballSha !== npmManifest.tarballSha256) {
-    throw new Error(
-      `prepared tarball digest mismatch: expected ${npmManifest.tarballSha256}, got ${actualTarballSha}`,
-    );
+  const tarballPath = options.publishEligible ? join(npmDir, npmManifest.tarballName) : null;
+  let actualTarballSha = null;
+  if (tarballPath !== null) {
+    if (!existsSync(tarballPath)) {
+      throw new Error(`prepared tarball missing: ${tarballPath}`);
+    }
+    actualTarballSha = sha256(tarballPath);
+    if (actualTarballSha !== npmManifest.tarballSha256) {
+      throw new Error(
+        `prepared tarball digest mismatch: expected ${npmManifest.tarballSha256}, got ${actualTarballSha}`,
+      );
+    }
   }
 
-  const parallels = await runParallelsIfNeeded(options, tarballPath);
-  const npmTelegram = await runTelegramIfNeeded(options, npmArtifactName);
+  const parallels =
+    tarballPath === null
+      ? { status: "skipped", reason: "policy-only stable preflight is nonpublishable" }
+      : await runParallelsIfNeeded(options, tarballPath);
+  const npmTelegram =
+    tarballPath === null
+      ? { status: "skipped", reason: "policy-only stable preflight is nonpublishable" }
+      : await runTelegramIfNeeded(options, npmArtifactName);
   options.npmTelegramRunId = npmTelegram.runId ?? "";
-  const pluginNpmPlan = await collectPluginPlanWithRetry(
-    "scripts/plugin-npm-release-plan.ts",
-    options,
-  );
-  const pluginClawHubPlan = await collectPluginPlanWithRetry(
-    "scripts/plugin-clawhub-release-plan.ts",
-    options,
-  );
-  const publishCommand = buildPublishCommand(options);
+  const pluginNpmPlan = options.publishEligible
+    ? await collectPluginPlanWithRetry("scripts/plugin-npm-release-plan.ts", options)
+    : null;
+  const pluginClawHubPlan = options.publishEligible
+    ? await collectPluginPlanWithRetry("scripts/plugin-clawhub-release-plan.ts", options)
+    : null;
+  const publishCommand = options.publishEligible ? buildPublishCommand(options) : null;
   const evidence = {
     version: 1,
     tag: options.tag,
@@ -1015,11 +1115,14 @@ async function main() {
       fullReleaseValidation: fullArtifactName,
     },
     localGeneratedCheck,
-    tarball: {
-      name: basename(tarballPath),
-      sha256: actualTarballSha,
-      path: tarballPath,
-    },
+    tarball:
+      tarballPath === null
+        ? null
+        : {
+            name: basename(tarballPath),
+            sha256: actualTarballSha,
+            path: tarballPath,
+          },
     parallels,
     npmTelegram,
     pluginNpmPlan,
@@ -1051,29 +1154,35 @@ async function main() {
       `- local generated release checks: ${localGeneratedCheck.status}${
         localGeneratedCheck.reason ? ` (${localGeneratedCheck.reason})` : ""
       }`,
-      `- tarball: ${basename(tarballPath)}`,
-      `- tarball sha256: ${actualTarballSha}`,
+      ...(tarballPath === null
+        ? ["- tarball: none (policy-only stable preflight)"]
+        : [`- tarball: ${basename(tarballPath)}`, `- tarball sha256: ${actualTarballSha}`]),
       `- npm dist-tag: ${options.npmDistTag}`,
-      `- plugin npm plan: ${pluginNpmPlan.packages?.length ?? 0} packages`,
-      `- ClawHub plan: ${pluginClawHubPlan.packages?.length ?? 0} packages`,
+      `- plugin npm plan: ${pluginNpmPlan?.packages?.length ?? 0} packages`,
+      `- ClawHub plan: ${pluginClawHubPlan?.packages?.length ?? 0} packages`,
       `- Parallels: ${parallels.status}${parallels.reason ? ` (${parallels.reason})` : ""}`,
       `- NPM Telegram E2E: ${npmTelegram.status}${
         npmTelegram.runId ? ` ${npmTelegram.runId} ${npmTelegram.url}` : ""
       }`,
       "",
-      "Publish command:",
-      "",
-      "```bash",
-      publishCommand,
-      "```",
-      "",
+      ...(publishCommand
+        ? ["", "Publish command:", "", "```bash", publishCommand, "```", ""]
+        : [
+            "",
+            "Publish command: unavailable; policy-only stable preflight is nonpublishable.",
+            "",
+          ]),
     ].join("\n"),
   );
 
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
-  console.log("publish command:");
-  console.log(publishCommand);
+  if (publishCommand) {
+    console.log("publish command:");
+    console.log(publishCommand);
+  } else {
+    console.log("policy-only stable preflight complete; no publish command emitted");
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

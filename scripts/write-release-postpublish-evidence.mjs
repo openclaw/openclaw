@@ -114,6 +114,13 @@ export function buildReleasePostpublishEvidence(params) {
     throw new Error("strict postpublish evidence requires verified signatures and provenance");
   }
   const policy = validateReleasePolicy(params.releasePolicy);
+  const compatibilityDistTags = { alpha: "alpha", beta: "beta", daily: "latest" };
+  const expectedDistTag = compatibilityDistTags[policy.releaseClass];
+  if (expectedDistTag !== undefined && registry.npmDistTag !== expectedDistTag) {
+    throw new Error(
+      `registry result npmDistTag mismatch: expected ${expectedDistTag}, got ${registry.npmDistTag}`,
+    );
+  }
   const policyDigest = releasePolicySha256(policy);
   if (params.releasePolicySha256 !== policyDigest) {
     throw new Error("releasePolicySha256 mismatch");

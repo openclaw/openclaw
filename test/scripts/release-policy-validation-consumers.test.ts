@@ -129,12 +129,14 @@ describe("Full Release Validation strict release policy", () => {
 
   it("writes v3 only for strict mode and sends the pinned public contract descriptor", () => {
     const manifest = step(FULL_VALIDATION, "summary", "Write release validation manifest");
+    expect(manifest.run).toContain("jq_args=(-cnS)");
     expect(manifest.run).toContain("version: (if $strictRelease then 3 else 2 end)");
     expect(manifest.run).toContain("releasePolicy: $releasePolicy");
     expect(manifest.run).toContain("releasePolicySha256: $releasePolicySha256");
     expect(manifest.run).toContain("strictTargetRef");
 
     const dispatch = step(FULL_VALIDATION, "summary", "Request release evidence update");
+    expect(dispatch.env?.TARGET_REF).toContain("needs.release_policy.outputs.target_ref");
     for (const field of [
       "verifier_run_id",
       "verifier_run_attempt",

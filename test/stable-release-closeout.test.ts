@@ -193,7 +193,7 @@ function strictCloseoutParams(
     policyMainSha: identities.policy,
     stableSourceSha: identities.source,
     releaseTagSha: identities.tag,
-    policyMainAppcast: `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip\n`,
+    policyMainAppcast: `<rss xmlns:sparkle="urn:sparkle"><channel><item><sparkle:shortVersionString>${version}</sparkle:shortVersionString><enclosure url="https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip"/></item></channel></rss>\n`,
     stableLines,
     stableSourcePackageJson: { version },
     tagPackageJson: { version },
@@ -531,6 +531,20 @@ describe("stable release closeout", () => {
     );
   });
 
+  it("requires the stable release to be the leading appcast item", () => {
+    const params = strictCloseoutParams();
+    const historical = `<item><sparkle:shortVersionString>2026.5.33</sparkle:shortVersionString><enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.5.33/OpenClaw-2026.5.33.zip"/></item>`;
+    const result = verifyStrictStableMainCloseout({
+      ...params,
+      policyMainAppcast: params.policyMainAppcast.replace("<item>", `${historical}<item>`),
+    });
+
+    expect(result.manifest).toBeNull();
+    expect(result.errors).toContain(
+      "policy-main appcast.xml does not select v2026.6.33 as its leading item.",
+    );
+  });
+
   it("rejects daily before stable-only asset and rollback validation", () => {
     const params = strictCloseoutParams();
     const dailyPolicy = {
@@ -567,7 +581,7 @@ describe("stable release closeout", () => {
       const tag = `v${version}`;
       const section = `## ${version}\n\n### Fixes\n\n- Stable fix.`;
       const changelogBytes = `# Changelog\n\n${section}\n\n## 2026.6.32\n\n- Old.\n`;
-      const appcast = `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip\n`;
+      const appcast = `<rss xmlns:sparkle="urn:sparkle"><channel><item><sparkle:shortVersionString>${version}</sparkle:shortVersionString><enclosure url="https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip"/></item></channel></rss>\n`;
       const stableLines = strictStableLines(version);
       const policyDir = join(temporaryRoot, "policy");
       const sourceDir = join(temporaryRoot, "source");
@@ -686,6 +700,11 @@ describe("stable release closeout", () => {
     expect(workflow).toContain("needs.resolve.outputs.release_tag_sha ||");
     expect(workflow).toContain('scripts/verify-release-operation.mjs" verify');
     expect(workflow).toContain('--policy-main-dir "$GITHUB_WORKSPACE/policy-main"');
+    expect(workflow).toContain("candidate_tags < <(gh release list");
+    expect(workflow).toContain("releasePolicy.releaseClass // empty");
+    expect(workflow).toContain("openclaw-release-postpublish-evidence-${RELEASE_TAG}");
+    expect(workflow).toContain("release-publish-artifacts.json");
+    expect(workflow).toContain("release asset differs from the authenticated postpublish artifact");
     expect(workflow).not.toContain("ref: ${{ needs.resolve.outputs.stable_source_ref }}");
     expect(workflow.indexOf('early_release_class="$(jq -r')).toBeLessThan(
       workflow.indexOf("Verify stable state and write closeout manifest"),
