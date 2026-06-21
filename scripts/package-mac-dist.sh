@@ -29,8 +29,81 @@ IFS=' ' read -r -a DSYM_ARCHS <<< "$DSYM_ARCHS_VALUE"
 # The .debug suffix in package-mac-app.sh blanks SUFeedURL intentionally for dev builds.
 export BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac}"
 
+DIST_PNPM_CMD=()
+SPARKLE_BUILD_DEPS_RETRIED=0
+
+resolve_dist_pnpm_cmd() {
+  if command -v pnpm >/dev/null 2>&1; then
+    DIST_PNPM_CMD=(pnpm)
+    return 0
+  fi
+
+  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
+    DIST_PNPM_CMD=(corepack pnpm)
+    return 0
+  fi
+
+  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
+  exit 1
+}
+
+run_dist_pnpm() {
+  if [[ "${#DIST_PNPM_CMD[@]}" -eq 0 ]]; then
+    resolve_dist_pnpm_cmd
+  fi
+  (cd "$ROOT_DIR" && "${DIST_PNPM_CMD[@]}" "$@")
+}
+
+ensure_sparkle_build_deps() {
+  echo "📦 Ensuring deps for Sparkle build metadata" >&2
+  run_dist_pnpm install --frozen-lockfile --config.node-linker=hoisted >&2
+}
+
+run_sparkle_build_node() {
+  (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
+}
+
 canonical_sparkle_build() {
-  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
+  local version="$1"
+  local output
+  local stderr_file
+
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/openclaw-sparkle-build.XXXXXX")" || {
+    echo "ERROR: failed to create temporary stderr capture for Sparkle build metadata." >&2
+    return 1
+  }
+
+  if output="$(run_sparkle_build_node "$version" 2>"$stderr_file")"; then
+    if [[ -s "$stderr_file" ]]; then
+      cat "$stderr_file" >&2
+    fi
+    rm -f "$stderr_file"
+    printf '%s\n' "$output"
+    return 0
+  fi
+
+  if [[ "$SPARKLE_BUILD_DEPS_RETRIED" == "1" ]]; then
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return 1
+  fi
+
+  rm -f "$stderr_file"
+  SPARKLE_BUILD_DEPS_RETRIED=1
+  ensure_sparkle_build_deps || return 1
+  run_sparkle_build_node "$version"
+}
+
+require_canonical_sparkle_build() {
+  local version="$1"
+  local build
+
+  if ! build="$(canonical_sparkle_build "$version")" || [[ ! "$build" =~ ^[0-9]+$ ]]; then
+    echo "Error: failed to derive canonical Sparkle build for '$version'." >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$build"
 }
 
 correction_build_from_exact_tag() {
@@ -56,11 +129,9 @@ correction_build_from_exact_tag() {
 # Local fallback releases must not silently fall back to a git-rev-count build number.
 # For correction tags, pass a higher explicit APP_BUILD than the canonical floor.
 if [[ -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]; then
-  CANONICAL_APP_BUILD="$(canonical_sparkle_build "$APP_VERSION_INPUT" 2>/dev/null || true)"
-  if [[ "$CANONICAL_APP_BUILD" =~ ^[0-9]+$ ]]; then
-    APP_BUILD="$(correction_build_from_exact_tag "$APP_VERSION_INPUT" "$CANONICAL_APP_BUILD")"
-    export APP_BUILD="${APP_BUILD:-$CANONICAL_APP_BUILD}"
-  fi
+  CANONICAL_APP_BUILD="$(require_canonical_sparkle_build "$APP_VERSION_INPUT")"
+  APP_BUILD="$(correction_build_from_exact_tag "$APP_VERSION_INPUT" "$CANONICAL_APP_BUILD")"
+  export APP_BUILD="${APP_BUILD:-$CANONICAL_APP_BUILD}"
 fi
 
 "$ROOT_DIR/scripts/package-mac-app.sh"
@@ -83,6 +154,13 @@ SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
 NOTARIZE=1
 SKIP_DSYM="${SKIP_DSYM:-0}"
 SKIP_DMG="${SKIP_DMG:-0}"
+NOTARY_ZIP_PENDING_CLEANUP=0
+
+cleanup_notary_zip() {
+  if [[ "$NOTARY_ZIP_PENDING_CLEANUP" == "1" ]]; then
+    rm -f "$NOTARY_ZIP"
+  fi
+}
 
 if [[ "$SKIP_NOTARIZE" == "1" ]]; then
   NOTARIZE=0
@@ -99,26 +177,28 @@ if [[ "$BUILD_CONFIG" == "release" ]]; then
     exit 1
   fi
 
-  CANONICAL_APP_BUILD="$(canonical_sparkle_build "$VERSION" 2>/dev/null || true)"
-  if [[ "$CANONICAL_APP_BUILD" =~ ^[0-9]+$ ]]; then
-    if [[ ! "$BUNDLE_VERSION" =~ ^[0-9]+$ ]]; then
-      echo "Error: release packaging produced non-numeric CFBundleVersion '$BUNDLE_VERSION'." >&2
-      exit 1
-    fi
-    if (( BUNDLE_VERSION < CANONICAL_APP_BUILD )); then
-      echo "Error: CFBundleVersion '$BUNDLE_VERSION' is below the canonical Sparkle floor '$CANONICAL_APP_BUILD' for '$VERSION'." >&2
-      echo "Set APP_BUILD explicitly only when you need a higher correction build." >&2
-      exit 1
-    fi
+  CANONICAL_APP_BUILD="$(require_canonical_sparkle_build "$VERSION")"
+  if [[ ! "$BUNDLE_VERSION" =~ ^[0-9]+$ ]]; then
+    echo "Error: release packaging produced non-numeric CFBundleVersion '$BUNDLE_VERSION'." >&2
+    exit 1
+  fi
+  if (( BUNDLE_VERSION < CANONICAL_APP_BUILD )); then
+    echo "Error: CFBundleVersion '$BUNDLE_VERSION' is below the canonical Sparkle floor '$CANONICAL_APP_BUILD' for '$VERSION'." >&2
+    echo "Set APP_BUILD explicitly only when you need a higher correction build." >&2
+    exit 1
   fi
 fi
 
 if [[ "$NOTARIZE" == "1" ]]; then
   echo "📦 Notary zip: $NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
+  NOTARY_ZIP_PENDING_CLEANUP=1
+  trap cleanup_notary_zip EXIT
   ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
   STAPLE_APP_PATH="$APP" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
+  NOTARY_ZIP_PENDING_CLEANUP=0
+  trap - EXIT
 fi
 
 echo "📦 Zip: $ZIP"
@@ -187,7 +267,10 @@ if [[ "$SKIP_DSYM" != "1" ]]; then
     fi
     echo "🧩 dSYM: $DSYM_ZIP"
     rm -f "$DSYM_ZIP"
-    ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"
+    if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then
+      rm -rf "$TMP_DSYM"
+      exit 1
+    fi
     rm -rf "$TMP_DSYM"
   else
     echo "Error: dSYM not found (set SKIP_DSYM=1 to skip symbols)" >&2

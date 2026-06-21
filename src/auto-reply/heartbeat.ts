@@ -24,12 +24,42 @@ export const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
+function stripLeadingHtmlCommentScaffolding(
+  line: string,
+  state: { inHtmlComment: boolean },
+): string {
+  let remaining = line;
+  while (state.inHtmlComment || remaining.trimStart().startsWith("<!--")) {
+    const searchText = state.inHtmlComment ? remaining : remaining.trimStart();
+    const commentEnd = searchText.indexOf("-->");
+    if (commentEnd === -1) {
+      state.inHtmlComment = true;
+      return "";
+    }
+
+    state.inHtmlComment = false;
+    if (searchText === remaining) {
+      remaining = remaining.slice(commentEnd + 3);
+    } else {
+      const leadingWidth = remaining.length - searchText.length;
+      remaining = remaining.slice(0, leadingWidth) + searchText.slice(commentEnd + 3);
+    }
+  }
+  return remaining;
+}
+
+function stripHeartbeatHtmlComments(content: string): string[] {
+  const state = { inHtmlComment: false };
+  return content.split("\n").map((line) => stripLeadingHtmlCommentScaffolding(line, state));
+}
+
 /**
  * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
  *
  * A file is considered effectively empty if it contains only:
  * - Whitespace / empty lines
+ * - Markdown/HTML comments
  * - Markdown ATX headers (`#`, `##`, ...)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
@@ -45,11 +75,15 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     return false;
   }
 
-  const lines = content.split("\n");
+  const lines = stripHeartbeatHtmlComments(content);
   for (const line of lines) {
     const trimmed = line.trim();
     // Skip empty lines
     if (!trimmed) {
+      continue;
+    }
+    // Skip single-line HTML comments used by the bundled runtime template.
+    if (/^<!--.*-->$/.test(trimmed)) {
       continue;
     }
     // Skip markdown header lines (# followed by space or EOL, ## etc)
@@ -62,9 +96,9 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
       continue;
     }
-    // Ignore markdown fence markers that were added for doc rendering but do
-    // not carry task semantics in the workspace template body.
-    if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
+    // Ignore markdown fence markers and HTML comments that only document the
+    // workspace template; neither carries heartbeat task semantics.
+    if (/^```[A-Za-z0-9_-]*$/.test(trimmed) || /^<!--.*-->$/.test(trimmed)) {
       continue;
     }
     // Found a non-empty, non-comment line - there's actionable content
@@ -224,7 +258,7 @@ export function stripHeartbeatToken(
  */
 export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
   const tasks: HeartbeatTask[] = [];
-  const lines = content.split("\n");
+  const lines = stripHeartbeatHtmlComments(content);
   let inTasksBlock = false;
 
   for (let i = 0; i < lines.length; i++) {

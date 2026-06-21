@@ -1,9 +1,7 @@
+// Verifies live session model selection, switch queuing, and pending-flag cleanup.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
-  abortEmbeddedAgentRunMock: vi.fn(),
-  requestEmbeddedRunModelSwitchMock: vi.fn(),
-  consumeEmbeddedRunModelSwitchMock: vi.fn(),
   resolveDefaultModelForAgentMock: vi.fn(),
   resolvePersistedSelectedModelRefMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
@@ -16,14 +14,6 @@ vi.mock("./embedded-agent.js", () => {
   state.embeddedAgentModuleImported = true;
   return {};
 });
-
-vi.mock("./embedded-agent-runner/runs.js", () => ({
-  abortEmbeddedAgentRun: (...args: unknown[]) => state.abortEmbeddedAgentRunMock(...args),
-  requestEmbeddedRunModelSwitch: (...args: unknown[]) =>
-    state.requestEmbeddedRunModelSwitchMock(...args),
-  consumeEmbeddedRunModelSwitch: (...args: unknown[]) =>
-    state.consumeEmbeddedRunModelSwitchMock(...args),
-}));
 
 vi.mock("./model-selection.js", async () => {
   const actual =
@@ -63,6 +53,8 @@ type ShouldSwitchParams = Parameters<
 >[0];
 
 function makeShouldSwitchParams(overrides: Partial<ShouldSwitchParams> = {}): ShouldSwitchParams {
+  // Defaults model an active Anthropic run so individual tests can override
+  // only the persisted/live selection fields under scrutiny.
   return {
     cfg: { session: { store: "/tmp/custom-store.json" } },
     sessionKey: "main",
@@ -81,9 +73,6 @@ describe("live model switch", () => {
   });
 
   beforeEach(() => {
-    state.abortEmbeddedAgentRunMock.mockReset().mockReturnValue(false);
-    state.requestEmbeddedRunModelSwitchMock.mockReset();
-    state.consumeEmbeddedRunModelSwitchMock.mockReset();
     state.embeddedAgentModuleImported = false;
     state.resolveDefaultModelForAgentMock
       .mockReset()
@@ -232,6 +221,8 @@ describe("live model switch", () => {
   });
 
   it("preserves provider when runtime model is a vendor-prefixed OpenRouter id", async () => {
+    // OpenRouter models often contain provider-like slashes. An explicit
+    // runtime provider must keep the full nested model id intact.
     state.loadSessionStoreMock.mockReturnValue({
       main: {
         modelProvider: "openrouter",
@@ -310,6 +301,8 @@ describe("live model switch", () => {
   });
 
   it("routes normalized overrides back through persisted ref resolution", async () => {
+    // Normalization strips duplicate provider prefixes before handing the
+    // choice to the shared persisted-ref resolver.
     state.loadSessionStoreMock.mockReturnValue({
       main: {
         providerOverride: "z-ai",
@@ -333,25 +326,6 @@ describe("live model switch", () => {
       runtimeModel: undefined,
       overrideProvider: "z-ai",
       overrideModel: "deepseek-chat",
-    });
-  });
-
-  it("queues a live switch only when an active run was aborted", async () => {
-    state.abortEmbeddedAgentRunMock.mockReturnValue(true);
-
-    const { requestLiveSessionModelSwitch } = await loadModule();
-
-    expect(
-      requestLiveSessionModelSwitch({
-        sessionEntry: { sessionId: "session-1" },
-        selection: { provider: "openai", model: "gpt-5.4", authProfileId: "profile-gpt" },
-      }),
-    ).toBe(true);
-    expect(state.abortEmbeddedAgentRunMock).toHaveBeenCalledWith("session-1");
-    expect(state.requestEmbeddedRunModelSwitchMock).toHaveBeenCalledWith("session-1", {
-      provider: "openai",
-      model: "gpt-5.4",
-      authProfileId: "profile-gpt",
     });
   });
 
@@ -430,23 +404,6 @@ describe("live model switch", () => {
     ).toBe(false);
   });
 
-  it("does not track persisted live selection when the run started on a transient model override", async () => {
-    const { shouldTrackPersistedLiveSessionModelSelection } = await loadModule();
-
-    expect(
-      shouldTrackPersistedLiveSessionModelSelection(
-        {
-          provider: "anthropic",
-          model: "claude-haiku-4-5",
-        },
-        {
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-        },
-      ),
-    ).toBe(false);
-  });
-
   describe("shouldSwitchToLiveModel", () => {
     it("returns the persisted selection when liveModelSwitchPending is true and model differs", async () => {
       const sessionEntry = {
@@ -508,6 +465,8 @@ describe("live model switch", () => {
     });
 
     it("clears the stale liveModelSwitchPending flag when models already match", async () => {
+      // A stale pending flag should self-heal once the active runtime already
+      // matches the persisted selection.
       const sessionEntry = {
         liveModelSwitchPending: true,
         providerOverride: "anthropic",

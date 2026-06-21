@@ -374,13 +374,11 @@ function isUnsupportedOptionalLockPackage(value: unknown): boolean {
   );
 }
 
-function readLockPackageName(location: string, value: unknown): string | undefined {
-  if (isRecord(value)) {
-    const packageName = readOptionalString(value.name);
-    if (packageName) {
-      return packageName;
-    }
-  }
+function hasNpmPlatformConstraint(value: Record<string, unknown>): boolean {
+  return value.os !== undefined || value.cpu !== undefined || value.libc !== undefined;
+}
+
+function readLockPackageLocationName(location: string): string | undefined {
   const parts = location.split("/");
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     if (parts[index] !== "node_modules") {
@@ -399,8 +397,77 @@ function readLockPackageName(location: string, value: unknown): string | undefin
   return undefined;
 }
 
+function readLockPackageName(location: string, value: unknown): string | undefined {
+  if (isRecord(value)) {
+    const packageName = readOptionalString(value.name);
+    if (packageName) {
+      return packageName;
+    }
+  }
+  return readLockPackageLocationName(location);
+}
+
+function resolveManagedNpmLockPackagePath(params: {
+  npmRoot: string;
+  location: string;
+}): string | undefined {
+  const npmRoot = path.resolve(params.npmRoot);
+  const packagePath = path.resolve(npmRoot, ...params.location.split("/"));
+  const relativePath = path.relative(npmRoot, packagePath);
+  if (
+    !relativePath ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    return undefined;
+  }
+  return packagePath;
+}
+
 function isTopLevelLockPackageLocation(location: string): boolean {
   return location.split("/").filter((part) => part === "node_modules").length === 1;
+}
+
+export type MissingRequiredPlatformPackage = {
+  name: string;
+  packagePath: string;
+};
+
+/** Lists explicitly required current-platform packages that npm recorded but did not materialize. */
+export async function listMissingRequiredPlatformPackages(params: {
+  npmRoot: string;
+  requiredPackageNames: ReadonlySet<string> | readonly string[];
+}): Promise<MissingRequiredPlatformPackage[]> {
+  const requiredPackageNames = new Set(params.requiredPackageNames);
+  if (requiredPackageNames.size === 0) {
+    return [];
+  }
+  const lockPath = path.join(params.npmRoot, "package-lock.json");
+  const parsed = await readJson<unknown>(lockPath);
+  if (!isRecord(parsed) || !isRecord(parsed.packages)) {
+    return [];
+  }
+  const missing: MissingRequiredPlatformPackage[] = [];
+  for (const [location, value] of Object.entries(parsed.packages)) {
+    if (
+      !isRecord(value) ||
+      value.optional !== true ||
+      !hasNpmPlatformConstraint(value) ||
+      isUnsupportedOptionalLockPackage(value)
+    ) {
+      continue;
+    }
+    const name = readLockPackageLocationName(location);
+    const packagePath = resolveManagedNpmLockPackagePath({ npmRoot: params.npmRoot, location });
+    if (!name || !requiredPackageNames.has(name) || !isSafePackageName(name) || !packagePath) {
+      continue;
+    }
+    if (!(await pathExists(packagePath))) {
+      missing.push({ name, packagePath });
+    }
+  }
+  return missing.toSorted((left, right) => left.packagePath.localeCompare(right.packagePath));
 }
 
 function findLockPackageVersion(params: {

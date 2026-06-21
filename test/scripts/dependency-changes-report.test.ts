@@ -1,9 +1,25 @@
+// Dependency Changes Report tests cover dependency changes report script behavior.
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createDependencyChangesReport,
   dependencyDiffPathspecs,
   isDependencyFile,
+  parseArgs,
 } from "../../scripts/dependency-changes-report.mjs";
+
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, ["scripts/dependency-changes-report.mjs", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+  });
+}
+
+function expectNoNodeStack(stderr: string) {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
+}
 
 describe("dependency-changes-report", () => {
   it("reports added, removed, and changed packages", () => {
@@ -56,5 +72,34 @@ describe("dependency-changes-report", () => {
   it("includes plugin shrinkwrap files in git diff pathspecs", () => {
     expect(dependencyDiffPathspecs()).toContain("extensions/*/package-lock.json");
     expect(dependencyDiffPathspecs()).toContain("extensions/*/npm-shrinkwrap.json");
+  });
+
+  it("rejects missing report artifact path option values", () => {
+    for (const flag of [
+      "--root",
+      "--base-ref",
+      "--base-lockfile",
+      "--head-lockfile",
+      "--json",
+      "--markdown",
+    ]) {
+      expect(() => parseArgs([flag, "--json"])).toThrow(`${flag} requires a value`);
+    }
+  });
+
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const missingBase = runCli();
+    expect(missingBase.status).toBe(1);
+    expect(missingBase.stdout).toBe("");
+    expect(missingBase.stderr.trim()).toBe(
+      "Expected --base-ref <git-ref> or --base-lockfile <path>.",
+    );
+    expectNoNodeStack(missingBase.stderr);
+
+    const unknownArg = runCli("--wat");
+    expect(unknownArg.status).toBe(1);
+    expect(unknownArg.stdout).toBe("");
+    expect(unknownArg.stderr.trim()).toBe("Unsupported argument: --wat");
+    expectNoNodeStack(unknownArg.stderr);
   });
 });

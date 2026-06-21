@@ -9,6 +9,16 @@ import {
   resolveSkillStatusEntry,
   type SkillStatusEntry,
 } from "../discovery/status.js";
+import {
+  assertInsideWorkspace,
+  assertWorkspaceSkillWriteTarget,
+  MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+  normalizeWorkspaceSkillSupportPath,
+  readWorkspaceSkillFile,
+  readWorkspaceSupportFile,
+  writeWorkspaceSkill,
+} from "../lifecycle/workspace-skill-write.js";
+import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillContent, scanSource } from "../security/scanner.js";
 import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "./config.js";
@@ -18,29 +28,21 @@ import {
   stripProposalFrontmatterForSkill,
 } from "./frontmatter.js";
 import {
-  assertInsideWorkspace,
   createSkillProposalId,
   createSkillProposalRollback,
   hashSkillProposalContent,
-  MAX_PROPOSAL_SUPPORT_FILE_BYTES,
   MAX_PROPOSAL_SUPPORT_FILES,
-  normalizeSkillProposalSupportPath,
   prepareSkillProposalSupportFiles,
   readProposalSupportFiles,
   readSkillProposal,
   readSkillProposalRecord,
   readSkillProposalManifest,
-  removeWorkspaceSupportFile,
-  readWorkspaceSupportFile,
-  readWorkspaceSkillFile,
   replaceSkillProposalDraft,
   refreshSkillProposalManifest,
   resolveSkillProposalTarget,
   updateSkillProposalRecord,
   writeSkillProposal,
   writeSkillProposalRollback,
-  writeWorkspaceSupportFile,
-  writeWorkspaceSkillFile,
   withSkillProposalTargetLock,
   type PreparedSkillProposalSupportFile,
 } from "./store.js";
@@ -134,14 +136,14 @@ export async function readSkillProposalDraftDirectory(dirPath: string): Promise<
     if (entry.kind !== "file") {
       throw new Error(`Proposal support file must be a regular file: ${relativePath}`);
     }
-    const supportPath = normalizeSkillProposalSupportPath(relativePath);
+    const supportPath = normalizeWorkspaceSkillSupportPath(relativePath);
     const stats = await fs.stat(entry.path);
     if ((stats.mode & 0o111) !== 0) {
       throw new Error(`Proposal support files must not be executable: ${relativePath}`);
     }
     const read = await draftRoot.read(relativePath, {
       hardlinks: "reject",
-      maxBytes: MAX_PROPOSAL_SUPPORT_FILE_BYTES,
+      maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
       symlinks: "reject",
     });
     supportFiles.push({
@@ -529,6 +531,18 @@ export async function applySkillProposal(
 
     assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
     assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+    const workshopConfig = resolveSkillWorkshopConfig(input.config);
+    const symlinkPolicy = {
+      allowWrites: workshopConfig.allowSymlinkTargetWrites,
+      allowedTargetRealPaths: workshopConfig.allowSymlinkTargetWrites
+        ? resolveAllowedSkillSymlinkTargetRealPaths(input.config)
+        : [],
+    };
+    await assertWorkspaceSkillWriteTarget({
+      workspaceDir: input.workspaceDir,
+      filePath: record.target.skillFile,
+      symlinkPolicy,
+    });
     const targetState = await readApplyTargetState(record, supportFiles);
     const rollback = createSkillProposalRollback({
       proposalId: record.id,
@@ -547,12 +561,14 @@ export async function applySkillProposal(
     });
 
     const skillContent = stripProposalFrontmatterForSkill(content);
-    await publishProposalTarget({
+    await writeWorkspaceSkill({
       workspaceDir: input.workspaceDir,
-      record,
-      skillContent,
+      skillDir: record.target.skillDir,
+      skillFile: record.target.skillFile,
+      content: skillContent,
       supportFiles,
-      previousSupportFiles: targetState.previousSupportFiles,
+      mode: record.kind,
+      symlinkPolicy,
     });
     bumpSkillsSnapshotVersion({
       workspaceDir: input.workspaceDir,
@@ -637,81 +653,6 @@ async function readApplyTargetState(
     }
   }
   return { previousContent, previousSupportFiles };
-}
-
-async function publishProposalTarget(params: {
-  workspaceDir: string;
-  record: SkillProposalRecord;
-  skillContent: string;
-  supportFiles: readonly PreparedSkillProposalSupportFile[];
-  previousSupportFiles: NonNullable<SkillProposalRollback["supportFiles"]>;
-}): Promise<void> {
-  const writtenSupportPaths: string[] = [];
-  try {
-    for (const file of params.supportFiles) {
-      await writeWorkspaceSupportFile({
-        skillDir: params.record.target.skillDir,
-        relativePath: file.path,
-        content: file.content,
-        overwrite: params.record.kind === "update",
-      });
-      writtenSupportPaths.push(file.path);
-    }
-    await writeWorkspaceSkillFile({
-      workspaceDir: params.workspaceDir,
-      filePath: params.record.target.skillFile,
-      content: params.skillContent,
-      overwrite: params.record.kind === "update",
-    });
-  } catch (error) {
-    if (params.record.kind === "create") {
-      await cleanupCreatedSupportFiles(params.record, writtenSupportPaths);
-    } else {
-      await restoreUpdatedSupportFiles({
-        record: params.record,
-        writtenSupportPaths,
-        previousSupportFiles: params.previousSupportFiles,
-      });
-    }
-    throw error;
-  }
-}
-
-async function cleanupCreatedSupportFiles(
-  record: SkillProposalRecord,
-  writtenSupportPaths: readonly string[],
-): Promise<void> {
-  await Promise.allSettled(
-    writtenSupportPaths.toReversed().map(async (relativePath) => {
-      await removeWorkspaceSupportFile({ skillDir: record.target.skillDir, relativePath });
-    }),
-  );
-}
-
-async function restoreUpdatedSupportFiles(params: {
-  record: SkillProposalRecord;
-  writtenSupportPaths: readonly string[];
-  previousSupportFiles: NonNullable<SkillProposalRollback["supportFiles"]>;
-}): Promise<void> {
-  const previousByPath = new Map(params.previousSupportFiles.map((file) => [file.path, file]));
-  await Promise.allSettled(
-    params.writtenSupportPaths.toReversed().map(async (relativePath) => {
-      const previous = previousByPath.get(relativePath);
-      if (!previous) {
-        return;
-      }
-      if (previous.existed) {
-        await writeWorkspaceSupportFile({
-          skillDir: params.record.target.skillDir,
-          relativePath,
-          content: previous.previousContent ?? "",
-          overwrite: true,
-        });
-      } else {
-        await removeWorkspaceSupportFile({ skillDir: params.record.target.skillDir, relativePath });
-      }
-    }),
-  );
 }
 
 function scanProposalBundle(

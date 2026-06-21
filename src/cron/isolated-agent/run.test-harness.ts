@@ -1,3 +1,4 @@
+// Isolated run test harness builds cron run inputs, mocks, and assertions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
@@ -68,6 +69,7 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
+export const queueCronMessageToolDeliveryAwarenessMock = createMock();
 export const cleanupDirectCronSessionMock = createMock();
 export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
@@ -82,7 +84,7 @@ const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
 export const resolveCronAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
-const deriveSessionTotalTokensMock = createMock();
+export const deriveSessionTotalTokensMock = createMock();
 const hasNonzeroUsageMock = createMock();
 const ensureAgentWorkspaceMock = createMock();
 const normalizeThinkLevelMock = createMock();
@@ -311,6 +313,7 @@ vi.mock("./run-delivery.runtime.js", async () => {
     cleanupDirectCronSession: cleanupDirectCronSessionMock,
     resolveDeliveryTarget: resolveDeliveryTargetMock,
     dispatchCronDelivery: dispatchCronDeliveryMock,
+    queueCronMessageToolDeliveryAwareness: queueCronMessageToolDeliveryAwarenessMock,
   };
 });
 
@@ -456,9 +459,20 @@ function resetRunConfigMocks(): void {
   resolveAgentTimeoutMsMock.mockReturnValue(60_000);
   deriveSessionTotalTokensMock.mockReturnValue(30);
   hasNonzeroUsageMock.mockImplementation(
-    (usage: { input?: unknown; output?: unknown } | undefined) =>
-      (typeof usage?.input === "number" && usage.input > 0) ||
-      (typeof usage?.output === "number" && usage.output > 0),
+    (
+      usage:
+        | {
+            input?: unknown;
+            output?: unknown;
+            cacheRead?: unknown;
+            cacheWrite?: unknown;
+            total?: unknown;
+          }
+        | undefined,
+    ) =>
+      [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite, usage?.total].some(
+        (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
+      ),
   );
   ensureAgentWorkspaceMock.mockResolvedValue({ dir: "/tmp/workspace" });
   normalizeThinkLevelMock.mockImplementation((value: unknown) => value);
@@ -619,6 +633,8 @@ function resetRunOutcomeMocks(): void {
       deliveryPayloads,
     }),
   );
+  queueCronMessageToolDeliveryAwarenessMock.mockReset();
+  queueCronMessageToolDeliveryAwarenessMock.mockResolvedValue(undefined);
   cleanupDirectCronSessionMock.mockReset();
   cleanupDirectCronSessionMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();

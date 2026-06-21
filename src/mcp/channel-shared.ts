@@ -1,3 +1,4 @@
+// Shared MCP channel helpers normalize channel tool payloads and responses.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString as toText,
@@ -125,13 +126,6 @@ export type QueueEvent =
       type: "plugin_approval_requested" | "plugin_approval_resolved";
       raw: Record<string, unknown>;
     };
-
-/** Claude channel permission notification payload before it is assigned an event cursor. */
-export type ClaudePermissionRequest = {
-  toolName: string;
-  description: string;
-  inputPreview: string;
-};
 
 /** Cursor and optional session filter used by event polling and waiting. */
 export type WaitFilter = {

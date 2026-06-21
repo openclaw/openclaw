@@ -34,6 +34,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "always-on",
+    sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     config: {
       command: "claude",
@@ -47,6 +48,8 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "user",
         "--allowedTools",
         "mcp__openclaw__*",
+        "--disallowedTools",
+        "ScheduleWakeup,CronCreate",
       ],
       resumeArgs: [
         "-p",
@@ -58,6 +61,8 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "user",
         "--allowedTools",
         "mcp__openclaw__*",
+        "--disallowedTools",
+        "ScheduleWakeup,CronCreate",
         "--resume",
         "{sessionId}",
       ],

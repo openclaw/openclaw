@@ -1,3 +1,4 @@
+// Chat message content helpers extract user-visible text from mixed message parts.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
 /** Returns inline string content or the first array text block without scanning later blocks. */
@@ -51,18 +52,6 @@ export function parseAssistantTextSignature(
   } catch {
     return null;
   }
-}
-
-/** Encodes versioned assistant text metadata stored alongside streamed text blocks. */
-export function encodeAssistantTextSignature(params: {
-  id: string;
-  phase?: AssistantPhase;
-}): string {
-  return JSON.stringify({
-    v: 1,
-    id: params.id,
-    ...(params.phase ? { phase: params.phase } : {}),
-  });
 }
 
 /** Resolves a message phase only when the top-level phase or all explicit blocks agree. */

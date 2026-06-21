@@ -1,3 +1,4 @@
+// Media store persists loaded media files and metadata for later references.
 import "../infra/fs-safe-defaults.js";
 import crypto from "node:crypto";
 import { createWriteStream } from "node:fs";
@@ -188,10 +189,25 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
   }
 }
 
+// Maps the cleanup mode onto the prune sweep depth. The fs-safe prune walker keys descent off
+// maxDepth whenever it is set and only falls back to the recursive flag when maxDepth is undefined,
+// so recursive:false must resolve to depth 0 (root only). Without this, recursive:false collapses
+// to the same one-level sweep as the unset default and would still descend into — and delete —
+// retained media subdirectories (e.g. media/inbound/<id>).
+function resolveCleanupMaxDepth(recursive: boolean | undefined): number | undefined {
+  if (recursive === true) {
+    return undefined; // full-tree sweep (configured maintenance timer)
+  }
+  if (recursive === false) {
+    return 0; // root-only sweep; never descend into retained subdirectories
+  }
+  return 1; // default: prune the media root and its immediate first-level subdirectories
+}
+
 /** Prunes expired media files, optionally recursing into scoped media subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   await openMediaStore().pruneExpired({
-    maxDepth: options.recursive ? undefined : 1,
+    maxDepth: resolveCleanupMaxDepth(options.recursive),
     ttlMs,
     recursive: options.recursive ?? true,
     pruneEmptyDirs: options.pruneEmptyDirs,
@@ -524,7 +540,6 @@ export async function saveMediaSource(
 ): Promise<SavedMedia> {
   const dir = resolveMediaScopedDir(subdir, "saveMediaSource");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await cleanOldMedia(DEFAULT_TTL_MS, { recursive: false });
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     return await saveMediaSiblingTempFile({

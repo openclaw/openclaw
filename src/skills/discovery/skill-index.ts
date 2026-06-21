@@ -1,3 +1,4 @@
+// Skill index helpers map normalized skill names to loaded skill entries.
 import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
 import type { SkillEntry } from "../types.js";
@@ -17,7 +18,7 @@ export type SkillIndexEntry = {
   userInvocable: boolean;
 };
 
-export type SkillIndex = {
+type SkillIndex = {
   entries: SkillIndexEntry[];
   runtimeEntries: SkillEntry[];
   promptVisibleEntries: SkillEntry[];
@@ -26,7 +27,7 @@ export type SkillIndex = {
   byNormalizedName: ReadonlyMap<string, readonly SkillIndexEntry[]>;
 };
 
-export type BuildSkillIndexOptions = {
+type BuildSkillIndexOptions = {
   bundledNames?: ReadonlySet<string>;
   agentSkillFilter?: readonly string[];
 };

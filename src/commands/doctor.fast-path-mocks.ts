@@ -1,3 +1,4 @@
+/** Fast-path module mocks for doctor command tests that do not need full integrations. */
 import { vi } from "vitest";
 
 vi.mock("./doctor-completion.js", () => ({
@@ -48,9 +49,10 @@ vi.mock("./doctor-config-audit-scrub.js", () => ({
   maybeScrubConfigAuditLog: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-cron.js", () => ({
+vi.mock("./doctor/cron/index.js", () => ({
   maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
   noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
+  repairLegacyCronStoreWithoutPrompt: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
 }));
 
 vi.mock("./doctor-device-pairing.js", () => ({
@@ -144,6 +146,6 @@ vi.mock("./doctor-heartbeat-template-repair.js", () => ({
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./oauth-tls-preflight.js", () => ({
+vi.mock("../plugins/provider-openai-chatgpt-oauth-tls.js", () => ({
   noteOpenAIOAuthTlsPrerequisites: vi.fn().mockResolvedValue(undefined),
 }));

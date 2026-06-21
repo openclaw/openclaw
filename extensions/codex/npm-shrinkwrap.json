@@ -1,23 +1,23 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.6.2",
+  "version": "2026.6.8",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/codex",
-      "version": "2026.6.2",
+      "version": "2026.6.8",
       "dependencies": {
-        "@openai/codex": "0.135.0",
+        "@openai/codex": "0.139.0",
         "typebox": "1.1.39",
         "ws": "8.21.0",
         "zod": "4.4.3"
       }
     },
     "node_modules/@openai/codex": {
-      "version": "0.135.0",
-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0.tgz",
-      "integrity": "sha512-ID75QEYmAT1WsUQmpxPlNsL5W1a+2eeD7fP6ywdwGseiXUG8D5i16L+dzbr8MT+2oTkaVqzOdvAqVOCeV/H/Bw==",
+      "version": "0.139.0",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.139.0.tgz",
+      "integrity": "sha512-wr2fRE+fzW0CjEbfFsLh1ftarVEcw0CMLWS7QyA0nyOz5qacQPVq3cq2+/U7oEbwm1TOqoi0Fm1nxniB5FkpmA==",
       "license": "Apache-2.0",
       "bin": {
         "codex": "bin/codex.js"
@@ -26,19 +26,19 @@
         "node": ">=16"
       },
       "optionalDependencies": {
-        "@openai/codex-darwin-arm64": "npm:@openai/codex@0.135.0-darwin-arm64",
-        "@openai/codex-darwin-x64": "npm:@openai/codex@0.135.0-darwin-x64",
-        "@openai/codex-linux-arm64": "npm:@openai/codex@0.135.0-linux-arm64",
-        "@openai/codex-linux-x64": "npm:@openai/codex@0.135.0-linux-x64",
-        "@openai/codex-win32-arm64": "npm:@openai/codex@0.135.0-win32-arm64",
-        "@openai/codex-win32-x64": "npm:@openai/codex@0.135.0-win32-x64"
+        "@openai/codex-darwin-arm64": "npm:@openai/codex@0.139.0-darwin-arm64",
+        "@openai/codex-darwin-x64": "npm:@openai/codex@0.139.0-darwin-x64",
+        "@openai/codex-linux-arm64": "npm:@openai/codex@0.139.0-linux-arm64",
+        "@openai/codex-linux-x64": "npm:@openai/codex@0.139.0-linux-x64",
+        "@openai/codex-win32-arm64": "npm:@openai/codex@0.139.0-win32-arm64",
+        "@openai/codex-win32-x64": "npm:@openai/codex@0.139.0-win32-x64"
       }
     },
     "node_modules/@openai/codex-darwin-arm64": {
       "name": "@openai/codex",
-      "version": "0.135.0-darwin-arm64",
-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0-darwin-arm64.tgz",
-      "integrity": "sha512-wpNzssusKfrldVlq39+HyQh1wCyc9SQNpHdAFGKtPenrgRte4Ct8/oVsDtKWuFZsqLBFwbL4MrzrevnB63+9HA==",
+      "version": "0.139.0-darwin-arm64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.139.0-darwin-arm64.tgz",
+      "integrity": "sha512-o+0ZKWwgDFMMLO7rwinzO0PQsgK+Vme1pMN2GeAxsX29ZgGZcyPICfpJbeGSUO1mb2a36Skjx6nfdRnxMY0r7w==",
       "cpu": [
         "arm64"
       ],
@@ -53,9 +53,9 @@
     },
     "node_modules/@openai/codex-darwin-x64": {
       "name": "@openai/codex",
-      "version": "0.135.0-darwin-x64",
-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0-darwin-x64.tgz",
-      "integrity": "sha512-ZrjAqce23lbv9KfkYOhElf1lTI+SysXmyGM0FV5u4+PBCKPkkEs4eaS3H8Uig0i4bUSu1QylrOOCskzYhZ6VyQ==",
+      "version": "0.139.0-darwin-x64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.139.0-darwin-x64.tgz",
+      "integrity": "sha512-9gkBWzu6DB2rqU4DbpxD3DE5bofGpsK46Lp0h0I+bKWc2IIcxvSi8K2utKmBLoJCbKrn4JQu7dFNGRqEfENung==",
       "cpu": [
         "x64"
       ],
@@ -70,9 +70,9 @@
     },
     "node_modules/@openai/codex-linux-arm64": {
       "name": "@openai/codex",
-      "version": "0.135.0-linux-arm64",
-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0-linux-arm64.tgz",
-      "integrity": "sha512-dM+cv5ZL+BgIQzEIvMg9AxZ98n5lkKLgtp5zJLXWSrbCllbnUSqxYMUiWI5c1a1uBDUtkbY9fcGKXFLf+d+gyg==",
+      "version": "0.139.0-linux-arm64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.139.0-linux-arm64.tgz",
+      "integrity": "sha512-tBQE5lZciRHeWZGuURgjP9S717MvTIpQMc593+DNxY2LQxozkngOkzFSQd1+/UmQKGrCqdFLu5irIwPXpSZyEw==",
       "cpu": [
         "arm64"
       ],
@@ -87,9 +87,9 @@
     },
     "node_modules/@openai/codex-linux-x64": {
       "name": "@openai/codex",
-      "version": "0.135.0-linux-x64",
-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0-linux-x64.tgz",
-      "integrity": "sha512-5EosY67yU28UJSnl/obdN2F1CDaimYbzm9SLR8dwwzkeBBnY6dHgAKJ2GTu9Nc8CmgmtVFBGzgPqehsIcueVvA==",
+      "version": "0.139.0-linux-x64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.139.0-linux-x64.tgz",
+      "integrity": "sha512-14UgzDS+X4crkvdt6S02A/ZZOrS8ZyWiuTRpguCtnhNamb7unSuDxy86BWgpAl3sqiTaN2CP8VLyp2ohQ8Nbzw==",
       "cpu": [
         "x64"
       ],
@@ -104,9 +104,9 @@
     },
     "node_modules/@openai/codex-win32-arm64": {
       "name": "@openai/codex",
-      "version": "0.135.0-win32-arm64",
-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0-win32-arm64.tgz",
-      "integrity": "sha512-SAeR+CUv7KWwE6eTc2UFaFjo6FpHywYfDFKrK6FqLms1rq1NPju2SoX7rhM6UEew/lUx2mdZv/LDs11s/N/Qgg==",
+      "version": "0.139.0-win32-arm64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.139.0-win32-arm64.tgz",
+      "integrity": "sha512-nlwRjsYotH1Rtqu/Q0VwQbIeO2UX1mkHK84Ov9qn/hl29QqqoBtno0tRyqIPbkXFIVQuWiAYXlV3ugLwH5fTrQ==",
       "cpu": [
         "arm64"
       ],
@@ -121,9 +121,9 @@
     },
     "node_modules/@openai/codex-win32-x64": {
       "name": "@openai/codex",
-      "version": "0.135.0-win32-x64",
-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0-win32-x64.tgz",
-      "integrity": "sha512-uYwUBMbOfmVlCESJZmZsOG+cYwNFYvkMbQ+FB6C1u9RYz0m3mZeYNN0j+l1hRSyUgPMFJHzNpgNx1Usal5QZFQ==",
+      "version": "0.139.0-win32-x64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.139.0-win32-x64.tgz",
+      "integrity": "sha512-lQrVLNz+90wdvWVNFDvCkHQRiAK9ZllmkTka3c8eqSDqdJk35Gpgppfv9Xtw5M2ZBtTq0sBdWBiCMyzGDBSpmQ==",
       "cpu": [
         "x64"
       ],

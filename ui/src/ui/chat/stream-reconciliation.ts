@@ -1,3 +1,4 @@
+// Control UI chat module implements stream reconciliation behavior.
 import { resetToolStream } from "../app-tool-stream.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { extractText } from "./message-extract.ts";
@@ -331,7 +332,7 @@ function insertMessageAtIndex(messages: unknown[], message: unknown, index: numb
   return [...messages.slice(0, index), message, ...messages.slice(index)];
 }
 
-function messageTimestampMs(message: unknown): number | null {
+export function messageTimestampMs(message: unknown): number | null {
   if (!message || typeof message !== "object") {
     return null;
   }

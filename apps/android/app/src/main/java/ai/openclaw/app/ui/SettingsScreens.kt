@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayCronJobSummary
@@ -8,7 +9,6 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
@@ -147,7 +147,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Appearance -> AppearanceSettingsScreen(onBack = onBack)
+    SettingsRoute.Appearance -> AppearanceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
   }
@@ -897,18 +897,14 @@ private fun GatewaySettingsScreen(
                 .orEmpty()
                 .ifEmpty { passwordInput.trim() }
             validationText = null
-            viewModel.setManualEnabled(true)
-            viewModel.setManualHost(endpointConfig.host)
-            viewModel.setManualPort(endpointConfig.port)
-            viewModel.setManualTls(endpointConfig.tls)
-            viewModel.setGatewayBootstrapToken(bootstrapToken)
-            viewModel.setGatewayToken(token)
-            viewModel.setGatewayPassword(password)
-            viewModel.connect(
-              GatewayEndpoint.manual(host = endpointConfig.host, port = endpointConfig.port),
-              token = token.ifEmpty { null },
-              bootstrapToken = bootstrapToken.ifEmpty { null },
-              password = password.ifEmpty { null },
+            viewModel.saveGatewayConfigAndConnect(
+              host = endpointConfig.host,
+              port = endpointConfig.port,
+              tls = endpointConfig.tls,
+              token = token,
+              bootstrapToken = bootstrapToken,
+              password = password,
+              resetSetupAuth = setup != null,
             )
           },
           modifier = Modifier.fillMaxWidth(),
@@ -919,21 +915,39 @@ private fun GatewaySettingsScreen(
 }
 
 @Composable
-private fun AppearanceSettingsScreen(onBack: () -> Unit) {
+private fun AppearanceSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val themeMode by viewModel.appearanceThemeMode.collectAsState()
+
   SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Theme", "Dark"),
+          SettingsMetric("Theme", appearanceThemeSummary(themeMode)),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
         ),
     )
     ClawPanel {
-      Text(text = "OpenClaw uses a fixed premium dark theme so it stays consistent across devices.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = "Theme", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        ClawSegmentedControl(
+          options = appearanceThemeOptions(),
+          selected = appearanceThemeSummary(themeMode),
+          onSelect = { selected -> viewModel.setAppearanceThemeMode(appearanceThemeModeForLabel(selected)) },
+        )
+      }
     }
   }
 }
+
+internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = mode.displayLabel
+
+internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map { it.displayLabel }
+
+internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode = AppearanceThemeMode.fromDisplayLabel(label)
 
 /** Converts raw gateway connection text into stable settings metric labels. */
 private fun gatewayStatusLabel(
@@ -971,7 +985,7 @@ private fun AboutSettingsScreen(
         listOf(
           SettingsMetric("Android App", BuildConfig.VERSION_NAME),
           SettingsMetric("Build", BuildConfig.VERSION_CODE.toString()),
-          SettingsMetric("Channel", "Play"),
+          SettingsMetric("Channel", androidDistributionChannel()),
           SettingsMetric("Gateway", currentGatewayVersion ?: "Not connected"),
         ),
     )
@@ -993,6 +1007,14 @@ private fun AboutSettingsScreen(
     }
   }
 }
+
+internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): String =
+  when (flavor.trim()) {
+    "play" -> "Play"
+    "thirdParty" -> "Third-party"
+    "" -> "Unknown"
+    else -> flavor.trim()
+  }
 
 @Composable
 private fun AboutStatusRow(

@@ -1,11 +1,16 @@
 #!/usr/bin/env node
+// Runs additional architecture and boundary checks with sharding, concurrency,
+// timeout handling, and grouped CI output.
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
 const TIMEOUT_KILL_GRACE_MS = 5_000;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
+const POST_FORCE_KILL_WAIT_MS = 1_000;
 
+/** Ordered list of supplemental boundary checks used by CI sharding. */
 export const BOUNDARY_CHECKS = [
   ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
@@ -66,10 +71,16 @@ export const BOUNDARY_CHECKS = [
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
 ].map(([label, command, args]) => ({ label, command, args }));
 
+/**
+ * Resolves the configured boundary-check concurrency.
+ */
 export function resolveConcurrency(value, fallback = 4, label = "concurrency") {
   return resolvePositiveInteger(value, fallback, label);
 }
 
+/**
+ * Parses positive integer CLI/env options with a fallback.
+ */
 export function resolvePositiveInteger(value, fallback, label = "value") {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -85,6 +96,9 @@ export function resolvePositiveInteger(value, fallback, label = "value") {
   return parsed;
 }
 
+/**
+ * Parses one N/TOTAL shard selector into zero-based index form.
+ */
 export function parseShardSpec(value) {
   if (!value) {
     return null;
@@ -93,11 +107,11 @@ export function parseShardSpec(value) {
   if (!match) {
     throw new Error(`Invalid shard spec '${value}' (expected N/TOTAL)`);
   }
-  const index = Number.parseInt(match[1], 10);
-  const count = Number.parseInt(match[2], 10);
+  const index = Number(match[1]);
+  const count = Number(match[2]);
   if (
-    !Number.isInteger(index) ||
-    !Number.isInteger(count) ||
+    !Number.isSafeInteger(index) ||
+    !Number.isSafeInteger(count) ||
     index < 1 ||
     count < 1 ||
     index > count
@@ -107,6 +121,9 @@ export function parseShardSpec(value) {
   return { count, index: index - 1, label: `${index}/${count}` };
 }
 
+/**
+ * Parses a comma-separated list of N/TOTAL shard selectors.
+ */
 export function parseShardSelection(value) {
   if (!value) {
     return null;
@@ -124,6 +141,9 @@ export function parseShardSelection(value) {
     });
 }
 
+/**
+ * Selects checks whose ordinal belongs to the requested shard set.
+ */
 export function selectChecksForShard(checks, shardSpec) {
   const shards =
     typeof shardSpec === "string"
@@ -141,10 +161,16 @@ export function selectChecksForShard(checks, shardSpec) {
   );
 }
 
+/**
+ * Formats a check command for CI group output.
+ */
 export function formatCommand({ command, args }) {
   return [command, ...args].join(" ");
 }
 
+/**
+ * Keeps only the tail of noisy check output so failure logs stay bounded.
+ */
 export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
   const limit = Math.max(1, maxBytes);
   const chunks = [];
@@ -203,6 +229,41 @@ function terminateChild(child, signal) {
   child.kill(signal);
 }
 
+function processGroupAlive(child) {
+  if (process.platform === "win32" || !child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForProcessGroupExit(child, timeoutMs) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!processGroupAlive(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+    });
+  }
+  return !processGroupAlive(child);
+}
+
+async function finishTerminatedProcessTree(child, timeoutKillGraceMs = TIMEOUT_KILL_GRACE_MS) {
+  if (processGroupAlive(child)) {
+    await waitForProcessGroupExit(child, timeoutKillGraceMs);
+  }
+  if (processGroupAlive(child)) {
+    terminateChild(child, "SIGKILL");
+    await waitForProcessGroupExit(child, POST_FORCE_KILL_WAIT_MS);
+  }
+}
+
 function terminateActiveChildren(activeChildren, signal) {
   for (const child of activeChildren) {
     terminateChild(child, signal);
@@ -211,42 +272,82 @@ function terminateActiveChildren(activeChildren, signal) {
 
 function installActiveChildCleanup(activeChildren) {
   let active = true;
+  let shutdownChildren = [];
+  let shutdownPromise = null;
+  let shutdownForceKillTimer = null;
+  let resolveShutdownForceKill = null;
   const removeHandlers = () => {
     for (const [signal, handler] of signalHandlers) {
       process.off(signal, handler);
     }
     process.off("exit", exitHandler);
   };
-  const cleanup = (signal) => {
+  const forceKillShutdownChildren = () => {
+    if (shutdownForceKillTimer) {
+      clearTimeout(shutdownForceKillTimer);
+      shutdownForceKillTimer = null;
+    }
+    terminateActiveChildren(shutdownChildren, "SIGKILL");
+    resolveShutdownForceKill?.();
+  };
+  const cleanup = (signal, { waitForExit = false } = {}) => {
     if (!active) {
-      return;
+      return shutdownPromise ?? Promise.resolve();
     }
     active = false;
-    terminateActiveChildren(activeChildren, signal);
+    shutdownChildren = [...activeChildren];
+    terminateActiveChildren(shutdownChildren, signal);
+    if (!waitForExit) {
+      return Promise.resolve();
+    }
+    shutdownPromise = new Promise((resolveForceKill) => {
+      resolveShutdownForceKill = resolveForceKill;
+      // Keep this timer ref'ed: once the leader exits, group liveness can look
+      // gone while descendants are still running and still need the force kill.
+      shutdownForceKillTimer = setTimeout(forceKillShutdownChildren, TIMEOUT_KILL_GRACE_MS);
+    })
+      .then(() =>
+        Promise.all(
+          shutdownChildren.map((child) => waitForProcessGroupExit(child, POST_FORCE_KILL_WAIT_MS)),
+        ),
+      )
+      .then(() => undefined);
+    return shutdownPromise;
   };
   const signalHandlers = new Map();
   const signals =
     process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
   for (const signal of signals) {
     const handler = () => {
-      cleanup(signal);
-      removeHandlers();
-      process.kill(process.pid, signal);
+      if (shutdownPromise) {
+        forceKillShutdownChildren();
+        return;
+      }
+      void cleanup(signal, { waitForExit: true }).finally(() => {
+        removeHandlers();
+        process.kill(process.pid, signal);
+      });
     };
     signalHandlers.set(signal, handler);
-    process.once(signal, handler);
+    process.on(signal, handler);
   }
   const exitHandler = () => {
-    cleanup("SIGTERM");
+    void cleanup("SIGTERM");
   };
   process.once("exit", exitHandler);
 
   return () => {
+    if (shutdownPromise) {
+      return;
+    }
     active = false;
     removeHandlers();
   };
 }
 
+/**
+ * Runs one boundary check with timeout and process-group termination.
+ */
 export function runSingleCheck(
   check,
   {
@@ -290,6 +391,10 @@ export function runSingleCheck(
         output: output.read(),
       });
     };
+    const finishAfterTimeoutTeardown = async (code, signal) => {
+      await finishTerminatedProcessTree(child, TIMEOUT_KILL_GRACE_MS);
+      finish(code, signal);
+    };
     const timeout = setTimeout(() => {
       timedOut = true;
       output.append(
@@ -314,7 +419,13 @@ export function runSingleCheck(
       output.append(`${error.stack ?? error.message}\n`);
       finish(1, null);
     });
-    child.on("close", (code, signal) => finish(code, signal));
+    child.on("close", (code, signal) => {
+      if (timedOut) {
+        void finishAfterTimeoutTeardown(code, signal);
+        return;
+      }
+      finish(code, signal);
+    });
   });
 }
 
@@ -359,6 +470,9 @@ function writeTimingSummary(results, output) {
   }
 }
 
+/**
+ * Runs boundary checks with bounded concurrency and returns the failure count.
+ */
 export async function runChecks(
   checks = BOUNDARY_CHECKS,
   {
@@ -422,48 +536,85 @@ export async function runChecks(
   return failures;
 }
 
-function resolveCliShardSpec(args, env) {
-  const shardIndex = args.indexOf("--shard");
-  if (shardIndex !== -1) {
-    return args[shardIndex + 1] ?? "";
+function usage() {
+  return `Usage: node scripts/run-additional-boundary-checks.mjs [--shard <N/TOTAL>[,<N/TOTAL>]]
+
+Runs supplemental architecture and boundary checks with bounded concurrency.
+
+Options:
+  --shard <spec>    Run only checks selected by one or more N/TOTAL shard specs
+  -h, --help        Show this help
+`;
+}
+
+export function parseCliArgs(args, env = process.env) {
+  let shardSpec = env.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "";
+  let help = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "-h" || arg === "--help") {
+      help = true;
+      continue;
+    }
+    if (arg === "--shard") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error("--shard requires a value");
+      }
+      shardSpec = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--shard=")) {
+      const value = arg.slice("--shard=".length);
+      if (!value) {
+        throw new Error("--shard requires a value");
+      }
+      shardSpec = value;
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
   }
-  const inlineShard = args.find((arg) => arg.startsWith("--shard="));
-  if (inlineShard) {
-    return inlineShard.slice("--shard=".length);
-  }
-  return env.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "";
+  return { help, shardSpec };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const concurrencyRaw =
-    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
-    process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY;
-  const concurrencyLabel =
-    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY === undefined
-      ? "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"
-      : "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY";
-  const concurrency = resolveConcurrency(
-    concurrencyRaw,
-    4,
-    concurrencyLabel,
-  );
-  const checkTimeoutMs = resolvePositiveInteger(
-    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS,
-    DEFAULT_CHECK_TIMEOUT_MS,
-    "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS",
-  );
-  const outputMaxBytes = resolvePositiveInteger(
-    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES,
-    DEFAULT_OUTPUT_MAX_BYTES,
-    "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
-  );
-  const shards = parseShardSelection(resolveCliShardSpec(process.argv.slice(2), process.env));
-  const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
-  if (shards) {
-    process.stdout.write(
-      `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,
-    );
+  try {
+    const cliArgs = parseCliArgs(process.argv.slice(2), process.env);
+    if (cliArgs.help) {
+      process.stdout.write(usage());
+      process.exitCode = 0;
+    } else {
+      const concurrencyRaw =
+        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
+        process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY;
+      const concurrencyLabel =
+        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY === undefined
+          ? "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"
+          : "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY";
+      const concurrency = resolveConcurrency(concurrencyRaw, 4, concurrencyLabel);
+      const checkTimeoutMs = resolvePositiveInteger(
+        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS,
+        DEFAULT_CHECK_TIMEOUT_MS,
+        "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS",
+      );
+      const outputMaxBytes = resolvePositiveInteger(
+        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES,
+        DEFAULT_OUTPUT_MAX_BYTES,
+        "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
+      );
+      const shards = parseShardSelection(cliArgs.shardSpec);
+      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
+      if (shards) {
+        process.stdout.write(
+          `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,
+        );
+      }
+      const failures = await runChecks(checks, { checkTimeoutMs, concurrency, outputMaxBytes });
+      process.exitCode = failures === 0 ? 0 : 1;
+    }
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n\n${usage()}`);
+    process.exitCode = 1;
   }
-  const failures = await runChecks(checks, { checkTimeoutMs, concurrency, outputMaxBytes });
-  process.exitCode = failures === 0 ? 0 : 1;
 }

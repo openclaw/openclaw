@@ -1,3 +1,5 @@
+// Filesystem session transcript helpers.
+// Resolves, archives, and cleans up transcript files owned by Gateway sessions.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +9,7 @@ import {
   parseSessionArchiveTimestamp,
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
+import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
@@ -16,10 +19,82 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
+type ResetArchiveCandidate = { archivePath: string; name: string; timestamp: number };
 export type ArchivedSessionTranscript = {
   sourcePath: string;
   archivedPath: string;
 };
+
+const MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES = 2048;
+const MAX_RESET_ARCHIVE_HEADER_MATCH_CACHE_ENTRIES = 4096;
+const MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT = 128;
+
+const resetArchiveDiscoveryCache = new Map<
+  string,
+  {
+    dirMtimeMs: number;
+    dirSize: number;
+    archives: ResetArchiveCandidate[];
+  }
+>();
+const resetArchiveHeaderMatchCache = new Map<
+  string,
+  {
+    mtimeMs: number;
+    size: number;
+    matches: boolean;
+  }
+>();
+
+function clearSessionTranscriptResetArchiveDiscoveryCache(): void {
+  resetArchiveDiscoveryCache.clear();
+  resetArchiveHeaderMatchCache.clear();
+}
+
+function deleteResetArchiveHeaderMatchesForArchives(archives: ResetArchiveCandidate[]): void {
+  if (archives.length === 0 || resetArchiveHeaderMatchCache.size === 0) {
+    return;
+  }
+  const archivePaths = new Set(archives.map((archive) => archive.archivePath));
+  for (const cacheKey of resetArchiveHeaderMatchCache.keys()) {
+    const archivePath = cacheKey.slice(cacheKey.indexOf("\0") + 1);
+    if (archivePaths.has(archivePath)) {
+      resetArchiveHeaderMatchCache.delete(cacheKey);
+    }
+  }
+}
+
+function setResetArchiveDiscoveryCacheEntry(
+  cacheKey: string,
+  entry: { dirMtimeMs: number; dirSize: number; archives: ResetArchiveCandidate[] },
+): void {
+  resetArchiveDiscoveryCache.set(cacheKey, entry);
+  while (resetArchiveDiscoveryCache.size > MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES) {
+    const oldestKey = resetArchiveDiscoveryCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    const oldestEntry = resetArchiveDiscoveryCache.get(oldestKey);
+    if (oldestEntry) {
+      deleteResetArchiveHeaderMatchesForArchives(oldestEntry.archives);
+    }
+    resetArchiveDiscoveryCache.delete(oldestKey);
+  }
+}
+
+function setResetArchiveHeaderMatchCacheEntry(
+  cacheKey: string,
+  entry: { mtimeMs: number; size: number; matches: boolean },
+): void {
+  resetArchiveHeaderMatchCache.set(cacheKey, entry);
+  while (resetArchiveHeaderMatchCache.size > MAX_RESET_ARCHIVE_HEADER_MATCH_CACHE_ENTRIES) {
+    const oldestKey = resetArchiveHeaderMatchCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    resetArchiveHeaderMatchCache.delete(oldestKey);
+  }
+}
 
 function classifySessionTranscriptCandidate(
   sessionId: string,
@@ -32,33 +107,7 @@ function classifySessionTranscriptCandidate(
   return transcriptSessionId === sessionId ? "current" : "stale";
 }
 
-function extractGeneratedTranscriptSessionId(sessionFile?: string): string | undefined {
-  const trimmed = sessionFile?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const base = path.basename(trimmed);
-  if (!base.endsWith(".jsonl")) {
-    return undefined;
-  }
-  const withoutExt = base.slice(0, -".jsonl".length);
-  const topicIndex = withoutExt.indexOf("-topic-");
-  if (topicIndex > 0) {
-    const topicSessionId = withoutExt.slice(0, topicIndex);
-    return looksLikeGeneratedSessionId(topicSessionId) ? topicSessionId : undefined;
-  }
-  const forkMatch = withoutExt.match(
-    /^(\d{4}-\d{2}-\d{2}T[\w-]+(?:Z|[+-]\d{2}(?:-\d{2})?)?)_(.+)$/,
-  );
-  if (forkMatch?.[2]) {
-    return looksLikeGeneratedSessionId(forkMatch[2]) ? forkMatch[2] : undefined;
-  }
-  return looksLikeGeneratedSessionId(withoutExt) ? withoutExt : undefined;
-}
-
-function looksLikeGeneratedSessionId(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
+export { extractGeneratedTranscriptSessionId };
 
 function canonicalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
@@ -118,6 +167,8 @@ export function resolveSessionTranscriptCandidates(
     }
   }
 
+  // Keep the legacy global sessions directory as a final candidate so tagged
+  // upgrades can still find transcripts created before per-agent paths.
   const home = resolveRequiredHomeDir(process.env, os.homedir);
   const legacyDir = path.join(home, ".openclaw", "sessions");
   pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
@@ -125,10 +176,189 @@ export function resolveSessionTranscriptCandidates(
   return uniqueStrings(candidates);
 }
 
+async function resetArchiveHeaderMatchesSessionId(
+  sessionId: string,
+  archivePath: string,
+): Promise<boolean> {
+  const stat = await fs.promises.stat(archivePath).catch(() => null);
+  if (!stat?.isFile()) {
+    return false;
+  }
+  const cacheKey = `${sessionId}\0${archivePath}`;
+  const cached = resetArchiveHeaderMatchCache.get(cacheKey);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    resetArchiveHeaderMatchCache.delete(cacheKey);
+    resetArchiveHeaderMatchCache.set(cacheKey, cached);
+    return cached.matches;
+  }
+
+  let matches = false;
+  const handle = await fs.promises.open(archivePath, "r").catch(() => null);
+  if (!handle) {
+    return false;
+  }
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const lines = buffer.toString("utf-8", 0, bytesRead).split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const record = JSON.parse(trimmed) as unknown;
+      matches =
+        Boolean(record) &&
+        typeof record === "object" &&
+        !Array.isArray(record) &&
+        (record as { type?: unknown; id?: unknown }).type === "session" &&
+        (record as { type?: unknown; id?: unknown }).id === sessionId;
+      return matches;
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    await handle.close().catch(() => undefined);
+    setResetArchiveHeaderMatchCacheEntry(cacheKey, {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      matches,
+    });
+  }
+}
+
+async function listResetArchiveCandidatesForTranscriptAsync(
+  transcriptPath: string,
+): Promise<ResetArchiveCandidate[] | undefined> {
+  const base = path.basename(transcriptPath);
+  if (!base.endsWith(".jsonl")) {
+    return undefined;
+  }
+  const dir = path.dirname(transcriptPath);
+  const dirStat = await fs.promises.stat(dir).catch(() => null);
+  if (!dirStat?.isDirectory()) {
+    return undefined;
+  }
+  const cacheKey = `${dir}\0${base}`;
+  const cached = resetArchiveDiscoveryCache.get(cacheKey);
+  if (cached && cached.dirMtimeMs === dirStat.mtimeMs && cached.dirSize === dirStat.size) {
+    resetArchiveDiscoveryCache.delete(cacheKey);
+    resetArchiveDiscoveryCache.set(cacheKey, cached);
+    return cached.archives;
+  }
+
+  const archives: ResetArchiveCandidate[] = [];
+  try {
+    for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith(`${base}.reset.`)) {
+        continue;
+      }
+      const timestamp = parseSessionArchiveTimestamp(entry.name, "reset");
+      if (timestamp == null) {
+        continue;
+      }
+      archives.push({ archivePath: path.join(dir, entry.name), name: entry.name, timestamp });
+    }
+  } catch {
+    return undefined;
+  }
+  archives.sort(
+    (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+  );
+  const boundedArchives = archives.slice(0, MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT);
+  setResetArchiveDiscoveryCacheEntry(cacheKey, {
+    dirMtimeMs: dirStat.mtimeMs,
+    dirSize: dirStat.size,
+    archives: boundedArchives,
+  });
+  return boundedArchives;
+}
+
+async function resolveLatestResetArchiveForTranscriptAsync(
+  sessionId: string,
+  transcriptPath: string,
+  opts?: { requireSessionHeader?: boolean },
+): Promise<ResetArchiveCandidate | undefined> {
+  const archives = await listResetArchiveCandidatesForTranscriptAsync(transcriptPath);
+  if (!archives) {
+    return undefined;
+  }
+  if (opts?.requireSessionHeader !== true) {
+    return archives[0];
+  }
+  for (const archive of archives) {
+    if (await resetArchiveHeaderMatchesSessionId(sessionId, archive.archivePath)) {
+      return archive;
+    }
+  }
+  return undefined;
+}
+
+function transcriptArchiveIdentity(
+  sessionId: string,
+  transcriptPath: string,
+): { key: string; requireSessionHeader: boolean } | undefined {
+  const generatedSessionId = extractGeneratedTranscriptSessionId(transcriptPath);
+  return {
+    key: path.basename(transcriptPath),
+    requireSessionHeader: !generatedSessionId || generatedSessionId !== sessionId,
+  };
+}
+
+export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<string[]> {
+  const candidatesByIdentity = new Map<
+    string,
+    Array<{ path: string; requireSessionHeader: boolean }>
+  >();
+  for (const candidate of resolveSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    sessionFile,
+    agentId,
+  )) {
+    const identity = transcriptArchiveIdentity(sessionId, candidate);
+    if (!identity) {
+      continue;
+    }
+    candidatesByIdentity.set(identity.key, [
+      ...(candidatesByIdentity.get(identity.key) ?? []),
+      { path: candidate, requireSessionHeader: identity.requireSessionHeader },
+    ]);
+  }
+  const archives = (
+    await Promise.all(
+      Array.from(candidatesByIdentity.values(), (candidates) =>
+        Promise.all(
+          candidates.map((candidate) =>
+            resolveLatestResetArchiveForTranscriptAsync(sessionId, candidate.path, {
+              requireSessionHeader: candidate.requireSessionHeader,
+            }),
+          ),
+        ),
+      ),
+    )
+  ).flatMap((identityArchives) =>
+    identityArchives
+      .flatMap((archive) => (archive ? [archive] : []))
+      .toSorted(
+        (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+      )
+      .slice(0, 1),
+  );
+  return uniqueStrings(archives.map((archive) => archive.archivePath));
+}
+
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
+  clearSessionTranscriptResetArchiveDiscoveryCache();
   // Notify the session transcript subscribers (memory index, sessions-history
   // HTTP, etc.) that a mutation landed on a session-owned path. Without this
   // emit the memory sync's incremental path never learns the new archive
@@ -247,17 +477,26 @@ export function resolveStableSessionEndTranscript(params: {
   return {};
 }
 
+export type SessionArchiveCleanupRule = {
+  reason: ArchiveFileReason;
+  olderThanMs: number;
+};
+
+// Store maintenance runs this on every session-store save. All retention rules
+// share one directory listing: a listing per reason would multiply READDIR
+// load on the per-save hot path, which is expensive on networked filesystems.
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
-  olderThanMs: number;
-  reason?: ArchiveFileReason;
+  rules: SessionArchiveCleanupRule[];
   nowMs?: number;
 }): Promise<{ removed: number; scanned: number }> {
-  if (!Number.isFinite(opts.olderThanMs) || opts.olderThanMs < 0) {
+  const rules = opts.rules.filter(
+    (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
+  );
+  if (rules.length === 0) {
     return { removed: 0, scanned: 0 };
   }
   const now = opts.nowMs ?? Date.now();
-  const reason: ArchiveFileReason = opts.reason ?? "deleted";
   const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
   let removed = 0;
   let scanned = 0;
@@ -265,21 +504,24 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   for (const dir of directories) {
     const entries = await fs.promises.readdir(dir).catch(() => []);
     for (const entry of entries) {
-      const timestamp = parseSessionArchiveTimestamp(entry, reason);
-      if (timestamp == null) {
-        continue;
+      for (const rule of rules) {
+        const timestamp = parseSessionArchiveTimestamp(entry, rule.reason);
+        if (timestamp == null) {
+          continue;
+        }
+        scanned += 1;
+        if (now - timestamp > rule.olderThanMs) {
+          const fullPath = path.join(dir, entry);
+          const stat = await fs.promises.stat(fullPath).catch(() => null);
+          if (stat?.isFile()) {
+            await fs.promises.rm(fullPath).catch(() => undefined);
+            removed += 1;
+          }
+        }
+        // An archive name carries exactly one `.{reason}.{timestamp}` suffix,
+        // so the first matching rule owns the entry.
+        break;
       }
-      scanned += 1;
-      if (now - timestamp <= opts.olderThanMs) {
-        continue;
-      }
-      const fullPath = path.join(dir, entry);
-      const stat = await fs.promises.stat(fullPath).catch(() => null);
-      if (!stat?.isFile()) {
-        continue;
-      }
-      await fs.promises.rm(fullPath).catch(() => undefined);
-      removed += 1;
     }
   }
 

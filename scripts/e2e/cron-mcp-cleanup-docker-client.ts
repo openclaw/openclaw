@@ -1,3 +1,4 @@
+// Cron Mcp Cleanup Docker Client script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -17,6 +18,7 @@ let mcpChannelsHarness: McpChannelsHarness | undefined;
 type CronJob = { id?: string };
 type CronRunResult = { ok?: boolean; enqueued?: boolean; runId?: string };
 type AgentRunResult = { runId?: string; status?: string };
+type CronFinishedPayload = { status?: unknown };
 
 async function loadMcpChannelsHarness(): Promise<McpChannelsHarness> {
   mcpChannelsHarness ??= await import("./mcp-channels-harness.ts");
@@ -27,11 +29,24 @@ export function readCronMcpCleanupProbePidWaitMs(env: NodeJS.ProcessEnv = proces
   return readPositiveIntEnv("OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS", 120_000, env);
 }
 
+export function assertCronFinishedOk(finished: CronFinishedPayload | undefined): void {
+  if (finished?.status !== "ok") {
+    throw new Error(`cron cleanup run did not finish ok: ${JSON.stringify(finished)}`);
+  }
+}
+
+function parseProbePid(raw: string): number | undefined {
+  const text = raw.trim();
+  if (!/^[1-9]\d*$/u.test(text)) {
+    return undefined;
+  }
+  const pid = Number(text);
+  return Number.isSafeInteger(pid) ? pid : undefined;
+}
+
 async function readProbePid(pidPath: string): Promise<number | undefined> {
   try {
-    const raw = (await fs.readFile(pidPath, "utf-8")).trim();
-    const pid = Number.parseInt(raw, 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+    return parseProbePid(await fs.readFile(pidPath, "utf-8"));
   } catch {
     return undefined;
   }
@@ -43,8 +58,8 @@ async function readProbePids(pidsPath: string): Promise<number[]> {
     const pids: number[] = [];
     const seen = new Set<number>();
     for (const line of raw.split(/\r?\n/)) {
-      const pid = Number.parseInt(line.trim(), 10);
-      if (!Number.isInteger(pid) || pid <= 0 || seen.has(pid)) {
+      const pid = parseProbePid(line);
+      if (pid === undefined || seen.has(pid)) {
         continue;
       }
       seen.add(pid);
@@ -213,6 +228,7 @@ async function runCronCleanupScenario(params: {
     240_000,
   );
   assert(finished, "missing cron finished event");
+  assertCronFinishedOk(finished);
 
   await waitForProbeExit({ pid, label: "cron" });
   return {

@@ -12,7 +12,10 @@ import {
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
   isImageProcessorUnavailableError,
+  MAX_IMAGE_INPUT_PIXELS,
+  readImageMetadataFromHeader,
   resizeToJpeg,
+  type ImageMetadata,
 } from "../media/media-services.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
@@ -31,12 +34,17 @@ const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
 const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
 const log = createSubsystemLogger("agents/tool-images");
 
+function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { type: "image" } {
+  return (
+    Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
+  );
+}
+
 function isImageBlock(block: unknown): block is ImageContentBlock {
-  if (!block || typeof block !== "object") {
+  if (!isImageTypeBlock(block)) {
     return false;
   }
-  const rec = block as Record<string, unknown>;
-  return rec.type === "image" && typeof rec.data === "string" && typeof rec.mimeType === "string";
+  return typeof block.data === "string" && typeof block.mimeType === "string";
 }
 
 function isTextBlock(block: unknown): block is TextContentBlock {
@@ -62,6 +70,26 @@ function inferMimeTypeFromBase64(base64: string): string | undefined {
     return "image/gif";
   }
   return undefined;
+}
+
+function imageWithinLimits(
+  buffer: Buffer,
+  metadata: ImageMetadata | null,
+  maxDimensionPx: number,
+  maxBytes: number,
+): metadata is ImageMetadata {
+  const width = metadata?.width;
+  const height = metadata?.height;
+  return (
+    typeof width === "number" &&
+    typeof height === "number" &&
+    width > 0 &&
+    height > 0 &&
+    buffer.byteLength <= maxBytes &&
+    width <= maxDimensionPx &&
+    height <= maxDimensionPx &&
+    width * height <= MAX_IMAGE_INPUT_PIXELS
+  );
 }
 
 function formatBytesShort(bytes: number): string {
@@ -147,19 +175,24 @@ async function resizeImageBase64IfNeeded(params: {
   height?: number;
 }> {
   const buf = Buffer.from(params.base64, "base64");
-  const meta = await getImageMetadata(buf);
+  const headerMeta = readImageMetadataFromHeader(buf);
+  if (imageWithinLimits(buf, headerMeta, params.maxDimensionPx, params.maxBytes)) {
+    return {
+      base64: params.base64,
+      mimeType: params.mimeType,
+      resized: false,
+      width: headerMeta.width,
+      height: headerMeta.height,
+    };
+  }
+  const meta = headerMeta ?? (await getImageMetadata(buf));
   const width = meta?.width;
   const height = meta?.height;
   const overBytes = buf.byteLength > params.maxBytes;
   const hasDimensions = typeof width === "number" && typeof height === "number";
   const overDimensions =
     hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
-  if (
-    hasDimensions &&
-    !overBytes &&
-    width <= params.maxDimensionPx &&
-    height <= params.maxDimensionPx
-  ) {
+  if (imageWithinLimits(buf, meta, params.maxDimensionPx, params.maxBytes)) {
     return {
       base64: params.base64,
       mimeType: params.mimeType,
@@ -282,6 +315,13 @@ export async function sanitizeContentBlocksImages(
   const out: ToolContentBlock[] = [];
   for (const block of blocks) {
     if (!isImageBlock(block)) {
+      if (isImageTypeBlock(block)) {
+        out.push({
+          type: "text",
+          text: `[${label}] omitted image payload: missing data or mimeType`,
+        } satisfies TextContentBlock);
+        continue;
+      }
       out.push(block);
       continue;
     }
@@ -350,7 +390,7 @@ export async function sanitizeToolResultImages(
   opts: ImageSanitizationLimits = {},
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
-  if (!content.some((b) => isImageBlock(b) || isTextBlock(b))) {
+  if (!content.some((block) => isImageTypeBlock(block) || isTextBlock(block))) {
     return result;
   }
 

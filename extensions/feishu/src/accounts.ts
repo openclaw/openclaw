@@ -1,3 +1,4 @@
+// Feishu plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   type OpenClawConfig as ClawdbotConfig,
@@ -50,12 +51,6 @@ export class FeishuSecretRefUnavailableError extends Error {
     this.name = "FeishuSecretRefUnavailableError";
     this.path = path;
   }
-}
-
-export function isFeishuSecretRefUnavailableError(
-  error: unknown,
-): error is FeishuSecretRefUnavailableError {
-  return error instanceof FeishuSecretRefUnavailableError;
 }
 
 function resolveFeishuSecretLike(params: {

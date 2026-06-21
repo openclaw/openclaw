@@ -1,3 +1,4 @@
+// Agent session helper tests cover explicit session resolution through config and session stores.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionKeyForRequest } from "./session.js";
@@ -82,6 +83,21 @@ describe("resolveSessionKeyForRequest", () => {
       to: "+15551234567",
     });
     expect(result.sessionKey).toBe("agent:main:main");
+  });
+
+  it("uses an agent-scoped --to value as the requested session key", () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+    mocks.loadSessionStore.mockReturnValue({
+      [sessionKey]: { sessionId: "wechat-session", updatedAt: 0 },
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      to: sessionKey,
+    });
+
+    expect(result.sessionKey).toBe(sessionKey);
   });
 
   it("uses the configured default agent store for new --to sessions", () => {

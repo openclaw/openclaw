@@ -2,11 +2,13 @@
  * Tests provider stream shared helpers and stream hook capture.
  */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createAnthropicThinkingPrefillPayloadWrapper,
+  createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
   defaultToolStreamExtraParams,
@@ -15,6 +17,27 @@ import {
 } from "./provider-stream-shared.js";
 
 type StreamEvent = { type: string } & Record<string, unknown>;
+
+const lmstudioBinaryModel = {
+  api: "openai-completions",
+  provider: "lmstudio",
+  id: "google/gemma-4-26b-a4b-qat",
+  baseUrl: "http://127.0.0.1:1234/v1",
+  reasoning: true,
+  compat: {
+    supportsReasoningEffort: true,
+    supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+  },
+} as unknown as Model<"openai-completions">;
+
+const lmstudioBareModel = {
+  api: "openai-completions",
+  provider: "lmstudio",
+  id: "qwen3-8b-instruct",
+  baseUrl: "http://127.0.0.1:1234/v1",
+  reasoning: true,
+} as unknown as Model<"openai-completions">;
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -33,6 +56,20 @@ function createEventStream(events: unknown[]): ReturnType<StreamFn> {
     stream.end();
   });
   return output as ReturnType<StreamFn>;
+}
+
+function createPayloadCapture(initialReasoningEffort?: string) {
+  const payloads: Array<Record<string, unknown>> = [];
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    const payload: Record<string, unknown> = { model: model.id };
+    if (initialReasoningEffort !== undefined) {
+      payload.reasoning_effort = initialReasoningEffort;
+    }
+    options?.onPayload?.(payload, model);
+    payloads.push(structuredClone(payload));
+    return createAssistantMessageEventStream();
+  };
+  return { baseStreamFn, payloads };
 }
 
 function createControlledPlainTextToolCallCompatStream() {
@@ -195,6 +232,40 @@ describe("createPayloadPatchStreamWrapper", () => {
     void wrapped({ id: "model" } as never, { messages: [] } as never, {});
 
     expect(onPayloadWasInstalled).toBe(false);
+  });
+});
+
+describe("createOpenAICompatibleCompletionsThinkingOffWrapper", () => {
+  it("maps reasoning_effort to the model's disabled value when thinking is off", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture("high");
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe("none");
+  });
+
+  it("drops reasoning_effort when the model has no disabled effort", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture("high");
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBareModel, { messages: [] }, {});
+
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("does not add reasoning_effort when none was sent", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("leaves enabled thinking levels unchanged", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture("high");
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "high");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe("high");
   });
 });
 

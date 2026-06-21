@@ -326,12 +326,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     rpc?.ok !== true &&
     isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
-    const container = Boolean(
-      resolveDaemonContainerContext(service.command?.environment ?? process.env),
-    );
+    const serviceEnv = service.command?.environment ?? process.env;
+    const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
-      wsl: isWSLEnv(),
+      wsl: isWSLEnv(serviceEnv),
       kind: classifySystemdUnavailableDetail(service.runtime?.detail),
       container,
     })) {
@@ -343,6 +342,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
+      defaultRuntime.error(errorText(hint));
+    }
+  } else if (service.runtime?.missingGuiSession) {
+    defaultRuntime.error(
+      errorText("LaunchAgent plist exists, but macOS has no usable GUI session for this user."),
+    );
+    for (const hint of renderRuntimeHints(
+      service.runtime,
+      service.command?.environment ?? process.env,
+      status.logFile,
+    )) {
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.runtime?.missingSupervision) {

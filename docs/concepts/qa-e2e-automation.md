@@ -31,9 +31,9 @@ script aliases; both forms are supported.
 
 | Command                                             | Purpose                                                                                                                                                                                                                                                                 |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                                                                                                        |
+| `qa run`                                            | Bundled QA self-check without `--qa-profile`; taxonomy-backed maturity profile runner with `--qa-profile smoke-ci` or `--qa-profile release`.                                                                                                                           |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
-| `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                           |
+| `qa coverage`                                       | Print the YAML scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                               |
 | `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report, or use `--runtime-axis --token-efficiency` to write Codex-vs-OpenClaw runtime parity and token-efficiency reports from one runtime-pair summary.                                         |
 | `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                                                                                                                            |
 | `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                                                                                                          |
@@ -48,7 +48,38 @@ script aliases; both forms are supported.
 | `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                                                                                                              |
 | `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                                                                                                       |
 | `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                               |
+| `qa whatsapp`                                       | Live transport lane against real WhatsApp Web accounts.                                                                                                                                                                                                                 |
 | `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis) and [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook). |
+
+Profile-backed `qa run` reads membership from `taxonomy.yaml`, then dispatches
+the resolved scenarios through `qa suite`. `--surface` and
+`--category` filter the selected profile instead of defining separate lanes.
+The resulting `qa-evidence.json` includes a profile scorecard summary with
+selected-category counts and missing coverage IDs; the individual evidence
+entries remain the source of truth for the tests, coverage roles, and results.
+Taxonomy feature coverage IDs are exact proof targets, not aliases. Primary
+scenario coverage fulfills matching IDs; secondary coverage stays advisory.
+Coverage IDs use dotted `namespace.behavior` form with lowercase
+alphanumeric/dash segments; profile, surface, and category IDs may still use
+the existing dashed or dotted taxonomy IDs.
+Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
+`smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
+
+```bash
+pnpm openclaw qa run \
+  --qa-profile smoke-ci \
+  --category agent-runtime-and-provider-execution.agent-turn-execution \
+  --provider-mode mock-openai \
+  --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
+```
+
+Use `smoke-ci` for deterministic no-live-service proof and `release` for the
+Stable/LTS proof lane. When a command also needs an OpenClaw root profile, put
+the root profile before the QA command:
+
+```bash
+pnpm openclaw --profile work qa run --qa-profile smoke-ci
+```
 
 ## Operator flow
 
@@ -168,15 +199,16 @@ decision still comes from the Discord REST oracle.
 
 CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`. Scheduled and default manual runs execute the fast Matrix profile with live frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans out into the five profile shards so the exhaustive catalog can run in parallel while keeping one artifact directory per shard.
 
-For transport-real Telegram, Discord, and Slack smoke lanes:
+For transport-real Telegram, Discord, Slack, and WhatsApp smoke lanes:
 
 ```bash
 pnpm openclaw qa telegram
 pnpm openclaw qa discord
 pnpm openclaw qa slack
+pnpm openclaw qa whatsapp
 ```
 
-They target a pre-existing real channel with two bots (driver + SUT). Required env vars, scenario lists, output artifacts, and the Convex credential pool are documented in [Telegram, Discord, and Slack QA reference](#telegram-discord-and-slack-qa-reference) below.
+They target a pre-existing real channel with two bots or accounts (driver + SUT). Required env vars, scenario lists, output artifacts, and the Convex credential pool are documented in [Telegram, Discord, Slack, and WhatsApp QA reference](#telegram-discord-slack-and-whatsapp-qa-reference) below.
 
 For a full Slack desktop VM run with VNC rescue, run:
 
@@ -276,10 +308,10 @@ coverage helpers, and scenario-selection helper from
 | Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
 | Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
 | Slack    | x      | x              | x          | x               | x               | x              | x                | x                |                      |              |                             |
+| WhatsApp | x      | x              |            | x               | x               | x              |                  |                  | x                    | x            |                             |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
-Telegram, and future live transports share one explicit transport-contract
-checklist.
+Telegram, and other live transports share one explicit transport-contract checklist.
 
 For a disposable Linux VM lane without bringing Docker into the QA path, run:
 
@@ -308,25 +340,25 @@ guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the guest
 can write back through the mounted workspace.
 
-## Telegram, Discord, and Slack QA reference
+## Telegram, Discord, Slack, and WhatsApp QA reference
 
-Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario count and Docker-backed homeserver provisioning. Telegram, Discord, and Slack are smaller - a handful of scenarios each, no profile system, against pre-existing real channels - so their reference lives here.
+Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario count and Docker-backed homeserver provisioning. Telegram, Discord, Slack, and WhatsApp run against pre-existing real transports, so their reference lives here.
 
 ### Shared CLI flags
 
 These lanes register through `extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts` and accept the same flags:
 
-| Flag                                  | Default                                                         | Description                                                                                                           |
-| ------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `--scenario <id>`                     | -                                                               | Run only this scenario. Repeatable.                                                                                   |
-| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/{telegram,discord,slack}-<timestamp>` | Where reports/summary/observed messages and the output log are written. Relative paths resolve against `--repo-root`. |
-| `--repo-root <path>`                  | `process.cwd()`                                                 | Repository root when invoking from a neutral cwd.                                                                     |
-| `--sut-account <id>`                  | `sut`                                                           | Temporary account id inside the QA gateway config.                                                                    |
-| `--provider-mode <mode>`              | `live-frontier`                                                 | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                  |
-| `--model <ref>` / `--alt-model <ref>` | provider default                                                | Primary/alternate model refs.                                                                                         |
-| `--fast`                              | off                                                             | Provider fast mode where supported.                                                                                   |
-| `--credential-source <env\|convex>`   | `env`                                                           | See [Convex credential pool](#convex-credential-pool).                                                                |
-| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                              | Role used when `--credential-source convex`.                                                                          |
+| Flag                                  | Default                                            | Description                                                                                                                                     |
+| ------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--scenario <id>`                     | -                                                  | Run only this scenario. Repeatable.                                                                                                             |
+| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
+| `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
+| `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
+| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                                            |
+| `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
+| `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
+| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                                          |
+| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes artifacts without setting a failing exit code.
 
@@ -343,10 +375,6 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_TELEGRAM_GROUP_ID` - numeric chat id (string).
 - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
 - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
-
-Optional:
-
-- `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts (default redacts).
 
 Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts`):
 
@@ -372,27 +400,27 @@ The implicit default set always covers canary, mention gating, native command re
 Output artifacts:
 
 - `telegram-qa-report.md`
-- `telegram-qa-summary.json` - includes per-reply RTT (driver send â†’ observed SUT reply) starting with the canary.
-- `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
+- `qa-evidence.json` - evidence entries for the live transport checks, including profile, coverage, provider, channel, artifacts, result, and RTT fields.
 
-Package RTT comparison uses the same Telegram credential contract while keeping
-its RTT sample controls on the RTT harness path:
+Package Telegram runs use the same Telegram credential contract. Repeated RTT
+measurement is part of the normal package Telegram live lane; the RTT
+distribution is folded into `qa-evidence.json` under `result.timing` for the
+selected RTT check.
 
 ```bash
-pnpm rtt openclaw@beta \
-  --credential-source convex \
-  --credential-role maintainer \
-  --samples 20 \
-  --sample-timeout-ms 30000
+OPENCLAW_QA_CREDENTIAL_SOURCE=convex \
+pnpm test:docker:npm-telegram-live
 ```
 
-When `--credential-source convex` is set, the RTT Docker wrapper leases a
-`kind: "telegram"` credential, exports the leased group/driver/SUT bot env into
-the installed-package run, heartbeats the lease, and releases it on shutdown.
-`--samples` and `--sample-timeout-ms` still feed
-`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES` and
-`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, so `result.json` remains comparable
-across env-backed and Convex-backed RTT runs.
+When `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` is set, the package live wrapper
+leases a `kind: "telegram"` credential, exports the leased group/driver/SUT bot
+env into the installed-package run, heartbeats the lease, and releases it on
+shutdown. The package wrapper defaults to 20 RTT checks of
+`telegram-mentioned-message-reply`, a 30s RTT timeout, and Convex role
+`maintainer` outside CI when Convex is selected. Override
+`OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`, `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`,
+or `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune RTT measurement without
+creating a separate RTT command or Telegram-specific summary format.
 
 ### Discord QA
 
@@ -445,7 +473,7 @@ pnpm openclaw qa discord \
 Output artifacts:
 
 - `discord-qa-report.md`
-- `discord-qa-summary.json`
+- `qa-evidence.json` - evidence entries for the live transport checks.
 - `discord-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1`.
 - `discord-qa-reaction-timelines.json` and `discord-status-reactions-tool-only-timeline.png` when the status-reaction scenario runs.
 
@@ -493,7 +521,7 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 Output artifacts:
 
 - `slack-qa-report.md`
-- `slack-qa-summary.json`
+- `qa-evidence.json` - evidence entries for the live transport checks.
 - `slack-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
 - `approval-checkpoints/` - only when Mantis sets
   `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR`; contains checkpoint JSON,
@@ -688,27 +716,57 @@ Required env when `--credential-source env`:
 
 Optional:
 
-- `OPENCLAW_QA_WHATSAPP_GROUP_JID` enables `whatsapp-mention-gating`.
+- `OPENCLAW_QA_WHATSAPP_GROUP_JID` enables group scenarios such as
+  `whatsapp-mention-gating` and `whatsapp-group-allowlist-block`.
 - `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1` keeps message bodies in
   observed-message artifacts.
 
-Scenarios (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts`):
+Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts`):
 
-- `whatsapp-canary`
-- `whatsapp-pairing-block`
-- `whatsapp-mention-gating`
-- `whatsapp-approval-exec-native` - opt-in native WhatsApp exec approval
-  scenario. Requests an exec approval through the gateway, verifies the
-  WhatsApp message has native reaction approval affordances, resolves it, and
-  verifies the resolved WhatsApp follow-up.
-- `whatsapp-approval-plugin-native` - opt-in native WhatsApp plugin approval
-  scenario. Enables exec and plugin approval forwarding together, then verifies
-  the same pending/resolved native WhatsApp path.
+- Baseline and group gating: `whatsapp-canary`, `whatsapp-pairing-block`,
+  `whatsapp-mention-gating`, `whatsapp-top-level-reply-shape`,
+  `whatsapp-restart-resume`, `whatsapp-group-allowlist-block`.
+- Native commands: `whatsapp-help-command`, `whatsapp-status-command`,
+  `whatsapp-commands-command`, `whatsapp-tools-compact-command`,
+  `whatsapp-whoami-command`, `whatsapp-context-command`,
+  `whatsapp-native-new-command`.
+- Reply and final-output behavior: `whatsapp-tool-only-usage-footer`,
+  `whatsapp-reply-to-message`, `whatsapp-reply-context-isolation`,
+  `whatsapp-reply-delivery-shape`, `whatsapp-stream-final-message-accounting`.
+- Inbound media and structured messages: `whatsapp-inbound-image-caption`,
+  `whatsapp-audio-preflight`, `whatsapp-inbound-structured-messages`,
+  `whatsapp-group-audio-gating`. These send real WhatsApp image, audio,
+  document, location, contact, and sticker events through the driver.
+- Outbound Gateway and message action coverage:
+  `whatsapp-outbound-media-matrix`,
+  `whatsapp-outbound-document-preserves-filename`, `whatsapp-outbound-poll`,
+  `whatsapp-message-actions`.
+- Access-control coverage: `whatsapp-access-control-dm-open`,
+  `whatsapp-access-control-dm-disabled`, `whatsapp-access-control-group-open`,
+  `whatsapp-access-control-group-disabled`, `whatsapp-group-allowlist-block`.
+- Native approvals: `whatsapp-approval-exec-deny-native`,
+  `whatsapp-approval-exec-native`, `whatsapp-approval-exec-reaction-native`,
+  `whatsapp-approval-plugin-native`.
+- Status reactions: `whatsapp-status-reactions`.
+
+The catalog currently contains 35 scenarios. The `live-frontier` default lane is
+kept small at 8 scenarios for fast smoke coverage. The `mock-openai` default
+lane runs 29 deterministic scenarios through the real WhatsApp transport while
+mocking only model output. Approval scenarios and a few heavier/blocking checks
+remain explicit by scenario id.
+
+The WhatsApp QA driver observes structured live events (`text`, `media`,
+`location`, `reaction`, and `poll`) and can actively send media, polls,
+contacts, locations, and stickers. QA Lab imports that driver through the
+`@openclaw/whatsapp/api.js` package surface instead of reaching into private
+WhatsApp runtime files. Message content is redacted by default. Outbound
+poll and upload-file coverage run through deterministic gateway `poll` and
+`message.action` calls instead of model-prompt-only tool invocation.
 
 Output artifacts:
 
 - `whatsapp-qa-report.md`
-- `whatsapp-qa-summary.json`
+- `qa-evidence.json` - evidence entries for the live transport checks.
 - `whatsapp-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1`.
 
 ### Convex credential pool
@@ -741,24 +799,26 @@ Operational env vars and the Convex broker endpoint contract live in [Testing â†
 
 Seed assets live in `qa/`:
 
-- `qa/scenarios/index.md`
-- `qa/scenarios/<theme>/*.md`
+- `qa/scenarios/index.yaml`
+- `qa/scenarios/<theme>/*.yaml`
 
 These are intentionally in git so the QA plan is visible to both humans and the
 agent.
 
-`qa-lab` should stay a generic markdown runner. Each scenario markdown file is
+`qa-lab` should stay a generic YAML scenario runner. Each scenario YAML file is
 the source of truth for one test run and should define:
 
-- scenario metadata
-- optional category, capability, lane, and risk metadata
-- docs and code refs
-- optional plugin requirements
-- optional gateway config patch
-- the executable `qa-flow`
+- top-level `title`
+- `scenario` metadata
+- optional category, capability, lane, and risk metadata in `scenario`
+- docs and code refs in `scenario`
+- optional plugin requirements in `scenario`
+- optional gateway config patch in `scenario`
+- executable top-level `flow` for flow scenarios, or `scenario.execution.kind` /
+  `scenario.execution.path` for Vitest and Playwright scenarios
 
-The reusable runtime surface that backs `qa-flow` is allowed to stay generic
-and cross-cutting. For example, markdown scenarios can combine transport-side
+The reusable runtime surface that backs `flow` is allowed to stay generic
+and cross-cutting. For example, YAML scenarios can combine transport-side
 helpers with browser-side helpers that drive the embedded Control UI through the
 Gateway `browser.request` seam without adding a special-case runner.
 
@@ -796,17 +856,17 @@ provider names.
 
 ## Transport adapters
 
-`qa-lab` owns a generic transport seam for markdown QA scenarios. `qa-channel` is the first adapter on that seam, but the design target is wider: future real or synthetic channels should plug into the same suite runner instead of adding a transport-specific QA runner.
+`qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is the first adapter on that seam, but the design target is wider: future real or synthetic channels should plug into the same suite runner instead of adding a transport-specific QA runner.
 
 At the architecture level, the split is:
 
 - `qa-lab` owns generic scenario execution, worker concurrency, artifact writing, and reporting.
 - The transport adapter owns gateway config, readiness, inbound and outbound observation, transport actions, and normalized transport state.
-- Markdown scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
+- YAML scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
 
 ### Adding a channel
 
-Adding a channel to the markdown QA system requires exactly two things:
+Adding a channel to the YAML QA system requires exactly two things:
 
 1. A transport adapter for the channel.
 2. A scenario pack that exercises the channel contract.
@@ -840,7 +900,7 @@ The minimum adoption bar for a new channel:
 2. Implement the transport runner on the shared `qa-lab` host seam.
 3. Keep transport-specific mechanics inside the runner plugin or channel harness.
 4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command. Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations` array from `runtime-api.ts`. Keep `runtime-api.ts` light; lazy CLI and runner execution should stay behind separate entrypoints.
-5. Author or adapt markdown scenarios under the themed `qa/scenarios/` directories.
+5. Author or adapt YAML scenarios under the themed `qa/scenarios/` directories.
 6. Use the generic scenario helpers for new scenarios.
 7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
 
@@ -883,6 +943,18 @@ The report should answer:
 For the inventory of available scenarios - useful when sizing follow-up work or wiring a new transport - run `pnpm openclaw qa coverage` (add `--json` for machine-readable output).
 When choosing focused proof for a touched behavior or file path, run `pnpm openclaw qa coverage --match <query>`.
 The match report searches scenario metadata, docs refs, code refs, coverage IDs, plugins, and provider requirements, then prints matching `qa suite --scenario ...` targets.
+Every `qa suite` run writes top-level `qa-evidence.json`,
+`qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected
+scenario set. Scenarios that declare `execution.kind: vitest` or
+`execution.kind: playwright` run the matching test path and also write
+per-scenario logs. Scenarios that declare `execution.kind: script` run the
+evidence producer at `execution.path` through `node --import tsx` (with
+`${outputDir}` and `${scenarioId}` expanded in `execution.args`); the producer
+writes its own `qa-evidence.json`, whose entries are imported into the suite
+output and whose artifact paths are resolved relative to that producer
+`qa-evidence.json`. When `qa suite` is reached through
+`qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
+scorecard summary for the selected taxonomy categories.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model

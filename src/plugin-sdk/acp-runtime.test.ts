@@ -1,3 +1,4 @@
+// ACP runtime tests cover plugin-facing ACP runtime setup and gateway dispatch behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
 
@@ -195,6 +196,20 @@ describe("tryDispatchAcpReplyHook", () => {
 
     shouldSendToolSummaries = false;
     expect(livePredicate?.()).toBe(false);
+  });
+
+  it("passes runtime toolsAllow through to ACP dispatch", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await tryDispatchAcpReplyHook({ ...event, toolsAllow: ["message"] }, ctx);
+
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    const [payload] = dispatchMock.mock.calls[0] ?? [];
+    expect((payload as { toolsAllow?: string[] }).toolsAllow).toStrictEqual(["message"]);
   });
 
   it("returns unhandled when ACP dispatcher declines the turn", async () => {

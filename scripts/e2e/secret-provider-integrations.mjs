@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs secret-provider integration E2E checks with fixture processes.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -19,16 +20,36 @@ const MANUAL_EXEC_TOKEN = "proof-manual-exec-token";
 const PLUGIN_EXEC_TOKEN = "proof-plugin-exec-token";
 const OPENAI_PROFILE = "openai:secretref-proof";
 const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.5";
-const COMMAND_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS, 120000);
-const READY_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_READY_MS, 120000);
-const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_RPC_MS, 15000);
+const COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS,
+  120000,
+  "OPENCLAW_SECRET_PROOF_COMMAND_MS",
+);
+const COMMAND_TIMEOUT_KILL_GRACE_MS = 1000;
+const READY_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_READY_MS,
+  120000,
+  "OPENCLAW_SECRET_PROOF_READY_MS",
+);
+const RPC_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_RPC_MS,
+  15000,
+  "OPENCLAW_SECRET_PROOF_RPC_MS",
+);
 const TEARDOWN_GRACE_MS = readPositiveInt(
   process.env.OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS,
   5000,
+  "OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS",
 );
 const OUTPUT_CAPTURE_LIMIT_BYTES = readPositiveInt(
   process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES,
   4 * 1024 * 1024,
+  "OPENCLAW_SECRET_PROOF_OUTPUT_BYTES",
+);
+const RESOLVER_STDIN_LIMIT_BYTES = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES,
+  1024 * 1024,
+  "OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES",
 );
 const RESULTS_PATH =
   process.env.OPENCLAW_SECRET_PROOF_RESULTS_PATH?.trim() ||
@@ -41,13 +62,42 @@ function requireFullMatrix() {
   return process.env.OPENCLAW_SECRET_PROOF_FULL === "1";
 }
 
-function readPositiveInt(raw, fallback) {
+function allowProofSkips() {
+  return process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS === "1";
+}
+
+function skipProof(evidence) {
+  return { status: "skip", evidence };
+}
+
+function isSkippedProofResult(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    value.status === "skip" &&
+    typeof value.evidence === "string"
+  );
+}
+
+function collectBlockingProofResults(entries = results) {
+  return entries.filter(
+    (entry) => entry.status === "fail" || (entry.status === "skip" && !allowProofSkips()),
+  );
+}
+
+function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
   const parsed = Number(text);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
+  return parsed;
 }
 
 function remainingDeadlineMs(started, timeoutMs) {
@@ -123,6 +173,12 @@ function createOutputCapture(label, options = {}) {
     text() {
       return output;
     },
+    reset() {
+      output = "";
+      bytes = 0;
+      truncated = false;
+      scanTail = "";
+    },
     leakedForbiddenValue() {
       return leakedForbiddenValue;
     },
@@ -134,12 +190,76 @@ function parseJsonOutput(stdout) {
   if (!text) {
     throw new Error("expected JSON output, got empty stdout");
   }
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  if (first < 0 || last < first) {
+  const parsed = parseJsonObjectsFromMixedOutput(text).at(-1);
+  if (parsed === undefined) {
     throw new Error(`expected JSON object output, got: ${scrub(text.slice(0, 500))}`);
   }
-  return JSON.parse(text.slice(first, last + 1));
+  return parsed;
+}
+
+function isJsonRecordStart(text, index) {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const char = text[cursor];
+    if (char === "\n" || char === "\r") {
+      return true;
+    }
+    if (char !== " " && char !== "\t") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseJsonObjectsFromMixedOutput(text) {
+  const objects = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (start === -1) {
+      if (char === "{" && isJsonRecordStart(text, index)) {
+        start = index;
+        depth = 1;
+        inString = false;
+        escaped = false;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char !== "}") {
+      continue;
+    }
+
+    depth -= 1;
+    if (depth === 0) {
+      try {
+        objects.push(JSON.parse(text.slice(start, index + 1)));
+      } catch {}
+      start = -1;
+    }
+  }
+  return objects;
 }
 
 function resolveOpenClawRunner() {
@@ -228,9 +348,10 @@ async function cleanupEnv(root, options = {}) {
 function runCommand(command, args, options = {}) {
   const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
+    const usesProcessGroup = options.detached ?? process.platform !== "win32";
     const child = childProcess.spawn(command, args, {
       cwd: options.cwd ?? process.cwd(),
-      detached: options.detached ?? process.platform !== "win32",
+      detached: usesProcessGroup,
       env: options.env ?? process.env,
       shell: options.shell,
       stdio: options.stdio ?? ["pipe", "pipe", "pipe"],
@@ -240,21 +361,29 @@ function runCommand(command, args, options = {}) {
     const stderr = createOutputCapture("stderr");
     let timedOut = false;
     let aborted = false;
+    let parentSignalPending = null;
     let killTimer;
+    let forceKillAt;
+    const armForceKill = () => {
+      forceKillAt ??= Date.now() + COMMAND_TIMEOUT_KILL_GRACE_MS;
+      killTimer ??= setTimeout(
+        () => terminateProcessTree(child, "SIGKILL"),
+        COMMAND_TIMEOUT_KILL_GRACE_MS,
+      );
+      killTimer.unref();
+    };
     const abort = () => {
-      if (childHasExited(child)) {
+      if (usesProcessGroup ? !processTreeIsAlive(child) : childHasExited(child)) {
         return;
       }
       aborted = true;
       terminateProcessTree(child, "SIGTERM");
-      killTimer ??= setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000);
-      killTimer.unref();
+      armForceKill();
     };
     const timer = setTimeout(() => {
       timedOut = true;
       terminateProcessTree(child, "SIGTERM");
-      killTimer = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000);
-      killTimer.unref();
+      armForceKill();
     }, timeoutMs);
     const abortSignal = options.signal;
     if (abortSignal?.aborted) {
@@ -275,15 +404,33 @@ function runCommand(command, args, options = {}) {
       }
       parentSignalHandlers.clear();
     };
+    const finishTerminatedTree = async () => {
+      await finishTimedOutCommandProcessTree(child, {
+        forceKillAt,
+        timeoutKillGraceMs: COMMAND_TIMEOUT_KILL_GRACE_MS,
+      });
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      forceKillAt = undefined;
+    };
     if (process.platform !== "win32" && child.pid) {
       for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
         const handler = () => {
+          if (parentSignalPending) {
+            terminateProcessTree(child, "SIGKILL");
+            return;
+          }
+          parentSignalPending = signal;
           terminateProcessTree(child, signal);
-          removeParentSignalHandlers();
-          process.kill(process.pid, signal);
+          armForceKill();
+          void finishTerminatedTree().finally(() => {
+            removeParentSignalHandlers();
+            process.kill(process.pid, signal);
+          });
         };
         parentSignalHandlers.set(signal, handler);
-        process.once(signal, handler);
+        process.on(signal, handler);
       }
     }
     child.on("error", (error) => {
@@ -291,25 +438,46 @@ function runCommand(command, args, options = {}) {
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      forceKillAt = undefined;
       abortSignal?.removeEventListener("abort", abort);
       removeParentSignalHandlers();
       reject(error instanceof Error ? error : new Error(formatErrorMessage(error)));
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", abort);
+      const result = { code, signal, stdout: stdout.text(), stderr: stderr.text() };
+      if (aborted) {
+        removeParentSignalHandlers();
+        void finishTerminatedTree().finally(() =>
+          reject(new Error(scrub(`command aborted: ${command} ${args.join(" ")}`))),
+        );
+        return;
+      }
+      if (parentSignalPending) {
+        return;
+      }
+      removeParentSignalHandlers();
+      if (timedOut) {
+        void finishTerminatedTree().finally(() =>
+          reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`))),
+        );
+        return;
+      }
       if (killTimer) {
         clearTimeout(killTimer);
       }
-      abortSignal?.removeEventListener("abort", abort);
-      removeParentSignalHandlers();
-      const result = { code: code ?? 0, signal, stdout: stdout.text(), stderr: stderr.text() };
-      if (aborted) {
-        reject(new Error(scrub(`command aborted: ${command} ${args.join(" ")}`)));
-        return;
-      }
-      if (timedOut) {
-        terminateProcessTree(child, "SIGKILL");
-        reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`)));
+      forceKillAt = undefined;
+      if (result.signal && options.allowFailure !== true) {
+        reject(
+          new Error(
+            scrub(
+              `command terminated by signal (${result.signal}): ${command} ${args.join(" ")}\n${
+                result.stderr || result.stdout
+              }`,
+            ),
+          ),
+        );
         return;
       }
       if (result.code !== 0 && options.allowFailure !== true) {
@@ -563,15 +731,36 @@ if (!storePath) {
   console.error("missing PROOF_SECRET_STORE_PATH");
   process.exit(4);
 }
+const stdinLimitBytes = ${RESOLVER_STDIN_LIMIT_BYTES};
 
 function readStdin() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let body = "";
+    let bytes = 0;
+    let failed = false;
+    const fail = (error) => {
+      if (failed) {
+        return;
+      }
+      failed = true;
+      reject(error);
+    };
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => {
+      bytes += Buffer.byteLength(chunk, "utf8");
+      if (bytes > stdinLimitBytes) {
+        fail(new Error(\`resolver stdin exceeded \${stdinLimitBytes} bytes\`));
+        process.stdin.destroy();
+        return;
+      }
       body += chunk;
     });
-    process.stdin.on("end", () => resolve(body));
+    process.stdin.on("error", fail);
+    process.stdin.on("end", () => {
+      if (!failed) {
+        resolve(body);
+      }
+    });
   });
 }
 
@@ -789,6 +978,21 @@ async function stopGateway(child) {
   }
   terminateProcessTree(child, "SIGKILL");
   await waitForProcessTreeExit(child, 1000);
+}
+
+async function finishTimedOutCommandProcessTree(child, { forceKillAt, timeoutKillGraceMs }) {
+  if (!processTreeIsAlive(child)) {
+    return;
+  }
+  const graceRemainingMs =
+    forceKillAt === undefined ? timeoutKillGraceMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForProcessTreeExit(child, graceRemainingMs);
+  }
+  if (processTreeIsAlive(child)) {
+    terminateProcessTree(child, "SIGKILL");
+  }
+  await waitForProcessTreeExit(child, timeoutKillGraceMs);
 }
 
 function childHasExited(child) {
@@ -1042,10 +1246,18 @@ async function runWithProof(name, description, fn) {
   try {
     const evidence = await fn();
     const elapsedMs = Date.now() - started;
-    results.push({ name, status: "pass", elapsedMs, evidence });
+    if (isSkippedProofResult(evidence)) {
+      const entry = { name, status: "skip", elapsedMs, evidence: evidence.evidence };
+      results.push(entry);
+      console.log(`[SKIP] ${name} ${description} (${elapsedMs}ms) ${scrub(evidence.evidence)}`);
+      return entry;
+    }
+    const entry = { name, status: "pass", elapsedMs, evidence };
+    results.push(entry);
     console.log(
       `[PASS] ${name} ${description} (${elapsedMs}ms) ${evidence ? scrub(evidence) : ""}`,
     );
+    return entry;
   } catch (error) {
     const elapsedMs = Date.now() - started;
     const message = error instanceof Error ? error.message : String(error);
@@ -1169,6 +1381,15 @@ async function p3ThroughP6StaticReloadAndCommandSnapshot() {
   return "static capture, reload success, reload LKG, and command snapshot resolution proved";
 }
 
+function assertAllowedFailureCommandSucceeded(result, label, combinedOutput) {
+  if (result.signal) {
+    throw new Error(`${label} terminated by signal ${result.signal}: ${combinedOutput}`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`${label} failed (${String(result.code)}): ${combinedOutput}`);
+  }
+}
+
 async function p7AuthProfileSecretRefPersistsAndResolves() {
   await withProofEnv("p7", async (envCtx, _plugin, storePath) => {
     const port = await allocatePort();
@@ -1220,6 +1441,11 @@ async function p7AuthProfileSecretRefPersistsAndResolves() {
         `auth-profile SecretRef did not resolve through plugin integration: ${combined}`,
       );
     }
+    assertAllowedFailureCommandSucceeded(
+      result,
+      "auth-profile SecretRef model status probe",
+      combined,
+    );
     const callsAfter = readJson(storePath).calls;
     if (callsAfter <= callsBefore) {
       throw new Error("auth-profile proof did not invoke the plugin-managed resolver");
@@ -1236,7 +1462,9 @@ async function p8ManagedServiceEnvProof() {
     if (requireFullMatrix()) {
       throw new Error("OPENCLAW_SECRET_PROOF_SERVICE=1 is required for full matrix service proof");
     }
-    return "not run in local rehearsal; final matrix must set OPENCLAW_SECRET_PROOF_SERVICE=1 on a service-capable host";
+    return skipProof(
+      "not run in local rehearsal; final matrix must set OPENCLAW_SECRET_PROOF_SERVICE=1 on a service-capable host",
+    );
   }
   await withProofEnv("p8", async (envCtx) => {
     const port = await allocatePort();
@@ -1466,7 +1694,9 @@ async function p12OpenAiLiveProof() {
     if (requireFullMatrix()) {
       throw new Error("OPENAI_API_KEY is required for full matrix OpenAI proof");
     }
-    return "OPENAI_API_KEY not present; final live matrix must forward the provided OpenAI env profile";
+    return skipProof(
+      "OPENAI_API_KEY not present; final live matrix must forward the provided OpenAI env profile",
+    );
   }
   await withProofEnv(
     "p12",
@@ -1534,7 +1764,7 @@ async function p12OpenAiLiveProof() {
   return "OpenAI model auth probe consumed API key through plugin-managed auth-profile SecretRef";
 }
 
-async function runPtySecretsConfigurePreset(envCtx) {
+async function runPtySecretsConfigurePreset(envCtx, options = {}) {
   const { spawn } = await import("@lydell/node-pty");
   const command = await resolveOpenClawCommand(
     ["secrets", "configure", "--providers-only", "--apply", "--yes", "--allow-exec", "--json"],
@@ -1547,45 +1777,134 @@ async function runPtySecretsConfigurePreset(envCtx) {
     cwd: command.options.cwd ?? process.cwd(),
     env: command.options.env ?? envCtx.env,
   });
-  let output = "";
+  const output = createOutputCapture("secrets configure stdout");
   let phase = "providers-menu";
+  const keyTimers = new Set();
+  const clearKeyTimers = () => {
+    for (const keyTimer of keyTimers) {
+      clearTimeout(keyTimer);
+    }
+    keyTimers.clear();
+  };
   const sendKeys = (keys) => {
     keys.forEach((key, index) => {
-      setTimeout(() => child.write(key), index * 80);
+      const keyTimer = setTimeout(() => {
+        keyTimers.delete(keyTimer);
+        child.write(key);
+      }, index * 80);
+      keyTimers.add(keyTimer);
     });
   };
   return await new Promise((resolve, reject) => {
+    let timedOut = false;
+    let forceKillAt;
+    let forceKillTimer;
+    const timeoutMs = options.timeoutMs ?? 60000;
+    const timeoutKillGraceMs = options.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS;
     const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`secrets configure preset timed out: ${scrub(output)}`));
-    }, 60000);
+      timedOut = true;
+      signalPtyProcessTree(child, "SIGHUP");
+      forceKillAt = Date.now() + timeoutKillGraceMs;
+      forceKillTimer = setTimeout(() => {
+        forceKillTimer = undefined;
+        forceKillAt = undefined;
+        signalPtyProcessTree(child, "SIGKILL");
+      }, timeoutKillGraceMs);
+      forceKillTimer.unref?.();
+    }, timeoutMs);
     child.onData((data) => {
-      output += data;
-      if (phase === "providers-menu" && output.includes("Configure secret providers")) {
+      output.append(data);
+      const outputText = output.text();
+      if (phase === "providers-menu" && outputText.includes("Configure secret providers")) {
         phase = "selecting-preset";
         sendKeys(["\x1b[B", "\r"]);
         return;
       }
-      if (phase === "selecting-preset" && output.includes("Select plugin preset")) {
+      if (phase === "selecting-preset" && outputText.includes("Select plugin preset")) {
         phase = "preset-selected";
         sendKeys(["\r"]);
-        output = "";
+        output.reset();
         return;
       }
-      if (phase === "preset-selected" && output.includes("Configure secret providers")) {
+      if (phase === "preset-selected" && outputText.includes("Configure secret providers")) {
         phase = "continue-selected";
         sendKeys(["\x1b[A", "\r"]);
       }
     });
     child.onExit(({ exitCode }) => {
       clearTimeout(timer);
-      if (exitCode !== 0) {
-        reject(new Error(`secrets configure preset failed (${exitCode}): ${scrub(output)}`));
+      clearKeyTimers();
+      if (timedOut) {
+        void finishTimedOutPtyProcessTree(child, {
+          forceKillAt,
+          forceKillTimer,
+          timeoutKillGraceMs,
+        }).finally(() =>
+          reject(new Error(`secrets configure preset timed out: ${scrub(output.text())}`)),
+        );
         return;
       }
-      resolve(output);
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+      if (exitCode !== 0) {
+        reject(new Error(`secrets configure preset failed (${exitCode}): ${scrub(output.text())}`));
+        return;
+      }
+      resolve(output.text());
     });
   });
+}
+
+async function finishTimedOutPtyProcessTree(
+  child,
+  { forceKillAt, forceKillTimer, timeoutKillGraceMs },
+) {
+  const graceRemainingMs =
+    forceKillAt === undefined ? timeoutKillGraceMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForPtyProcessTreeExit(child, graceRemainingMs);
+  }
+  if (forceKillTimer) {
+    clearTimeout(forceKillTimer);
+  }
+  if (ptyProcessTreeIsAlive(child)) {
+    signalPtyProcessTree(child, "SIGKILL");
+  }
+  await waitForPtyProcessTreeExit(child, timeoutKillGraceMs);
+}
+
+function ptyProcessTreeIsAlive(child) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForPtyProcessTreeExit(child, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!ptyProcessTreeIsAlive(child)) {
+      return true;
+    }
+    await delay(50);
+  }
+  return !ptyProcessTreeIsAlive(child);
+}
+
+function signalPtyProcessTree(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  child.kill(signal);
 }
 
 async function p13SecretsConfigurePreset() {
@@ -1789,19 +2108,26 @@ async function main() {
   if (runError) {
     throw toLintErrorObject(runError, "Non-Error thrown");
   }
-  const failed = results.filter((entry) => entry.status !== "pass");
-  if (failed.length > 0) {
+  const blockingResults = collectBlockingProofResults();
+  if (blockingResults.length > 0) {
     process.exitCode = 1;
   }
 }
 
 export {
+  assertAllowedFailureCommandSucceeded,
+  collectBlockingProofResults,
   cleanupEnv,
   expectGatewayStartupFails,
   gatewayCall,
+  parseJsonOutput,
+  runPtySecretsConfigurePreset,
+  runWithProof,
   runCommand,
+  skipProof,
   startGateway,
   waitForManagedGatewayStatus,
+  writeProofPlugin,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

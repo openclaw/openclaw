@@ -124,6 +124,7 @@ type PluginBindingGlobalState = {
   fallbackNoticeBindingIds: Set<string>;
   approvalsCache: PluginBindingApprovalsFile | null;
   approvalsLoaded: boolean;
+  approvalsSaveChain: Promise<void>;
 };
 
 type PluginConversationBindingState = {
@@ -149,6 +150,7 @@ const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState
     fallbackNoticeBindingIds: new Set<string>(),
     approvalsCache: null,
     approvalsLoaded: false,
+    approvalsSaveChain: Promise.resolve(),
   }),
 );
 
@@ -380,10 +382,16 @@ async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
   const state = getPluginBindingGlobalState();
   state.approvalsCache = file;
   state.approvalsLoaded = true;
-  await writeJson(filePath, file, {
-    mode: 0o600,
-    trailingNewline: true,
-  });
+  const writeApprovals = state.approvalsSaveChain
+    .catch(() => undefined)
+    .then(async () => {
+      await writeJson(filePath, file, {
+        mode: 0o600,
+        trailingNewline: true,
+      });
+    });
+  state.approvalsSaveChain = writeApprovals.catch(() => undefined);
+  await writeApprovals;
 }
 
 function getApprovals(): PluginBindingApprovalsFile {
@@ -1010,6 +1018,7 @@ export const testing = {
     const state = getPluginBindingGlobalState();
     state.approvalsCache = null;
     state.approvalsLoaded = false;
+    state.approvalsSaveChain = Promise.resolve();
     state.fallbackNoticeBindingIds.clear();
   },
 };

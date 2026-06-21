@@ -26,7 +26,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metada
 import {
   normalizePluginDependencySpecs,
   type PluginDependencySpecMap,
-} from "./status-dependencies.js";
+} from "./status-dependencies-core.js";
 
 const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
 const installedPackageJsonPathCache = new Map<string, string | null>();

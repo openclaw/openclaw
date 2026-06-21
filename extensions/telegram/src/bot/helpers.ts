@@ -1,3 +1,4 @@
+// Telegram helper module supports helpers behavior.
 import type { Chat, Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -39,6 +40,7 @@ import {
   renderTelegramTextEntities,
   resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
+  resolveTelegramRichMessagePlaceholder,
   type TelegramForwardedContext,
   type TelegramTextEntity,
 } from "./body-helpers.js";
@@ -55,6 +57,7 @@ export {
   normalizeForwardedContext,
   renderTelegramTextEntities,
   resolveTelegramMediaPlaceholder,
+  resolveTelegramRichMessagePlaceholder,
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -618,11 +621,12 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
       : replyLike && typeof replyLike.caption === "string"
         ? replyLike.caption
         : undefined;
-  const safeReplyText = resolveTelegramTextContent(rawReplyText);
-  const replyTextParts = replyLike && safeReplyText ? getTelegramTextParts(replyLike) : undefined;
+  const replyTextParts = replyLike ? getTelegramTextParts(replyLike) : undefined;
+  const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = safeReplyText.trim();
+    const replyBody =
+      safeReplyText.trim() || resolveTelegramRichMessagePlaceholder(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {

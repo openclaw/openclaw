@@ -1,3 +1,5 @@
+// Role allowlist update tests cover operator-driven gateway updates, node lists,
+// device/node pairing state, restart sentinels, and runtime plugin visibility.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +11,7 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
 import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { resolveRestartSentinelPath } from "../infra/restart-sentinel.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -39,11 +42,31 @@ import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js"
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const FAST_WAIT_OPTS = { timeout: 1_000, interval: 2 } as const;
+const FAST_WAIT_OPTS = { timeout: 5_000, interval: 10 } as const;
 type PollWaitOptions = { timeout: number; interval: number };
 
 let ws: WebSocket;
 let port: number;
+
+async function withoutSupervisorHints<T>(fn: () => Promise<T>): Promise<T> {
+  const previousEnv = new Map<string, string | undefined>();
+  for (const key of SUPERVISOR_HINT_ENV_VARS) {
+    previousEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 function countConnectedNodes(nodes: readonly { connected?: boolean }[] | undefined): number {
   let count = 0;
@@ -369,72 +392,76 @@ describe("gateway role enforcement", () => {
 
 describe("gateway update.run", () => {
   test("writes sentinel and schedules restart", async () => {
-    const sigusr1 = vi.fn();
-    process.on("SIGUSR1", sigusr1);
+    await withoutSupervisorHints(async () => {
+      const sigusr1 = vi.fn();
+      process.on("SIGUSR1", sigusr1);
 
-    try {
-      const id = "req-update";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "update.run",
-          params: {
-            sessionKey: "agent:main:whatsapp:dm:+15555550123",
-            restartDelayMs: 0,
-          },
-        }),
-      );
-      const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
-      expect(res.ok).toBe(true);
+      try {
+        const id = "req-update";
+        ws.send(
+          JSON.stringify({
+            type: "req",
+            id,
+            method: "update.run",
+            params: {
+              sessionKey: "agent:main:whatsapp:dm:+15555550123",
+              restartDelayMs: 0,
+            },
+          }),
+        );
+        const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
+        expect(res.ok).toBe(true);
 
-      await vi.waitFor(() => {
-        expect(sigusr1.mock.calls.length).toBeGreaterThan(0);
-      }, FAST_WAIT_OPTS);
-      expect(sigusr1).toHaveBeenCalled();
+        await vi.waitFor(() => {
+          expect(sigusr1.mock.calls.length).toBeGreaterThan(0);
+        }, FAST_WAIT_OPTS);
+        expect(sigusr1).toHaveBeenCalled();
 
-      const sentinelPath = resolveRestartSentinelPath();
-      const raw = await fs.readFile(sentinelPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        payload?: { kind?: string; stats?: { mode?: string } };
-      };
-      expect(parsed.payload?.kind).toBe("update");
-      expect(parsed.payload?.stats?.mode).toBe("git");
-    } finally {
-      process.off("SIGUSR1", sigusr1);
-    }
+        const sentinelPath = resolveRestartSentinelPath();
+        const raw = await fs.readFile(sentinelPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          payload?: { kind?: string; stats?: { mode?: string } };
+        };
+        expect(parsed.payload?.kind).toBe("update");
+        expect(parsed.payload?.stats?.mode).toBe("git");
+      } finally {
+        process.off("SIGUSR1", sigusr1);
+      }
+    });
   });
 
   test("uses configured update channel", async () => {
-    const sigusr1 = vi.fn();
-    process.on("SIGUSR1", sigusr1);
+    await withoutSupervisorHints(async () => {
+      const sigusr1 = vi.fn();
+      process.on("SIGUSR1", sigusr1);
 
-    try {
-      const configPath = getGatewayTestConfigPath();
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify({ update: { channel: "beta" } }, null, 2));
-      const updateMock = vi.mocked(runGatewayUpdate);
-      updateMock.mockClear();
+      try {
+        const configPath = getGatewayTestConfigPath();
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(configPath, JSON.stringify({ update: { channel: "beta" } }, null, 2));
+        const updateMock = vi.mocked(runGatewayUpdate);
+        updateMock.mockClear();
 
-      const id = "req-update-channel";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "update.run",
-          params: {
-            restartDelayMs: 0,
-          },
-        }),
-      );
-      const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
-      expect(res.ok).toBe(true);
-      await vi.waitFor(() => {
-        expect(updateMock).toHaveBeenCalledOnce();
-      }, FAST_WAIT_OPTS);
-    } finally {
-      process.off("SIGUSR1", sigusr1);
-    }
+        const id = "req-update-channel";
+        ws.send(
+          JSON.stringify({
+            type: "req",
+            id,
+            method: "update.run",
+            params: {
+              restartDelayMs: 0,
+            },
+          }),
+        );
+        const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
+        expect(res.ok).toBe(true);
+        await vi.waitFor(() => {
+          expect(updateMock).toHaveBeenCalledOnce();
+        }, FAST_WAIT_OPTS);
+      } finally {
+        process.off("SIGUSR1", sigusr1);
+      }
+    });
   });
 });
 

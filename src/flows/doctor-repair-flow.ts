@@ -1,11 +1,15 @@
+// Doctor repair flow builds and runs repair actions for doctor findings.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import { listHealthChecks } from "./health-check-registry.js";
-import type { HealthCheckRunResult, RegisteredHealthCheck } from "./health-check-runner-types.js";
 import type {
-  HealthCheck,
+  HealthCheckInput,
+  HealthCheckRunResult,
+  RegisteredHealthCheck,
+} from "./health-check-runner-types.js";
+import type {
   HealthFinding,
   HealthRepairContext,
   HealthRepairDiff,
@@ -15,7 +19,7 @@ import type {
 
 // Repair runner for structured doctor health checks; carries config between checks.
 export interface DoctorRepairRunOptions {
-  readonly checks?: readonly HealthCheck[];
+  readonly checks?: readonly HealthCheckInput[];
   readonly dryRun?: boolean;
   readonly diff?: boolean;
 }

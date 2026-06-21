@@ -1,3 +1,4 @@
+// Coverage for building compaction runtime context from active runner state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../bash-process-registry.js";
@@ -17,6 +18,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       sessionKey: "agent:main:thread:1",
       messageChannel: "slack",
       messageProvider: "slack",
+      chatType: "channel",
       agentAccountId: "acct-1",
       currentChannelId: "C123",
       currentThreadTs: "thread-9",
@@ -38,6 +40,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.sessionKey).toBe("agent:main:thread:1");
     expect(result.messageChannel).toBe("slack");
     expect(result.messageProvider).toBe("slack");
+    expect(result.chatType).toBe("channel");
     expect(result.agentAccountId).toBe("acct-1");
     expect(result.currentChannelId).toBe("C123");
     expect(result.currentThreadTs).toBe("thread-9");
@@ -57,6 +60,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       sessionKey: null,
       messageChannel: null,
       messageProvider: null,
+      chatType: null,
       agentAccountId: null,
       currentChannelId: null,
       currentThreadTs: null,
@@ -71,6 +75,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.sessionKey).toBeUndefined();
     expect(result.messageChannel).toBeUndefined();
     expect(result.messageProvider).toBeUndefined();
+    expect(result.chatType).toBeUndefined();
     expect(result.agentAccountId).toBeUndefined();
     expect(result.currentChannelId).toBeUndefined();
     expect(result.currentThreadTs).toBeUndefined();
@@ -94,7 +99,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("anthropic");
     expect(result.model).toBe("claude-opus-4-6");
-    // Auth profile dropped because provider changed
+    // Auth profile must be dropped when provider changes; otherwise compaction
+    // could send a stale credential to the override provider.
     expect(result.authProfileId).toBeUndefined();
   });
 
@@ -130,6 +136,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   });
 
   it("preserves scoped active process session references for compaction", () => {
+    // Only sessions tied to the same scope are summarized; cross-session process
+    // state would leak unrelated task context into the compaction prompt.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
     const active = createProcessSessionFixture({
@@ -381,6 +389,162 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.4-mini");
     expect(result.authProfileId).toBeUndefined();
+  });
+
+  it("resolves compaction.model alias to canonical model ref on same provider (#90340)", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4-mini": {
+                alias: "gpt54mini",
+                params: { thinking: "high" },
+              },
+            },
+            compaction: { model: "gpt54mini" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:default",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+    expect(result.authProfileId).toBe("openai:default");
+  });
+
+  it("resolves compaction.model alias to canonical model ref on different provider", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                alias: "thinky",
+              },
+            },
+            compaction: { model: "thinky" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:default",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    // Auth profile must be dropped when provider changes
+    expect(result.authProfileId).toBeUndefined();
+  });
+
+  it("falls back to literal model when alias does not match", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4-mini": {
+                alias: "gpt54mini",
+              },
+            },
+            compaction: { model: "nonexistent-alias" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:default",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("nonexistent-alias");
+    expect(result.authProfileId).toBe("openai:default");
+  });
+
+  it("preserves auth when an omitted provider uses the effective default", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4-mini": {
+                alias: "summary",
+              },
+            },
+            compaction: { model: "summary" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      authProfileId: "openai:default",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+    expect(result.authProfileId).toBe("openai:default");
+  });
+
+  it("prefers literal configured model ids over alias collisions (#90340)", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4-mini": {
+                alias: "gpt54mini",
+              },
+              "openai/gpt54mini": {},
+            },
+            compaction: { model: "gpt54mini" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:default",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt54mini");
+    expect(result.authProfileId).toBe("openai:default");
+  });
+
+  it("keeps current-provider configured model ids over cross-provider alias collisions (#90340)", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                alias: "gpt-5.4-mini",
+              },
+            },
+            compaction: { model: "gpt-5.4-mini" },
+          },
+        },
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.4-mini" }] },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:default",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+    expect(result.authProfileId).toBe("openai:default");
   });
 
   it("leaves non-openai providers unchanged", () => {

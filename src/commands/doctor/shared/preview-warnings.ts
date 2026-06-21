@@ -1,3 +1,4 @@
+// Doctor preview warning aggregation for config that can surprise users before repair.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -55,19 +56,6 @@ function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
     const subagents = hasRecord(agent.subagents) ? agent.subagents : undefined;
     return Array.isArray(subagents?.allowAgents);
   });
-}
-
-function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
-  if (cfg.plugins?.enabled === false) {
-    return true;
-  }
-  const entries = cfg.plugins?.entries;
-  if (!hasRecord(entries)) {
-    return false;
-  }
-  return Object.values(entries).some(
-    (entry) => hasRecord(entry) && "enabled" in entry && entry.enabled === false,
-  );
 }
 
 function hasToolsBySenderKey(value: unknown): boolean {
@@ -305,6 +293,7 @@ function formatTargets(targets: string[]): string {
   return `${targets.slice(0, 2).join(", ")}, and ${targets.length - 2} more`;
 }
 
+/** Warn when visible-reply policy selects message_tool but message is unavailable. */
 export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
   const warnings: string[] = [];
@@ -345,6 +334,7 @@ function formatChannelList(channels: string[]): string {
     .join(", ")}, and ${channels.length - 2} more`;
 }
 
+/** Warn when routed channel agents lack the message tool required for channel actions. */
 export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   return collectChannelRouteTargets(cfg).flatMap((target) => {
     const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
@@ -686,6 +676,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   });
 }
 
+/** Warn when configured tool sections no longer widen restrictive tool profiles. */
 export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
@@ -754,14 +745,44 @@ export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig)
 }
 
 export type DoctorPreviewNotes = {
+  /** Non-warning doctor notes shown during preview. */
   infoNotes: string[];
+  /** Warning notes shown during preview. */
   warningNotes: string[];
 };
 
+async function resolveDoctorChannelPreviewConfig(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  allowExec?: boolean;
+}): Promise<{ cfg: OpenClawConfig; diagnostics: string[] }> {
+  const [{ resolveCommandSecretRefsViaGateway }, { getConfiguredChannelsCommandSecretTargetIds }] =
+    await Promise.all([
+      import("../../../cli/command-secret-gateway.js"),
+      import("../../../cli/command-secret-targets.js"),
+    ]);
+  const targetIds = getConfiguredChannelsCommandSecretTargetIds(params.cfg, params.env);
+  if (targetIds.size === 0) {
+    return { cfg: params.cfg, diagnostics: [] };
+  }
+  const resolved = await resolveCommandSecretRefsViaGateway({
+    config: params.cfg,
+    commandName: "doctor preview",
+    targetIds,
+    mode: "read_only_status",
+    allowLocalExecSecretRefs: params.allowExec === true,
+    scrubUnresolvedSecretRefs: false,
+  });
+  return { cfg: resolved.resolvedConfig, diagnostics: resolved.diagnostics };
+}
+
+/** Collect info and warning notes for doctor preview mode. */
 export async function collectDoctorPreviewNotes(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  allowExec?: boolean;
 }): Promise<DoctorPreviewNotes> {
   const infoNotes: string[] = [];
   const warnings: string[] = [];
@@ -772,18 +793,21 @@ export async function collectDoctorPreviewNotes(params: {
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
   warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
+  const { collectBlockedLegacyOpenAICodexProviderWarnings } =
+    await import("./legacy-config-migrations.runtime.models.js");
+  warnings.push(...collectBlockedLegacyOpenAICodexProviderWarnings(params.cfg));
 
   const { collectActiveToolSchemaProjectionWarnings } =
     await import("./active-tool-schema-warnings.js");
   warnings.push(...collectActiveToolSchemaProjectionWarnings({ cfg: params.cfg, env }));
 
-  const channelPluginRuntime =
-    hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)
-      ? await import("./channel-plugin-blockers.js")
-      : undefined;
-  const channelPluginBlockerHits =
-    channelPluginRuntime?.scanConfiguredChannelPluginBlockers(params.cfg, env) ?? [];
-  if (channelPluginRuntime && channelPluginBlockerHits.length > 0) {
+  const channelPluginRuntime = await import("./channel-plugin-blockers.js");
+  const channelPluginBlockerHits = channelPluginRuntime.scanConfiguredChannelPluginBlockers(
+    params.cfg,
+    env,
+    params.activationSourceConfig,
+  );
+  if (channelPluginBlockerHits.length > 0) {
     warnings.push(
       channelPluginRuntime
         .collectConfiguredChannelPluginBlockerWarnings(channelPluginBlockerHits)
@@ -792,9 +816,15 @@ export async function collectDoctorPreviewNotes(params: {
   }
 
   if (hasChannelConfig) {
+    const channelPreviewConfig = await resolveDoctorChannelPreviewConfig({
+      cfg: params.cfg,
+      env,
+      allowExec: params.allowExec,
+    });
+    warnings.push(...channelPreviewConfig.diagnostics);
     const { collectChannelDoctorPreviewWarnings } = await loadChannelDoctorModule();
     const channelDoctorWarnings = await collectChannelDoctorPreviewWarnings({
-      cfg: params.cfg,
+      cfg: channelPreviewConfig.cfg,
       doctorFixCommand: params.doctorFixCommand,
       env,
     });
@@ -891,12 +921,7 @@ export async function collectDoctorPreviewNotes(params: {
         emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
     }).filter(
       (warning) =>
-        !(
-          channelPluginRuntime?.isWarningBlockedByChannelPlugin(
-            warning,
-            channelPluginBlockerHits,
-          ) ?? false
-        ),
+        !channelPluginRuntime.isWarningBlockedByChannelPlugin(warning, channelPluginBlockerHits),
     );
     if (emptyAllowlistWarnings.length > 0) {
       const { sanitizeForLog } = await import("../../../../packages/terminal-core/src/ansi.js");
@@ -959,10 +984,12 @@ export async function collectDoctorPreviewNotes(params: {
   return { infoNotes, warningNotes: warnings };
 }
 
+/** Collect warning notes only for callers that do not display info notes. */
 export async function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  allowExec?: boolean;
 }): Promise<string[]> {
   return (await collectDoctorPreviewNotes(params)).warningNotes;
 }

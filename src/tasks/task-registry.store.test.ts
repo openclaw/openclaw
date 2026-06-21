@@ -2,13 +2,18 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -45,7 +50,7 @@ import {
   parseTaskStatus,
 } from "./task-registry.types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -105,11 +110,7 @@ function createStoredTask(): TaskRecord {
 
 describe("task-registry store runtime", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    ORIGINAL_ENV.restore();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests({ persist: false });
   });
@@ -519,6 +520,50 @@ describe("task-registry store runtime", () => {
       sourceId: "job-123",
       task: "Run nightly cron",
     });
+  });
+
+  it("persists executor and requester agent ids in sqlite task rows", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-agent-id-" },
+      async () => {
+        const created = createTaskRecord({
+          runtime: "subagent",
+          requesterSessionKey: "global",
+          ownerKey: "global",
+          scopeKind: "session",
+          childSessionKey: "agent:worker:subagent:child",
+          requesterAgentId: "main",
+          runId: "run-worker-subagent-sqlite",
+          task: "Inspect worker state",
+          status: "running",
+          deliveryStatus: "pending",
+        });
+
+        const database = openOpenClawStateDatabase();
+        const db = getNodeSqliteKysely<TaskRegistryTestDatabase>(database.db);
+        const row = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("task_runs")
+            .select(["agent_id", "requester_agent_id", "child_session_key", "owner_key"])
+            .where("task_id", "=", created.taskId),
+        );
+
+        expect(row).toEqual({
+          agent_id: "worker",
+          requester_agent_id: "main",
+          child_session_key: "agent:worker:subagent:child",
+          owner_key: "global",
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+        expect(findTaskByRunId("run-worker-subagent-sqlite")).toMatchObject({
+          taskId: created.taskId,
+          agentId: "worker",
+          requesterAgentId: "main",
+        });
+      },
+    );
   });
 
   it("persists requester origin atomically when creating sqlite tasks", async () => {

@@ -1,12 +1,15 @@
 #!/usr/bin/env -S pnpm tsx
+// Windows Smoke script supports OpenClaw repository automation.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
+  currentRunningSnapshotInfo,
   makeTempDir,
   parseMode,
+  parseTcpPort,
   parseProvider,
   readPositiveIntEnv,
   resolveLatestVersion,
@@ -15,6 +18,8 @@ import {
   resolveSnapshot,
   run,
   say,
+  shouldSkipSnapshotRestore,
+  validateSnapshotRestoreMode,
   warn,
   withProgressOnStderr,
   writeSummaryMarkdown,
@@ -27,9 +32,12 @@ import {
 } from "./common.ts";
 import { runWindowsBackgroundPowerShell, WindowsGuest } from "./guest-transports.ts";
 import { startHostServer } from "./host-server.ts";
-import { waitForVmStatus } from "./parallels-vm.ts";
+import { ensureVmRunning } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
-import { windowsProviderOnlyPluginIsolationScript } from "./plugin-isolation.ts";
+import {
+  windowsCodexPlatformPackageRepairFunction,
+  windowsProviderOnlyPluginIsolationScript,
+} from "./plugin-isolation.ts";
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
@@ -149,7 +157,7 @@ export function parseArgs(argv: string[]): WindowsOptions {
       options.hostIp = value;
     },
     "--host-port": (value) => {
-      options.hostPort = Number(value);
+      options.hostPort = parseTcpPort(value, "--host-port");
       options.hostPortExplicit = true;
     },
     "--install-url": (value) => {
@@ -274,7 +282,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     this.guest = new WindowsGuest(this.options.vmName, this.phases);
     this.tgzDir = await makeTempDir("openclaw-parallels-windows-tgz.");
     try {
-      this.snapshot = resolveSnapshot(this.options.vmName, this.options.snapshotHint);
+      validateSnapshotRestoreMode(this.options.mode, "Windows smoke");
+      this.snapshot = shouldSkipSnapshotRestore()
+        ? currentRunningSnapshotInfo(this.options.vmName)
+        : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
       await this.prepareHost(
@@ -428,11 +439,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
 
   private log = (text: string): void => this.phases.append(text);
 
-  private guestExec = (
-    args: string[],
-    options: { check?: boolean; timeoutMs?: number } = {},
-  ): string => this.guest.exec(args, options);
-
   private guestPowerShell(
     script: string,
     options: { check?: boolean; timeoutMs?: number } = {},
@@ -441,6 +447,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   }
 
   private restoreSnapshot(): void {
+    if (shouldSkipSnapshotRestore()) {
+      say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
+      return;
+    }
     this.waitForVmNotRestoring(240);
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     let restored = false;
@@ -471,16 +481,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
       throw new Error("snapshot-switch failed after restoring-state retries");
     }
     this.waitForVmNotRestoring(240);
-    if (this.snapshot.state === "poweroff") {
-      waitForVmStatus(this.options.vmName, "stopped", 240, {
-        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
-      });
-      say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
-      });
-    }
+    ensureVmRunning(this.options.vmName, 240, {
+      probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      transitionTimeoutMs: () => this.remainingPhaseTimeoutMs(120_000),
+    });
   }
 
   private waitForVmNotRestoring(timeoutSeconds: number): void {
@@ -538,7 +542,7 @@ ${cleanScript}`,
     const versionArg = this.installVersion ? ` -Tag ${psSingleQuote(this.installVersion)}` : "";
     this.guestPowerShell(
       `$ErrorActionPreference = 'Stop'
-$script = Invoke-RestMethod -Uri ${psSingleQuote(this.options.installUrl)}
+$script = Invoke-RestMethod -Uri ${psSingleQuote(this.options.installUrl)} -TimeoutSec 120
 & ([scriptblock]::Create($script))${versionArg} -NoOnboard
 if ($LASTEXITCODE -ne 0) { throw "installer failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version
@@ -555,7 +559,7 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LAST
     this.guestPowerShell(
       `$ErrorActionPreference = 'Stop'
 $tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
-curl.exe -fsSL ${psSingleQuote(tgzUrl)} -o $tgz
+curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(tgzUrl)} -o $tgz
 npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
 if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version
@@ -720,6 +724,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 ${windowsPortableGitPathScript}
 ${windowsAgentTurnConfigPatchScript(this.auth.modelId)}
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
+${windowsCodexPlatformPackageRepairFunction()}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 $agentOk = $false
 for ($attempt = 1; $attempt -le 2; $attempt++) {
@@ -748,6 +753,10 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
   if ($agentExitCode -eq 0 -and ($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
     $agentOk = $true
     break
+  }
+  if ($agentExitCode -ne 0 -and $attempt -lt 2 -and (Repair-MissingCodexPlatformPackage -Output $output)) {
+    Write-Host "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+    continue
   }
   if ($attempt -lt 2) {
     Write-Host "agent turn attempt $attempt failed or finished without OK response; retrying"

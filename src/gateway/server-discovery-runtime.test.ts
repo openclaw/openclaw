@@ -1,5 +1,8 @@
+// Gateway discovery runtime tests cover plugin discovery advertisements,
+// wide-area DNS records, Bonjour naming, and shutdown cleanup.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
+import { captureFullEnv } from "../test-utils/env.js";
 
 type WriteWideAreaGatewayZone = typeof import("../infra/widearea-dns.js").writeWideAreaGatewayZone;
 type ResolveWideAreaDiscoveryDomain =
@@ -144,12 +147,14 @@ function startStuckDiscovery(timeoutMs: string) {
 }
 
 describe("startGatewayDiscovery", () => {
+  const envSnapshot = captureFullEnv();
+
   afterEach(() => {
     vi.useRealTimers();
+    envSnapshot.restore();
     while (cleanupEnv.length > 0) {
       cleanupEnv.pop()?.();
     }
-
     vi.clearAllMocks();
   });
 

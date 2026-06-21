@@ -306,6 +306,15 @@
             "fps",
             "screenIndex"
           ]
+        },
+        "screen_snapshot": {
+          "label": "screen snapshot",
+          "detailKeys": [
+            "node",
+            "nodeId",
+            "screenIndex",
+            "maxWidth"
+          ]
         }
       }
     },

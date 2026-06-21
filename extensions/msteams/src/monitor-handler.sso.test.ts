@@ -1,5 +1,10 @@
+// Msteams tests cover monitor handler.sso plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createMSTeamsSsoTokenStoreMemory } from "./sso-token-store.js";
+import {
+  makeMSTeamsSsoTokenStoreKey,
+  type MSTeamsSsoStoredToken,
+  type MSTeamsSsoTokenStore,
+} from "./sso-token-store.js";
 import {
   type MSTeamsSsoFetch,
   handleSigninTokenExchangeInvoke,
@@ -8,8 +13,23 @@ import {
   parseSigninVerifyStateValue,
 } from "./sso.js";
 
+function createMemorySsoTokenStore(): MSTeamsSsoTokenStore {
+  const tokens = new Map<string, MSTeamsSsoStoredToken>();
+  return {
+    async get({ connectionName, userId }) {
+      return tokens.get(makeMSTeamsSsoTokenStoreKey(connectionName, userId)) ?? null;
+    },
+    async save(token) {
+      tokens.set(makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId), { ...token });
+    },
+    async remove({ connectionName, userId }) {
+      return tokens.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
+    },
+  };
+}
+
 function createSsoDeps(params: { fetchImpl: MSTeamsSsoFetch }) {
-  const tokenStore = createMSTeamsSsoTokenStoreMemory();
+  const tokenStore = createMemorySsoTokenStore();
   const tokenProvider = {
     getAccessToken: vi.fn(async () => "bf-service-token"),
   };

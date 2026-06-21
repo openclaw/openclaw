@@ -1,3 +1,4 @@
+// Control UI tests cover workboard status persistence behavior.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
@@ -107,6 +108,33 @@ function requireRecord(value: unknown): Record<string, unknown> {
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function workboardField(scope: Page | Locator, label: string) {
+  return scope.locator(".workboard-field").filter({
+    hasText: new RegExp(`^\\s*${escapeRegExp(label)}\\b`, "u"),
+  });
+}
+
+async function chooseWorkboardSelectOption(
+  scope: Page | Locator,
+  label: string,
+  optionLabel: string,
+): Promise<void> {
+  const field = workboardField(scope, label);
+  expect(await field.count()).toBe(1);
+  await field.locator(".workboard-select__trigger").click();
+  await field.getByRole("option", { exact: true, name: optionLabel }).click();
+}
+
+async function workboardSelectValue(scope: Page | Locator, label: string): Promise<string> {
+  const field = workboardField(scope, label);
+  expect(await field.count()).toBe(1);
+  return (await field.locator(".workboard-select__value").textContent()) ?? "";
 }
 
 function workboardColumn(page: Page, title: string) {
@@ -285,10 +313,12 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await workboardCard(page, "Todo", "Persist queue status").waitFor({ timeout: 10_000 });
       await waitForRequestCount(gateway, "workboard.cards.update", 0);
 
-      await workboardCard(page, "Todo", "Persist queue status").getByTitle("Edit card").click();
+      await workboardCard(page, "Todo", "Persist queue status")
+        .locator('button[aria-label="Edit card"]')
+        .click();
       await page.getByLabel("Title").fill("Persisted renamed card");
       await page.getByLabel("Notes").fill("Edited notes survive reopening.");
-      await page.getByLabel("Priority").selectOption("high");
+      await chooseWorkboardSelectOption(page, "Priority", "High");
       await page.getByRole("button", { name: "Save" }).click();
 
       const updateRequests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
@@ -312,13 +342,15 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       }
       await workboardCard(page, "Todo", "Persisted renamed card").waitFor({ timeout: 10_000 });
 
-      await workboardCard(page, "Todo", "Persisted renamed card").getByTitle("Edit card").click();
+      await workboardCard(page, "Todo", "Persisted renamed card")
+        .locator('button[aria-label="Edit card"]')
+        .click();
       await page.locator('[role="dialog"]').waitFor({ timeout: 10_000 });
       await expect.poll(() => page.getByLabel("Title").inputValue()).toBe("Persisted renamed card");
       await expect
         .poll(() => page.getByLabel("Notes").inputValue())
         .toBe("Edited notes survive reopening.");
-      await expect.poll(() => page.getByLabel("Priority").inputValue()).toBe("high");
+      await expect.poll(() => workboardSelectValue(page, "Priority")).toBe("High");
       await page.screenshot({
         fullPage: true,
         path: path.join(artifactDir, "workboard-edit-reopen.png"),

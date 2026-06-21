@@ -1,3 +1,4 @@
+// Imessage tests cover monitor provider.echo cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createIMessagePluginStateSyncStoreForTest,
@@ -50,6 +51,20 @@ describe("iMessage sent-message echo cache", () => {
     ).toBe(true);
   });
 
+  it("matches delayed reflected echoes with leading NUL corruption markers", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "Delayed echo reply" });
+
+    expect(
+      cache.has("acct:imessage:+1555", {
+        text: "\u0000\u0000Delayed echo reply",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps attributedBody corruption cleanup leading-only", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
@@ -64,6 +79,16 @@ describe("iMessage sent-message echo cache", () => {
     ).toBe(false);
     expect(cache.has("acct:imessage:+1555", { text: "Delayed\techo reply" })).toBe(false);
     expect(cache.has("acct:imessage:+1555", { text: "Delayed\necho reply" })).toBe(false);
+  });
+
+  it("keeps NUL corruption cleanup leading-only", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "Delayed echo reply" });
+
+    expect(cache.has("acct:imessage:+1555", { text: "Delayed\u0000echo reply" })).toBe(false);
   });
 
   it("matches by outbound message id and ignores placeholder ids", () => {
@@ -116,6 +141,23 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has(scope, { messageId: "id-only" })).toBe(true);
   });
 
+  it("keeps short-lived pending persisted echoes out of generic text matching", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const scope = "acct:imessage:+1555";
+
+    rememberPersistedIMessageEcho({ scope, text: "pending-send", ttlMs: 1_000, pending: true });
+    expect(hasPersistedIMessageEcho({ scope, text: "pending-send" })).toBe(false);
+    expect(
+      hasPersistedIMessageEcho({ scope, text: "pending-send", includePendingText: true }),
+    ).toBe(true);
+
+    vi.advanceTimersByTime(1_001);
+    expect(
+      hasPersistedIMessageEcho({ scope, text: "pending-send", includePendingText: true }),
+    ).toBe(false);
+  });
+
   it("refreshes persisted echoes written after an earlier empty lookup", () => {
     const cache = createSentMessageCache();
     const scope = "acct:imessage:+1555";
@@ -146,13 +188,11 @@ describe("iMessage sent-message echo cache", () => {
     expect(hasPersistedIMessageEcho({ scope, text: "stale echo" })).toBe(false);
   });
 
-  it("retains entries written hours earlier so catchup replay sees own outbound rows", () => {
-    // Catchup's default maxAgeMinutes is 120 (2h). The persisted-echo TTL must
-    // be >= that window, otherwise the agent's own outbound rows from before
-    // a gateway gap fall out of dedupe before catchup re-feeds the inbound
-    // rows around them — and the agent's replies to itself land back in the
-    // inbound pipeline as if they were external sends. Regression guard for
-    // the echo-cache retention extension that ships with #78649.
+  it("retains entries written hours earlier so a reconnect re-emit still sees own outbound rows", () => {
+    // The persisted-echo TTL must outlive the inbound replay guard window so
+    // an own-outbound row that imsg re-emits after a bridge reconnect is still
+    // recognized as the agent's echo, not re-ingested as an external send.
+    // Regression guard for the echo-cache retention window.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
     rememberPersistedIMessageEcho({

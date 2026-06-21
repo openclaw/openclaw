@@ -1,5 +1,5 @@
 // Fast-path argv parser for `openclaw gateway ...` without full Commander registration.
-import { isValueToken } from "../infra/cli-root-options.js";
+import { consumeRootOptionToken, isValueToken } from "../infra/cli-root-options.js";
 
 const GATEWAY_RUN_VALUE_FLAGS = new Set([
   "--port",
@@ -47,6 +47,23 @@ export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index:
   return isValueToken(args[index + 1]) ? 2 : 0;
 }
 
+function consumeGatewayRunPreBootstrapOptionToken(
+  args: ReadonlyArray<string>,
+  index: number,
+): number {
+  const consumed = consumeGatewayRunOptionToken(args, index);
+  if (consumed > 0) {
+    return consumed;
+  }
+  const arg = args[index];
+  if (arg && GATEWAY_RUN_VALUE_FLAGS.has(arg) && args[index + 1] !== undefined) {
+    // Commander will reject option-looking required values later. Consume them here so malformed
+    // input cannot accidentally enable a destructive flag before parsing reaches that error.
+    return 2;
+  }
+  return 0;
+}
+
 /** Return how many root fast-path tokens are consumed before the `gateway` command. */
 export function consumeGatewayFastPathRootOptionToken(
   args: ReadonlyArray<string>,
@@ -79,7 +96,7 @@ export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | nul
       break;
     }
     if (!sawGateway) {
-      const consumed = consumeGatewayFastPathRootOptionToken(args, index);
+      const consumed = consumeRootOptionToken(args, index);
       if (consumed > 0) {
         index += consumed - 1;
         continue;
@@ -106,4 +123,61 @@ export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | nul
   }
 
   return sawGateway ? ["gateway"] : null;
+}
+
+/** Resolve destructive gateway-run flags before Commander registration. */
+export function resolveGatewayRunPreBootstrapOptions(
+  argv: string[],
+): { force: boolean; reset: boolean } | null {
+  const args = argv.slice(2);
+  let force = false;
+  let reset = false;
+  let sawGateway = false;
+  let sawRun = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      break;
+    }
+    if (!sawGateway) {
+      const consumed = consumeRootOptionToken(args, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        continue;
+      }
+      if (arg !== "gateway") {
+        return null;
+      }
+      sawGateway = true;
+      continue;
+    }
+    if (!sawRun && arg === "run") {
+      sawRun = true;
+      continue;
+    }
+    const consumed = consumeGatewayRunPreBootstrapOptionToken(args, index);
+    if (consumed > 0) {
+      if (arg === "--force") {
+        force = true;
+      } else if (arg === "--reset") {
+        reset = true;
+      }
+      index += consumed - 1;
+      continue;
+    }
+    if (arg === "--force") {
+      force = true;
+    } else if (arg === "--reset") {
+      reset = true;
+    }
+    if (!arg.startsWith("-")) {
+      return null;
+    }
+  }
+
+  return sawGateway ? { force, reset } : null;
 }

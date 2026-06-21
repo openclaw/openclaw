@@ -49,7 +49,7 @@ jobs:
           fi
 
       - name: Checkout selected tag
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -83,16 +83,35 @@ jobs:
       browser_digest: ${{ steps.build-browser.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
+      - name: Pre-pull BuildKit image
+        shell: bash
+        env:
+          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if docker pull "${BUILDKIT_IMAGE}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "4" ]]; then
+              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 10))
+            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "${sleep_seconds}"
+          done
+
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -161,7 +180,7 @@ jobs:
       - name: Build and push amd64 image
         id: build
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           platforms: linux/amd64
@@ -179,7 +198,7 @@ jobs:
         id: build-browser
         if: steps.tags.outputs.browser != ''
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           platforms: linux/amd64
@@ -274,16 +293,35 @@ jobs:
       browser_digest: ${{ steps.build-browser.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
+      - name: Pre-pull BuildKit image
+        shell: bash
+        env:
+          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if docker pull "${BUILDKIT_IMAGE}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "4" ]]; then
+              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 10))
+            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "${sleep_seconds}"
+          done
+
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -352,7 +390,7 @@ jobs:
       - name: Build and push arm64 image
         id: build
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           platforms: linux/arm64
@@ -370,7 +408,7 @@ jobs:
         id: build-browser
         if: steps.tags.outputs.browser != ''
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           platforms: linux/arm64
@@ -462,13 +500,13 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -557,15 +595,34 @@ jobs:
       packages: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 1
 
+      - name: Pre-pull BuildKit image
+        shell: bash
+        env:
+          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if docker pull "${BUILDKIT_IMAGE}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "4" ]]; then
+              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 10))
+            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "${sleep_seconds}"
+          done
+
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}

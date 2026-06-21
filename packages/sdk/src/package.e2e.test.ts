@@ -1,10 +1,12 @@
-import { spawn } from "node:child_process";
+// OpenClaw SDK tests cover package behavior.
+import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 
 type CommandResult = {
@@ -35,18 +37,24 @@ type PackedPackage = {
 function runCommand(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs?: number },
+  options: { cwd: string; timeoutMs?: number } & Pick<
+    SpawnOptionsWithoutStdio,
+    "env" | "shell" | "windowsVerbatimArguments"
+  >,
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
+      detached: process.platform !== "win32",
+      env: options.env ?? createCommandEnv(),
+      shell: options.shell,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: options.windowsVerbatimArguments,
     });
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      signalCommandProcess(child, "SIGKILL");
       reject(
         new Error(
           `command timed out after ${options.timeoutMs ?? COMMAND_TIMEOUT_MS}ms: ${[
@@ -81,6 +89,50 @@ function runCommand(
   });
 }
 
+function signalCommandProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
+}
+
+function createCommandEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    CI: process.env.CI ?? "true",
+    npm_config_audit: "false",
+    npm_config_fund: "false",
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+  };
+}
+
+function runPnpmCommand(
+  args: string[],
+  options: { cwd: string; timeoutMs?: number },
+): Promise<CommandResult> {
+  const spec = createPnpmRunnerSpawnSpec({
+    cwd: options.cwd,
+    env: createCommandEnv(),
+    pnpmArgs: args,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const cwd = typeof spec.options.cwd === "string" ? spec.options.cwd : options.cwd;
+  return runCommand(spec.command, spec.args, {
+    cwd,
+    env: spec.options.env,
+    shell: spec.options.shell,
+    timeoutMs: options.timeoutMs,
+    windowsVerbatimArguments: spec.options.windowsVerbatimArguments,
+  });
+}
+
 function normalizeWorkspaceDependencies(
   dependencies: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
@@ -108,7 +160,10 @@ function tarballFileName(manifest: PackageManifest): string {
   return `${manifest.name.replace(/^@/, "").replace("/", "-")}-${manifest.version}.tgz`;
 }
 
-async function createPackStagingRoot(packageRoot: string, destinationRoot: string): Promise<string> {
+async function createPackStagingRoot(
+  packageRoot: string,
+  destinationRoot: string,
+): Promise<string> {
   const manifest = await readPackageManifest(packageRoot);
   const packageSlug = manifest.name.replace(/^@/, "").replace("/", "-");
   const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
@@ -216,7 +271,7 @@ describe("OpenClaw SDK package e2e", () => {
     tempDirs.push(tempDir);
 
     for (const packageName of WORKSPACE_PACKAGE_NAMES) {
-      await runCommand("pnpm", ["--filter", packageName, "build"], {
+      await runPnpmCommand(["--filter", packageName, "build"], {
         cwd: repoRoot,
         timeoutMs: 180_000,
       });

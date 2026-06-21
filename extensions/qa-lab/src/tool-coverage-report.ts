@@ -1,14 +1,17 @@
+// Qa Lab plugin module implements tool coverage report behavior.
 import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  RuntimeId,
-  RuntimeParityCell,
-  RuntimeParityDrift,
-  RuntimeParityResult,
+import {
+  isRuntimeParityCellPassable,
+  type RuntimeId,
+  type RuntimeParityCell,
+  type RuntimeParityDrift,
+  type RuntimeParityResult,
 } from "./runtime-parity.js";
 import {
+  readRuntimeToolCoverageConfig,
   readScenarioRuntimeToolCoverageMetadata,
   type QaRuntimeCapabilityLayer,
   type QaRuntimeToolBucket,
@@ -94,21 +97,17 @@ function cellStatus(cell: RuntimeParityCell | undefined): QaToolCoverageStatus {
   if (!cell) {
     return "missing";
   }
-  return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
+  return isRuntimeParityCellPassable(cell) ? "pass" : "fail";
 }
 
 function toolIdsForScenario(scenario: QaSeedScenarioWithSource): string[] {
-  const coverageIds = [
-    ...(scenario.coverage?.primary ?? []),
-    ...(scenario.coverage?.secondary ?? []),
-  ];
-  return [
-    ...new Set(
-      coverageIds
-        .filter((coverageId) => coverageId.startsWith("tools."))
-        .map((coverageId) => coverageId.slice("tools.".length)),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
+  const toolCoverage = readRuntimeToolCoverageConfig(scenario.execution.config);
+  const family =
+    readString(toolCoverage?.family) ??
+    readString(toolCoverage?.tool) ??
+    readString(toolCoverage?.actualTool) ??
+    readString(scenario.execution.config?.toolName);
+  return family ? [family] : [];
 }
 
 function groupToolFixtures(scenarios: readonly QaSeedScenarioWithSource[]): ToolFixtureGroup[] {

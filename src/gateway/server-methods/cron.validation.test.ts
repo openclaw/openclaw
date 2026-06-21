@@ -1,3 +1,5 @@
+// Cron validation tests cover channel target validation against plugin
+// prefixes/aliases and runtime config for cron delivery destinations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -597,6 +599,34 @@ describe("cron method validation", () => {
     expectResponseError(respond, { messageIncludes: "belongs to telegram, not slack" });
   });
 
+  it("accepts clearing an explicit channel back to runtime last", async () => {
+    setRuntimeConfig(telegramSlackConfig());
+
+    const { context, respond } = await invokeCronUpdateDelivery(
+      { channel: null },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("validates a provider-prefixed target when clearing its explicit channel", async () => {
+    setRuntimeConfig(slackConfig());
+
+    const { context, respond } = await invokeCronUpdateDelivery(
+      { channel: null },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:123" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, { messageIncludes: "delivery.channel must be one of: slack" });
+  });
+
   it("accepts completion webhook delivery patches and nullable clears", async () => {
     const currentJob = createCronJob({
       delivery: { mode: "announce" },
@@ -1029,6 +1059,34 @@ describe("cron method validation", () => {
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
       expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
+    });
+
+    it("rejects a contradictory explicit agentId + agent-prefixed sessionKey pair", async () => {
+      // The cron target resolver treats agentId as authoritative; a
+      // contradictory pair would silently wake a lane the caller never named.
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "ops",
+      });
+      expect(context.cron.wake).not.toHaveBeenCalled();
+      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "contradicts" });
+    });
+
+    it("accepts an explicit agentId matching the agent that owns the sessionKey", async () => {
+      const { context } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "agent-456",
+      });
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "agent-456",
+      });
     });
 
     it("treats whitespace-only sessionKey as omitted at the handler boundary", async () => {

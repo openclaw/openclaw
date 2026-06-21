@@ -1,3 +1,4 @@
+// Openai tests cover image generation provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -1000,6 +1001,42 @@ describe("openai image generation provider", () => {
     });
   });
 
+  it("cancels oversized Codex OAuth image response streams", async () => {
+    mockCodexAuthOnly();
+    let canceled = false;
+    let chunkSent = false;
+    const release = vi.fn(async () => {});
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunkSent) {
+          return;
+        }
+        chunkSent = true;
+        controller.enqueue(new Uint8Array(64 * 1024 * 1024 + 1));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(stream),
+      release,
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw an oversized Codex lighthouse",
+        cfg: {},
+        authStore: createCodexOAuthAuthStore(),
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation response exceeded size limit");
+    expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat Codex API key profiles as configured Codex OAuth image auth", async () => {
     mockGeneratedPngResponse();
     resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
@@ -1186,6 +1223,31 @@ describe("openai image generation provider", () => {
     expect(body.tools?.[0]?.output_format).toBe("png");
     expect(body.tools?.[0]?.background).toBe("transparent");
     expect(result.model).toBe("gpt-image-1.5");
+  });
+
+  it("forwards OpenAI moderation into Codex Responses image-generation tool requests", async () => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-moderated-image" });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw a low-moderation Codex preview",
+      cfg: {},
+      authStore: { version: 1, profiles: {} },
+      providerOptions: {
+        openai: {
+          moderation: "low",
+        },
+      },
+    });
+
+    const request = jsonRequestCall();
+    const body = request.body as { tools?: Array<Record<string, unknown>> };
+    expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(body.tools?.[0]?.type).toBe("image_generation");
+    expect(body.tools?.[0]?.moderation).toBe("low");
   });
 
   it("omits output compression for PNG Codex image requests", async () => {

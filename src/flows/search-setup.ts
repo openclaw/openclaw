@@ -1,3 +1,4 @@
+// Search setup flow configures web search providers and defaults.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
@@ -20,12 +21,13 @@ import {
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution, FlowOption } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
-export type SearchProvider = NonNullable<
+type SearchProvider = NonNullable<
   NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
 >;
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
@@ -349,8 +351,9 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
   };
 }
 
-export type SetupSearchOptions = {
+type SetupSearchOptions = {
   quickstartDefaults?: boolean;
+  preserveDisabledSearchState?: boolean;
   secretInputMode?: SecretInputMode;
 };
 
@@ -386,7 +389,9 @@ async function finalizeSearchProviderSetup(params: {
     }
     next = installed.cfg;
   }
-  next = preserveDisabledState(params.originalConfig, next);
+  if (params.opts?.preserveDisabledSearchState !== false) {
+    next = preserveDisabledState(params.originalConfig, next);
+  }
   if (!params.entry.runSetup) {
     return next;
   }
@@ -397,7 +402,9 @@ async function finalizeSearchProviderSetup(params: {
     quickstartDefaults: params.opts?.quickstartDefaults,
     secretInputMode: params.opts?.secretInputMode,
   });
-  return preserveDisabledState(params.originalConfig, next);
+  return params.opts?.preserveDisabledSearchState === false
+    ? next
+    : preserveDisabledState(params.originalConfig, next);
 }
 
 export async function runSearchSetupFlow(
@@ -430,6 +437,43 @@ export async function runSearchSetupFlow(
 
   const existingProvider = config.tools?.web?.search?.provider;
 
+  const defaultChoice: SearchProvider = (() => {
+    if (existingProvider && providerOptions.some((entry) => entry.id === existingProvider)) {
+      return existingProvider;
+    }
+    // Mirror runtime auto-detect only when it has a concrete configured signal.
+    // Keyless providers are selectable, but never preselected; pressing through
+    // setup should not opt the user into a third-party search destination.
+    // Resolve over the providers actually shown in setup (`providerOptions`) so
+    // the default can't pick an option that isn't listed or force-load runtime
+    // code for an install-catalog-only provider.
+    // Clear any existing provider id before auto-detecting: the valid-existing
+    // case already returned above, so a leftover value here is stale/invalid/
+    // disabled and would otherwise make the resolver short-circuit to that
+    // invalid selection. Keep the rest of the search config so configured
+    // credentials are still detected.
+    const searchForAutoDetect = {
+      ...config.tools?.web?.search,
+      provider: undefined,
+    } as Parameters<typeof resolveWebSearchProviderId>[0]["search"];
+    const autoDetectedId = resolveWebSearchProviderId({
+      config,
+      search: searchForAutoDetect,
+      providers: [...providerOptions],
+    });
+    const autoDetected = providerOptions.find((entry) => entry.id === autoDetectedId);
+    if (autoDetected) {
+      return autoDetected.id;
+    }
+    const detected = providerOptions.find(
+      (entry) => providerNeedsCredential(entry) && providerIsReady(config, entry),
+    );
+    if (detected) {
+      return detected.id;
+    }
+    return "__skip__";
+  })();
+
   const options = providerOptions.map((entry) => {
     const hint =
       entry.requiresCredential === false
@@ -439,17 +483,6 @@ export async function runSearchSetupFlow(
           : entry.hint;
     return { value: entry.id, label: entry.label, hint };
   });
-
-  const defaultProvider: SearchProvider = (() => {
-    if (existingProvider && providerOptions.some((entry) => entry.id === existingProvider)) {
-      return existingProvider;
-    }
-    const detected = providerOptions.find((entry) => providerIsReady(config, entry));
-    if (detected) {
-      return detected.id;
-    }
-    return providerOptions[0].id;
-  })();
 
   const choice = await prompter.select({
     message: t("wizard.search.providerPrompt"),
@@ -461,7 +494,7 @@ export async function runSearchSetupFlow(
         hint: t("wizard.search.configureLaterHint"),
       },
     ],
-    initialValue: defaultProvider,
+    initialValue: defaultChoice,
     searchable: true,
   });
 
@@ -658,16 +691,20 @@ export async function runSearchSetupFlow(
 
   const search: SearchConfig = {
     ...config.tools?.web?.search,
+    enabled: false,
     provider: choice,
   };
-  return {
-    ...config,
-    tools: {
-      ...config.tools,
-      web: {
-        ...config.tools?.web,
-        search,
+  return applySearchProviderSelectionConfig(
+    {
+      ...config,
+      tools: {
+        ...config.tools,
+        web: {
+          ...config.tools?.web,
+          search,
+        },
       },
     },
-  };
+    entry,
+  );
 }

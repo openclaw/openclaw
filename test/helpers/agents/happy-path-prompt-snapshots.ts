@@ -1,3 +1,4 @@
+// Happy path prompt snapshot helper reads expected prompt snapshot files.
 import fs from "node:fs";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -14,6 +15,7 @@ import {
 import { buildReplyPromptBodies } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
+import { normalizeChatType } from "../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type {
   AnyAgentTool,
@@ -67,11 +69,26 @@ const HAPPY_PATH_TOOL_NAMES = new Set([
   "web_fetch",
 ]);
 
-type CodexDynamicToolSpec = {
+type CodexDynamicToolFunctionSpec = {
+  type?: "function";
   name: string;
   description?: string;
   inputSchema?: unknown;
 };
+
+type CodexDynamicToolNamespaceSpec = {
+  type: "namespace";
+  name: string;
+  tools: CodexDynamicToolFunctionSpec[];
+};
+
+type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
+
+function flattenCodexDynamicToolSpecs(
+  specs: readonly CodexDynamicToolSpec[],
+): CodexDynamicToolFunctionSpec[] {
+  return specs.flatMap((spec) => (spec.type === "namespace" ? spec.tools : [spec]));
+}
 
 type CodexPromptSnapshotApi = {
   resolveCodexPromptSnapshotAppServerOptions: (pluginConfig?: unknown) => unknown;
@@ -366,6 +383,7 @@ function createAttempt(params: {
     trigger: params.scenario.trigger,
     messageProvider: params.scenario.ctx.Provider,
     messageChannel: params.scenario.ctx.OriginatingChannel,
+    chatType: normalizeChatType(params.scenario.ctx.ChatType),
     agentAccountId: params.scenario.ctx.AccountId,
     messageTo: params.scenario.ctx.OriginatingTo,
     messageThreadId: params.scenario.ctx.MessageThreadId,
@@ -593,10 +611,8 @@ function selectedThreadStartParams(value: Record<string, unknown>): Record<strin
     ...value,
     developerInstructions: "<see Reconstructed Model-Bound Prompt Layers>",
     dynamicTools: Array.isArray(value.dynamicTools)
-      ? value.dynamicTools.map((tool) =>
-          tool && typeof tool === "object" && "name" in tool
-            ? (tool as { name?: unknown }).name
-            : tool,
+      ? flattenCodexDynamicToolSpecs(value.dynamicTools as CodexDynamicToolSpec[]).map(
+          (tool) => tool.name,
         )
       : value.dynamicTools,
   };
@@ -800,7 +816,8 @@ function renderScenarioSnapshot(
     heartbeatCollaborationInstructions:
       scenario.trigger === "heartbeat" ? CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS : undefined,
   });
-  const criticalToolSpecs = scenario.dynamicTools.filter((tool) =>
+  const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);
+  const criticalToolSpecs = dynamicToolFunctions.filter((tool) =>
     ["message", "heartbeat_respond"].includes(tool.name),
   );
   const dynamicToolsJson = stableJson(scenario.dynamicTools);
@@ -860,7 +877,7 @@ function renderScenarioSnapshot(
     ...renderModelBoundPromptLayers({ scenario, codexSnapshot, dynamicToolsJson }),
     "## Dynamic Tool Names",
     "",
-    markdownFence("json", stableJson(scenario.dynamicTools.map((tool) => tool.name))),
+    markdownFence("json", stableJson(dynamicToolFunctions.map((tool) => tool.name))),
     "",
     "## Critical Visible-Reply Tool Specs",
     "",

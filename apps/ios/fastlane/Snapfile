@@ -1,0 +1,24 @@
+project("OpenClaw.xcodeproj")
+scheme("OpenClawUITests")
+configuration("Debug")
+
+devices([
+  "iPhone 16 Pro Max",
+  "iPad Pro 13-inch (M4)",
+])
+
+languages([
+  "en-US",
+])
+
+launch_arguments([
+  "--openclaw-screenshot-mode",
+])
+
+output_directory("fastlane/screenshots")
+clear_previous_screenshots(true)
+reinstall_app(true)
+concurrent_simulators(false)
+override_status_bar(true)
+override_status_bar_arguments("--time 09:41 --dataNetwork wifi --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100")
+skip_open_summary(true)

@@ -13,10 +13,10 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 
 /** Config surface that supplied a resolved model runtime policy. */
-export type ModelRuntimePolicySource = "model" | "provider";
+type ModelRuntimePolicySource = "model" | "provider";
 
 /** Runtime policy plus the config surface that supplied it. */
-export type ResolvedModelRuntimePolicy = {
+type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
   source?: ModelRuntimePolicySource;
   matchedProvider?: string;

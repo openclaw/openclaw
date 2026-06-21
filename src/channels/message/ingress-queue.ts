@@ -201,7 +201,7 @@ function affectedRows(result: { numAffectedRows?: bigint }): number {
 }
 
 function parseJson(value: string): unknown {
-  return JSON.parse(value) as unknown;
+  return JSON.parse(value);
 }
 
 function baseRecord<TPayload, TMetadata>(

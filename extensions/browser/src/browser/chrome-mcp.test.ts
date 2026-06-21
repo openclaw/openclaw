@@ -1,3 +1,4 @@
+// Browser tests cover chrome mcp plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpCoords,
   clickChromeMcpElement,
-  buildChromeMcpArgs,
   decodeChromeMcpStderrTail,
   ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
@@ -119,6 +119,25 @@ function createFakeSession(): ChromeMcpSession {
   } as unknown as ChromeMcpSession;
 }
 
+function createToolErrorSession(message: string): ChromeMcpSession {
+  const callTool = vi.fn(async () => ({
+    isError: true,
+    content: [{ type: "text", text: message }],
+  }));
+  return {
+    client: {
+      callTool,
+      listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+      close: vi.fn().mockResolvedValue(undefined),
+      connect: vi.fn().mockResolvedValue(undefined),
+    },
+    transport: {
+      pid: 123,
+    },
+    ready: Promise.resolve(),
+  } as unknown as ChromeMcpSession;
+}
+
 describe("chrome MCP page parsing", () => {
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
@@ -152,6 +171,33 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("suggests cdpUrl when auto-connect cannot read DevToolsActivePort", async () => {
+    setChromeMcpSessionFactoryForTest(async () =>
+      createToolErrorSession(
+        "Could not connect to Chrome in /tmp/chrome-profile. Cause: ENOENT: no such file or directory, open '/tmp/chrome-profile/DevToolsActivePort'",
+      ),
+    );
+
+    await expect(
+      listChromeMcpTabs("chrome-live", { userDataDir: "/tmp/chrome-profile" }),
+    ).rejects.toThrow(/set browser\.profiles\.chrome-live\.cdpUrl/);
+  });
+
+  it("names the configured endpoint when endpoint attach fails", async () => {
+    setChromeMcpSessionFactoryForTest(async () =>
+      createToolErrorSession("Could not connect to Chrome: ECONNREFUSED"),
+    );
+
+    await expect(
+      listChromeMcpTabs("chrome-live", {
+        cdpUrl:
+          "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+      }),
+    ).rejects.toThrow(
+      /configured Chrome endpoint \(https:\/\/example\.com\/chrome\?token=\*\*\*\)/,
+    );
+  });
+
   it("reads screenshot files with the extension written by chrome-devtools-mcp", async () => {
     const factory: ChromeMcpSessionFactory = async () => createFakeSession();
     setChromeMcpSessionFactoryForTest(factory);
@@ -163,114 +209,6 @@ describe("chrome MCP page parsing", () => {
         format: "jpeg",
       }),
     ).resolves.toEqual(Buffer.from("screenshot:jpeg"));
-  });
-
-  it("adds --userDataDir when an explicit Chromium profile path is configured", () => {
-    expect(buildChromeMcpArgs("/tmp/brave-profile")).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--autoConnect",
-      "--no-usage-statistics",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-      "--userDataDir",
-      "/tmp/brave-profile",
-    ]);
-  });
-
-  it("uses browserUrl for existing-session cdpUrl without also passing userDataDir", () => {
-    expect(
-      buildChromeMcpArgs({
-        cdpUrl: "http://127.0.0.1:9222",
-        userDataDir: "/tmp/brave-profile",
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--browserUrl",
-      "http://127.0.0.1:9222",
-      "--no-usage-statistics",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-    ]);
-  });
-
-  it("uses wsEndpoint for direct existing-session websocket cdpUrl", () => {
-    expect(
-      buildChromeMcpArgs({
-        cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--wsEndpoint",
-      "ws://127.0.0.1:9222/devtools/browser/abc",
-      "--no-usage-statistics",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-    ]);
-  });
-
-  it("appends custom Chrome MCP args and lets explicit endpoint args override auto-connect", () => {
-    expect(
-      buildChromeMcpArgs({
-        userDataDir: "/tmp/brave-profile",
-        mcpArgs: ["--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-      "--browserUrl",
-      "http://127.0.0.1:9222",
-      "--no-usage-statistics",
-    ]);
-  });
-
-  it("lets explicit Chrome MCP usage-statistics args override the default opt-out", () => {
-    expect(
-      buildChromeMcpArgs({
-        mcpArgs: ["--usage-statistics"],
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--autoConnect",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-      "--usage-statistics",
-    ]);
-  });
-
-  it("does not duplicate an explicit Chrome MCP usage-statistics opt-out", () => {
-    expect(
-      buildChromeMcpArgs({
-        mcpArgs: ["--no-usage-statistics"],
-      }),
-    ).toEqual([
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--autoConnect",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-      "--no-usage-statistics",
-    ]);
-  });
-
-  it("omits the npx package prefix for a custom Chrome MCP command", () => {
-    expect(
-      buildChromeMcpArgs({
-        mcpCommand: "/usr/local/bin/chrome-devtools-mcp",
-        cdpUrl: "http://127.0.0.1:9222",
-      }),
-    ).toEqual([
-      "--browserUrl",
-      "http://127.0.0.1:9222",
-      "--no-usage-statistics",
-      "--experimentalStructuredContent",
-      "--experimental-page-id-routing",
-    ]);
   });
 
   it("terminates the owned Chrome MCP subprocess tree when closing temporary sessions", async () => {

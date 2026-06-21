@@ -18,11 +18,13 @@ most Linux-compatible Gateway runtime.
 Windows Hub is the native WinUI companion app for Windows 10 20H2+ and Windows 11. It installs without administrator privileges and is published with signed
 x64 and ARM64 installers on OpenClaw releases.
 
-Download the latest stable installer:
+Download the latest stable installer from the [OpenClaw releases page](https://github.com/openclaw/openclaw/releases):
 
-- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
-- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
-- [Checksums](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-SHA256SUMS.txt)
+- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-Setup-x64.exe)
+- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-Setup-arm64.exe)
+- [Checksums](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-SHA256SUMS.txt)
+
+If a download link above returns a 404, visit the [releases page](https://github.com/openclaw/openclaw/releases) and look for the `OpenClawCompanion-Setup-*` assets on the latest release.
 
 After install, launch **OpenClaw Companion** from the Start menu or the system
 tray. The installer also adds shortcuts for Gateway Setup, Chat, Settings,
@@ -184,6 +186,7 @@ into Windows.
 Inside WSL:
 
 ```bash
+sudo apt-get install -y dbus-x11
 sudo loginctl enable-linger "$(whoami)"
 openclaw gateway install
 ```
@@ -191,7 +194,7 @@ openclaw gateway install
 In PowerShell as Administrator:
 
 ```powershell
-schtasks /create /tn "WSL Boot" /tr "wsl.exe -d Ubuntu --exec /bin/true" /sc onstart /ru SYSTEM
+schtasks /create /tn "WSL Boot" /tr "wsl.exe -d Ubuntu --exec dbus-launch true" /sc onstart /ru "$env:USERNAME"
 ```
 
 Replace `Ubuntu` with your distro name from:
@@ -199,6 +202,11 @@ Replace `Ubuntu` with your distro name from:
 ```powershell
 wsl --list --verbose
 ```
+
+> **Note:** Two changes from older recipes:
+>
+> - **`dbus-launch true` instead of `/bin/true`** — On WSL ≥ 2.6.1.0 a regression ([microsoft/WSL #13416](https://github.com/microsoft/WSL/issues/13416)) causes the distro to idle-terminate 15–20 seconds after the last client exits, even with linger enabled. `dbus-launch true` keeps a child-of-init process alive as a workaround ([community discussion, microsoft/WSL #9245](https://github.com/microsoft/WSL/discussions/9245)).
+> - **`/ru "$env:USERNAME"` instead of `/ru SYSTEM`** — Per-user WSL distros (the default setup) are not visible to the SYSTEM account; the task appears to run but the distro is never started. Running as your own account avoids this. Windows will prompt for your password when the task is created.
 
 After reboot, verify from WSL:
 

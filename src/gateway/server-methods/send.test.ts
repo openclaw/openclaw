@@ -1,3 +1,8 @@
+// Send method tests cover outbound message routing, transcript mirroring, poll
+// dispatch, plugin channel selection, and durable delivery dependencies.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -205,6 +210,22 @@ async function runMessageActionRequest(
     isWebchatConnect: () => false,
   });
   return { respond };
+}
+
+async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-send-state-"));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  try {
+    return await test(stateDir);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
 }
 
 function deliveryCall(index = 0): Record<string, any> | undefined {
@@ -788,6 +809,34 @@ describe("gateway send mirroring", () => {
     ]);
     expect(deliveryCall()?.session?.agentId).toBe("work");
     expect(deliveryCall()?.session?.key).toBe("agent:work:whatsapp:resolved");
+  });
+
+  it("materializes buffer-only gateway sends before outbound delivery", async () => {
+    mockDeliverySuccess("m-buffer-media");
+
+    await withTempOpenClawStateDir(async () => {
+      const { respond } = await runSend({
+        to: "+15551234567",
+        mediaUrl: "buffer://message-send/attachment",
+        mediaUrls: ["buffer://message-send/attachment"],
+        buffer: Buffer.from("gateway send bytes").toString("base64"),
+        filename: "gateway-send.txt",
+        contentType: "text/plain",
+        channel: "whatsapp",
+        agentId: "work",
+        idempotencyKey: "idem-whatsapp-buffer",
+      });
+
+      expect(firstRespondCall(respond)[0]).toBe(true);
+      const payload = deliveryCall()?.payloads?.[0];
+      expect(typeof payload?.mediaUrl).toBe("string");
+      expect(payload?.mediaUrls).toEqual([payload?.mediaUrl]);
+      expect(payload?.mediaUrl).not.toBe("buffer://message-send/attachment");
+      await expect(fs.readFile(String(payload?.mediaUrl), "utf8")).resolves.toBe(
+        "gateway send bytes",
+      );
+      expect(deliveryCall()?.session?.agentId).toBe("work");
+    });
   });
 
   it("maps gateway asVoice sends onto outbound audioAsVoice payloads", async () => {
@@ -1485,15 +1534,18 @@ describe("gateway send mirroring", () => {
       actions: {
         describeMessageTool: () => ({ actions: ["react"] }),
         supportsAction: ({ action }) => action === "react",
-        handleAction: async ({ params, requesterSenderId, toolContext }) =>
+        handleAction: async ({ params, requesterAccountId, requesterSenderId, toolContext }) =>
           jsonResult({
             ok: true,
             messageId: params.messageId,
+            requesterAccountId,
             requesterSenderId,
             currentMessageId: toolContext?.currentMessageId,
+            currentMessagingTarget: toolContext?.currentMessagingTarget,
             currentGraphChannelId: toolContext?.currentGraphChannelId,
             replyToMode: toolContext?.replyToMode,
             hasRepliedRef: toolContext?.hasRepliedRef?.value,
+            sameChannelThreadRequired: toolContext?.sameChannelThreadRequired,
             skipCrossContextDecoration: toolContext?.skipCrossContextDecoration,
           }),
       },
@@ -1513,11 +1565,14 @@ describe("gateway send mirroring", () => {
       jsonResult({
         ok: true,
         messageId: "wamid.1",
+        requesterAccountId: "default",
         requesterSenderId: "trusted-user",
         currentMessageId: "wamid.1",
+        currentMessagingTarget: "user:15551234567",
         currentGraphChannelId: "graph:team/chan",
         replyToMode: "first",
         hasRepliedRef: true,
+        sameChannelThreadRequired: true,
         skipCrossContextDecoration: true,
       }),
     );
@@ -1530,14 +1585,17 @@ describe("gateway send mirroring", () => {
         messageId: "wamid.1",
         emoji: "✅",
       },
+      requesterAccountId: "default",
       requesterSenderId: "trusted-user",
       inboundTurnKind: "room_event",
       toolContext: {
+        currentMessagingTarget: "user:15551234567",
         currentGraphChannelId: "graph:team/chan",
         currentChannelProvider: "whatsapp",
         currentMessageId: "wamid.1",
         replyToMode: "first",
         hasRepliedRef: { value: true },
+        sameChannelThreadRequired: true,
         skipCrossContextDecoration: true,
       },
       idempotencyKey: "idem-message-action",
@@ -1548,18 +1606,24 @@ describe("gateway send mirroring", () => {
       {
         ok: true,
         messageId: "wamid.1",
+        requesterAccountId: "default",
         requesterSenderId: "trusted-user",
         currentMessageId: "wamid.1",
+        currentMessagingTarget: "user:15551234567",
         currentGraphChannelId: "graph:team/chan",
         replyToMode: "first",
         hasRepliedRef: true,
+        sameChannelThreadRequired: true,
         skipCrossContextDecoration: true,
       },
       undefined,
       { channel: "whatsapp" },
     );
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
-      expect.objectContaining({ inboundEventKind: "room_event" }),
+      expect.objectContaining({
+        inboundEventKind: "room_event",
+        requesterAccountId: "default",
+      }),
     );
   });
 
@@ -1623,6 +1687,153 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-source-message-action",
       config: {},
     });
+  });
+
+  it("mirrors a Slack DM send after target resolution strips its user prefix", async () => {
+    const slackPlugin: ChannelPlugin = {
+      id: "slack",
+      meta: {
+        id: "slack",
+        label: "Slack",
+        selectionLabel: "Slack",
+        docsPath: "/channels/slack",
+        blurb: "Slack DM transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "slack-1" }),
+      },
+      threading: {
+        matchesToolContextTarget: ({ target, toolContext }) =>
+          target.toLowerCase() ===
+          toolContext.currentMessagingTarget?.replace(/^user:/i, "").toLowerCase(),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(slackPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackPlugin }]),
+      "send-test-slack-dm-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockImplementationOnce(async ({ params }) => {
+      params.to = "U123";
+      return jsonResult({
+        ok: true,
+        result: {
+          messageId: "slack-1",
+          receipt: { threadId: "171.222" },
+        },
+      });
+    });
+
+    const { respond } = await runMessageActionRequest({
+      channel: "slack",
+      action: "send",
+      params: {
+        to: "user:U123",
+        message: "visible Slack DM reply",
+      },
+      sessionKey: "agent:main:slack:direct:U123:thread:171.222",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "D123",
+        currentMessagingTarget: "user:U123",
+        currentThreadTs: "171.222",
+        replyToMode: "all",
+      },
+      idempotencyKey: "idem-slack-dm-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:slack:direct:U123:thread:171.222",
+      text: "visible Slack DM reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-slack-dm-source-message-action",
+      config: {},
+    });
+
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    for (const testCase of [
+      {
+        name: "top-level",
+        placement: { topLevel: true },
+        deliveredThreadId: undefined,
+        replyToMode: "all" as const,
+        hasRepliedRef: undefined,
+      },
+      {
+        name: "null thread",
+        placement: { threadId: null },
+        deliveredThreadId: undefined,
+        replyToMode: "all" as const,
+        hasRepliedRef: undefined,
+      },
+      {
+        name: "different thread",
+        placement: { threadId: "999.888" },
+        deliveredThreadId: "999.888",
+        replyToMode: "all" as const,
+        hasRepliedRef: undefined,
+      },
+      {
+        name: "reply mode off",
+        placement: {},
+        deliveredThreadId: undefined,
+        replyToMode: "off" as const,
+        hasRepliedRef: undefined,
+      },
+      {
+        name: "consumed first reply",
+        placement: {},
+        deliveredThreadId: undefined,
+        replyToMode: "first" as const,
+        hasRepliedRef: { value: true },
+      },
+    ] as const) {
+      mocks.dispatchChannelMessageAction.mockImplementationOnce(async ({ params }) => {
+        params.to = "U123";
+        return jsonResult({
+          ok: true,
+          result: {
+            messageId: `slack-${testCase.name}`,
+            receipt: testCase.deliveredThreadId ? { threadId: testCase.deliveredThreadId } : {},
+          },
+        });
+      });
+
+      const redirected = await runMessageActionRequest({
+        channel: "slack",
+        action: "send",
+        params: {
+          to: "user:U123",
+          message: `visible Slack DM ${testCase.name} reply`,
+          ...testCase.placement,
+        },
+        sessionKey: "agent:main:slack:direct:U123:thread:171.222",
+        agentId: "main",
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "D123",
+          currentMessagingTarget: "user:U123",
+          currentThreadTs: "171.222",
+          replyToMode: testCase.replyToMode,
+          ...(testCase.hasRepliedRef ? { hasRepliedRef: testCase.hasRepliedRef } : {}),
+        },
+        idempotencyKey: `idem-slack-dm-source-message-action-${testCase.name}`,
+      });
+
+      expect(firstRespondCall(redirected.respond)[0]).toBe(true);
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    }
   });
 
   it("mirrors accepted source send text aliases", async () => {
@@ -2240,5 +2451,66 @@ describe("gateway send mirroring", () => {
     const actionCall = lastDispatchChannelMessageActionCall();
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
     expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
+  });
+
+  it("materializes buffer-only message.action sends on the gateway before plugin dispatch", async () => {
+    const mediaActionPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram media action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(mediaActionPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: mediaActionPlugin }]),
+      "send-test-message-action-buffer-materialize",
+    );
+
+    await withTempOpenClawStateDir(async () => {
+      const { respond } = await runMessageActionRequest(
+        {
+          channel: "telegram",
+          action: "send",
+          params: {
+            to: "123",
+            media: "buffer://message-send/attachment",
+            mediaUrl: "buffer://message-send/attachment",
+            mediaUrls: ["buffer://message-send/attachment"],
+            buffer: Buffer.from("gateway bytes").toString("base64"),
+            filename: "gateway.txt",
+            contentType: "text/plain",
+          },
+          agentId: "work",
+          idempotencyKey: "idem-message-action-buffer-materialize",
+        },
+        { connect: { scopes: ["operator.write"] } },
+      );
+
+      expect(firstRespondCall(respond)[0]).toBe(true);
+      const actionCall = lastDispatchChannelMessageActionCall();
+      const actionParams = actionCall?.params;
+      expect(actionParams?.buffer).toBeUndefined();
+      expect(typeof actionParams?.mediaUrl).toBe("string");
+      expect(actionParams?.media).toBe(actionParams?.mediaUrl);
+      expect(actionParams?.mediaUrls).toEqual([actionParams?.mediaUrl]);
+      await expect(fs.readFile(String(actionParams?.mediaUrl), "utf8")).resolves.toBe(
+        "gateway bytes",
+      );
+    });
   });
 });

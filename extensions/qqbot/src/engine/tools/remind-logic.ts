@@ -1,3 +1,4 @@
+// Qqbot plugin module implements remind logic behavior.
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 
 /**
@@ -56,9 +57,6 @@ type RemindCronPlan =
       ok: false;
       error: string;
     };
-
-const PREPARED_CRON_PARAMS_INSTRUCTION =
-  "Gateway cron action prepared for internal QQ reminder scheduling.";
 
 /**
  * JSON Schema for AI tool parameters (used by framework registration).
@@ -334,30 +332,6 @@ export function prepareRemindCronAction(
     cronAction: buildOnceJob(params, atMs, resolvedTo, resolvedAccountId),
     summary: `⏰ Reminder in ${formatDelay(delayMs)}: "${params.content}"`,
   };
-}
-
-/**
- * Execute the reminder tool logic.
- * 执行提醒工具逻辑。
- *
- * Validates params, parses time, and returns a structured result
- * containing cron job params that the framework shell passes back
- * as the tool output.
- *
- * When the AI omits `to` / `accountId`, the bridge layer can supply
- * `ctx.fallbackTo` / `ctx.fallbackAccountId` (typically resolved from
- * the request-scoped AsyncLocalStorage) to fill them in.
- */
-export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = {}) {
-  const plan = prepareRemindCronAction(params, ctx);
-  if (!plan.ok) {
-    return json({ error: plan.error });
-  }
-  return json({
-    _instruction: PREPARED_CRON_PARAMS_INSTRUCTION,
-    action: plan.action,
-    summary: plan.summary,
-  });
 }
 
 export async function executeScheduledRemind(

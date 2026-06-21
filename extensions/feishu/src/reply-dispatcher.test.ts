@@ -1,3 +1,4 @@
+// Feishu tests cover reply dispatcher plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
@@ -121,7 +122,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     onReplyStart?: () => Promise<void> | void;
     onIdle?: () => Promise<void> | void;
     deliver: (
-      payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
+      payload: {
+        text?: string;
+        mediaUrl?: string;
+        mediaUrls?: string[];
+        audioAsVoice?: boolean;
+        isError?: boolean;
+      },
       meta: { kind: string },
     ) => Promise<void> | void;
   };
@@ -391,6 +398,27 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("targets typing at the inbound message while replies stay on the thread root", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_topic_root",
+      typingTargetMessageId: "om_topic_child",
+      replyInThread: true,
+      messageCreateTimeMs: Date.now() - 30_000,
+    });
+
+    await options.onReplyStart?.();
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(addTypingIndicatorMock, "typing indicator params", {
+      messageId: "om_topic_child",
+    });
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      replyToMessageId: "om_topic_root",
+      replyInThread: true,
+    });
+  });
+
   it("streams auto mode plain final text when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });
@@ -527,18 +555,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("does not attach automatic mentions to non-streaming plain text replies", async () => {
+  it("passes mention-forward targets to non-streaming plain text replies without rewriting body text", async () => {
     useNonStreamingAutoAccount();
 
     const { options } = createDispatcherHarness({
       replyToMessageId: "om_msg",
+      mentionTargets: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
-    await options.deliver({ text: "plain text" }, { kind: "final" });
+    await options.deliver(
+      { text: 'plain text <at user_id="ou_body">Body User</at>' },
+      { kind: "final" },
+    );
 
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(sendMessageFeishuMock, "send message params")).not.toHaveProperty(
-      "mentions",
-    );
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: 'plain text <at user_id="ou_body">Body User</at>',
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
   });
 
   it("does not attach automatic mentions to card replies", async () => {
@@ -685,7 +718,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("coalesces distinct final payloads into one streaming card until idle", async () => {
+  it("coalesces cumulative final payloads into one streaming card until idle", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
     });
@@ -703,6 +736,76 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("appends an independent error final without replacing the assistant answer", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "The file is ready." }, { kind: "final" });
+    await options.deliver({ text: "⚠️ Exec failed", isError: true }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "The file is ready.\n\n⚠️ Exec failed",
+      { note: "Agent: agent" },
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate the answer from a cumulative error final", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "The file is ready." }, { kind: "final" });
+    await options.deliver(
+      { text: "The file is ready.\n\n⚠️ Exec failed", isError: true },
+      { kind: "final" },
+    );
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "The file is ready.\n\n⚠️ Exec failed",
+      { note: "Agent: agent" },
+    );
+  });
+
+  it("replaces a partial preview when the first final is an error", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    result.replyOptions.onPartialReply?.({ text: "Working on it..." });
+    await options.deliver({ text: "⚠️ Exec failed", isError: true }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("⚠️ Exec failed", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("falls back to chunked text when an appended error exceeds the streaming limit", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(20);
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "123456789012345678" }, { kind: "final" });
+    await options.deliver({ text: "⚠️ Exec failed", isError: true }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].discard).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectLastMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: "123456789012345678\n\n⚠️ Exec failed",
+    });
   });
 
   it("skips exact duplicate final text after streaming close", async () => {

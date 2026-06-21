@@ -1,3 +1,4 @@
+// Memory Host SDK module implements embeddings worker behavior.
 import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,13 +81,20 @@ function resolveDefaultWorkerScriptPath(): string {
 /** Keep only local embedding options that are safe and necessary to send over IPC. */
 function serializeLocalEmbeddingOptions(
   options: EmbeddingProviderOptions,
+  runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): EmbeddingProviderOptions {
   return {
     config: {},
     provider: "local",
     model: options.model,
     fallback: "none",
-    local: options.local,
+    outputDimensionality: options.outputDimensionality,
+    local: {
+      ...options.local,
+      ...(runtimeOptions?.nodeLlamaCppImportUrl
+        ? { nodeLlamaCppImportUrl: runtimeOptions.nodeLlamaCppImportUrl }
+        : {}),
+    } as EmbeddingProviderOptions["local"],
   };
 }
 
@@ -350,7 +358,7 @@ export async function createLocalEmbeddingWorkerProvider(
   runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
-  const workerOptions = serializeLocalEmbeddingOptions(options);
+  const workerOptions = serializeLocalEmbeddingOptions(options, runtimeOptions);
   const client = new LocalEmbeddingWorkerClient(
     runtimeOptions?.workerScriptPath ?? resolveDefaultWorkerScriptPath(),
   );

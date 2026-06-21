@@ -1,3 +1,5 @@
+// Covers rich shell-command extraction, fake parser shapes, source span mapping,
+// nested wrapper parsing, and parser error handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Node as TreeSitterNode, Parser, Tree } from "web-tree-sitter";
 import { explainShellCommand } from "./extract.js";
@@ -147,6 +149,10 @@ function expectRisk(
     throw new Error(`Expected risk ${JSON.stringify(fields)}`);
   }
   return risk;
+}
+
+function spanText(source: string, span: { startIndex: number; endIndex: number }): string {
+  return source.slice(span.startIndex, span.endIndex);
 }
 
 afterEach(() => {
@@ -317,6 +323,105 @@ describe("command explainer tree-sitter runtime", () => {
       "pnpm",
       "echo",
       "pwd",
+    ]);
+  });
+
+  it("emits command topology metadata for operators and shell wrapper payload commands", async () => {
+    const chained = await explainShellCommand("git status && npm test; pwd");
+    const [gitStatus, npmTest, pwd] = chained.topLevelCommands;
+    expect(chained.topLevelCommands.map((step) => step.text)).toEqual([
+      "git status",
+      "npm test",
+      "pwd",
+    ]);
+    expect(
+      (chained.operators ?? []).map((operator) => ({
+        kind: operator.kind,
+        text: operator.text,
+        fromCommandId: operator.fromCommandId,
+        toCommandId: operator.toCommandId,
+        spanText: spanText(chained.source, operator.span),
+      })),
+    ).toEqual([
+      {
+        kind: "and",
+        text: "&&",
+        fromCommandId: gitStatus?.id,
+        toCommandId: npmTest?.id,
+        spanText: "&&",
+      },
+      {
+        kind: "sequence",
+        text: ";",
+        fromCommandId: npmTest?.id,
+        toCommandId: pwd?.id,
+        spanText: ";",
+      },
+    ]);
+
+    const pipe = await explainShellCommand("git diff | cat");
+    const [gitDiff, catPipe] = pipe.topLevelCommands;
+    expect(pipe.topLevelCommands.map((step) => step.text)).toEqual(["git diff", "cat"]);
+    expect(pipe.operators).toEqual([
+      expect.objectContaining({
+        kind: "pipe",
+        text: "|",
+        fromCommandId: gitDiff?.id,
+        toCommandId: catPipe?.id,
+      }),
+    ]);
+    expect(spanText(pipe.source, pipe.operators?.[0]?.span ?? { startIndex: 0, endIndex: 0 })).toBe(
+      "|",
+    );
+
+    const stderrPipe = await explainShellCommand("grep x file |& cat");
+    const [grepStep, catStderrPipe] = stderrPipe.topLevelCommands;
+    expect(stderrPipe.topLevelCommands.map((step) => step.text)).toEqual(["grep x file", "cat"]);
+    expect(stderrPipe.operators).toEqual([
+      expect.objectContaining({
+        kind: "stderr-pipe",
+        text: "|&",
+        fromCommandId: grepStep?.id,
+        toCommandId: catStderrPipe?.id,
+      }),
+    ]);
+    expect(
+      spanText(
+        stderrPipe.source,
+        stderrPipe.operators?.[0]?.span ?? { startIndex: 0, endIndex: 0 },
+      ),
+    ).toBe("|&");
+
+    const newline = await explainShellCommand("echo a\npwd");
+    const [echoStep, pwdStep] = newline.topLevelCommands;
+    expect(newline.topLevelCommands.map((step) => step.text)).toEqual(["echo a", "pwd"]);
+    expect(newline.operators).toEqual([
+      expect.objectContaining({
+        kind: "newline-sequence",
+        text: "\n",
+        fromCommandId: echoStep?.id,
+        toCommandId: pwdStep?.id,
+      }),
+    ]);
+    expect(
+      spanText(newline.source, newline.operators?.[0]?.span ?? { startIndex: 0, endIndex: 0 }),
+    ).toBe("\n");
+
+    const wrapper = await explainShellCommand("sh -c 'git status && npm test'");
+    const [wrapperStep] = wrapper.topLevelCommands;
+    const [nestedGitStatus, nestedNpmTest] = wrapper.nestedCommands;
+    expect(wrapper.nestedCommands.map((step) => [step.text, step.parentCommandId])).toEqual([
+      ["git status", wrapperStep?.id],
+      ["npm test", wrapperStep?.id],
+    ]);
+    expect(wrapper.operators).toEqual([
+      expect.objectContaining({
+        kind: "and",
+        text: "&&",
+        fromCommandId: nestedGitStatus?.id,
+        toCommandId: nestedNpmTest?.id,
+        parentCommandId: wrapperStep?.id,
+      }),
     ]);
   });
 

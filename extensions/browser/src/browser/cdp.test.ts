@@ -1,3 +1,4 @@
+// Browser tests cover cdp plugin behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -11,7 +12,7 @@ import {
   isWebSocketUrl,
   parseBrowserHttpUrl as parseHttpUrl,
 } from "./cdp.helpers.js";
-import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
+import { createTargetViaCdp, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import {
   BROWSER_ENDPOINT_BLOCKED_MESSAGE,
   BROWSER_NAVIGATION_BLOCKED_MESSAGE,
@@ -409,32 +410,6 @@ describe("cdp", () => {
         },
       }),
     ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
-  });
-
-  it("evaluates javascript via CDP", async () => {
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method === "Runtime.enable") {
-        socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        return;
-      }
-      if (msg.method === "Runtime.evaluate") {
-        expect(msg.params?.expression).toBe("1+1");
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
-            result: { result: { type: "number", value: 2 } },
-          }),
-        );
-      }
-    });
-
-    const res = await evaluateJavaScript({
-      wsUrl: `ws://127.0.0.1:${wsPort}`,
-      expression: "1+1",
-    });
-
-    expect(res.result.type).toBe("number");
-    expect(res.result.value).toBe(2);
   });
 
   it("fails when /json/version omits webSocketDebuggerUrl for an HTTP cdpUrl", async () => {

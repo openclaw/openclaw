@@ -223,6 +223,7 @@ export function buildBuiltinChatCommands(
       textAlias: "/status",
       category: "status",
       tier: "essential",
+      acceptsArgs: true,
     }),
     defineChatCommand({
       key: "goal",
@@ -739,6 +740,23 @@ export function buildBuiltinChatCommands(
       acceptsArgs: true,
       category: "session",
       tier: "essential",
+    }),
+    defineChatCommand({
+      key: "name",
+      nativeName: "name",
+      description: "Name or rename the current session.",
+      textAlias: "/name",
+      acceptsArgs: true,
+      category: "session",
+      tier: "standard",
+      args: [
+        {
+          name: "title",
+          description: "New session name (omit to see a suggestion)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
     }),
     defineChatCommand({
       key: "compact",

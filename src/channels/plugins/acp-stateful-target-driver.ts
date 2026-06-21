@@ -125,7 +125,12 @@ async function resetAcpTargetInPlace(params: {
     commandSource: params.commandSource ?? "stateful-target:acp-reset-in-place",
   });
   if (result.ok) {
-    return { ok: true };
+    return {
+      ok: true,
+      sessionKey: result.key,
+      sessionId: result.entry.sessionId,
+      storePath: result.storePath,
+    };
   }
   return {
     ok: false,

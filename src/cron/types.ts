@@ -1,3 +1,4 @@
+/** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
@@ -220,11 +221,17 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-/** Payload variants cron can execute in main-session or isolated-agent modes. */
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+/** Payload variants cron can execute in main-session or detached modes. */
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronCommandPayload;
 
 /** Partial payload update shape used by cron patch/edit flows. */
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronCommandPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -249,9 +256,29 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "toolsAllow">> & {
+    model?: string | null;
     toolsAllow?: string[] | null;
   };
+
+type CronCommandPayloadFields = {
+  /** Explicit argv vector to execute. Use a shell wrapper argv for shell syntax. */
+  argv: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  input?: string;
+  timeoutSeconds?: number;
+  noOutputTimeoutSeconds?: number;
+  outputMaxBytes?: number;
+};
+
+type CronCommandPayload = {
+  kind: "command";
+} & CronCommandPayloadFields;
+
+type CronCommandPayloadPatch = {
+  kind: "command";
+} & Partial<CronCommandPayloadFields>;
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;

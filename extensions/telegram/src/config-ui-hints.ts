@@ -1,3 +1,4 @@
+// Telegram helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
@@ -37,6 +38,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Mention Pattern Denylist",
     help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are disabled. Native bot mentions still trigger.",
   },
+  includeGroupHistoryContext: {
+    label: "Telegram Group History Context",
+    help: 'Controls prior Telegram group messages included in model context: "mention-only" keeps messages addressed to the bot and bot replies (default), "recent" includes recent room history, and "none" disables group history context.',
+  },
   "commands.native": {
     label: "Telegram Native Commands",
     help: 'Override native commands for Telegram (bool or "auto").',
@@ -56,6 +61,10 @@ export const telegramChannelConfigUiHints = {
   "streaming.chunkMode": {
     label: "Telegram Chunk Mode",
     help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
+  },
+  richMessages: {
+    label: "Telegram Rich Messages",
+    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "streaming.block.enabled": {
     label: "Telegram Block Streaming Enabled",

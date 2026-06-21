@@ -37,6 +37,39 @@ import { testApi, usageHandlers } from "./usage.js";
 
 describe("gateway usage helpers", () => {
   const dayMs = 24 * 60 * 60 * 1000;
+  const costSummary = (params: { date?: string; totalTokens: number; totalCost: number }) => ({
+    updatedAt: Date.now(),
+    days: 1,
+    daily: [
+      {
+        date: params.date ?? "2026-02-01",
+        input: params.totalTokens,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: params.totalTokens,
+        totalCost: params.totalCost,
+        inputCost: params.totalCost,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+    ],
+    totals: {
+      input: params.totalTokens,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: params.totalTokens,
+      totalCost: params.totalCost,
+      inputCost: params.totalCost,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    },
+  });
 
   function expectUtcDateRange(
     range: ReturnType<typeof testApi.parseDateRange>,
@@ -59,6 +92,51 @@ describe("gateway usage helpers", () => {
     expect(testApi.parseDateToMs("2026-2-5")).toBeUndefined();
     expect(testApi.parseDateToMs("nope")).toBeUndefined();
     expect(testApi.parseDateToMs(undefined)).toBeUndefined();
+  });
+
+  it("parseDateToMs rejects out-of-range calendar dates instead of rolling them over", () => {
+    // Impossible dates that still match the YYYY-MM-DD shape must not silently shift to a real day.
+    expect(testApi.parseDateToMs("2026-02-30")).toBeUndefined(); // would roll to Mar 2
+    expect(testApi.parseDateToMs("2026-04-31")).toBeUndefined(); // would roll to May 1
+    expect(testApi.parseDateToMs("2025-02-29")).toBeUndefined(); // non-leap Feb 29
+    expect(testApi.parseDateToMs("2026-13-01")).toBeUndefined(); // month too large
+    expect(testApi.parseDateToMs("2026-00-10")).toBeUndefined(); // month zero
+    expect(testApi.parseDateToMs("2026-01-00")).toBeUndefined(); // day zero
+    // Real leap day must stay valid (guard against over-rejection).
+    expect(testApi.parseDateToMs("2024-02-29")).toBe(Date.UTC(2024, 1, 29));
+  });
+
+  it("findInvalidExplicitDate flags provided-but-unparseable dates and ignores absent/valid ones", () => {
+    // Explicitly provided invalid dates (bad format or impossible calendar date) are reported.
+    expect(testApi.findInvalidExplicitDate({ startDate: "2026-02-30" })).toBe("startDate");
+    expect(testApi.findInvalidExplicitDate({ endDate: "2026-2-5" })).toBe("endDate");
+    expect(testApi.findInvalidExplicitDate({ startDate: 0 })).toBe("startDate");
+    expect(testApi.findInvalidExplicitDate({ endDate: [] })).toBe("endDate");
+    expect(
+      testApi.findInvalidExplicitDate({ startDate: "2026-02-01", endDate: "2026-13-01" }),
+    ).toBe("endDate");
+    // Absent or valid dates are not flagged, so they still fall through to the default range.
+    expect(testApi.findInvalidExplicitDate({})).toBeUndefined();
+    expect(testApi.findInvalidExplicitDate({ startDate: "", endDate: null })).toBeUndefined();
+    expect(
+      testApi.findInvalidExplicitDate({ startDate: "2026-02-01", endDate: "2026-02-02" }),
+    ).toBeUndefined();
+  });
+
+  it("usage.cost rejects an explicitly provided invalid date with INVALID_REQUEST", async () => {
+    const respond = vi.fn();
+    await usageHandlers["usage.cost"]({
+      respond,
+      params: { startDate: 0 },
+      context: { getRuntimeConfig: () => ({}) },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(JSON.stringify(error)).toContain("startDate");
+    // A rejected request must not query the cost loader for an unrelated range.
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
   });
 
   it("parseUtcOffsetToMinutes supports whole-hour and half-hour offsets", () => {
@@ -256,5 +334,66 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
     );
+  });
+
+  it("aggregates usage.cost only for explicit all-agent scope", async () => {
+    vi.mocked(loadCostUsageSummaryFromCache).mockImplementation(async (params) =>
+      params?.agentId === "opus"
+        ? costSummary({ totalTokens: 20, totalCost: 2 })
+        : costSummary({ totalTokens: 10, totalCost: 1 }),
+    );
+
+    const config = {
+      agents: { list: [{ id: "main" }, { id: "opus" }] },
+      session: {},
+    } as OpenClawConfig;
+    const context = { getRuntimeConfig: () => config };
+    const params = { startDate: "2026-02-01", endDate: "2026-02-01", mode: "utc" };
+
+    const defaultRespond = vi.fn();
+    await usageHandlers["usage.cost"]({
+      respond: defaultRespond,
+      params,
+      context,
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBeUndefined();
+    expect(defaultRespond.mock.calls[0]?.[1]).toMatchObject({
+      totals: { totalTokens: 10, totalCost: 1 },
+    });
+
+    const aggregateRespond = vi.fn();
+    await usageHandlers["usage.cost"]({
+      respond: aggregateRespond,
+      params: { ...params, agentScope: "all" },
+      context,
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(3);
+    expect(
+      vi
+        .mocked(loadCostUsageSummaryFromCache)
+        .mock.calls.slice(1)
+        .map((call) => call[0]?.agentId),
+    ).toEqual(["main", "opus"]);
+    expect(aggregateRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(aggregateRespond.mock.calls[0]?.[1]).toMatchObject({
+      totals: { totalTokens: 30, totalCost: 3 },
+      daily: [{ date: "2026-02-01", totalTokens: 30, totalCost: 3 }],
+    });
+
+    const mainRespond = vi.fn();
+    await usageHandlers["usage.cost"]({
+      respond: mainRespond,
+      params: { ...params, agentId: "main" },
+      context,
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[3]?.[0]?.agentId).toBe("main");
+    expect(mainRespond.mock.calls[0]?.[1]).toMatchObject({
+      totals: { totalTokens: 10, totalCost: 1 },
+    });
   });
 });

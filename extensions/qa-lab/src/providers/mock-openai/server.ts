@@ -1,9 +1,11 @@
+// Qa Lab plugin module implements server behavior.
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
+import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -101,8 +103,11 @@ type MockOpenAiRequestSnapshot = {
   model: string;
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
+  plannedToolCallId?: string;
   plannedToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
+  toolOutputCallId?: string;
+  toolOutputStructuredError?: true;
 };
 
 // Anthropic /v1/messages request/response shapes the mock actually needs.
@@ -122,6 +127,7 @@ type AnthropicMessageContentBlock =
   | {
       type: "tool_result";
       tool_use_id: string;
+      is_error?: boolean;
       content: string | Array<{ type: "text"; text: string }>;
     }
   | { type: "image"; source: Record<string, unknown> };
@@ -144,6 +150,7 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa check/i;
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
+const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE = /anthropic thinking error qa check/i;
 const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i;
 const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
@@ -159,6 +166,7 @@ const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_s
 const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
 const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
+const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -175,9 +183,15 @@ const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small projec
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
+const QA_AUDIO_TRANSCRIPTION_TEXT =
+  "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
+const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
+  "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
+const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
+  anthropicThinkingErrorPhase: number;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
 };
@@ -185,7 +199,7 @@ type MockScenarioState = {
 function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
   return providerVariant === "anthropic"
     ? "repo/docs/help/testing.md"
-    : "repo/qa/scenarios/index.md";
+    : "repo/qa/scenarios/index.yaml";
 }
 
 function subagentHandoffTaskForProvider(providerVariant: MockOpenAiProviderVariant) {
@@ -214,14 +228,11 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-function writeJson(res: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(text),
-    "cache-control": "no-store",
-  });
-  res.end(text);
+function transcriptionTextForAudioRequest(rawBody: string) {
+  if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
+    return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
+  }
+  return QA_AUDIO_TRANSCRIPTION_TEXT;
 }
 
 function writeSse(res: ServerResponse, events: StreamEvent[]) {
@@ -376,6 +387,29 @@ function extractFunctionCallOutputText(item: ResponsesInputItem) {
   return stringifyFunctionCallOutput(item.output);
 }
 
+function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
+  if (item.type !== "function_call_output") {
+    return "";
+  }
+  const record = item as {
+    call_id?: unknown;
+    tool_call_id?: unknown;
+    tool_use_id?: unknown;
+  };
+  return (
+    [record.call_id, record.tool_call_id, record.tool_use_id].find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    ) ?? ""
+  );
+}
+
+function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
+  if (item.type !== "function_call_output") {
+    return false;
+  }
+  return item.is_error === true || item.isError === true;
+}
+
 function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
   for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
@@ -401,6 +435,64 @@ function extractToolOutput(input: ResponsesInputItem[]) {
         return output;
       }
       continue;
+    }
+  }
+  return "";
+}
+
+function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
+  const lastUserIndex = findLastUserIndex(input);
+  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      return functionCallOutputIsStructuredError(item);
+    }
+  }
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      const laterUserTexts = input
+        .slice(index + 1)
+        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
+        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
+        .filter(Boolean);
+      if (
+        laterUserTexts.length > 0 &&
+        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+      ) {
+        return functionCallOutputIsStructuredError(item);
+      }
+    }
+  }
+  return false;
+}
+
+function extractToolOutputCallId(input: ResponsesInputItem[]) {
+  const lastUserIndex = findLastUserIndex(input);
+  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      return extractFunctionCallOutputCallId(item);
+    }
+  }
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      const laterUserTexts = input
+        .slice(index + 1)
+        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
+        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
+        .filter(Boolean);
+      if (
+        laterUserTexts.length > 0 &&
+        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+      ) {
+        return extractFunctionCallOutputCallId(item);
+      }
     }
   }
   return "";
@@ -869,6 +961,33 @@ function extractExactMarkerDirective(text: string) {
   );
 }
 
+function extractWhatsAppLocationMarkerDirective(text: string) {
+  return extractLastCapture(
+    text,
+    /WhatsApp location marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+  );
+}
+
+function extractWhatsAppContactMarkerDirective(text: string) {
+  return extractLastCapture(text, /WhatsApp contact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
+}
+
+function extractWhatsAppStickerMarkerDirective(text: string) {
+  return extractLastCapture(text, /WhatsApp sticker marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
+}
+
+function shouldUseWhatsAppLocationMarker(prompt: string) {
+  return /(?:^|[\n:]\s*)📍\s*37\.774900,\s*-122\.419400\b/u.test(prompt.trim());
+}
+
+function shouldUseWhatsAppContactMarker(prompt: string) {
+  return /(?:^|[\n:]\s*)<contacts?(?::|>)/iu.test(prompt.trim());
+}
+
+function shouldUseWhatsAppStickerMarker(prompt: string) {
+  return /(?:^|[\n:]\s*)<media:sticker>(?:\s|$)/iu.test(prompt.trim());
+}
+
 function extractLabeledMarkerDirective(text: string, label: string) {
   const escapedLabel = escapeRegExp(label);
   const backtickedMatch = extractLastCapture(
@@ -1115,6 +1234,15 @@ function buildAssistantText(
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
+    ? extractWhatsAppLocationMarkerDirective(allInputText)
+    : "";
+  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
+    ? extractWhatsAppContactMarkerDirective(allInputText)
+    : "";
+  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
+    ? extractWhatsAppStickerMarkerDirective(allInputText)
+    : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const latestImageUserTurn = extractLatestImageUserTurn(input);
@@ -1155,6 +1283,15 @@ function buildAssistantText(
     latestImageUserTurn.imageInputCount > 0
   ) {
     return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
+  }
+  if (whatsAppLocationMarker) {
+    return whatsAppLocationMarker;
+  }
+  if (whatsAppContactMarker) {
+    return whatsAppContactMarker;
+  }
+  if (whatsAppStickerMarker) {
+    return whatsAppStickerMarker;
   }
   if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return exactReplyDirective;
@@ -1315,7 +1452,7 @@ function buildAssistantText(
   ) {
     return [
       "Worked:",
-      "- Read all three seeded files: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
+      "- Read all three seeded files: repo/qa/scenarios/index.yaml, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
       "- Extra QA scenario candidates: config restart capability flip and image generation roundtrip.",
       "Failed:",
       "- None observed in mock mode.",
@@ -1429,6 +1566,19 @@ function extractPlannedToolName(events: StreamEvent[]) {
   return undefined;
 }
 
+function extractPlannedToolCallId(events: StreamEvent[]) {
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as { type?: unknown; call_id?: unknown };
+    if (item.type === "function_call" && typeof item.call_id === "string") {
+      return item.call_id;
+    }
+  }
+  return undefined;
+}
+
 function extractPlannedToolArgs(events: StreamEvent[]) {
   for (const event of events) {
     if (event.type !== "response.output_item.done") {
@@ -1467,19 +1617,20 @@ function splitMockStreamingText(text: string, parts = 3) {
   return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
 }
 
-function buildTelegramLongFinalText({
+function buildQaLongFinalText({
   endMarker = "TELEGRAM-LONG-FINAL-END",
+  segmentPrefix = "telegram-long-final-segment",
   segmentCount = 42,
   startMarker = "TELEGRAM-LONG-FINAL-BEGIN",
 }: {
   endMarker?: string;
+  segmentPrefix?: string;
   segmentCount?: number;
   startMarker?: string;
 } = {}) {
   const body = Array.from(
     { length: segmentCount },
-    (_, index) =>
-      `telegram-long-final-segment-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
+    (_, index) => `${segmentPrefix}-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
   ).join("\n");
   return `${startMarker}\n${body}\n${endMarker}`;
 }
@@ -1751,6 +1902,15 @@ async function buildResponsesPayload(
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
+    ? extractWhatsAppLocationMarkerDirective(allInputText)
+    : "";
+  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
+    ? extractWhatsAppContactMarkerDirective(allInputText)
+    : "";
+  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
+    ? extractWhatsAppStickerMarkerDirective(allInputText)
+    : "";
   const blockStreamingPrompt =
     extractLastMatchingUserText(extractAllUserTexts(input), QA_BLOCK_STREAMING_PROMPT_RE) ||
     prompt ||
@@ -1974,7 +2134,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("");
   }
   if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(allInputText)) {
-    const text = buildTelegramLongFinalText({
+    const text = buildQaLongFinalText({
       endMarker: "TELEGRAM-LONG-FINAL-3CHUNK-END",
       segmentCount: 96,
       startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
@@ -1989,10 +2149,26 @@ async function buildResponsesPayload(
     ]);
   }
   if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(allInputText)) {
-    const text = buildTelegramLongFinalText();
+    const text = buildQaLongFinalText();
     return buildAssistantEvents([
       {
         id: "msg_mock_telegram_long_final",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(text),
+        text,
+      },
+    ]);
+  }
+  if (QA_WHATSAPP_LONG_FINAL_PROMPT_RE.test(allInputText)) {
+    const text = buildQaLongFinalText({
+      endMarker: "WHATSAPP-LONG-FINAL-END",
+      segmentPrefix: "whatsapp-long-final-segment",
+      segmentCount: 64,
+      startMarker: "WHATSAPP-LONG-FINAL-BEGIN",
+    });
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_whatsapp_long_final",
         phase: "final_answer",
         streamDeltas: splitMockStreamingText(text),
         text,
@@ -2080,6 +2256,15 @@ async function buildResponsesPayload(
     return buildAssistantEvents(
       exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
     );
+  }
+  if (whatsAppLocationMarker) {
+    return buildAssistantEvents(whatsAppLocationMarker);
+  }
+  if (whatsAppContactMarker) {
+    return buildAssistantEvents(whatsAppContactMarker);
+  }
+  if (whatsAppStickerMarker) {
+    return buildAssistantEvents(whatsAppStickerMarker);
   }
   if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
     return buildAssistantEvents(exactReplyDirective);
@@ -2802,7 +2987,12 @@ function convertAnthropicMessagesToResponsesInput(params: {
       if (block.type === "tool_result") {
         const output = stringifyToolResultContent(block.content);
         if (output.trim()) {
-          toolResultItems.push({ type: "function_call_output", output });
+          toolResultItems.push({
+            type: "function_call_output",
+            call_id: block.tool_use_id,
+            output,
+            ...(block.is_error === true ? { is_error: true } : {}),
+          });
         }
         continue;
       }
@@ -2931,6 +3121,90 @@ function buildAnthropicMessageResponse(params: {
   };
 }
 
+const QA_ANTHROPIC_THINKING_ERROR_TEXT =
+  "QA replay-safe read completed, but the provider stream failed after signed thinking.";
+const QA_ANTHROPIC_THINKING_ERROR_SIGNATURE = "qa_signed_thinking_block_91953";
+const QA_ANTHROPIC_THINKING_ERROR_MESSAGE = "QA injected provider stream failure";
+
+function buildAnthropicThinkingErrorResponse(params: { model: string }): Record<string, unknown> {
+  return {
+    type: "error",
+    error: {
+      type: "api_error",
+      message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
+    },
+    model: params.model || "claude-opus-4-8",
+  };
+}
+
+function buildAnthropicThinkingErrorStreamEvents(params: {
+  model: string;
+}): AnthropicStreamEvent[] {
+  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
+  return [
+    {
+      type: "message_start",
+      message: {
+        id: messageId,
+        type: "message",
+        role: "assistant",
+        model: params.model || "claude-opus-4-8",
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: 64,
+          output_tokens: 0,
+        },
+      },
+    },
+    {
+      type: "content_block_start",
+      index: 0,
+      content_block: {
+        type: "thinking",
+        thinking: "",
+        signature: "",
+      },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "thinking_delta",
+        thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT,
+      },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "signature_delta",
+        signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE,
+      },
+    },
+    {
+      type: "content_block_stop",
+      index: 0,
+    },
+    {
+      type: "message_delta",
+      delta: {},
+      usage: {
+        input_tokens: 64,
+        output_tokens: 1120,
+      },
+    },
+    {
+      type: "error",
+      error: {
+        type: "api_error",
+        message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
+      },
+    },
+  ];
+}
+
 function buildAnthropicMessageStreamEvents(params: {
   model: string;
   extracted: ExtractedAssistantOutput;
@@ -3057,6 +3331,35 @@ async function buildMessagesPayload(
     stream: false,
     ...(Array.isArray(body.tools) ? { tools: body.tools } : {}),
   };
+  const allInputText = extractAllRequestTexts(input, dispatchBody);
+  if (QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE.test(allInputText)) {
+    const toolOutput = extractToolOutput(input);
+    const shouldEmitThinkingError =
+      toolOutput.length > 0 && scenarioState.anthropicThinkingErrorPhase === 0;
+    const events =
+      toolOutput.length === 0
+        ? buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" })
+        : shouldEmitThinkingError
+          ? (() => {
+              scenarioState.anthropicThinkingErrorPhase = 1;
+              return buildAssistantEvents("");
+            })()
+          : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+    const extracted = extractFinalAssistantOutputFromEvents(events);
+    const responseBody = shouldEmitThinkingError
+      ? buildAnthropicThinkingErrorResponse({ model: normalizedModel })
+      : buildAnthropicMessageResponse({
+          model: normalizedModel,
+          extracted,
+        });
+    const streamEvents = shouldEmitThinkingError
+      ? buildAnthropicThinkingErrorStreamEvents({ model: normalizedModel })
+      : buildAnthropicMessageStreamEvents({
+          model: normalizedModel,
+          extracted,
+        });
+    return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
+  }
   const events = await buildResponsesPayload(dispatchBody, scenarioState);
   const extracted = extractFinalAssistantOutputFromEvents(events);
   const responseBody = buildAnthropicMessageResponse({
@@ -3073,6 +3376,7 @@ async function buildMessagesPayload(
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
   const host = params?.host ?? "127.0.0.1";
   const scenarioState: MockScenarioState = {
+    anthropicThinkingErrorPhase: 0,
     subagentFanoutPhase: 0,
     subagentHandoffSpawned: false,
   };
@@ -3092,6 +3396,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
             { id: "gpt-5.5", object: "model" },
             { id: "gpt-5.5-alt", object: "model" },
             { id: "gpt-image-1", object: "model" },
+            { id: "gpt-4o-transcribe", object: "model" },
             { id: "text-embedding-3-small", object: "model" },
             { id: "claude-opus-4-8", object: "model" },
             { id: "claude-sonnet-4-6", object: "model" },
@@ -3125,6 +3430,13 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
               revised_prompt: "A QA lighthouse with protocol droid silhouette.",
             },
           ],
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {
+        const raw = await readBody(req);
+        writeJson(res, 200, {
+          text: transcriptionTextForAudioRequest(raw),
         });
         return;
       }
@@ -3166,8 +3478,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           model: resolvedModel,
           providerVariant: resolveProviderVariant(resolvedModel),
           imageInputCount: countImageInputs(input),
+          plannedToolCallId: extractPlannedToolCallId(events),
           plannedToolName: extractPlannedToolName(events),
           plannedToolArgs: extractPlannedToolArgs(events),
+          toolOutputCallId: extractToolOutputCallId(input) || undefined,
+          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
         };
         requests.push(lastRequest);
         if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
@@ -3222,8 +3537,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           model: normalizedModel,
           providerVariant: resolveProviderVariant(normalizedModel),
           imageInputCount: countImageInputs(input),
+          plannedToolCallId: extractPlannedToolCallId(events),
           plannedToolName: extractPlannedToolName(events),
           plannedToolArgs: extractPlannedToolArgs(events),
+          toolOutputCallId: extractToolOutputCallId(input) || undefined,
+          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
         };
         requests.push(lastRequest);
         if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {

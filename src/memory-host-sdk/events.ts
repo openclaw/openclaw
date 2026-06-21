@@ -1,3 +1,4 @@
+// Memory host event helpers append and read memory host event logs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile } from "../infra/fs-safe.js";
@@ -17,6 +18,23 @@ export type MemoryHostRecallRecordedEvent = {
     startLine: number;
     endLine: number;
     score: number;
+  }>;
+};
+
+/** Event emitted when recall hits are visible but excluded from short-term promotion. */
+export type MemoryHostRecallSkippedEvent = {
+  type: "memory.recall.skipped";
+  timestamp: string;
+  query: string;
+  reason: "non-short-term-memory-path";
+  eligibleResultCount: number;
+  skippedResultCount: number;
+  results: Array<{
+    path: string;
+    startLine: number;
+    endLine: number;
+    score: number;
+    reason: "non-short-term-memory-path";
   }>;
 };
 
@@ -53,6 +71,9 @@ export type MemoryHostEvent =
   | MemoryHostPromotionAppliedEvent
   | MemoryHostDreamCompletedEvent;
 
+/** Full event-log record schema, including opt-in diagnostic variants. */
+export type MemoryHostEventRecord = MemoryHostEvent | MemoryHostRecallSkippedEvent;
+
 /** Resolve the event log path inside a workspace without touching the filesystem. */
 export function resolveMemoryHostEventLogPath(workspaceDir: string): string {
   return path.join(workspaceDir, MEMORY_HOST_EVENT_LOG_RELATIVE_PATH);
@@ -61,7 +82,7 @@ export function resolveMemoryHostEventLogPath(workspaceDir: string): string {
 /** Append one memory host event, creating the dreams directory with symlink-safe writes. */
 export async function appendMemoryHostEvent(
   workspaceDir: string,
-  event: MemoryHostEvent,
+  event: MemoryHostEventRecord,
 ): Promise<void> {
   const eventLogPath = resolveMemoryHostEventLogPath(workspaceDir);
   await fs.mkdir(path.dirname(eventLogPath), { recursive: true });
@@ -72,11 +93,28 @@ export async function appendMemoryHostEvent(
   });
 }
 
-/** Read recent memory host events, ignoring corrupt JSONL lines left by partial writes. */
-export async function readMemoryHostEvents(params: {
+function parseMemoryHostEventRecord(line: string): MemoryHostEventRecord | null {
+  try {
+    const record = JSON.parse(line) as MemoryHostEventRecord;
+    if (
+      record.type === "memory.recall.recorded" ||
+      record.type === "memory.recall.skipped" ||
+      record.type === "memory.promotion.applied" ||
+      record.type === "memory.dream.completed"
+    ) {
+      return record;
+    }
+  } catch {
+    // The log is best-effort diagnostics; one malformed line must not hide
+    // later valid events or break memory status rendering.
+  }
+  return null;
+}
+
+async function readMemoryHostEventRecordsRaw(params: {
   workspaceDir: string;
   limit?: number;
-}): Promise<MemoryHostEvent[]> {
+}): Promise<MemoryHostEventRecord[]> {
   const eventLogPath = resolveMemoryHostEventLogPath(params.workspaceDir);
   const raw = await fs.readFile(eventLogPath, "utf8").catch((err: unknown) => {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
@@ -92,17 +130,40 @@ export async function readMemoryHostEvents(params: {
     .map((line) => line.trim())
     .filter(Boolean)
     .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as MemoryHostEvent];
-      } catch {
-        // The log is best-effort diagnostics; one malformed line must not hide
-        // later valid events or break memory status rendering.
-        return [];
-      }
+      const record = parseMemoryHostEventRecord(line);
+      return record ? [record] : [];
     });
   if (!Number.isFinite(params.limit)) {
     return events;
   }
   const limit = Math.max(0, Math.floor(params.limit as number));
   return limit === 0 ? [] : events.slice(-limit);
+}
+
+function applyMemoryHostEventLimit<T>(events: T[], limit: number | undefined): T[] {
+  if (!Number.isFinite(limit)) {
+    return events;
+  }
+  const normalizedLimit = Math.max(0, Math.floor(limit as number));
+  return normalizedLimit === 0 ? [] : events.slice(-normalizedLimit);
+}
+
+/** Read recent memory host events, ignoring corrupt JSONL lines left by partial writes. */
+export async function readMemoryHostEvents(params: {
+  workspaceDir: string;
+  limit?: number;
+}): Promise<MemoryHostEvent[]> {
+  const events = await readMemoryHostEventRecordsRaw({ workspaceDir: params.workspaceDir });
+  const legacyEvents = events.filter(
+    (event): event is MemoryHostEvent => event.type !== "memory.recall.skipped",
+  );
+  return applyMemoryHostEventLimit(legacyEvents, params.limit);
+}
+
+/** Read recent memory host event records, including opt-in diagnostic variants. */
+export async function readMemoryHostEventRecords(params: {
+  workspaceDir: string;
+  limit?: number;
+}): Promise<MemoryHostEventRecord[]> {
+  return await readMemoryHostEventRecordsRaw(params);
 }

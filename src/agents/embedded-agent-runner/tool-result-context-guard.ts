@@ -1,7 +1,11 @@
 /**
  * Installs context guards for oversized tool-result histories.
  */
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
+} from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
@@ -334,6 +338,9 @@ export function installContextEngineLoopHook(params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
+  runtimeSettings?: ContextEngineRuntimeSettings;
+  /** True when this turn belongs to a heartbeat run. */
+  isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const mutableAgent = params.agent as GuardableAgentRecord;
@@ -398,6 +405,8 @@ export function installContextEngineLoopHook(params: {
             messages: transcriptMessages,
             prePromptMessageCount,
           }),
+          runtimeSettings: params.runtimeSettings,
+          isHeartbeat: params.isHeartbeat,
         });
       } else {
         const newMessages = transcriptMessages.slice(prePromptMessageCount);
@@ -407,6 +416,7 @@ export function installContextEngineLoopHook(params: {
               sessionId,
               sessionKey,
               messages: newMessages,
+              isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
@@ -414,6 +424,7 @@ export function installContextEngineLoopHook(params: {
                 sessionId,
                 sessionKey,
                 message,
+                isHeartbeat: params.isHeartbeat,
               });
             }
           }
@@ -428,6 +439,7 @@ export function installContextEngineLoopHook(params: {
         messages: providerMessages,
         tokenBudget,
         model: modelId,
+        runtimeSettings: params.runtimeSettings,
       });
       if (assembled && Array.isArray(assembled.messages)) {
         const repairedMessages =

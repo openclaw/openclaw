@@ -81,7 +81,7 @@
   color: var(--muted);
 }
 
-.config-search__input:focus {
+.config-search__input:focus-visible {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
   background: var(--bg-hover);
@@ -91,7 +91,7 @@
   background: white;
 }
 
-:root[data-theme-mode="light"] .config-search__input:focus {
+:root[data-theme-mode="light"] .config-search__input:focus-visible {
   background: white;
 }
 
@@ -143,7 +143,7 @@
   border-radius: calc(var(--radius-md) - 3px);
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 600;
   cursor: pointer;
   transition:
@@ -265,7 +265,7 @@
   background: var(--accent-subtle);
   border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   color: var(--accent);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 600;
   animation: badge-enter 0.2s var(--ease-out);
 }
@@ -676,7 +676,7 @@
 }
 
 .settings-theme-import__label {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -698,7 +698,7 @@
   color: var(--muted);
 }
 
-.settings-theme-import__input:focus {
+.settings-theme-import__input:focus-visible {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   box-shadow: var(--focus-ring);
@@ -716,7 +716,7 @@
 }
 
 .settings-theme-import__meta-label {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -790,7 +790,7 @@
 }
 
 .settings-roundness__label {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 600;
   color: var(--muted);
 }
@@ -847,7 +847,7 @@
 
 .settings-text-scale__label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   line-height: 1.2;
 }
 
@@ -986,7 +986,7 @@
   padding: 4px 9px;
   border-radius: var(--radius-full);
   border: 1px solid transparent;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 650;
   line-height: 1;
   white-space: nowrap;
@@ -1039,7 +1039,7 @@
 }
 
 .settings-notifications__label {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1320,9 +1320,9 @@
   box-shadow: none;
 }
 
-.cfg-field--error .cfg-input:focus,
-.cfg-field--error .cfg-textarea:focus,
-.cfg-field--error .cfg-select:focus {
+.cfg-field--error .cfg-input:focus-visible,
+.cfg-field--error .cfg-textarea:focus-visible,
+.cfg-field--error .cfg-select:focus-visible {
   border-color: var(--border);
   box-shadow: none;
 }
@@ -1352,7 +1352,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   color: var(--muted);
   background: var(--bg-elevated);
   white-space: nowrap;
@@ -1392,11 +1392,11 @@
   opacity: 0.6;
 }
 
-.cfg-input:hover:not(:focus) {
+.cfg-input:hover:not(:focus-visible) {
   border-color: var(--border-strong);
 }
 
-.cfg-input:focus {
+.cfg-input:focus-visible {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
   background: var(--bg-hover);
@@ -1407,11 +1407,11 @@
   border-color: var(--border);
 }
 
-:root[data-theme-mode="light"] .cfg-input:hover:not(:focus) {
+:root[data-theme-mode="light"] .cfg-input:hover:not(:focus-visible) {
   border-color: var(--border-strong);
 }
 
-:root[data-theme-mode="light"] .cfg-input:focus {
+:root[data-theme-mode="light"] .cfg-input:focus-visible {
   background: white;
 }
 
@@ -1460,11 +1460,11 @@
     box-shadow var(--duration-fast) ease;
 }
 
-.cfg-textarea:hover:not(:focus) {
+.cfg-textarea:hover:not(:focus-visible) {
   border-color: var(--border-strong);
 }
 
-.cfg-textarea:focus {
+.cfg-textarea:focus-visible {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
@@ -1570,11 +1570,11 @@
     box-shadow var(--duration-fast) ease;
 }
 
-.cfg-select:hover:not(:focus) {
+.cfg-select:hover:not(:focus-visible) {
   border-color: var(--border-strong);
 }
 
-.cfg-select:focus {
+.cfg-select:focus-visible {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
@@ -1693,7 +1693,7 @@
 .cfg-toggle-row__help {
   display: block;
   margin-top: 2px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   color: var(--muted);
   line-height: 1.45;
 }
@@ -1753,7 +1753,7 @@
   background: var(--ok);
 }
 
-.cfg-toggle input:focus + .cfg-toggle__track {
+.cfg-toggle input:focus-visible + .cfg-toggle__track {
   box-shadow: var(--focus-ring);
 }
 
@@ -1957,7 +1957,7 @@
 }
 
 .cfg-array__item-index {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
@@ -2129,7 +2129,7 @@
 /* Pill variants */
 .pill--sm {
   padding: 5px 12px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
 }
 
 .pill--ok {
@@ -2235,7 +2235,7 @@
   gap: 6px;
   flex-wrap: wrap;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }

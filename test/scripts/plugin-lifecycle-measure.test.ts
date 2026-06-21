@@ -1,9 +1,13 @@
+// Plugin Lifecycle Measure tests cover plugin lifecycle measure script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,6 +23,15 @@ function makeTempDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-lifecycle-measure-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function writeFakeGetconf(dir: string, body: string): string {
+  const binDir = path.join(dir, "bin");
+  mkdirSync(binDir);
+  const getconfPath = path.join(binDir, "getconf");
+  writeFileSync(getconfPath, `#!/bin/sh\n${body}\n`, "utf8");
+  chmodSync(getconfPath, 0o755);
+  return binDir;
 }
 
 function pidExists(pid: number): boolean {
@@ -79,6 +92,40 @@ afterEach(() => {
 });
 
 describe("plugin lifecycle resource sampler", () => {
+  it.runIf(process.platform === "linux")(
+    "derives proc units from getconf when overrides are absent",
+    () => {
+      const dir = makeTempDir();
+      const summary = path.join(dir, "summary.tsv");
+      const logPath = path.join(dir, "getconf.log");
+      const binDir = writeFakeGetconf(
+        dir,
+        'printf "%s\\n" "$1" >>"$GETCONF_LOG"\ncase "$1" in PAGESIZE) echo 16384 ;; CLK_TCK) echo 250 ;; esac',
+      );
+      const env = {
+        ...process.env,
+        GETCONF_LOG: logPath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      };
+      delete env.OPENCLAW_PROC_PAGE_SIZE;
+      delete env.OPENCLAW_PROC_CLK_TCK;
+
+      const result = spawnSync(
+        process.execPath,
+        [scriptPath, summary, "getconf-units", "--", process.execPath, "-e", ""],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env,
+          timeout: 5000,
+        },
+      );
+
+      expect(readFileSync(logPath, "utf8")).toBe("PAGESIZE\nCLK_TCK\n");
+      expect(result.stderr).not.toContain("failed to derive OPENCLAW_PROC");
+    },
+  );
+
   it("rejects loose numeric env values instead of parsing prefixes", () => {
     const dir = makeTempDir();
     const summary = path.join(dir, "summary.tsv");
@@ -117,16 +164,66 @@ describe("plugin lifecycle resource sampler", () => {
     );
   });
 
+  it("rejects loose resource ceiling env values instead of parsing prefixes", () => {
+    const dir = makeTempDir();
+    const summary = path.join(dir, "summary.tsv");
+    const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO: "1x",
+      },
+      timeout: 5000,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO must be a positive number; got: 1x",
+    );
+  });
+
   it("configures a phase timeout with process-group cleanup", () => {
     const script = readFileSync(scriptPath, "utf8");
 
     expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS");
     expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS");
+    expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB");
+    expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS");
+    expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO");
     expect(script).toContain("detached: true");
     expect(script).toContain("process.kill(-child.pid, signal)");
+    expect(script).toContain("plugin lifecycle resource ceiling exceeded");
     expect(script).toContain('const summarySignal = timedOut ? "timeout"');
     expect(script).toContain("process.exit(124)");
   });
+
+  it.runIf(process.platform === "linux")(
+    "fails successful phases that exceed wall ceilings",
+    () => {
+      const dir = makeTempDir();
+      const summary = path.join(dir, "summary.tsv");
+      const result = spawnSync(
+        "node",
+        [scriptPath, summary, "slow-success", "--", "node", "-e", "setTimeout(() => {}, 40)"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
+            OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS: "1",
+          },
+          timeout: 5000,
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("plugin lifecycle resource ceiling exceeded");
+      expect(result.stderr).toContain("wall_ms=");
+      expect(readFileSync(summary, "utf8")).toMatch(/^slow-success\t\d+\t[\d.]+\t\d+\t[\d.]+\t$/mu);
+    },
+  );
 
   it.runIf(process.platform === "linux")(
     "times out wedged phases and records the timeout signal",
@@ -174,7 +271,11 @@ describe("plugin lifecycle resource sampler", () => {
             "--",
             "bash",
             "-lc",
-            'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; while :; do sleep 1; done\' & wait',
+            [
+              'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; while :; do sleep 1; done\' &',
+              'while [ ! -s "$PID_FILE" ]; do sleep 0.01; done',
+              "exit 0",
+            ].join("\n"),
           ],
           {
             cwd: process.cwd(),

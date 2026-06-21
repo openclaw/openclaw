@@ -1,3 +1,4 @@
+// Ci Node Test Plan tests cover ci node test plan script behavior.
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
@@ -174,6 +175,32 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .map((shard) => shard.shardName);
 
     expect(requiresDistShardNames).toEqual(["core-support-boundary"]);
+  });
+
+  it("splits tooling checks independently from built artifacts", () => {
+    const toolingShards = createNodeTestShards().filter((shard) =>
+      shard.shardName.startsWith("core-tooling"),
+    );
+
+    expect(toolingShards).toEqual([
+      {
+        checkName: "checks-node-core-tooling",
+        configs: [
+          "test/vitest/vitest.tooling.config.ts",
+          "test/vitest/vitest.tooling-isolated.config.ts",
+        ],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "core-tooling",
+      },
+      {
+        checkName: "checks-node-core-tooling-docker",
+        configs: ["test/vitest/vitest.tooling-docker.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "core-tooling-docker",
+      },
+    ]);
   });
 
   it("assigns Blacksmith runners to every core node shard", () => {

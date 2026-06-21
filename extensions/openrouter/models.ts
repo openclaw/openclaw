@@ -1,3 +1,4 @@
+// Openrouter plugin module implements models behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OPENROUTER_MISTRAL_MODEL_PREFIXES = [
@@ -11,13 +12,30 @@ const OPENROUTER_MISTRAL_MODEL_PREFIXES = [
   "pixtral-",
   "voxtral-",
 ] as const;
+const OPENROUTER_MODEL_PREFIX = "openrouter/";
 
 export function normalizeOpenRouterModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
   }
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return normalized.startsWith("openrouter/") ? normalized.slice("openrouter/".length) : normalized;
+  return normalized.startsWith(OPENROUTER_MODEL_PREFIX)
+    ? normalized.slice(OPENROUTER_MODEL_PREFIX.length)
+    : normalized;
+}
+
+export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefined {
+  if (typeof modelId !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  if (!normalized.startsWith(OPENROUTER_MODEL_PREFIX)) {
+    return normalized;
+  }
+  const unprefixed = normalized.slice(OPENROUTER_MODEL_PREFIX.length);
+  // `openrouter/` is both a provider qualifier and an upstream namespace.
+  // Strip it only when the remainder is still a namespaced API model id.
+  return unprefixed.includes("/") ? unprefixed : normalized;
 }
 
 export function isOpenRouterMistralModelId(modelId: unknown): boolean {

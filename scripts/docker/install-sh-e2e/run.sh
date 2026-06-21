@@ -15,6 +15,38 @@ fi
 # shellcheck source=../install-sh-common/version-parse.sh
 source "$VERIFY_HELPER_PATH"
 
+read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [[ -z "${!name+x}" ]]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf "%s\n" "$((10#$value))"
+}
+
+read_boolean_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [[ -z "${!name+x}" ]]; then
+    value="$fallback"
+  fi
+  case "$value" in
+    0 | 1)
+      printf "%s\n" "$value"
+      ;;
+    *)
+      echo "invalid $name: $value" >&2
+      return 2
+      ;;
+  esac
+}
+
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
 MODELS_MODE="${OPENCLAW_E2E_MODELS:-both}" # both|openai|anthropic
 INSTALL_TAG="${OPENCLAW_INSTALL_TAG:-latest}"
@@ -23,11 +55,11 @@ SKIP_PREVIOUS="${OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS:-0}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
-AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300}"
-AGENT_TURNS_PARALLEL="${OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL:-1}"
-AGENT_TOOL_SMOKE="${OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE:-1}"
+AGENT_TURN_TIMEOUT_SECONDS="$(read_positive_int_env OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS 300)"
+AGENT_TURNS_PARALLEL="$(read_boolean_env OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL 1)"
+AGENT_TOOL_SMOKE="$(read_boolean_env OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE 1)"
 OPENAI_AGENT_MODEL="${OPENCLAW_INSTALL_E2E_OPENAI_MODEL:-openai/gpt-5.5}"
-OPENAI_PROVIDER_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS:-${AGENT_TURN_TIMEOUT_SECONDS}}"
+OPENAI_PROVIDER_TIMEOUT_SECONDS="$(read_positive_int_env OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS")"
 
 time_phase() {
   local name="$1"
@@ -496,9 +528,11 @@ const fs = require("node:fs");
 const jsonl = process.argv[2];
 const required = new Set(process.argv.slice(3));
 
-const raw = fs.readFileSync(jsonl, "utf8");
-const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
 const seen = new Set();
+const head = [];
+let scannedBytes = 0;
+let truncated = false;
+let skippedOversizedLines = 0;
 
 const toolTypes = new Set([
   "tool_use",
@@ -511,10 +545,30 @@ const toolTypes = new Set([
   "toolresult",
   "tool-result",
 ]);
-function walk(node, parent) {
+function readPositiveIntEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    console.error(`${name} must be a positive integer`);
+    process.exit(2);
+  }
+  return Number(raw);
+}
+const maxBytes = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_SCAN_BYTES", 16 * 1024 * 1024);
+const maxLineBytes = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_LINE_BYTES", 1024 * 1024);
+const maxDepth = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_SCAN_DEPTH", 64);
+const maxNodes = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_SCAN_NODES", 100000);
+
+function missingTools() {
+  return [...required].filter((t) => !seen.has(t));
+}
+
+function walk(node, depth, state) {
   if (!node) return;
+  if (depth > maxDepth || state.nodes >= maxNodes) return;
+  state.nodes += 1;
   if (Array.isArray(node)) {
-    for (const item of node) walk(item, node);
+    for (const item of node) walk(item, depth + 1, state);
     return;
   }
   if (typeof node !== "object") return;
@@ -542,26 +596,113 @@ function walk(node, parent) {
     }
   }
   if (obj.function && typeof obj.function.name === "string") seen.add(obj.function.name);
-  for (const v of Object.values(obj)) walk(v, obj);
+  for (const v of Object.values(obj)) walk(v, depth + 1, state);
 }
 
-for (const line of lines) {
+function processLine(lineBuffer) {
+  const line = lineBuffer.toString("utf8").trim();
+  if (!line) return;
+  if (head.length < 5) head.push(line.slice(0, maxLineBytes));
   try {
     const entry = JSON.parse(line);
-    walk(entry, null);
+    walk(entry, 0, { nodes: 0 });
   } catch {
     // ignore unparsable lines
   }
 }
 
-const missing = [...required].filter((t) => !seen.has(t));
-if (missing.length > 0) {
-  console.error(`Missing tools in transcript: ${missing.join(", ")}`);
-  console.error(`Seen tools: ${[...seen].sort().join(", ")}`);
-  console.error("Transcript head:");
-  console.error(lines.slice(0, 5).join("\n"));
-  process.exit(1);
+async function scan() {
+  const stream = fs.createReadStream(jsonl, { highWaterMark: 64 * 1024 });
+  let lineParts = [];
+  let lineBytes = 0;
+  let skippingLine = false;
+
+  function resetLine() {
+    lineParts = [];
+    lineBytes = 0;
+    skippingLine = false;
+  }
+
+  function appendLineChunk(chunk) {
+    if (skippingLine) return;
+    if (lineBytes + chunk.length > maxLineBytes) {
+      skippedOversizedLines += 1;
+      lineParts = [];
+      lineBytes = 0;
+      skippingLine = true;
+      return;
+    }
+    lineParts.push(chunk);
+    lineBytes += chunk.length;
+  }
+
+  function finishLine() {
+    if (!skippingLine && lineBytes > 0) {
+      processLine(Buffer.concat(lineParts, lineBytes));
+    }
+    resetLine();
+  }
+
+  for await (const rawChunk of stream) {
+    let chunk = rawChunk;
+    let stopAfterChunk = false;
+    if (scannedBytes + rawChunk.length > maxBytes) {
+      const remaining = Math.max(0, maxBytes - scannedBytes);
+      chunk = rawChunk.subarray(0, remaining);
+      truncated = true;
+      stopAfterChunk = true;
+    }
+    scannedBytes += chunk.length;
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(10, offset);
+      const end = newline === -1 ? chunk.length : newline;
+      if (end > offset) {
+        appendLineChunk(chunk.subarray(offset, end));
+      }
+      if (newline === -1) {
+        break;
+      }
+      finishLine();
+      if (missingTools().length === 0) {
+        stream.destroy();
+        return;
+      }
+      offset = newline + 1;
+    }
+    if (stopAfterChunk) {
+      stream.destroy();
+      break;
+    }
+  }
+  if (!truncated && lineBytes > 0) {
+    finishLine();
+  }
 }
+
+scan()
+  .then(() => {
+    const missing = missingTools();
+    if (missing.length > 0) {
+      console.error(`Missing tools in transcript: ${missing.join(", ")}`);
+      console.error(`Seen tools: ${[...seen].sort().join(", ")}`);
+      if (truncated) {
+        console.error(`Transcript scan stopped after ${maxBytes} bytes`);
+      }
+      if (skippedOversizedLines > 0) {
+        console.error(`Skipped ${skippedOversizedLines} oversized transcript line(s)`);
+      }
+      console.error("Transcript head:");
+      console.error(head.join("\n"));
+      process.exit(1);
+    }
+  })
+  .catch((error) => {
+    console.error(
+      `Could not scan transcript ${jsonl}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  });
 NODE
 }
 

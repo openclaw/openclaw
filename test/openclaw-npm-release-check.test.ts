@@ -1,3 +1,4 @@
+// OpenClaw npm release check tests validate package release checks.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +22,6 @@ import {
   resolveNpmReleaseCheckCommandTimeoutMs,
   runNpmReleaseCheckCommand,
   shouldSkipPackedTarballValidation,
-  utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
@@ -50,45 +50,42 @@ describe("workspace template package paths", () => {
 });
 
 describe("parseReleaseVersion", () => {
-  it("parses stable CalVer releases", () => {
+  it("parses stable monthly patch releases", () => {
     expect(parseReleaseVersion("2026.3.10")).toStrictEqual({
       version: "2026.3.10",
       baseVersion: "2026.3.10",
       channel: "stable",
       year: 2026,
       month: 3,
-      day: 10,
+      patch: 10,
       alphaNumber: undefined,
       betaNumber: undefined,
-      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
-  it("parses beta CalVer releases", () => {
+  it("parses beta monthly patch releases", () => {
     expect(parseReleaseVersion("2026.3.10-beta.2")).toStrictEqual({
       version: "2026.3.10-beta.2",
       baseVersion: "2026.3.10",
       channel: "beta",
       year: 2026,
       month: 3,
-      day: 10,
+      patch: 10,
       alphaNumber: undefined,
       betaNumber: 2,
-      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
-  it("parses alpha CalVer releases", () => {
+  it("parses alpha monthly patch releases", () => {
     expect(parseReleaseVersion("2026.3.10-alpha.2")).toStrictEqual({
       version: "2026.3.10-alpha.2",
       baseVersion: "2026.3.10",
       channel: "alpha",
       year: 2026,
       month: 3,
-      day: 10,
+      patch: 10,
       alphaNumber: 2,
       betaNumber: undefined,
-      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
@@ -99,19 +96,39 @@ describe("parseReleaseVersion", () => {
       channel: "stable",
       year: 2026,
       month: 3,
-      day: 10,
+      patch: 10,
       alphaNumber: undefined,
       betaNumber: undefined,
-      date: new Date(Date.UTC(2026, 2, 10)),
       correctionNumber: 1,
+    });
+  });
+
+  it("accepts patch numbers that are not calendar days", () => {
+    expect(parseReleaseVersion("2026.2.30")).toMatchObject({
+      version: "2026.2.30",
+      baseVersion: "2026.2.30",
+      channel: "stable",
+      patch: 30,
+    });
+    expect(parseReleaseVersion("2026.6.32-beta.1")).toMatchObject({
+      version: "2026.6.32-beta.1",
+      baseVersion: "2026.6.32",
+      channel: "beta",
+      patch: 32,
+      betaNumber: 1,
     });
   });
 
   it("rejects legacy and malformed release formats", () => {
     expect(parseReleaseVersion("2026.03.09")).toBeNull();
     expect(parseReleaseVersion("v2026.3.10")).toBeNull();
-    expect(parseReleaseVersion("2026.2.30")).toBeNull();
+    expect(parseReleaseVersion("2026.13.1")).toBeNull();
+    expect(parseReleaseVersion("2026.3.0")).toBeNull();
     expect(parseReleaseVersion("2026.3.10-0")).toBeNull();
+    expect(parseReleaseVersion("2026.3.9007199254740993")).toBeNull();
+    expect(parseReleaseVersion("2026.3.10-beta.9007199254740993")).toBeNull();
+    expect(parseReleaseVersion("2026.3.10-alpha.9007199254740993")).toBeNull();
+    expect(parseReleaseVersion("2026.3.10-9007199254740993")).toBeNull();
     expect(parseReleaseVersion("2.0.0-beta2")).toBeNull();
   });
 });
@@ -123,7 +140,6 @@ describe("parseReleaseTagVersion", () => {
       packageVersion: "2026.3.10-2",
       baseVersion: "2026.3.10",
       channel: "stable",
-      date: new Date(Date.UTC(2026, 2, 10)),
       correctionNumber: 2,
     });
   });
@@ -268,15 +284,15 @@ describe("shouldSkipPackedTarballValidation", () => {
 });
 
 describe("compareReleaseVersions", () => {
-  it("treats stable as newer than same-day beta", () => {
+  it("treats stable as newer than same-patch beta", () => {
     expect(compareReleaseVersions("2026.3.29", "2026.3.29-beta.2")).toBe(1);
   });
 
-  it("orders alpha before beta on the same day", () => {
+  it("orders alpha before beta on the same patch", () => {
     expect(compareReleaseVersions("2026.3.29-alpha.2", "2026.3.29-beta.1")).toBe(-1);
   });
 
-  it("treats a newer beta day as newer than an older stable day", () => {
+  it("treats a newer beta patch as newer than an older stable patch", () => {
     expect(compareReleaseVersions("2026.4.1-beta.1", "2026.3.29")).toBe(1);
   });
 
@@ -286,14 +302,6 @@ describe("compareReleaseVersions", () => {
 
   it("returns null when either version is not release-shaped", () => {
     expect(compareReleaseVersions("latest", "2026.3.29")).toBeNull();
-  });
-});
-
-describe("utcCalendarDayDistance", () => {
-  it("compares UTC calendar days rather than wall-clock hours", () => {
-    const left = new Date("2026-03-09T23:59:59Z");
-    const right = new Date("2026-03-11T00:00:01Z");
-    expect(utcCalendarDayDistance(left, right)).toBe(2);
   });
 });
 
@@ -332,6 +340,21 @@ describe("resolveNpmCommandInvocation", () => {
         comSpec: "C:\\Windows\\System32\\cmd.exe",
         npmArgs: ["view", "openclaw@beta", "version"],
         npmExecPath: "",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd view openclaw@beta version"],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("wraps bare Windows npm_execpath through npm.cmd", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["view", "openclaw@beta", "version"],
+        npmExecPath: "npm",
         platform: "win32",
       }),
     ).toEqual({
@@ -567,7 +590,7 @@ describe("collectForbiddenPackedPathErrors", () => {
         "dist/plugin-sdk/qa-channel-protocol.d.ts",
         "dist/qa-runtime-B9LDtssJ.js",
         "docs/channels/qa-channel.md",
-        "qa/scenarios/index.md",
+        "qa/scenarios/index.yaml",
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
@@ -580,7 +603,7 @@ describe("collectForbiddenPackedPathErrors", () => {
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
       'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
-      'npm package must not include private QA suite artifact "qa/scenarios/index.md".',
+      'npm package must not include private QA suite artifact "qa/scenarios/index.yaml".',
     ]);
   });
 
@@ -697,26 +720,55 @@ describe("collectPackedTestCargoErrors", () => {
 });
 
 describe("collectReleaseTagErrors", () => {
-  it("accepts versions within the two-day CalVer window", () => {
+  it("accepts monthly patch versions beyond calendar day ranges", () => {
     expect(
       collectReleaseTagErrors({
-        packageVersion: "2026.3.10",
-        releaseTag: "v2026.3.10",
-        now: new Date("2026-03-11T12:00:00Z"),
+        packageVersion: "2026.3.40",
+        releaseTag: "v2026.3.40",
       }),
     ).toStrictEqual([]);
   });
 
-  it("rejects versions outside the two-day CalVer window", () => {
+  it("rejects malformed monthly patch versions", () => {
     expect(
       collectReleaseTagErrors({
-        packageVersion: "2026.3.10",
-        releaseTag: "v2026.3.10",
-        now: new Date("2026-03-13T00:00:00Z"),
+        packageVersion: "2026.3.0",
+        releaseTag: "v2026.3.0",
       }),
     ).toStrictEqual([
-      "Release version 2026.3.10 is 3 days away from current UTC date 2026-03-13; release CalVer date 2026-03-10 must be within 2 days.",
+      'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "2026.3.0".',
+      'Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-alpha.N, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "v2026.3.0".',
+      "Release tag v2026.3.0 does not match package.json version 2026.3.0; expected v2026.3.0.",
     ]);
+  });
+
+  it("rejects new June 2026 stable and beta trains below the transition floor", () => {
+    expect(
+      collectReleaseTagErrors({
+        packageVersion: "2026.6.4",
+        releaseTag: "v2026.6.4",
+      }),
+    ).toStrictEqual([
+      'June 2026 stable and beta release trains must use patch 5 or higher because 2026.6.5-beta.1 is already published; found "2026.6.4".',
+    ]);
+
+    expect(
+      collectReleaseTagErrors({
+        packageVersion: "2026.6.4-beta.1",
+        releaseTag: "v2026.6.4-beta.1",
+      }),
+    ).toStrictEqual([
+      'June 2026 stable and beta release trains must use patch 5 or higher because 2026.6.5-beta.1 is already published; found "2026.6.4-beta.1".',
+    ]);
+  });
+
+  it("keeps pre-transition June alpha tags parseable for compatibility", () => {
+    expect(
+      collectReleaseTagErrors({
+        packageVersion: "2026.6.4-alpha.1",
+        releaseTag: "v2026.6.4-alpha.1",
+      }),
+    ).toStrictEqual([]);
   });
 
   it("accepts fallback correction tags for stable package versions", () => {

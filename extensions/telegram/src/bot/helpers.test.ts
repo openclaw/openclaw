@@ -1,3 +1,4 @@
+// Telegram tests cover helpers plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTelegramInboundOriginTarget,
@@ -506,6 +507,24 @@ describe("describeReplyTarget", () => {
     expect(result?.kind).toBe("reply");
   });
 
+  it("describes rich-message-only reply targets with a sanitized placeholder", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+
+    expect(result?.body).toBe("[unsupported Telegram rich_message received]");
+    expect(result?.quoteSourceText).toBeUndefined();
+  });
+
   it("drops binary reply captions with no safe fallback", () => {
     const result = describeReplyTarget({
       message_id: 2,
@@ -709,6 +728,23 @@ describe("isBinaryContent", () => {
 });
 
 describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
+  it("keeps rich-message-only updates out of canonical text", () => {
+    const result = getTelegramTextParts({
+      rich_message: { blocks: [{ type: "paragraph" }] },
+    });
+
+    expect(result).toEqual({ text: "", entities: [] });
+  });
+
+  it("keeps normal text when Telegram also supplies a rich message", () => {
+    const result = getTelegramTextParts({
+      text: "normal text",
+      rich_message: { blocks: [{ type: "paragraph" }] },
+    });
+
+    expect(result).toEqual({ text: "normal text", entities: [] });
+  });
+
   it("strips binary caption content to prevent token explosion", () => {
     const binaryCaption = "PK\x03\x04\x14\x00\x08binary-ebook-data";
     const result = getTelegramTextParts({

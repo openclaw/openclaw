@@ -1,3 +1,5 @@
+// Gateway method registry aggregator wires core and plugin RPC descriptors to
+// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -7,7 +9,11 @@ import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
-import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import {
+  ADMIN_SCOPE,
+  authorizeOperatorScopesForMethod,
+  authorizeOperatorScopesForRequiredScope,
+} from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -16,6 +22,7 @@ import {
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
+import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import type {
   GatewayRequestHandler,
@@ -155,6 +162,10 @@ const loadSendHandlers = lazyHandlerModule(
   () => import("./server-methods/send.js"),
   (module) => module.sendHandlers,
 );
+const loadSessionsFilesHandlers = lazyHandlerModule(
+  () => import("./server-methods/sessions-files.js"),
+  (module) => module.sessionsFilesHandlers,
+);
 const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
@@ -220,6 +231,7 @@ function authorizeGatewayMethod(
   method: string,
   client: GatewayRequestOptions["client"],
   params: unknown,
+  methodRegistry: GatewayMethodRegistry,
 ) {
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
@@ -244,7 +256,10 @@ function authorizeGatewayMethod(
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }
-  const scopeAuth = authorizeOperatorScopesForMethod(method, scopes, params);
+  const registeredScope = methodRegistry.getScope(method);
+  const scopeAuth = isOperatorScope(registeredScope)
+    ? authorizeOperatorScopesForRequiredScope(registeredScope, scopes)
+    : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
   }
@@ -573,6 +588,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
     loadHandlers: loadArtifactsHandlers,
   }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.files.list", "sessions.files.get"],
+    loadHandlers: loadSessionsFilesHandlers,
+  }),
 };
 
 /** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
@@ -622,7 +641,7 @@ export async function handleGatewayRequest(
   const { req, respond, client, isWebchatConnect, context } = opts;
   const methodRegistry =
     opts.methodRegistry ?? createRequestGatewayMethodRegistry(opts.extraHandlers);
-  const authError = authorizeGatewayMethod(req.method, client, req.params);
+  const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
     return;

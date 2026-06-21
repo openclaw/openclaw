@@ -1,7 +1,13 @@
+// Child adapter tests cover adapting child processes to supervisor runs.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getWindowsInstallRoots,
+  resetWindowsInstallRootsForTests,
+} from "../../../infra/windows-install-roots.js";
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
@@ -82,6 +88,8 @@ type SpawnWithFallbackParams = {
     detached?: boolean;
     env?: NodeJS.ProcessEnv | Record<string, string>;
     stdio?: string[];
+    windowsHide?: boolean;
+    windowsVerbatimArguments?: boolean;
   };
   fallbacks?: Array<{ options?: { detached?: boolean } }>;
 };
@@ -106,6 +114,10 @@ function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }, label: st
   return call[0];
 }
 
+function expectedTrustedCmdExe(): string {
+  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
+}
+
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -122,6 +134,7 @@ describe("createChildAdapter", () => {
   });
 
   beforeEach(() => {
+    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
@@ -387,6 +400,28 @@ describe("createChildAdapter", () => {
     const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.argv).toEqual(["node", "-e", "process.exit(0)"]);
     expect(spawnArgs.options?.env).toBeUndefined();
+  });
+
+  it("wraps Windows command shims through trusted cmd.exe", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 3335,
+      argv: ["pnpm", "--version"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([
+      expectedTrustedCmdExe(),
+      "/d",
+      "/s",
+      "/c",
+      "pnpm.cmd --version",
+    ]);
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.options?.windowsHide).toBe(true);
+    expect(spawnArgs.options?.windowsVerbatimArguments).toBe(true);
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
 
   it("wraps Linux child spawns and strips shell-init env", async () => {

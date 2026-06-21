@@ -1,3 +1,4 @@
+// OpenAI ChatGPT Responses provider handles ChatGPT-authenticated response streams.
 import type * as NodeOs from "node:os";
 import type {
   Tool as OpenAITool,
@@ -48,7 +49,7 @@ import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.j
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   convertResponsesMessages,
-  convertResponsesTools,
+  convertResponsesToolPayload,
   processResponsesStream,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -507,8 +508,16 @@ function buildRequestBody(
     body.service_tier = options.serviceTier;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    body.tools = convertResponsesTools(context.tools, { strict: null });
+  if (context.tools) {
+    const converted = convertResponsesToolPayload(context.tools, { strict: null });
+    if (converted.projection.inputToolCount > 0 || converted.projection.diagnostics.length > 0) {
+      body.tools = converted.tools;
+      if (body.tools.length === 0) {
+        delete body.tools;
+        delete body.tool_choice;
+        delete body.parallel_tool_calls;
+      }
+    }
   }
 
   if (options?.reasoningEffort !== undefined) {
@@ -826,13 +835,6 @@ function getOrCreateWebSocketDebugStats(sessionId: string): OpenAICodexWebSocket
     websocketDebugStats.set(sessionId, stats);
   }
   return stats;
-}
-
-export function getOpenAICodexWebSocketDebugStats(
-  sessionId: string,
-): OpenAICodexWebSocketDebugStats | undefined {
-  const stats = websocketDebugStats.get(sessionId);
-  return stats ? { ...stats } : undefined;
 }
 
 export function resetOpenAICodexWebSocketDebugStats(sessionId?: string): void {

@@ -1,3 +1,4 @@
+// Memory Host SDK module implements session files behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -214,13 +215,6 @@ function resolveSessionStoreTranscriptPath(
     return normalizeComparablePath(path.join(sessionsDir, `${entry.sessionId.trim()}.jsonl`));
   }
   return null;
-}
-
-export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
-  sessionsDir: string,
-): ReadonlySet<string> {
-  return loadSessionTranscriptClassificationForSessionsDir(sessionsDir)
-    .dreamingNarrativeTranscriptPaths;
 }
 
 export function loadSessionTranscriptClassificationForSessionsDir(
@@ -490,17 +484,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
     return null;
   }
   return normalized;
-}
-
-export function extractSessionText(
-  content: unknown,
-  role: "user" | "assistant" = "assistant",
-): string | null {
-  const rawText = collectRawSessionText(content);
-  if (rawText === null) {
-    return null;
-  }
-  return sanitizeSessionText(rawText, role);
 }
 
 function parseSessionTimestampMs(

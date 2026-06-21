@@ -1,3 +1,4 @@
+// Input file helpers normalize inline, fetched, and local media inputs.
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { detectMime } from "@openclaw/media-core/mime";
@@ -14,17 +15,17 @@ import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
 /** Image payload shape reused for extracted PDF images and normalized input images. */
-export type InputImageContent = PdfExtractedImage;
+type InputImageContent = PdfExtractedImage;
 
 /** Text/images extracted from an input_file source after MIME-specific processing. */
-export type InputFileExtractResult = {
+type InputFileExtractResult = {
   filename: string;
   text?: string;
   images?: InputImageContent[];
 };
 
 /** PDF extraction limits applied before model-visible input_file content is produced. */
-export type InputPdfLimits = {
+type InputPdfLimits = {
   maxPages: number;
   maxPixels: number;
   minTextChars: number;
@@ -81,7 +82,7 @@ export type InputImageSource =
     };
 
 /** Supported input_file source variants before text/PDF extraction. */
-export type InputFileSource =
+type InputFileSource =
   | {
       type: "base64";
       data: string;
@@ -96,7 +97,7 @@ export type InputFileSource =
     };
 
 /** Guarded URL fetch result before final MIME allowlist validation. */
-export type InputFetchResult = {
+type InputFetchResult = {
   buffer: Buffer;
   mimeType: string;
   contentType?: string;

@@ -1,3 +1,4 @@
+// Telegram tests cover bot native commands plugin behavior.
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -700,6 +701,25 @@ describe("registerTelegramNativeCommands", () => {
     const deliverParams = firstDeliverRepliesParams();
     expect(deliverParams.silent).toBe(true);
     expect(replyAt(deliverParams).isError).toBe(true);
+  });
+
+  it("uses rich messages for plugin command replies when enabled", async () => {
+    const { handler } = registerPlugCommand({
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+          },
+        },
+      },
+      registerOverrides: {
+        telegramCfg: { richMessages: true } as TelegramAccountConfig,
+      },
+    });
+
+    await handler(createPrivateCommandContext());
+
+    expect(firstDeliverRepliesParams().richMessages).toBe(true);
   });
 
   it("forwards topic-scoped binding context to Telegram plugin commands", async () => {

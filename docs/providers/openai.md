@@ -101,21 +101,19 @@ explicit runtime config.
   Control UI Talk with `talk.realtime.provider: "openai"`) goes through the
   public **OpenAI Platform Realtime API**, which is billed against OpenAI
   Platform credits rather than Codex/ChatGPT subscription quota. An account
-  with healthy OpenAI OAuth that runs Codex-backed chat models without
-  issue can still hit `insufficient_quota` / "You exceeded your current
-  quota" on the first Realtime turn if the same OpenAI organization has no
-  Platform billing set up.
+  with healthy OpenAI OAuth that runs Codex-backed chat models without issue
+  still needs an OpenAI API-key auth profile or a Platform API key with funded
+  Platform billing for Realtime voice.
 
 Fix: top up Platform credits at
 [platform.openai.com/account/billing](https://platform.openai.com/account/billing)
-for the organization backing your realtime credentials. Realtime accepts
-either a Platform `OPENAI_API_KEY` (configured via `talk.realtime.providers.openai.apiKey`
-for Control UI Talk, or `plugins.entries.voice-call.config.realtime.providers.openai.apiKey`
-for Voice Call) or an `openai` OAuth profile whose underlying
-organization has Platform billing — both routes mint Realtime client secrets
-through the Platform API, so either way the org needs funded Platform
-credits. For chat turns you can still use Codex-backed `openai/*` models against the same
-OpenClaw install; Realtime is the one route that needs Platform billing.
+for the organization backing your realtime credentials. Realtime voice accepts
+the `openai` API-key auth profile created by `openclaw onboard --auth-choice openai-api-key`,
+a Platform `OPENAI_API_KEY` configured via `talk.realtime.providers.openai.apiKey`
+for Control UI Talk, `plugins.entries.voice-call.config.realtime.providers.openai.apiKey`
+for Voice Call, or the `OPENAI_API_KEY` environment variable. OpenAI OAuth
+profiles can still run Codex-backed `openai/*` chat models in the same
+OpenClaw install, but they do not configure Realtime voice.
 </Note>
 
 ## Memory embeddings
@@ -508,6 +506,9 @@ openclaw infer image generate \
 Use the same `--output-format` and `--background` flags with
 `openclaw infer image edit` when starting from an input file.
 `--openai-background` remains available as an OpenAI-specific alias.
+Use `--quality low|medium|high|auto` when you need to control OpenAI Images
+quality and cost. Use `--openai-moderation low|auto` to pass OpenAI's
+provider-specific moderation hint from either `image generate` or `image edit`.
 
 For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
 `openai` OAuth profile is configured, OpenClaw resolves that stored OAuth
@@ -646,7 +647,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     ```
 
     <Note>
-    Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting the chat API endpoint. OpenAI TTS is still configured through an API key; for OAuth-only live talk-back, use the Realtime voice path instead of agent-mode STT -> TTS speech.
+    Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting the chat API endpoint. OpenAI TTS and Realtime voice are both configured through an OpenAI Platform API key; OAuth-only installs can still use Codex-backed chat models, but not OpenAI live talk-back.
     </Note>
 
   </Accordion>
@@ -717,7 +718,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     | Silence duration | `...openai.silenceDurationMs` | `500` |
     | Prefix padding | `...openai.prefixPaddingMs` | `300` |
     | Reasoning effort | `...openai.reasoningEffort` | (unset) |
-    | Auth | `...openai.apiKey`, `OPENAI_API_KEY`, or `openai` OAuth | Browser Talk and non-Azure backend bridges can use OpenAI OAuth |
+    | Auth | `openai` API-key auth profile, `...openai.apiKey`, or `OPENAI_API_KEY` | OpenAI Platform API key required; OpenAI OAuth does not configure Realtime voice |
 
     Available built-in Realtime voices for `gpt-realtime-2`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
@@ -739,10 +740,10 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     <Note>
     Control UI Talk uses OpenAI browser realtime sessions with a Gateway-minted
     ephemeral client secret and a direct browser WebRTC SDP exchange against the
-    OpenAI Realtime API. When no direct OpenAI API key is configured, the
-    Gateway can mint that client secret with the selected `openai` OAuth
-    profile. Gateway relay and Voice Call backend realtime WebSocket bridges use
-    the same OAuth fallback for native OpenAI endpoints. Maintainer live
+    OpenAI Realtime API. The Gateway mints that client secret with the selected
+    `openai` API-key auth profile or configured OpenAI Platform API key. Gateway
+    relay and Voice Call backend realtime WebSocket bridges use the same
+    API-key-only auth path for native OpenAI endpoints. Maintainer live
     verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
     the OpenAI legs verify both the backend WebSocket bridge and the browser
@@ -1042,10 +1043,11 @@ the Server-side compaction accordion below.
     ```
 
     With `strict-agentic`, OpenClaw:
-    - No longer treats a plan-only turn as successful progress when a tool action is available
-    - Retries the turn with an act-now steer
     - Auto-enables `update_plan` for substantial work
-    - Surfaces an explicit blocked state if the model keeps planning without acting
+    - Retries structurally empty or reasoning-only turns with a visible-answer continuation
+    - Uses explicit harness plan events when the selected harness provides them
+
+    OpenClaw does not classify assistant prose to decide whether a turn is a plan, progress update, or final answer.
 
     <Note>
     Scoped to OpenAI and Codex GPT-5-family runs only. Other providers and older model families keep default behavior.

@@ -1,7 +1,7 @@
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
@@ -91,6 +91,8 @@ export type GetReplyOptions = {
   shouldSuppressToolErrorWarnings?: () => boolean | undefined;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
+  /** Runtime tool allow-list for this turn. Empty means no tools. */
+  toolsAllow?: string[];
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
@@ -100,6 +102,16 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
+  allowToolLifecycleWhenProgressHidden?: boolean;
+  /**
+   * Called before dispatch with a live getter for whether verbose standalone
+   * progress messages are active for this run. Channels that render tool or
+   * commentary progress inside an ephemeral streaming draft should yield those
+   * draft lines while the getter returns true, so progress is not rendered in
+   * both lanes at once.
+   */
+  onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
@@ -124,6 +136,7 @@ export type GetReplyOptions = {
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
     itemId?: string;
+    toolCallId?: string;
     kind?: string;
     title?: string;
     name?: string;
@@ -135,6 +148,8 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<void> | void;
+  /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
+  commentaryProgressEnabled?: boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;

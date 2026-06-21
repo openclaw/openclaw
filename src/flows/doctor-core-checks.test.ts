@@ -1,22 +1,18 @@
+// Doctor core checks tests cover core doctor checks and repair hints.
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   CORE_HEALTH_CHECKS,
   createCoreHealthChecks,
-  type CoreHealthCheckDeps,
-  registerCoreHealthChecks,
   resetCoreHealthChecksForTest,
+  type CoreHealthCheckDeps,
 } from "./doctor-core-checks.js";
-import { doctorHealthConversionRules } from "./doctor-health-conversion-plan.js";
-import {
-  clearHealthChecksForTest,
-  listHealthChecks,
-  registerHealthCheck,
-} from "./health-check-registry.js";
+import { clearHealthChecksForTest } from "./health-check-registry.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -43,6 +39,7 @@ function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntr
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
     eligible: false,
+    platformIncompatible: false,
     modelVisible: false,
     userInvocable: true,
     commandVisible: false,
@@ -95,7 +92,7 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
   return check;
 }
 
-describe("registerCoreHealthChecks", () => {
+describe("CORE_HEALTH_CHECKS", () => {
   let tmp: string | undefined;
   let hooksModelCatalogCase: {
     calls: unknown[][];
@@ -129,8 +126,6 @@ describe("registerCoreHealthChecks", () => {
   });
 
   beforeEach(() => {
-    clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
     tmp = undefined;
@@ -142,57 +137,7 @@ describe("registerCoreHealthChecks", () => {
     }
   });
 
-  it("registers the built-in health checks once", () => {
-    registerCoreHealthChecks();
-    registerCoreHealthChecks();
-
-    expect(listHealthChecks().map((check) => check.id)).toEqual(
-      CORE_HEALTH_CHECKS.map((check) => check.id),
-    );
-  });
-
-  it("can retry after a duplicate registration failure is cleared", () => {
-    registerHealthCheck({
-      id: "core/doctor/gateway-config",
-      kind: "core",
-      description: "duplicate",
-      async detect() {
-        return [];
-      },
-    });
-
-    expect(() => registerCoreHealthChecks()).toThrow("health check already registered");
-
-    clearHealthChecksForTest();
-    registerCoreHealthChecks();
-
-    expect(listHealthChecks()).toHaveLength(CORE_HEALTH_CHECKS.length);
-  });
-
-  it("registers only implemented core health targets from the doctor conversion inventory", () => {
-    registerCoreHealthChecks();
-
-    const registeredIds = new Set(listHealthChecks().map((check) => check.id));
-    const coreTargets = new Set<string>(
-      doctorHealthConversionRules.flatMap((rule) =>
-        rule.target.filter((target) => target.startsWith("core/doctor/")),
-      ),
-    );
-    const plannedOnlyTargets = [
-      "core/doctor/auth-profiles/keychain",
-      "core/doctor/session-locks",
-      "core/doctor/gateway-daemon",
-    ];
-
-    for (const id of CORE_HEALTH_CHECKS.map((check) => check.id)) {
-      if (id === "core/doctor/browser-clawd-profile-residue") {
-        continue;
-      }
-      expect(coreTargets.has(id)).toBe(true);
-    }
-    for (const id of plannedOnlyTargets) {
-      expect(registeredIds.has(id)).toBe(false);
-    }
+  it("does not include placeholder health registry entries", () => {
     expect(
       CORE_HEALTH_CHECKS.some((check) =>
         check.description.endsWith("represented in the health registry."),
@@ -379,9 +324,7 @@ describe("registerCoreHealthChecks", () => {
 
   it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
-    const previousToken = process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
-    process.env.OPENCLAW_TEST_GATEWAY_TOKEN = "resolved-test-token";
-    try {
+    await withEnvAsync({ OPENCLAW_TEST_GATEWAY_TOKEN: "resolved-test-token" }, async () => {
       const findings = await check?.detect({
         mode: "lint",
         runtime: { log() {}, error() {}, exit() {} },
@@ -407,64 +350,49 @@ describe("registerCoreHealthChecks", () => {
       });
 
       expect(findings).toEqual([]);
-    } finally {
-      if (previousToken === undefined) {
-        delete process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_TEST_GATEWAY_TOKEN = previousToken;
-      }
-    }
+    });
   });
 
   it("reports unresolved SecretRefs even when OPENCLAW_GATEWAY_TOKEN is set", async () => {
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
-    const previousFallbackToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    const previousRefToken = process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
-    delete process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
-    try {
-      const findings = await check?.detect({
-        mode: "lint",
-        runtime: { log() {}, error() {}, exit() {} },
-        cfg: {
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: {
-                source: "env",
-                provider: "default",
-                id: "OPENCLAW_MISSING_GATEWAY_REF_TOKEN",
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "fallback-token",
+        OPENCLAW_MISSING_GATEWAY_REF_TOKEN: undefined,
+      },
+      async () => {
+        const findings = await check?.detect({
+          mode: "lint",
+          runtime: { log() {}, error() {}, exit() {} },
+          cfg: {
+            gateway: {
+              mode: "local",
+              auth: {
+                mode: "token",
+                token: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_MISSING_GATEWAY_REF_TOKEN",
+                },
+              },
+            },
+            secrets: {
+              providers: {
+                default: { source: "env" },
               },
             },
           },
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-        },
-        cwd: tmp,
-      });
+          cwd: tmp,
+        });
 
-      expect(findings).toContainEqual(
-        expect.objectContaining({
-          checkId: "core/doctor/gateway-auth",
-          message: expect.stringContaining("Gateway token SecretRef could not be resolved:"),
-        }),
-      );
-    } finally {
-      if (previousFallbackToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = previousFallbackToken;
-      }
-      if (previousRefToken === undefined) {
-        delete process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
-      } else {
-        process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN = previousRefToken;
-      }
-    }
+        expect(findings).toContainEqual(
+          expect.objectContaining({
+            checkId: "core/doctor/gateway-auth",
+            message: expect.stringContaining("Gateway token SecretRef could not be resolved:"),
+          }),
+        );
+      },
+    );
   });
 
   it("does not execute or warn for valid exec SecretRefs during default gateway auth lint checks", async () => {
@@ -569,12 +497,9 @@ describe("registerCoreHealthChecks", () => {
       "utf8",
     );
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
-    const previousFallbackToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
 
-    let findings: readonly HealthFinding[] | undefined;
-    try {
-      findings = await check?.detect({
+    const findings = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, async () => {
+      return await check?.detect({
         mode: "lint",
         runtime: { log() {}, error() {}, exit() {} },
         cfg: {
@@ -604,13 +529,7 @@ describe("registerCoreHealthChecks", () => {
         },
         allowExecSecretRefs: true,
       });
-    } finally {
-      if (previousFallbackToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = previousFallbackToken;
-      }
-    }
+    });
 
     expect(findings).toContainEqual(
       expect.objectContaining({

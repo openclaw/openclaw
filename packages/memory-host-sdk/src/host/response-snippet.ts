@@ -1,3 +1,4 @@
+// Memory Host SDK module implements response snippet behavior.
 const DEFAULT_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const DEFAULT_ERROR_BODY_MAX_CHARS = 1_000;
 const DEFAULT_JSON_BODY_MAX_BYTES = 64 * 1024 * 1024;
@@ -7,11 +8,13 @@ const TRUNCATED_SUFFIX = "... [truncated]";
 type ResponseTextSnippetOptions = {
   maxBytes?: number;
   maxChars?: number;
+  signal?: AbortSignal;
 };
 
 type ResponseJsonOptions = {
   maxBytes?: number;
   errorPrefix: string;
+  signal?: AbortSignal;
 };
 
 type ResponsePrefix = {
@@ -27,7 +30,7 @@ export async function readResponseTextSnippet(
 ): Promise<string> {
   const maxBytes = options.maxBytes ?? DEFAULT_ERROR_BODY_MAX_BYTES;
   const maxChars = options.maxChars ?? DEFAULT_ERROR_BODY_MAX_CHARS;
-  const prefix = await readResponsePrefix(res, maxBytes);
+  const prefix = await readResponsePrefix(res, maxBytes, options.signal);
   if (prefix.length === 0) {
     return "";
   }
@@ -55,7 +58,7 @@ export async function readResponseJsonWithLimit(
     throw responseTooLarge(options.errorPrefix, contentLength, maxBytes);
   }
 
-  const text = await readResponseTextWithLimit(res, maxBytes, options.errorPrefix);
+  const text = await readResponseTextWithLimit(res, maxBytes, options.errorPrefix, options.signal);
 
   try {
     return JSON.parse(text);
@@ -64,7 +67,45 @@ export async function readResponseJsonWithLimit(
   }
 }
 
-async function readResponsePrefix(res: Response, maxBytes: number): Promise<ResponsePrefix> {
+function toAbortError(signal: AbortSignal, fallbackMessage: string): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error(fallbackMessage);
+}
+
+async function readChunkWithAbort(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+  fallbackMessage: string,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (!signal) {
+    return await reader.read();
+  }
+  if (signal.aborted) {
+    await reader.cancel().catch(() => undefined);
+    throw toAbortError(signal, fallbackMessage);
+  }
+
+  let removeAbortListener: (() => void) | undefined;
+  const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
+    const onAbort = () => {
+      void reader.cancel().catch(() => undefined);
+      reject(toAbortError(signal, fallbackMessage));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+  });
+
+  try {
+    return await Promise.race([reader.read(), abortPromise]);
+  } finally {
+    removeAbortListener?.();
+  }
+}
+
+async function readResponsePrefix(
+  res: Response,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<ResponsePrefix> {
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
     return { bytes: [], length: 0, truncated: false };
@@ -77,7 +118,11 @@ async function readResponsePrefix(res: Response, maxBytes: number): Promise<Resp
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readChunkWithAbort(
+        reader,
+        signal,
+        "Response snippet body read aborted",
+      );
       if (done) {
         break;
       }
@@ -114,6 +159,7 @@ async function readResponseTextWithLimit(
   res: Response,
   maxBytes: number,
   errorPrefix: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
@@ -126,7 +172,11 @@ async function readResponseTextWithLimit(
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readChunkWithAbort(
+        reader,
+        signal,
+        `${errorPrefix}: response body read aborted`,
+      );
       if (done) {
         break;
       }

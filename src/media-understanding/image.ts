@@ -1,3 +1,5 @@
+// Model-backed image understanding runtime for providers without a native media
+// provider hook.
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
@@ -74,6 +76,8 @@ function removeReasoningInclude(value: unknown): unknown {
 }
 
 function disableReasoningForImageRetryPayload(payload: unknown, model: Model): unknown {
+  // Empty-text image responses can be caused by reasoning-only payloads; retry
+  // with reasoning stripped while preserving provider-specific Responses shape.
   if (!isRecord(payload)) {
     return undefined;
   }
@@ -140,6 +144,8 @@ async function resolveImageRuntime(params: {
   authStore?: ImageDescriptionRequest["authStore"];
   workspaceDir?: string;
 }): Promise<{ apiKey: string; model: Model }> {
+  // Fast static resolution avoids provider runtime hooks during tool discovery;
+  // execution falls back to full model discovery when the static path lacks image metadata.
   const resolvedRef = normalizeModelRef(params.provider, params.model);
   const fastResolved = await resolveModelAsync(
     resolvedRef.provider,
@@ -292,6 +298,7 @@ function shouldPlaceImagePromptInUserContent(model: Model): boolean {
   });
   return (
     capabilities.endpointClass === "openrouter" ||
+    capabilities.endpointClass === "modelstudio-native" ||
     (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
   );
 }
@@ -422,17 +429,39 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   };
 }
 
-function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined, startedAtMs: number) {
+function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined) {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return undefined;
   }
-  return Math.max(1, Math.floor(timeoutMs - (Date.now() - startedAtMs)));
+  return Math.floor(timeoutMs);
+}
+
+function buildImageDescriptionTimeoutError(params: {
+  phase: "setup" | "request";
+  timeoutMs: number;
+  setupDurationMs?: number;
+}): Error {
+  if (params.phase === "setup") {
+    return new Error(
+      `image description setup timed out after ${params.timeoutMs}ms before provider request started`,
+    );
+  }
+  const setupDurationMs =
+    typeof params.setupDurationMs === "number" && Number.isFinite(params.setupDurationMs)
+      ? Math.max(0, Math.floor(params.setupDurationMs))
+      : 0;
+  return new Error(
+    setupDurationMs > 0
+      ? `image description request timed out after ${params.timeoutMs}ms (setup took ${setupDurationMs}ms before provider request started)`
+      : `image description request timed out after ${params.timeoutMs}ms`,
+  );
 }
 
 async function withImageDescriptionTimeout<T>(params: {
   task: Promise<T>;
   timeoutMs: number | undefined;
   controller: AbortController;
+  createTimeoutError: (timeoutMs: number) => Error;
 }): Promise<T> {
   if (params.timeoutMs === undefined) {
     return await params.task;
@@ -444,7 +473,7 @@ async function withImageDescriptionTimeout<T>(params: {
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           params.controller.abort();
-          reject(new Error(`image description timed out after ${params.timeoutMs}ms`));
+          reject(params.createTimeoutError(params.timeoutMs!));
         }, params.timeoutMs);
       }),
     ]);
@@ -462,13 +491,16 @@ async function describeImagesWithModelInternal(
   const prompt = params.prompt ?? "Describe the image.";
   const startedAtMs = Date.now();
   const controller = new AbortController();
+  const configuredTimeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs);
   let apiKey: string;
   let model: Model | undefined;
 
   try {
     const resolved = await withImageDescriptionTimeout({
       controller,
-      timeoutMs: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
+      timeoutMs: configuredTimeoutMs,
+      createTimeoutError: (timeoutMs) =>
+        buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
       task: resolveImageRuntime(params),
     });
     apiKey = resolved.apiKey;
@@ -477,7 +509,13 @@ async function describeImagesWithModelInternal(
     if (!isMinimaxVlmModel(params.provider, params.model) || !isUnknownModelError(err)) {
       throw err;
     }
-    const fallback = await resolveMinimaxVlmFallbackRuntime(params);
+    const fallback = await withImageDescriptionTimeout({
+      controller,
+      timeoutMs: configuredTimeoutMs,
+      createTimeoutError: (timeoutMs) =>
+        buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
+      task: resolveMinimaxVlmFallbackRuntime(params),
+    });
     return await describeImagesWithMinimax({
       apiKey: fallback.apiKey,
       provider: params.provider,
@@ -488,6 +526,8 @@ async function describeImagesWithModelInternal(
       images: params.images,
     });
   }
+
+  const setupDurationMs = Date.now() - startedAtMs;
 
   if (isMinimaxVlmModel(model.provider, model.id)) {
     return await describeImagesWithMinimax({
@@ -515,7 +555,7 @@ async function describeImagesWithModelInternal(
   const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
-    const timeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
+    const timeoutMs = configuredTimeoutMs;
     const headers = buildImageRequestHeaders(model);
     const streamOptions = {
       apiKey,
@@ -531,6 +571,12 @@ async function describeImagesWithModelInternal(
     return await withImageDescriptionTimeout({
       controller,
       timeoutMs,
+      createTimeoutError: (requestTimeoutMs) =>
+        buildImageDescriptionTimeoutError({
+          phase: "request",
+          timeoutMs: requestTimeoutMs,
+          setupDurationMs,
+        }),
       task,
     });
   };

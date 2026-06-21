@@ -1,3 +1,4 @@
+// Command queue serializes and limits process execution for shared command lanes.
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
@@ -68,6 +69,9 @@ type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+  taskTimeoutAbortSignal?: AbortSignal;
+  taskTimeoutAbortGraceMs?: number;
+  taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -276,6 +280,8 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     return await taskPromise;
   }
 
+  const taskTimeoutAbortGraceMs =
+    normalizeTaskTimeoutMs(entry.taskTimeoutAbortGraceMs) ?? taskTimeoutMs;
   const startedAtMs = Date.now();
   const readLastProgressAtMs = () => {
     let value: number | undefined;
@@ -289,20 +295,64 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
       : startedAtMs;
   };
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  let removeReleaseListener: (() => void) | undefined;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    const armTimeout = () => {
+    const rejectForTimeout = () => {
+      timedOut = true;
+      reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+    };
+    const armTimer = (delayMs: number, onTimeout: () => void) => {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      if (delayMs <= 0) {
+        onTimeout();
+        return;
+      }
+      timeoutHandle = setTimeout(onTimeout, delayMs);
+      timeoutHandle.unref?.();
+    };
+    const armProgressTimeout = () => {
       const elapsedMs = Math.max(0, Date.now() - readLastProgressAtMs());
       const remainingMs = taskTimeoutMs - elapsedMs;
       if (remainingMs <= 0) {
-        timedOut = true;
-        reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+        rejectForTimeout();
         return;
       }
-      timeoutHandle = setTimeout(armTimeout, remainingMs);
-      timeoutHandle.unref?.();
+      armTimer(remainingMs, armProgressTimeout);
     };
-    armTimeout();
+    const armAbortTimeout = () => {
+      armTimer(taskTimeoutAbortGraceMs, rejectForTimeout);
+    };
+    const abortSignal = entry.taskTimeoutAbortSignal;
+    const releaseSignal = entry.taskTimeoutReleaseSignal;
+    const onRelease = () => {
+      removeReleaseListener?.();
+      rejectForTimeout();
+    };
+    if (releaseSignal?.aborted) {
+      onRelease();
+      return;
+    }
+    if (abortSignal?.aborted) {
+      armAbortTimeout();
+      return;
+    }
+    armProgressTimeout();
+    if (abortSignal) {
+      const onAbort = () => {
+        removeAbortListener?.();
+        armAbortTimeout();
+      };
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+    }
+    if (releaseSignal) {
+      releaseSignal.addEventListener("abort", onRelease, { once: true });
+      removeReleaseListener = () => releaseSignal.removeEventListener("abort", onRelease);
+    }
   });
 
   try {
@@ -317,9 +367,11 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     }
     throw err;
   } finally {
-    if (!timedOut && timeoutHandle) {
+    if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
+    removeAbortListener?.();
+    removeReleaseListener?.();
   }
 }
 
@@ -444,6 +496,9 @@ export function enqueueCommandInLane<T>(
       activeAheadAtEnqueue: 0,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
+      taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
+      taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
+      taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
@@ -481,6 +536,15 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
     };
   }
   return createCommandLaneSnapshot(state);
+}
+
+/**
+ * Active task ids for a lane. Ids are process-monotonic, so recovery can
+ * detect a turn that started after a point in time it captured earlier.
+ */
+export function getCommandLaneActiveTaskIds(lane: string = CommandLane.Main): number[] {
+  const state = getQueueState().lanes.get(normalizeLane(lane));
+  return state ? [...state.activeTaskIds] : [];
 }
 
 export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {

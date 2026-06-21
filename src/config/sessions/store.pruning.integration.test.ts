@@ -1,3 +1,4 @@
+// Session store pruning integration tests cover filesystem-backed pruning.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -21,7 +22,6 @@ import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintena
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
-  runQuotaSuspensionMaintenance,
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -889,57 +889,6 @@ describe("Integration: saveSessionStore with pruning", () => {
     } finally {
       unregister();
     }
-  });
-
-  it("persists quota suspension TTL transitions through writer maintenance", async () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      suspended: {
-        ...makeEntry(now),
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now - 30_000,
-          expectedResumeBy: now - 1,
-          state: "suspended",
-          reason: "quota_exhausted",
-          failedProvider: "anthropic",
-          failedModel: "claude-opus-4-6",
-          laneId: "main",
-        },
-      },
-      active: {
-        ...makeEntry(now),
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now - 61_000,
-          expectedResumeBy: now - 31_000,
-          state: "active",
-          reason: "circuit_open",
-          failedProvider: "anthropic",
-          failedModel: "claude-opus-4-6",
-          laneId: "main",
-        },
-      },
-    };
-    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
-
-    const result = await runQuotaSuspensionMaintenance({
-      storePath,
-      now,
-      ttlMs: 30_000,
-      log: false,
-    });
-
-    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
-    const loaded = loadSessionStore(storePath, { skipCache: true });
-    expect(loaded.suspended?.quotaSuspension?.state).toBe("resuming");
-    expect(loaded.active?.quotaSuspension).toBeUndefined();
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
-    expect(persisted.suspended?.quotaSuspension?.state).toBe("resuming");
-    expect(persisted.active?.quotaSuspension).toBeUndefined();
   });
 
   it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {

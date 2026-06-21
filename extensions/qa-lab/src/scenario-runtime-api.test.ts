@@ -1,3 +1,4 @@
+// Qa Lab tests cover scenario runtime api plugin behavior.
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -138,7 +139,7 @@ describe("createQaScenarioRuntimeApi", () => {
       surface: "test",
       objective: "test",
       successCriteria: ["works"],
-      sourcePath: "qa/scenarios/generic-flow.md",
+      sourcePath: "qa/scenarios/generic-flow.yaml",
       execution: {
         kind: "flow" as const,
         config: { expected: "value" },

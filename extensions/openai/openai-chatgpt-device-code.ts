@@ -1,7 +1,9 @@
+// Openai plugin module implements openai chatgpt device code behavior.
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
 import { trimNonEmptyString } from "./openai-chatgpt-shared.js";
 
@@ -11,6 +13,8 @@ const OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS = 15 * 60_000;
 const OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5_000;
 const OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS = 1_000;
 const OPENAI_CODEX_DEVICE_CALLBACK_URL = `${OPENAI_AUTH_BASE_URL}/deviceauth/callback`;
+const OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const OPENAI_CODEX_DEVICE_JSON_BODY_LIMIT_BYTES = 256 * 1024;
 
 function resolveOpenAICodexDeviceCodeHeaders(contentType: string): Record<string, string> {
   const version = process.env.OPENCLAW_VERSION?.trim();
@@ -119,6 +123,15 @@ function formatDeviceCodeError(params: {
     : `${params.prefix}: HTTP ${params.status}`;
 }
 
+async function readOpenAICodexDeviceBody(response: Response): Promise<string> {
+  return await readResponseTextLimited(
+    response,
+    response.ok
+      ? OPENAI_CODEX_DEVICE_JSON_BODY_LIMIT_BYTES
+      : OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES,
+  );
+}
+
 async function requestOpenAICodexDeviceCode(fetchFn: typeof fetch): Promise<RequestedDeviceCode> {
   const response = await fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/usercode`, {
     method: "POST",
@@ -128,7 +141,7 @@ async function requestOpenAICodexDeviceCode(fetchFn: typeof fetch): Promise<Requ
     }),
   });
 
-  const bodyText = await response.text();
+  const bodyText = await readOpenAICodexDeviceBody(response);
   if (!response.ok) {
     if (response.status === 404) {
       throw new Error(
@@ -179,7 +192,7 @@ async function pollOpenAICodexDeviceCode(params: {
       }),
     });
 
-    const bodyText = await response.text();
+    const bodyText = await readOpenAICodexDeviceBody(response);
     if (response.ok) {
       const body = parseJsonObject(bodyText) as DeviceCodeTokenPayload | null;
       const authorizationCode = trimNonEmptyString(body?.authorization_code);
@@ -229,7 +242,7 @@ async function exchangeOpenAICodexDeviceCode(params: {
     }),
   });
 
-  const bodyText = await response.text();
+  const bodyText = await readOpenAICodexDeviceBody(response);
   if (!response.ok) {
     throw new Error(
       formatDeviceCodeError({

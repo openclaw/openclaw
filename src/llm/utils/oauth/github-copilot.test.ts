@@ -1,3 +1,4 @@
+// GitHub Copilot OAuth tests cover device flow polling and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { refreshGitHubCopilotToken, testing } from "./github-copilot.js";
@@ -164,5 +165,19 @@ describe("GitHub Copilot OAuth model policy", () => {
         timeoutMs: 5,
       }),
     ).resolves.toBe(false);
+  });
+
+  it("cancels model enablement response bodies", async () => {
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, body: { cancel } }) as unknown as Response),
+    );
+
+    await expect(
+      testing.enableGitHubCopilotModel("copilot-token", "claude-sonnet-4.6"),
+    ).resolves.toBe(true);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 });

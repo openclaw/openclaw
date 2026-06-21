@@ -1,5 +1,6 @@
+// Mock server for minimal OpenAI web-search E2E scenarios.
 import http from "node:http";
-import { readPositiveIntEnv } from "../env-limits.mjs";
+import { readTcpPortEnv } from "../env-limits.mjs";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -9,7 +10,7 @@ import {
   writeSse,
 } from "../mock-openai-http.mjs";
 
-const port = readPositiveIntEnv("MOCK_PORT");
+const port = readTcpPortEnv("MOCK_PORT");
 const requestLog = process.env.MOCK_REQUEST_LOG;
 const successMarker = process.env.SUCCESS_MARKER;
 const rawSchemaError = process.env.RAW_SCHEMA_ERROR;

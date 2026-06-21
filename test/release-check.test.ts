@@ -1,6 +1,7 @@
+// Release check tests cover release validation script behavior.
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, win32 } from "node:path";
+import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
@@ -32,6 +33,7 @@ import {
   PACKED_CLI_SMOKE_COMMANDS,
   PACKED_COMPLETION_SMOKE_ARGS,
   packageNameFromSpecifier,
+  resolvePackedTarballPath,
   resolveReleaseNpmCommand,
   resolveMissingPackBuildHint,
   runReleaseCheckCommand,
@@ -41,6 +43,7 @@ import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../src/infra/package-dist-inventory.ts";
+import { withEnv } from "../src/test-utils/env.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
@@ -51,24 +54,7 @@ function makePackResult(filename: string, unpackedSize: number) {
 }
 
 function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
-  const previous = new Map<string, string | undefined>();
-  for (const key of Object.keys(env)) {
-    previous.set(key, process.env[key]);
-  }
-  for (const [key, value] of Object.entries(env)) {
-    process.env[key] = value;
-  }
-  try {
-    return callback();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  return withEnv(env, callback);
 }
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
@@ -94,6 +80,14 @@ describe("collectAppcastSparkleVersionErrors", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
     expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
+  });
+
+  it("rejects appcast entries with invalid prerelease lanes", () => {
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.0", "2606000500")}</channel></rss>`;
+
+    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([
+      "appcast item '2026.6.5-beta.0' has invalid sparkle:shortVersionString '2026.6.5-beta.0'.",
+    ]);
   });
 });
 
@@ -582,7 +576,7 @@ describe("collectForbiddenPackPaths", () => {
         "dist/plugin-sdk/qa-runtime.js",
         "dist/qa-runtime-B9LDtssJ.js",
         "docs/channels/qa-channel.md",
-        "qa/scenarios/index.md",
+        "qa/scenarios/index.yaml",
       ]),
     ).toEqual([
       "dist/extensions/qa-channel/runtime-api.js",
@@ -595,7 +589,7 @@ describe("collectForbiddenPackPaths", () => {
       "dist/plugin-sdk/qa-runtime.js",
       "dist/qa-runtime-B9LDtssJ.js",
       "docs/channels/qa-channel.md",
-      "qa/scenarios/index.md",
+      "qa/scenarios/index.yaml",
     ]);
   });
 
@@ -882,6 +876,32 @@ describe("collectPackUnpackedSizeErrors", () => {
     ).toEqual([
       "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
     ]);
+  });
+});
+
+describe("resolvePackedTarballPath", () => {
+  it("resolves one local npm pack tarball filename inside the pack destination", () => {
+    expect(
+      resolvePackedTarballPath("/tmp/openclaw-pack", [{ filename: "openclaw-2026.6.17.tgz" }]),
+    ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
+  });
+
+  it("rejects path-like npm pack tarball filenames", () => {
+    const unsafeFilenames = [
+      "../openclaw.tgz",
+      "nested/openclaw.tgz",
+      "nested\\openclaw.tgz",
+      "/tmp/openclaw.tgz",
+      "C:\\temp\\openclaw.tgz",
+      "openclaw\u0000.tgz",
+      "openclaw.tar.gz",
+    ];
+
+    for (const filename of unsafeFilenames) {
+      expect(() => resolvePackedTarballPath("/tmp/openclaw-pack", [{ filename }])).toThrow(
+        "release-check: npm pack reported unsafe tarball filename",
+      );
+    }
   });
 });
 

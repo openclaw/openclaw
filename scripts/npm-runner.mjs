@@ -1,3 +1,4 @@
+// Resolves npm commands from the active Node toolchain, especially on Windows.
 import fs from "node:fs";
 import path from "node:path";
 import { buildCmdExeCommandLine, resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
@@ -10,10 +11,7 @@ function resolveToolchainNpmRunner(params) {
   const npmCliPath = npmCliCandidates.find((candidate) => params.existsSync(candidate));
   if (npmCliPath) {
     return {
-      command:
-        params.platform === "win32"
-          ? params.pathImpl.join(params.nodeDir, "node.exe")
-          : params.pathImpl.join(params.nodeDir, "node"),
+      command: params.execPath,
       args: [npmCliPath, ...params.npmArgs],
       shell: false,
     };
@@ -41,6 +39,9 @@ function resolveToolchainNpmRunner(params) {
   return null;
 }
 
+/**
+ * Resolves a toolchain-local npm invocation for the current platform.
+ */
 export function resolveNpmRunner(params = {}) {
   const execPath = params.execPath ?? process.execPath;
   const npmArgs = params.npmArgs ?? [];
@@ -53,6 +54,7 @@ export function resolveNpmRunner(params = {}) {
   const npmToolchain = resolveToolchainNpmRunner({
     comSpec,
     existsSync,
+    execPath,
     nodeDir,
     npmArgs,
     pathImpl,

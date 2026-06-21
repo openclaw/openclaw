@@ -1,7 +1,9 @@
+// Cron tool schema tests cover the provider-facing parameter shape and runtime
+// validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "../agent-tools.schema.js";
-import { createCronToolSchema, CronToolSchema } from "./cron-tool.js";
+import { createCronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
 function keysAt(schema: Record<string, unknown>, path: string): string[] {
@@ -26,7 +28,7 @@ function propertyAt(
   return cursor;
 }
 
-describe("CronToolSchema", () => {
+describe("createCronToolSchema", () => {
   const schemaRecord = createCronToolSchema() as unknown as Record<string, unknown>;
   const providerSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
     modelProvider: "gemini",
@@ -110,6 +112,8 @@ describe("CronToolSchema", () => {
   });
 
   it("describes cron expressions as local wall-clock time in the supplied timezone", () => {
+    // Cron expressions are interpreted by the gateway scheduler; model-facing
+    // docs must not encourage UTC conversion by the agent.
     const jobExpr = propertyAt(schemaRecord, "job.schedule.expr");
     const patchExpr = propertyAt(schemaRecord, "patch.schedule.expr");
     const jobTz = propertyAt(schemaRecord, "job.schedule.tz");
@@ -204,7 +208,7 @@ describe("CronToolSchema", () => {
 
   it("accepts nullable cron patch clears in the runtime schema", () => {
     expect(
-      Value.Check(CronToolSchema, {
+      Value.Check(createCronToolSchema(), {
         action: "update",
         jobId: "job-1",
         patch: {
@@ -246,6 +250,8 @@ describe("CronToolSchema", () => {
     // unions so OpenAPI 3.0 subset validators accept them.
     expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
     expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
+    expect(patchProps?.payload?.properties?.model?.type).toBe("string");
+    expect(patchProps?.payload?.properties?.model?.description).toMatch(/null to clear/i);
   });
 
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the

@@ -1,3 +1,4 @@
+// Telegram plugin module implements reasoning lane coordinator behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -11,12 +12,15 @@ const REASONING_TAG_PREFIXES = [
   "<thinking",
   "<thought",
   "<antthinking",
+  "<mm:think",
   "</think",
   "</thinking",
   "</thought",
   "</antthinking",
+  "</mm:think",
 ];
-const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_TAG_RE =
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
 function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   if (!text) {

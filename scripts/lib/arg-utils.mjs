@@ -1,12 +1,5 @@
-export function readEnvNumber(name, env = process.env) {
-  const raw = env[name]?.trim();
-  if (!raw) {
-    return null;
-  }
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
+// Shared argument parsing helpers for repository scripts.
+/** Read a flag value from `--flag value` or `--flag=value` arguments. */
 export function readFlagValue(args, name) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -20,6 +13,7 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 
+/** Remove the leading `--` separator inserted by package-manager script invocations. */
 export function stripLeadingPackageManagerSeparator(argv) {
   return argv[0] === "--" ? argv.slice(1) : argv;
 }
@@ -110,7 +104,7 @@ function readFlagOptionValue(argv, index, flag) {
     return null;
   }
   const value = argv[index + 1];
-  if (!value) {
+  if (!value || value.startsWith("--")) {
     throw new Error(`${flag} requires a value`);
   }
   return { nextIndex: index + 1, value };
@@ -140,6 +134,7 @@ function parseFloatFlagValue(raw, flag) {
   return parsed;
 }
 
+/** Create a flag spec that assigns one string value to the parsed args object. */
 export function stringFlag(flag, key, options = {}) {
   return {
     consume(argv, index) {
@@ -157,6 +152,7 @@ export function stringFlag(flag, key, options = {}) {
   };
 }
 
+/** Create a flag spec that appends repeated string values to an array field. */
 export function stringListFlag(flag, key, options = {}) {
   return {
     consume(argv, index) {
@@ -192,6 +188,7 @@ function createAssignedValueFlag(consumeOption) {
   };
 }
 
+/** Create a flag spec that parses and assigns a safe integer value. */
 export function intFlag(flag, key, options) {
   return createAssignedValueFlag((argv, index) => {
     const option = consumeIntFlag(argv, index, flag, options);
@@ -199,6 +196,7 @@ export function intFlag(flag, key, options) {
   });
 }
 
+/** Create a flag spec that parses and assigns a finite floating-point value. */
 export function floatFlag(flag, key, options) {
   return createAssignedValueFlag((argv, index) => {
     const option = consumeFloatFlag(argv, index, flag, options);
@@ -206,6 +204,7 @@ export function floatFlag(flag, key, options) {
   });
 }
 
+/** Create a flag spec that assigns a fixed boolean-like value when present. */
 export function booleanFlag(flag, key, value = true) {
   return {
     consume(argv, index) {
@@ -222,6 +221,7 @@ export function booleanFlag(flag, key, value = true) {
   };
 }
 
+/** Apply flag specs to argv and return the mutated parsed args object. */
 export function parseFlagArgs(argv, args, specs, options = {}) {
   const ignoreDoubleDash = options.ignoreDoubleDash ?? true;
   for (let i = 0; i < argv.length; i += 1) {

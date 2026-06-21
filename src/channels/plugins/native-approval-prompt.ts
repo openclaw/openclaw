@@ -13,6 +13,7 @@ const NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY_NORMALIZED = "nativeapprovals";
 
 const KNOWN_NATIVE_APPROVAL_PROMPT_CHANNELS = new Set([
   "discord",
+  "googlechat",
   "matrix",
   "qqbot",
   "slack",

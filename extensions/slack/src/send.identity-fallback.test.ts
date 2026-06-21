@@ -1,6 +1,7 @@
+// Slack tests cover send.identity fallback plugin behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),
@@ -8,7 +9,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   shouldLogVerbose: () => false,
 }));
 
-installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 

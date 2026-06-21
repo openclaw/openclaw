@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite planning plugin behavior.
 import { lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,10 +13,20 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
-  selectQaSuiteScenarios,
+  selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+
+function makePlaywrightQaSuiteTestScenario(id: string): ReturnType<typeof makeQaSuiteTestScenario> {
+  return {
+    ...makeQaSuiteTestScenario(id),
+    execution: {
+      kind: "playwright",
+      path: `ui/src/ui/e2e/${id}.e2e.test.ts`,
+    },
+  };
+}
 
 describe("qa suite planning helpers", () => {
   it("normalizes suite concurrency to a bounded integer", () => {
@@ -204,7 +215,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["anthropic-only"],
         providerMode: "live-frontier",
@@ -221,7 +232,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["third", "first"],
         providerMode: "live-frontier",
@@ -319,10 +330,15 @@ describe("qa suite planning helpers", () => {
         plugins: ["browser"],
         gatewayRuntime: { forwardHostHome: true },
       }),
+      makeQaSuiteTestScenario("otel-stdout", {
+        plugins: ["diagnostics-otel"],
+        gatewayRuntime: { preserveDebugArtifacts: true },
+      }),
     ];
 
     expect(collectQaSuiteGatewayRuntimeOptions(scenarios)).toEqual({
       forwardHostHome: true,
+      preserveDebugArtifacts: true,
     });
   });
 
@@ -392,7 +408,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.5",
@@ -400,13 +416,46 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "openai-only"]);
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
         primaryModel: "claude-cli/claude-sonnet-4-6",
         claudeCliAuthMode: "subscription",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "claude-subscription"]);
+  });
+
+  it("keeps Playwright scenarios out of implicit flow suite selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("flow"),
+      makePlaywrightQaSuiteTestScenario("playwright"),
+    ];
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["flow"]);
+  });
+
+  it("rejects explicit Playwright scenarios in the flow suite selector", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("flow"),
+      makePlaywrightQaSuiteTestScenario("playwright"),
+    ];
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["playwright"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }),
+    ).toThrow(
+      "flow execution requires execution.kind: flow; unsupported scenario(s): playwright (playwright)",
+    );
   });
 
   it("filters provider-mode-specific scenarios from implicit suite selections", () => {
@@ -421,7 +470,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
@@ -429,7 +478,7 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "mock-only"]);
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.5",
@@ -446,7 +495,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
@@ -454,7 +503,7 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic"]);
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["live-runtime"],
         providerMode: "mock-openai",

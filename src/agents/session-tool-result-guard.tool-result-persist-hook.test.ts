@@ -1,3 +1,4 @@
+// Verifies persisted tool results are redacted/capped and can be transformed by hooks.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,7 @@ const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 let tempDirs: string[] = [];
 
 function writeTempPlugin(params: { dir: string; id: string; body: string }): string {
+  // Temp plugin manifests allow testing real hook loading without bundled plugins.
   const pluginDir = path.join(params.dir, params.id);
   fs.mkdirSync(pluginDir, { recursive: true });
   const file = path.join(pluginDir, `${params.id}.mjs`);
@@ -99,6 +101,7 @@ function expectPersistedToolResultTextCapped(sm: ReturnType<typeof SessionManage
 }
 
 function expectPersistedToolResultDetailsCapped(sm: ReturnType<typeof SessionManager.inMemory>) {
+  // Large details are summarized before persistence to keep transcript files bounded.
   const toolResult = requirePersistedToolResult(sm);
   const details = toolResult.details as Record<string, unknown>;
   expect(details.persistedDetailsTruncated).toBe(true);
@@ -137,6 +140,38 @@ describe("tool_result_persist hook", () => {
     expect(toolResult.details.originalDetailKeys).toEqual(["big"]);
     expect(typeof toolResult.details.originalDetailsBytesAtLeast).toBe("number");
     expect(toolResult.details.originalDetailsBytesAtLeast).toBeGreaterThan(8_192);
+  });
+
+  it("preserves result state values when capping oversized details", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+    } as AgentMessage);
+    appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      isError: false,
+      content: [{ type: "text", text: "visible output stays small" }],
+      details: {
+        success: true,
+        disabled: false,
+        unavailable: false,
+        error: null,
+        payload: "x".repeat(10_000),
+      },
+    } as any);
+
+    const details = requirePersistedToolResult(sm).details;
+    expect(details.persistedDetailsTruncated).toBe(true);
+    expect(details.success).toBe(true);
+    expect(details.disabled).toBe(false);
+    expect(details.unavailable).toBe(false);
+    expect(details.error).toBeUndefined();
   });
 
   it("redacts small toolResult details before persistence", () => {
@@ -604,6 +639,8 @@ describe("tool_result_persist hook", () => {
       details: {
         status: "completed".repeat(250),
         sessionId: "exec-oversized",
+        success: false,
+        error: "upstream unavailable",
         cwd: "/tmp/very-long-working-directory".repeat(250),
         name: "noisy process".repeat(250),
         fullOutputPath: "/tmp/output.log".repeat(250),
@@ -628,6 +665,8 @@ describe("tool_result_persist hook", () => {
     expect(details.finalDetailsTruncated).toBe(true);
     expect(details.aggregated).toBeUndefined();
     expect(details.tail).toBeUndefined();
+    expect(details.success).toBe(false);
+    expect(details.error).toBe("upstream unavailable");
     expect(Buffer.byteLength(JSON.stringify(details), "utf-8")).toBeLessThan(8_192);
   });
 

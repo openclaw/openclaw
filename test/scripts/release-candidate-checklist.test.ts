@@ -1,17 +1,111 @@
+// Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishCommand,
+  candidateParallelsArgs,
+  candidateParallelsShellCommand,
   githubApi,
   parseArgs,
   parseRunIdFromDispatchOutput,
   resolveArtifactName,
+  requireRunIdFromDispatchOutput,
+  validateFullManifest,
+  validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
+function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(body), init);
+}
+
 describe("release candidate checklist", () => {
+  it("infers validation profiles from candidate tags", () => {
+    expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
+    expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
+      "stable",
+    );
+    expect(
+      parseArgs([
+        "--tag",
+        "v2026.5.14",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--release-profile",
+        "full",
+      ]).releaseProfile,
+    ).toBe("full");
+  });
+
+  it("runs Parallels against the exact prepared candidate tarball", () => {
+    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz")).toEqual([
+      "test:parallels:npm-update",
+      "--",
+      "--target-tarball",
+      ".artifacts/preflight/openclaw.tgz",
+      "--json",
+    ]);
+    expect(
+      candidateParallelsShellCommand(
+        ".artifacts/preflight/openclaw candidate.tgz",
+        "/opt/homebrew/bin/gtimeout",
+      ),
+    ).toContain(
+      "set -a; source \"$HOME/.profile\" >/dev/null 2>&1 || true; set +a; exec '/opt/homebrew/bin/gtimeout' --foreground 150m pnpm",
+    );
+    expect(
+      candidateParallelsShellCommand(
+        ".artifacts/preflight/openclaw candidate.tgz",
+        "/opt/homebrew/bin/gtimeout",
+      ),
+    ).toContain("'--target-tarball' '.artifacts/preflight/openclaw candidate.tgz'");
+  });
+
   it("requires run ids when dispatch is disabled", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
       "--skip-dispatch requires --full-release-run and --npm-preflight-run",
     );
+  });
+
+  it("requires stable validation evidence to include soak and blocking performance", () => {
+    const stableManifest = {
+      workflowName: "Full Release Validation",
+      targetSha: "candidate-sha",
+      releaseProfile: "stable",
+      rerunGroup: "all",
+      runReleaseSoak: "true",
+      controls: { performanceBlocking: true },
+    };
+
+    expect(() =>
+      validateFullManifest(stableManifest, {
+        targetSha: "candidate-sha",
+        releaseProfile: "stable",
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateFullManifest(
+        {
+          ...stableManifest,
+          runReleaseSoak: "false",
+        },
+        {
+          targetSha: "candidate-sha",
+          releaseProfile: "stable",
+        },
+      ),
+    ).toThrow("runReleaseSoak=true");
+    expect(() =>
+      validateFullManifest(
+        {
+          ...stableManifest,
+          controls: { performanceBlocking: false },
+        },
+        {
+          targetSha: "candidate-sha",
+          releaseProfile: "stable",
+        },
+      ),
+    ).toThrow("blocking product performance");
   });
 
   it("stops parsing options after the argument terminator", () => {
@@ -68,6 +162,137 @@ describe("release candidate checklist", () => {
     expect(buildPublishCommand(options)).toContain("'preflight_run_id=222'");
     expect(buildPublishCommand(options)).toContain("'tag=v2026.5.14-beta.3'");
     expect(buildPublishCommand(options)).toContain("'plugin_publish_scope=all-publishable'");
+    expect(buildPublishCommand(options)).not.toContain("windows_node_tag=");
+  });
+
+  it("requires and carries an exact Windows Node tag for stable release candidates", () => {
+    expect(() => parseArgs(["--tag", "v2026.5.14"])).toThrow(
+      "stable release candidates require --windows-node-tag",
+    );
+    expect(() => parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "latest"])).toThrow(
+      "--windows-node-tag must be an explicit version tag, not latest",
+    );
+
+    const options = {
+      ...parseArgs([
+        "--tag",
+        "v2026.5.14",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--workflow-ref",
+        "release/2026.5.14",
+      ]),
+      workflowRef: "release/2026.5.14",
+      windowsNodeInstallerDigests: JSON.stringify({
+        "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
+        "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
+      }),
+    };
+
+    expect(buildPublishCommand(options)).toContain("'windows_node_tag=v0.6.3'");
+    expect(buildPublishCommand(options)).toContain(
+      `'windows_node_installer_digests={"OpenClawCompanion-Setup-x64.exe":"sha256:${"a".repeat(64)}","OpenClawCompanion-Setup-arm64.exe":"sha256:${"b".repeat(64)}"}'`,
+    );
+  });
+
+  it("validates the stable Windows source release and immutable installer digests", async () => {
+    const assets = [
+      {
+        name: "OpenClawCompanion-Setup-x64.exe",
+        digest: `sha256:${"a".repeat(64)}`,
+      },
+      {
+        name: "OpenClawCompanion-Setup-arm64.exe",
+        digest: `sha256:${"b".repeat(64)}`,
+      },
+    ];
+    const fetchImpl = vi.fn(async () => {
+      return jsonResponse({
+        tag_name: "v0.6.3",
+        draft: false,
+        prerelease: false,
+        html_url: "https://github.com/openclaw/openclaw-windows-node/releases/tag/v0.6.3",
+        assets,
+      });
+    });
+
+    await expect(
+      validateWindowsSourceRelease("v0.6.3", {
+        fetchImpl,
+        timeoutMs: 1234,
+        token: "test-token",
+      }),
+    ).resolves.toEqual({
+      tag: "v0.6.3",
+      url: "https://github.com/openclaw/openclaw-windows-node/releases/tag/v0.6.3",
+      assets,
+    });
+  });
+
+  it.each([
+    [{ draft: true }, "must be published"],
+    [{ prerelease: true }, "must not be a prerelease"],
+    [{ tag_name: "v0.6.4" }, "Windows source release tag mismatch: expected v0.6.3, got v0.6.4"],
+    [
+      { assets: [] },
+      "must contain exactly one required asset OpenClawCompanion-Setup-x64.exe; found 0",
+    ],
+    [
+      {
+        assets: [
+          {
+            name: "OpenClawCompanion-Setup-x64.exe",
+            digest: `sha256:${"a".repeat(64)}`,
+          },
+          {
+            name: "OpenClawCompanion-Setup-x64.exe",
+            digest: `sha256:${"c".repeat(64)}`,
+          },
+          {
+            name: "OpenClawCompanion-Setup-arm64.exe",
+            digest: `sha256:${"b".repeat(64)}`,
+          },
+        ],
+      },
+      "must contain exactly one required asset OpenClawCompanion-Setup-x64.exe; found 2",
+    ],
+    [
+      {
+        assets: [
+          { name: "OpenClawCompanion-Setup-x64.exe", digest: "" },
+          { name: "OpenClawCompanion-Setup-arm64.exe", digest: `sha256:${"b".repeat(64)}` },
+        ],
+      },
+      "asset OpenClawCompanion-Setup-x64.exe is missing its SHA-256 digest",
+    ],
+  ])("rejects an invalid stable Windows source release", async (override, message) => {
+    const fetchImpl = vi.fn(async () => {
+      return jsonResponse({
+        tag_name: "v0.6.3",
+        draft: false,
+        prerelease: false,
+        html_url: "https://github.com/openclaw/openclaw-windows-node/releases/tag/v0.6.3",
+        assets: [
+          {
+            name: "OpenClawCompanion-Setup-x64.exe",
+            digest: `sha256:${"a".repeat(64)}`,
+          },
+          {
+            name: "OpenClawCompanion-Setup-arm64.exe",
+            digest: `sha256:${"b".repeat(64)}`,
+          },
+        ],
+        ...override,
+      });
+    });
+
+    await expect(
+      validateWindowsSourceRelease("v0.6.3", {
+        fetchImpl,
+        timeoutMs: 1234,
+        token: "test-token",
+      }),
+    ).rejects.toThrow(message);
   });
 
   it("carries the Telegram proof run into the publish command when available", () => {
@@ -117,6 +342,15 @@ describe("release candidate checklist", () => {
     ).toBe("25922042055");
   });
 
+  it("fails closed when gh dispatch output does not include the run url", () => {
+    expect(() =>
+      requireRunIdFromDispatchOutput(
+        "Created workflow_dispatch event for full-release-validation.yml",
+        "full-release-validation.yml",
+      ),
+    ).toThrow("refusing to guess from recent workflow_dispatch runs");
+  });
+
   it("falls back to a single compatible artifact from the same run", () => {
     expect(
       resolveArtifactName(
@@ -135,10 +369,7 @@ describe("release candidate checklist", () => {
         Authorization: "Bearer test-token",
         "X-GitHub-Api-Version": "2022-11-28",
       });
-      return {
-        ok: true,
-        json: async () => ({ workflow_runs: [] }),
-      };
+      return jsonResponse({ workflow_runs: [] });
     });
 
     await expect(
@@ -154,6 +385,42 @@ describe("release candidate checklist", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+  });
+
+  it("bounds GitHub API error bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response("x".repeat(65), {
+        headers: { "content-length": "65" },
+        status: 500,
+      });
+    });
+
+    await expect(
+      githubApi("repos/openclaw/openclaw/actions/runs", {
+        fetchImpl,
+        maxBodyBytes: 64,
+        timeoutMs: 1234,
+        token: "test-token",
+      }),
+    ).rejects.toThrow(
+      "GitHub API repos/openclaw/openclaw/actions/runs response body exceeded 64 bytes",
+    );
+  });
+
+  it("keeps GitHub API timeouts active while reading response bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status: 200,
+      });
+    });
+
+    await expect(
+      githubApi("repos/openclaw/openclaw/actions/runs", {
+        fetchImpl,
+        timeoutMs: 25,
+        token: "test-token",
+      }),
+    ).rejects.toThrow("GitHub API repos/openclaw/openclaw/actions/runs timed out after 25ms");
   });
 
   it("includes the GitHub API path when a request times out", async () => {

@@ -1,3 +1,4 @@
+// Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -49,15 +50,6 @@ export type ControlUiMockGatewayScenario = {
   methodResponses?: Record<string, unknown>;
   models?: Array<{ id: string; name: string; provider: string }>;
   sessionKey?: string;
-};
-
-export type ControlUiMockGatewayMethodResponseCase = {
-  match?: Record<string, unknown>;
-  response: unknown;
-};
-
-export type ControlUiMockGatewayMethodResponseCases = {
-  cases: ControlUiMockGatewayMethodResponseCase[];
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -432,6 +424,23 @@ function installControlUiMockGateway(input: {
         };
       case "agents.files.get":
         return null;
+      case "sessions.files.list":
+        return {
+          browser: {
+            entries: [],
+            path: "",
+          },
+          files: [],
+          root: "",
+          sessionKey:
+            isRecord(params) && typeof params.sessionKey === "string" ? params.sessionKey : "main",
+        };
+      case "sessions.files.get":
+        return null;
+      case "artifacts.list":
+        return { artifacts: [] };
+      case "artifacts.download":
+        return null;
       case "chat.history":
         return {
           messages: scenario.historyMessages,
@@ -453,6 +462,9 @@ function installControlUiMockGateway(input: {
             scope: "agent",
           },
           messages: scenario.historyMessages,
+          metadata: {
+            models: scenario.models,
+          },
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
         };

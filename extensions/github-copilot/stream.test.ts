@@ -1,3 +1,4 @@
+// Github Copilot tests cover stream plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { buildCopilotDynamicHeaders } from "./stream.js";
 import {
@@ -28,7 +29,7 @@ function requireFirstStreamOptions(mock: ReturnType<typeof vi.fn>, label: string
 }
 
 describe("wrapCopilotAnthropicStream", () => {
-  it("adds Copilot headers and Anthropic cache markers for Claude payloads", () => {
+  it("adds Copilot headers, strips thinking replay, and marks cache for Claude payloads", () => {
     const payloads: Array<{
       messages: Array<Record<string, unknown>>;
     }> = [];
@@ -38,7 +39,11 @@ describe("wrapCopilotAnthropicStream", () => {
           { role: "system", content: "system prompt" },
           {
             role: "assistant",
-            content: [{ type: "thinking", text: "draft", cache_control: { type: "ephemeral" } }],
+            content: [
+              { type: "thinking", thinking: "draft", cache_control: { type: "ephemeral" } },
+              { type: "redacted_thinking", data: "opaque" },
+              { type: "text", text: "visible reply" },
+            ],
           },
         ],
       };
@@ -97,8 +102,51 @@ describe("wrapCopilotAnthropicStream", () => {
       },
       {
         role: "assistant",
-        content: [{ type: "thinking", text: "draft" }],
+        content: [{ type: "text", text: "visible reply" }],
       },
+    ]);
+  });
+
+  it("keeps a non-empty assistant turn when Copilot replay only contains thinking", () => {
+    const payloads: Array<{
+      messages: Array<Record<string, unknown>>;
+    }> = [];
+    const baseStreamFn = vi.fn((model, _context, options) => {
+      const payload = {
+        messages: [
+          { role: "user", content: "use the tool result" },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "private" },
+              { type: "redacted_thinking", data: "opaque" },
+            ],
+          },
+          { role: "user", content: [{ type: "tool_result", content: "done" }] },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(payload);
+      return {
+        async *[Symbol.asyncIterator]() {},
+      } as never;
+    });
+
+    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
+    void wrapped(
+      {
+        provider: "github-copilot",
+        api: "anthropic-messages",
+        id: "claude-haiku-4.5",
+      } as never,
+      { messages: [{ role: "user", content: "hi" }] } as never,
+      {},
+    );
+
+    expect(payloads[0]?.messages).toEqual([
+      { role: "user", content: "use the tool result" },
+      { role: "assistant", content: [{ type: "text", text: "[assistant reasoning omitted]" }] },
+      { role: "user", content: [{ type: "tool_result", content: "done" }] },
     ]);
   });
 

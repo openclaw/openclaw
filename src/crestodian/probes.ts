@@ -1,3 +1,4 @@
+// Crestodian probes check local tools and Gateway health with bounded subprocess/network work.
 import { spawn } from "node:child_process";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
@@ -93,6 +94,7 @@ export async function probeLocalCommand(
         finish(timeoutResult());
         return;
       }
+      // Version output can arrive on stdout or stderr depending on the CLI.
       const text = `${stdout}\n${stderr}`.trim().split(/\r?\n/)[0]?.trim();
       finish({
         command,
@@ -114,8 +116,9 @@ export async function probeGatewayUrl(
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 900);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response | undefined;
   try {
-    const response = await fetch(healthUrl, {
+    response = await fetch(healthUrl, {
       method: "GET",
       signal: controller.signal,
     });
@@ -128,5 +131,6 @@ export async function probeGatewayUrl(
     };
   } finally {
     clearTimeout(timeout);
+    await response?.body?.cancel().catch(() => undefined);
   }
 }

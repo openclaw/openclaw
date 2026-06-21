@@ -3,7 +3,6 @@ import SwiftUI
 struct TalkPermissionPromptView: View {
     enum Style {
         case card
-        case settings
         case sheet
     }
 

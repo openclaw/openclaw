@@ -3,6 +3,7 @@
  * Redacts and summarizes arguments into short labels/details for chat and UI
  * tool update streams.
  */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -10,7 +11,6 @@ import {
 import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
-import { asRecord } from "./tool-display-record.js";
 
 type ToolDisplayActionSpec = {
   label?: string;
@@ -26,7 +26,7 @@ export type ToolDisplaySpec = {
 };
 
 /** Normalized display target for code/search bridge tools. */
-export type ToolSearchCodeDisplayTarget = {
+type ToolSearchCodeDisplayTarget = {
   toolName: string;
   displayToolName?: string;
   displayArgs?: Record<string, unknown>;
@@ -350,8 +350,13 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
   add(record.q);
   add(record.search);
   add(record.input);
+  // Parallel's `web_search` provider uses the native Parallel Search shape
+  // (`objective` + `search_queries`). Surface those so CLI progress and
+  // Codex activity metadata render the query context instead of a bare
+  // `search`.
+  add(record.objective);
 
-  for (const key of ["search_query", "image_query", "queries"]) {
+  for (const key of ["search_query", "image_query", "queries", "search_queries"]) {
     const value = record[key];
     if (!Array.isArray(value)) {
       continue;

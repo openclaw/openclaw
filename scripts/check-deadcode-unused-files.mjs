@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs knip unused-file detection and compares results to the allowlist.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -8,9 +9,23 @@ import {
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const KNIP_VERSION = "6.8.0";
+/**
+ * Timeout for the unused-file knip child process.
+ */
 export const KNIP_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Grace period before force-killing a timed-out knip child process.
+ */
 export const KNIP_KILL_GRACE_MS = 5_000;
+const KNIP_PROCESS_TREE_EXIT_POLL_MS = 25;
+const KNIP_POST_FORCE_KILL_WAIT_MS = 1_000;
+/**
+ * Heartbeat interval used while knip runs without output.
+ */
 export const KNIP_HEARTBEAT_MS = 60_000;
+/**
+ * Maximum buffered knip output retained for diagnostics.
+ */
 export const KNIP_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const KNIP_ARGS = [
   "--config",
@@ -37,6 +52,9 @@ function isLikelyRepoFilePath(value) {
   return /^(apps|docs|extensions|packages|scripts|src|test|ui)\//u.test(normalizeRepoPath(value));
 }
 
+/**
+ * Parses compact knip output into unused file paths.
+ */
 export function parseKnipCompactUnusedFiles(output) {
   const files = [];
   let inUnusedFilesSection = false;
@@ -68,6 +86,9 @@ export function parseKnipCompactUnusedFiles(output) {
   return uniqueSorted(files);
 }
 
+/**
+ * Compares detected unused files against the checked-in allowlist.
+ */
 export function compareUnusedFilesToAllowlist(
   actualFiles,
   allowlistFiles,
@@ -90,6 +111,9 @@ export function compareUnusedFilesToAllowlist(
   };
 }
 
+/**
+ * Formats unused-file allowlist drift for CLI output.
+ */
 export function formatUnusedFileComparison(comparison) {
   const lines = [];
   if (!comparison.allowlistIsSorted) {
@@ -132,6 +156,37 @@ function signalProcessTree(child, signal) {
   }
 }
 
+function processTreeAlive(child) {
+  if (!child.pid) {
+    return false;
+  }
+  if (process.platform === "win32") {
+    return child.exitCode === null && child.signalCode === null;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForProcessTreeExit(child, timeoutMs) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!processTreeAlive(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, KNIP_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !processTreeAlive(child);
+}
+
+/**
+ * Runs knip and returns parsed unused-file results.
+ */
 export async function runKnipUnusedFiles(params = {}) {
   const run = params.spawnCommand ?? spawn;
   const timeoutMs = params.timeoutMs ?? KNIP_TIMEOUT_MS;
@@ -173,6 +228,28 @@ export async function runKnipUnusedFiles(params = {}) {
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const parentSignalHandlers = [];
+    const cleanupParentSignalHandlers = () => {
+      for (const { signal, handler } of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.length = 0;
+    };
+    const relayParentSignal = (signal) => {
+      const handler = () => {
+        signalProcessTree(child, signal);
+        signalProcessTree(child, "SIGKILL");
+        cleanupParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.push({ signal, handler });
+      process.once(signal, handler);
+    };
+    if (process.platform !== "win32") {
+      relayParentSignal("SIGINT");
+      relayParentSignal("SIGTERM");
+      relayParentSignal("SIGHUP");
+    }
 
     const heartbeatTimer = setInterval(() => {
       writeStatus(
@@ -200,10 +277,21 @@ export async function runKnipUnusedFiles(params = {}) {
       clearTimeout(timeoutTimer);
       clearInterval(heartbeatTimer);
       clearTimeout(killTimer);
+      cleanupParentSignalHandlers();
       resolve({
         ...result,
         output: output.join(""),
       });
+    };
+    const finishAfterProcessTreeCleanup = async (result) => {
+      if (processTreeAlive(child)) {
+        await waitForProcessTreeExit(child, killGraceMs);
+      }
+      if (processTreeAlive(child)) {
+        signalProcessTree(child, "SIGKILL");
+        await waitForProcessTreeExit(child, KNIP_POST_FORCE_KILL_WAIT_MS);
+      }
+      finish(result);
     };
 
     const appendOutput = (chunk) => {
@@ -258,7 +346,7 @@ export async function runKnipUnusedFiles(params = {}) {
       exitSignal = exitSignal ?? signal;
       const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
       if (timedOut) {
-        finish({
+        void finishAfterProcessTreeCleanup({
           errorCode: "ETIMEDOUT",
           errorMessage: `Knip unused-file scan timed out after ${elapsedSeconds}s`,
           signal: exitSignal,
@@ -267,7 +355,7 @@ export async function runKnipUnusedFiles(params = {}) {
         return;
       }
       if (bufferExceeded) {
-        finish({
+        void finishAfterProcessTreeCleanup({
           errorCode: "ENOBUFS",
           errorMessage: `Knip unused-file scan exceeded ${maxBufferBytes} output bytes`,
           signal: exitSignal,
@@ -284,6 +372,9 @@ export async function runKnipUnusedFiles(params = {}) {
     });
   });
 }
+/**
+ * Checks detected unused files against the current allowlist.
+ */
 export function checkUnusedFiles(
   output,
   allowlistFiles = KNIP_UNUSED_FILE_ALLOWLIST,

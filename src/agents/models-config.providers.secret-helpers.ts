@@ -35,7 +35,7 @@ export type SecretDefaults = {
 };
 
 /** Resolved API key value plus provenance for discovery and secret-marker handling. */
-export type ProfileApiKeyResolution = {
+type ProfileApiKeyResolution = {
   apiKey: string;
   source: "plaintext" | "env-ref" | "non-env-ref";
   discoveryApiKey?: string;
@@ -96,6 +96,18 @@ export function resolveAwsSdkApiKeyVarName(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return resolveAwsSdkEnvVarName(env);
+}
+
+function resolveEnvAuthEvidenceApiKeyMarker(
+  provider: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const resolved = resolveEnvApiKey(provider, env);
+  const apiKey = resolved?.apiKey?.trim();
+  if (!apiKey || !isNonSecretApiKeyMarker(apiKey, { includeEnvVarName: false })) {
+    return undefined;
+  }
+  return apiKey;
 }
 
 /** Rewrites secret-backed provider headers to stable marker values. */
@@ -334,11 +346,14 @@ export function resolveMissingProviderApiKey(params: {
   }
 
   const fromEnv = resolveEnvApiKeyVarName(params.providerKey, params.env);
-  const apiKey = fromEnv ?? params.profileApiKey?.apiKey;
+  const fromAuthEvidence = fromEnv
+    ? undefined
+    : resolveEnvAuthEvidenceApiKeyMarker(params.providerKey, params.env);
+  const apiKey = fromEnv ?? fromAuthEvidence ?? params.profileApiKey?.apiKey;
   if (!apiKey?.trim()) {
     return params.provider;
   }
-  if (params.profileApiKey && params.profileApiKey.source !== "plaintext") {
+  if (fromAuthEvidence || (params.profileApiKey && params.profileApiKey.source !== "plaintext")) {
     params.secretRefManagedProviders?.add(params.providerKey);
   }
   return {

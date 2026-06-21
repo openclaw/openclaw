@@ -1,3 +1,5 @@
+// Control UI controller manages chat gateway state.
+import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -6,12 +8,18 @@ import {
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
 import {
+  appendChatMessageToCache,
+  cacheChatMessages,
+  type ChatMessageCache,
+} from "../chat/session-message-cache.ts";
+import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
   currentLiveToolCallIds,
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
+  messageTimestampMs,
   maybeResetToolStream,
   persistedCurrentToolStreamIds,
   prunePersistedToolStreamMessages,
@@ -24,20 +32,29 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "../control-ui-performance.ts";
+import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
 import {
   areUiSessionKeysEquivalent,
+  DEFAULT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import type { AgentsListResult, GatewaySessionRow, GatewaySessionsDefaults } from "../types.ts";
+import type {
+  AgentsListResult,
+  GatewaySessionRow,
+  GatewaySessionsDefaults,
+  ModelCatalogEntry,
+} from "../types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
+
+export { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -228,18 +245,6 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
-function messageTimestampMs(message: unknown): number | null {
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-  const timestamp = (message as { timestamp?: unknown; ts?: unknown }).timestamp;
-  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
-    return timestamp;
-  }
-  const ts = (message as { timestamp?: unknown; ts?: unknown }).ts;
-  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
-}
-
 function historyHasSameOrNewerDisplayMessage(
   historyMessages: unknown[],
   signature: string,
@@ -362,14 +367,6 @@ function isUnknownGatewayMethodError(err: unknown, method: string): err is Gatew
   );
 }
 
-export function isGatewayMethodAdvertised(state: ChatState, method: string): boolean | null {
-  const methods = state.hello?.features?.methods;
-  if (!Array.isArray(methods)) {
-    return null;
-  }
-  return methods.includes(method);
-}
-
 function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
   const retryAfterMs =
     typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
@@ -389,6 +386,7 @@ export type ChatState = {
   currentSessionId?: string | null;
   chatLoading: boolean;
   chatMessages: unknown[];
+  chatMessagesBySession?: ChatMessageCache;
   chatThinkingLevel: string | null;
   chatSending: boolean;
   chatMessage: string;
@@ -417,6 +415,11 @@ export type ChatHistoryResult = {
   defaults?: GatewaySessionsDefaults;
   sessionInfo?: GatewaySessionRow;
   agentsList?: AgentsListResult;
+  metadata?: ChatMetadataResult;
+};
+
+export type ChatMetadataResult = CommandsListResult & {
+  models?: ModelCatalogEntry[];
 };
 
 export type ChatEventPayload = {
@@ -574,6 +577,30 @@ function recordChatHistoryTiming(
   );
 }
 
+function appendCachedChatMessage(
+  state: ChatState,
+  sessionKey: string,
+  message: unknown,
+  agentId?: string,
+) {
+  if (!state.chatMessagesBySession) {
+    return;
+  }
+  appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
+}
+
+function replaceCachedChatMessages(
+  state: ChatState,
+  sessionKey: string,
+  messages: unknown[],
+  agentId?: string,
+) {
+  if (!state.chatMessagesBySession) {
+    return;
+  }
+  cacheChatMessages(state.chatMessagesBySession, state, { sessionKey, agentId }, messages);
+}
+
 export async function loadChatHistory(
   state: ChatState,
   opts: LoadChatHistoryOptions = {},
@@ -719,6 +746,7 @@ async function loadChatHistoryUncached(
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
+    replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
     state.currentSessionId =
       typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
         ? res.sessionInfo.sessionId
@@ -1235,6 +1263,15 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
   if (!sessionMatches && !activeRunMatches) {
+    if (payload.state === "final") {
+      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+        const cacheAgentId = isGlobalSessionKey(payload.sessionKey)
+          ? (payload.agentId ?? resolveDefaultAgentId(state) ?? DEFAULT_AGENT_ID)
+          : payload.agentId;
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage, cacheAgentId);
+      }
+    }
     return null;
   }
   if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {

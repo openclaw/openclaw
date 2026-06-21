@@ -15,6 +15,7 @@ const ROOT_SECTIONS = [
   "commitments",
   "browser",
   "ui",
+  "tui",
   "auth",
   "models",
   "nodeHost",
@@ -44,6 +45,7 @@ const TARGET_KEYS = [
   "memory.citations",
   "memory.backend",
   "memory.qmd.searchMode",
+  "memory.qmd.rerank",
   "memory.qmd.searchTool",
   "memory.qmd.scope",
   "memory.qmd.includeDefaultMemory",
@@ -97,7 +99,6 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
-  "agents.defaults.memorySearch.store.path",
   "agents.defaults.memorySearch.inputType",
   "agents.defaults.memorySearch.queryInputType",
   "agents.defaults.memorySearch.documentInputType",
@@ -456,6 +457,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
   "wizard.lastRunMode": ['"local"', '"remote"'],
   "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
+  "diagnostics.otel.logsExporter": ['"otlp"', '"stdout"', '"both"'],
   "logging.level": ['"silent"', '"fatal"', '"error"', '"warn"', '"info"', '"debug"', '"trace"'],
   "logging.consoleLevel": [
     '"silent"',
@@ -565,6 +567,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "diagnostics.otel.headers",
   "diagnostics.otel.logsEndpoint",
   "diagnostics.otel.logs",
+  "diagnostics.otel.logsExporter",
   "diagnostics.otel.metricsEndpoint",
   "diagnostics.otel.metrics",
   "diagnostics.otel.sampleRate",
@@ -577,10 +580,52 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "skills.load.extraDirs",
   "skills.load.watch",
   "skills.load.watchDebounceMs",
+  "skills.workshop.allowSymlinkTargetWrites",
   "ui.assistant.avatar",
   "ui.assistant.name",
   "ui.seamColor",
 ] as const;
+
+function titleCaseLabelSegment(segment: string): string {
+  return segment
+    .replace(/\[\]/g, "")
+    .replace(/[*_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function createFieldLabelStub(key: string): string {
+  const segments = key.split(".").filter((segment) => segment !== "*");
+  const leaf = segments.at(-1) ?? key;
+  return titleCaseLabelSegment(leaf) || key;
+}
+
+function collectMissingLabelKeys(
+  helpKeys: readonly string[],
+  labels: Record<string, string>,
+): string[] {
+  return helpKeys.filter((key) => {
+    const label = labels[key];
+    return typeof label !== "string" || label.length === 0;
+  });
+}
+
+function formatMissingLabelFailure(missingKeys: readonly string[]): string {
+  const stubs = missingKeys
+    .map((key) => `  ${JSON.stringify(key)}: ${JSON.stringify(createFieldLabelStub(key))},`)
+    .join("\n");
+  return [
+    `${missingKeys.length} help key(s) missing from FIELD_LABELS.`,
+    "Add or adjust these entries in src/config/schema.labels.ts:",
+    "",
+    stubs,
+    "",
+    "Review generated labels before committing; they are mechanical starting points.",
+  ].join("\n");
+}
 
 describe("config help copy quality", () => {
   function requireHelp(key: string): string {
@@ -622,9 +667,21 @@ describe("config help copy quality", () => {
   });
 
   it("keeps labels in parity for all help keys", () => {
-    for (const key of Object.keys(FIELD_HELP)) {
-      expect(requireLabel(key)).not.toHaveLength(0);
+    const missing = collectMissingLabelKeys(Object.keys(FIELD_HELP), FIELD_LABELS);
+    if (missing.length > 0) {
+      expect.fail(formatMissingLabelFailure(missing));
     }
+  });
+
+  it("prints copy-paste-ready label stubs for missing help labels", () => {
+    const message = formatMissingLabelFailure([
+      "gateway.push",
+      "gateway.push.apns.relay.timeoutMs",
+    ]);
+    expect(message).toContain("2 help key(s) missing from FIELD_LABELS.");
+    expect(message).toContain("src/config/schema.labels.ts");
+    expect(message).toContain(`  "gateway.push": "Push",`);
+    expect(message).toContain(`  "gateway.push.apns.relay.timeoutMs": "Timeout Ms",`);
   });
 
   it("covers the target confusing fields with non-trivial explanations", () => {
@@ -677,9 +734,6 @@ describe("config help copy quality", () => {
     expect(FIELD_HELP["memory.qmd.paths.pattern"].includes("**/*.md")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.interval"].includes("5m")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.embedInterval"].includes("60m")).toBe(true);
-    expect(FIELD_HELP["agents.defaults.memorySearch.store.path"]).toContain(
-      "~/.openclaw/memory/{agentId}.sqlite",
-    );
   });
 
   it("documents cron deprecation, migration, and retention formats", () => {
@@ -882,6 +936,7 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+    expect(/alias/i.test(compactionModel)).toBe(true);
 
     const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
     expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);

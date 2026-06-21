@@ -1,3 +1,4 @@
+// Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
 import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
@@ -37,12 +38,33 @@ export function formatUnknownText(
   return Object.prototype.toString.call(value);
 }
 
+export type UiTimeFormatPreference = "auto" | "12" | "24";
+
+// Resolved `agents.defaults.timeFormat`, threaded in once at bootstrap. "auto"
+// (or unset) keeps the browser locale default so existing deployments render
+// unchanged; only "12"/"24" force an hour cycle across Control UI timestamps.
+let uiTimeFormatPreference: UiTimeFormatPreference = "auto";
+
+export function setUiTimeFormatPreference(value: UiTimeFormatPreference | null | undefined): void {
+  uiTimeFormatPreference = value === "12" || value === "24" ? value : "auto";
+}
+
+export function resolveUiHourCycleOptions(): Intl.DateTimeFormatOptions {
+  if (uiTimeFormatPreference === "12") {
+    return { hour12: true };
+  }
+  if (uiTimeFormatPreference === "24") {
+    return { hour12: false };
+  }
+  return {};
+}
+
 export function formatMs(ms?: number | null): string {
   const timestampMs = asDateTimestampMs(ms);
   if (timestampMs === undefined) {
     return t("common.na");
   }
-  return new Date(timestampMs).toLocaleString();
+  return new Date(timestampMs).toLocaleString([], resolveUiHourCycleOptions());
 }
 
 export function formatDateMs(
@@ -64,7 +86,7 @@ export function formatTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleTimeString([], options);
+    : new Date(timestampMs).toLocaleTimeString([], { ...resolveUiHourCycleOptions(), ...options });
 }
 
 export function formatDateTimeMs(
@@ -73,7 +95,9 @@ export function formatDateTimeMs(
   fallback = t("common.na"),
 ): string {
   const timestampMs = asDateTimestampMs(ms);
-  return timestampMs === undefined ? fallback : new Date(timestampMs).toLocaleString([], options);
+  return timestampMs === undefined
+    ? fallback
+    : new Date(timestampMs).toLocaleString([], { ...resolveUiHourCycleOptions(), ...options });
 }
 
 export function formatList(values?: Array<string | null | undefined>): string {

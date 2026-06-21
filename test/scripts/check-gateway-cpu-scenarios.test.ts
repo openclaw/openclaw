@@ -1,3 +1,5 @@
+// Check Gateway Cpu Scenarios tests cover check gateway cpu scenarios script behavior.
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,6 +13,41 @@ function makeTempRoot(): string {
   const root = mkdtempSync(path.join(artifactRoot, "gateway-cpu-test-"));
   tempRoots.push(root);
   return root;
+}
+
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, ["scripts/check-gateway-cpu-scenarios.mjs", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+  });
+}
+
+function expectNoNodeStack(stderr: string) {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
+}
+
+function writeQaSuiteSummary(
+  outputDir: string,
+  counts: { failed: number; passed: number; total: number } = { failed: 0, passed: 1, total: 1 },
+): void {
+  const qaOutputDir = path.join(outputDir, "qa-suite");
+  mkdirSync(qaOutputDir, { recursive: true });
+  writeFileSync(
+    path.join(qaOutputDir, "qa-suite-summary.json"),
+    `${JSON.stringify({
+      counts,
+      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+      run: { completedAt: "2026-01-01T00:00:01.000Z", startedAt: "2026-01-01T00:00:00.000Z" },
+      scenarios: [
+        {
+          id: "channel-chat-baseline",
+          status: counts.failed > 0 ? "fail" : "pass",
+          ...(counts.failed > 0 ? {} : { steps: [{ name: "mock step", status: "pass" }] }),
+        },
+      ],
+    })}\n`,
+  );
 }
 
 afterEach(() => {
@@ -58,8 +95,32 @@ describe("gateway CPU scenario guard", () => {
     ).toThrow("--cpu-core-warn must be a positive number");
   });
 
+  it("rejects missing valued options instead of consuming the next flag", () => {
+    for (const flag of [
+      "--output-dir",
+      "--startup-case",
+      "--qa-scenario",
+      "--runs",
+      "--warmup",
+      "--cpu-core-warn",
+      "--hot-wall-warn-ms",
+    ]) {
+      expect(() => testing.parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+    }
+  });
+
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const result = runCli("--wat");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expectNoNodeStack(result.stderr);
+  });
+
   it("prepares CLI startup artifacts before running the startup bench", async () => {
     const outputDir = makeTempRoot();
+    const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
     const calls: Array<{ command: string; args: string[] }> = [];
     const options = testing.parseArgs([
       "--output-dir",
@@ -75,6 +136,9 @@ describe("gateway CPU scenario guard", () => {
       silent: true,
       spawnSync: (command: string, args: string[]) => {
         calls.push({ command, args });
+        if (args.includes("scripts/bench-gateway-startup.ts")) {
+          writeFileSync(startupOutput, `${JSON.stringify({ results: [{ id: "default" }] })}\n`);
+        }
         return { status: 0 };
       },
     });
@@ -85,6 +149,62 @@ describe("gateway CPU scenario guard", () => {
       "--import",
     ]);
     expect(calls[1]?.args).toContain("scripts/bench-gateway-startup.ts");
+  });
+
+  it("fails successful startup benches that do not write a report", async () => {
+    const outputDir = makeTempRoot();
+    const options = testing.parseArgs([
+      "--output-dir",
+      outputDir,
+      "--runs",
+      "1",
+      "--warmup",
+      "0",
+      "--skip-qa",
+    ]);
+
+    const result = await testing.runGatewayCpuScenarios(options, {
+      silent: true,
+      spawnSync: () => ({ status: 0 }),
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.summary).toMatchObject({
+      startupOutput: null,
+      startupReportFailure: "startup-report-missing",
+    });
+    expect(result.summary.startupReportFailureDetail).toContain("expected startup bench report");
+  });
+
+  it("fails successful startup benches that write malformed reports", async () => {
+    const outputDir = makeTempRoot();
+    const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
+    const options = testing.parseArgs([
+      "--output-dir",
+      outputDir,
+      "--runs",
+      "1",
+      "--warmup",
+      "0",
+      "--skip-qa",
+    ]);
+
+    const result = await testing.runGatewayCpuScenarios(options, {
+      silent: true,
+      spawnSync: (_command: string, args: string[]) => {
+        if (args.includes("scripts/bench-gateway-startup.ts")) {
+          writeFileSync(startupOutput, `${JSON.stringify({ results: [] })}\n`);
+        }
+        return { status: 0 };
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.summary).toMatchObject({
+      startupOutput,
+      startupReportFailure: "startup-report-invalid",
+      startupReportFailureDetail: "startup report has no measured results",
+    });
   });
 
   it("does not run the startup bench when the startup build fails", async () => {
@@ -156,6 +276,9 @@ describe("gateway CPU scenario guard", () => {
           writeFileSync(path.join(pluginSdkDist, "qa-lab.js"), "export {};\n");
           writeFileSync(path.join(pluginSdkDist, "qa-runtime.js"), "export {};\n");
         }
+        if (args.includes("openclaw") && args.includes("qa")) {
+          writeQaSuiteSummary(outputDir);
+        }
         return { status: 0 };
       },
     });
@@ -204,6 +327,9 @@ describe("gateway CPU scenario guard", () => {
       silent: true,
       spawnSync: (_command: string, args: string[], opts?: { env?: Record<string, string> }) => {
         calls.push({ args, env: opts?.env });
+        if (args.includes("openclaw") && args.includes("qa")) {
+          writeQaSuiteSummary(outputDir);
+        }
         return { status: 0 };
       },
     });
@@ -219,6 +345,33 @@ describe("gateway CPU scenario guard", () => {
       USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
     });
     expect(calls[0]?.env?.HOME).not.toBe("/real/user/home");
+  });
+
+  it("fails successful QA commands that report failed scenarios", async () => {
+    const outputDir = makeTempRoot();
+    const options = testing.parseArgs([
+      "--output-dir",
+      outputDir,
+      "--skip-startup",
+      "--qa-scenario",
+      "channel-chat-baseline",
+    ]);
+
+    const result = await testing.runGatewayCpuScenarios(options, {
+      silent: true,
+      spawnSync: (_command: string, args: string[]) => {
+        if (args.includes("openclaw") && args.includes("qa")) {
+          writeQaSuiteSummary(outputDir, { failed: 1, passed: 0, total: 1 });
+        }
+        return { status: 0 };
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.summary).toMatchObject({
+      qaSummaryFailure: "qa-summary-failed-scenarios",
+      qaSummaryFailureDetail: "QA suite reported 1 failed scenario(s)",
+    });
   });
 
   it("fails when completed runs report hot gateway CPU observations", async () => {

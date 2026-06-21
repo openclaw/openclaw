@@ -1111,6 +1111,8 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/status")).toBe(true);
     expect(hasControlCommand("/STATUS")).toBe(true);
     expect(hasControlCommand("/status:")).toBe(true);
+    expect(hasControlCommand("/status plugins")).toBe(true);
+    expect(hasControlCommand("/STATUS plugins")).toBe(true);
     expect(hasControlCommand("status")).toBe(false);
     expect(hasControlCommand("usage")).toBe(false);
 
@@ -1134,7 +1136,7 @@ describe("control command parsing", () => {
 
   it("requires commands to be the full message", () => {
     expect(hasControlCommand("hello /status")).toBe(false);
-    expect(hasControlCommand("/status please")).toBe(false);
+    expect(hasControlCommand("/status please")).toBe(true);
     expect(hasControlCommand("prefix /send on")).toBe(false);
     expect(hasControlCommand("/send on")).toBe(true);
   });

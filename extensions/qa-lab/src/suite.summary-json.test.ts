@@ -1,4 +1,6 @@
+// Qa Lab tests cover suite.summary json plugin behavior.
 import { describe, expect, it } from "vitest";
+import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
 import { buildQaSuiteSummaryJson } from "./suite.js";
 
 describe("buildQaSuiteSummaryJson", () => {
@@ -54,7 +56,7 @@ describe("buildQaSuiteSummaryJson", () => {
   });
 
   it("treats an empty scenarioIds array as unspecified (no filter)", () => {
-    // A CLI path that omits --scenario passes an empty array to runQaSuite.
+    // A CLI path that omits --scenario passes an empty array to runQaFlowSuite.
     // The summary must encode that as null so downstream parity/report
     // tooling doesn't interpret a full run as an explicit empty selection.
     const json = buildQaSuiteSummaryJson({
@@ -100,6 +102,34 @@ describe("buildQaSuiteSummaryJson", () => {
       passed: 1,
       failed: 1,
     });
+  });
+
+  it("preserves the evidence summary when provided", () => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
+      scenarioDefinitions: [
+        {
+          id: "dm-chat-baseline",
+          title: "DM baseline conversation",
+          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
+          surface: "dm",
+          coverage: {
+            primary: ["channels.dm"],
+          },
+        },
+      ],
+      channelId: "qa-channel",
+      generatedAt: "2026-04-11T00:05:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
+    });
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      evidence,
+    });
+
+    expect(json.evidence).toEqual(evidence);
   });
 
   it("preserves scenario-level runtime parity payloads", () => {

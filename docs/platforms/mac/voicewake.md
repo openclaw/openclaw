@@ -7,6 +7,12 @@ title: "Voice wake (macOS)"
 
 # Voice Wake & Push-to-Talk
 
+## Requirements
+
+Voice Wake and push-to-talk require macOS 26 or newer. On older macOS versions,
+the controls are hidden from the Voice settings page, which shows the macOS 26
+requirement.
+
 ## Modes
 
 - **Wake-word mode** (default): always-on Speech recognizer waits for trigger tokens (`swabbleTriggerWords`). On match it starts capture, shows the overlay with partial text, and auto-sends after silence.
@@ -47,7 +53,7 @@ Hardening:
 ## User-facing settings
 
 - **Voice Wake** toggle: enables wake-word runtime.
-- **Hold Cmd+Fn to talk**: enables the push-to-talk monitor. Disabled on macOS < 26.
+- **Hold Right Option to talk**: enables the push-to-talk monitor.
 - Language & mic pickers, live level meter, trigger-word table, tester (local-only; does not forward).
 - Mic picker preserves the last selection if a device disconnects, shows a disconnected hint, and temporarily falls back to the system default until it returns.
 - **Sounds**: chimes on trigger detect and on send; defaults to the macOS "Glass" system sound. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event or choose **No Sound**.
@@ -63,7 +69,7 @@ Hardening:
 
 ## Quick verification
 
-- Toggle push-to-talk on, hold Cmd+Fn, speak, release: overlay should show partials then send.
+- Toggle push-to-talk on, hold Right Option, speak, release: overlay should show partials then send.
 - While holding, menu-bar ears should stay enlarged (uses `triggerVoiceEars(ttl:nil)`); they drop after release.
 
 ## Related

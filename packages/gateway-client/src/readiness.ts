@@ -1,3 +1,4 @@
+// Gateway Client module implements readiness behavior.
 import type { GatewayClientOptions } from "./client.js";
 import {
   waitForEventLoopReady,
@@ -20,7 +21,7 @@ export type GatewayClientStartReadinessOptions = {
   timeoutMs?: number;
   clientOptions?: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
   >;
   signal?: AbortSignal;
 };
@@ -41,6 +42,7 @@ function resolveGatewayClientStartReadinessTimeoutMs(
         ? clientOptions.connectDelayMs
         : undefined;
   return resolveConnectChallengeTimeoutMs(timeoutOverride, {
+    env: clientOptions.env,
     configuredTimeoutMs: clientOptions.preauthHandshakeTimeoutMs,
   });
 }

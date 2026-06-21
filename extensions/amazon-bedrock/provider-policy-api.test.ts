@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover provider policy api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
@@ -15,8 +16,25 @@ describe("amazon-bedrock provider-policy-api", () => {
       "medium",
       "high",
       "adaptive",
+      "max",
     ]);
     expect(profile?.defaultLevel).toBe("adaptive");
+  });
+
+  it("caps Bedrock Claude Sonnet 4.6 at high effort", () => {
+    const profile = resolveThinkingProfile({
+      provider: "amazon-bedrock",
+      modelId: "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "adaptive",
+    ]);
   });
 
   it("leaves Bedrock Claude Opus 4.8 thinking off by default with max effort available", () => {
@@ -48,6 +66,32 @@ describe("amazon-bedrock provider-policy-api", () => {
       })?.levels.map((level) => level.id),
     ).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]);
   });
+
+  it.each([
+    {
+      canonicalModelId: "claude-fable-5",
+      defaultLevel: "high",
+      preservesCatalogOptOut: true,
+    },
+    {
+      canonicalModelId: "claude-opus-4-8",
+      defaultLevel: "off",
+      preservesCatalogOptOut: false,
+    },
+  ])(
+    "resolves $canonicalModelId deployment aliases from canonical metadata",
+    ({ canonicalModelId, defaultLevel, preservesCatalogOptOut }) => {
+      const profile = resolveThinkingProfile({
+        provider: "amazon-bedrock",
+        modelId: "production-claude",
+        params: { canonicalModelId },
+      });
+
+      expect(profile?.defaultLevel).toBe(defaultLevel);
+      expect(profile?.levels.map((level) => level.id)).toContain("max");
+      expect(profile?.preserveWhenCatalogReasoningFalse === true).toBe(preservesCatalogOptOut);
+    },
+  );
 
   it("ignores unrelated providers", () => {
     expect(

@@ -59,6 +59,14 @@ export CLICKCLACK_BOT_TOKEN="ccb_..."
 openclaw gateway
 ```
 
+If `plugins.allow` is a non-empty restrictive list, explicitly selecting
+ClickClack in channel setup or running `openclaw plugins enable clickclack`
+appends `clickclack` to that list. Onboarding installation uses the same
+explicit-selection behavior. These paths do not override `plugins.deny` or a
+global `plugins.enabled: false` setting. Direct `openclaw plugins install
+clickclack` follows the normal plugin-install policy and also records ClickClack
+in an existing allowlist.
+
 ## Multiple bots
 
 Each account opens its own ClickClack realtime connection and uses its own bot token.

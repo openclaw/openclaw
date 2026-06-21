@@ -1,9 +1,12 @@
+// Auth rate-limit tests cover sliding-window, lockout, scope, loopback, and
+// cleanup behavior shared by gateway secret and device-token authentication.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  buildRateLimitIdentityKey,
   createAuthRateLimiter,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
@@ -196,6 +199,13 @@ describe("auth rate limiter", () => {
     });
     limiter.recordFailure("127.0.0.1");
     expect(limiter.check("127.0.0.1").allowed).toBe(false);
+  });
+
+  it("does not exempt opaque identity keys", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    const key = buildRateLimitIdentityKey("node", "node-1");
+    limiter.recordFailure(key);
+    expect(limiter.check(key).allowed).toBe(false);
   });
 
   // ---------- reset ----------

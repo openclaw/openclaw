@@ -1,3 +1,4 @@
+// Control UI tests cover custom theme behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createImportedCustomThemeFixture as createImportedTheme,
@@ -110,6 +111,16 @@ describe("custom theme import helpers", () => {
       sourceUrl: "https://tweakcn.com/themes/amethyst-haze",
       fetchUrl: "https://tweakcn.com/r/themes/amethyst-haze",
       themeId: "amethyst-haze",
+    });
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/claude")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
+    });
+    expect(normalizeTweakcnThemeUrl("twitter")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/twitter",
+      fetchUrl: "https://tweakcn.com/r/themes/twitter",
+      themeId: "twitter",
     });
   });
 
@@ -266,6 +277,7 @@ describe("custom theme import helpers", () => {
       throw new Error("Expected imported custom theme to parse");
     }
     expect(parsed.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+    expect(parseImportedCustomTheme({ ...imported, themeId: "claude" })?.themeId).toBe("claude");
     expect(parseImportedCustomTheme({ ...imported, light: {} })).toBeNull();
   });
 

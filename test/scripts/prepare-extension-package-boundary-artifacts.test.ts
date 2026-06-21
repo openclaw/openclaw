@@ -1,5 +1,7 @@
-import { EventEmitter } from "node:events";
+// Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { spawn } from "node:child_process";
+// Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,11 +12,13 @@ import {
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
+  resolveBoundaryEntryShimRequiredOutputs,
   resolveBoundaryRootShimsTimeoutMs,
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
 
@@ -165,6 +169,49 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           process.kill(descendantPid, "SIGKILL");
         }
       }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "lets aborted sibling descendants drain during kill grace",
+    async () => {
+      const rootDir = makeTempDir(tempRoots, "openclaw-boundary-abort-drain-");
+      const readyPath = path.join(rootDir, "descendant.ready");
+      const drainedPath = path.join(rootDir, "descendant.drained");
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {",
+        "  setTimeout(() => {",
+        `    fs.writeFileSync(${JSON.stringify(drainedPath)}, 'drained');`,
+        "    process.exit(0);",
+        "  }, 50);",
+        "});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const command = runNodeStepsInParallel([
+        {
+          label: "delayed-fail",
+          args: ["--eval", "setTimeout(() => process.exit(2), 150)"],
+          timeoutMs: 5_000,
+        },
+        {
+          label: "abort-group-drain",
+          args: ["--eval", parentScript],
+          timeoutMs: 60_000,
+        },
+      ]);
+
+      await waitForFile(readyPath, 1_000);
+      await expect(command).rejects.toThrow("delayed-fail failed with exit code 2");
+      expect(fs.readFileSync(drainedPath, "utf8")).toBe("drained");
     },
   );
 
@@ -356,6 +403,67 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         outputPaths: ["dist/demo.tsbuildinfo"],
       }),
     ).toBe(false);
+  });
+
+  it("requires generated entry-shim outputs in addition to the freshness stamp", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-entry-shims-"));
+    tempRoots.add(rootDir);
+    const inputPath = path.join(rootDir, "scripts", "write-plugin-sdk-entry-dts.ts");
+    const stampPath = path.join(rootDir, "dist", "plugin-sdk", ".boundary-entry-shims.stamp");
+    const rootDtsPath = path.join(rootDir, "dist", "plugin-sdk", "index.d.ts");
+    const packageDtsPath = path.join(
+      rootDir,
+      "packages",
+      "plugin-sdk",
+      "dist",
+      "src",
+      "plugin-sdk",
+      "index.d.ts",
+    );
+
+    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
+    fs.mkdirSync(path.dirname(rootDtsPath), { recursive: true });
+    fs.mkdirSync(path.dirname(packageDtsPath), { recursive: true });
+    fs.writeFileSync(inputPath, "export {};\n", "utf8");
+    fs.writeFileSync(stampPath, "ok\n", "utf8");
+    fs.writeFileSync(rootDtsPath, "export {};\n", "utf8");
+    fs.writeFileSync(packageDtsPath, "export {};\n", "utf8");
+
+    fs.utimesSync(inputPath, new Date(1_000), new Date(1_000));
+    fs.utimesSync(stampPath, new Date(2_000), new Date(2_000));
+    fs.utimesSync(rootDtsPath, new Date(2_000), new Date(2_000));
+    fs.utimesSync(packageDtsPath, new Date(2_000), new Date(2_000));
+
+    expect(
+      isArtifactSetFresh({
+        rootDir,
+        inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
+        outputPaths: [
+          "dist/plugin-sdk/.boundary-entry-shims.stamp",
+          "dist/plugin-sdk/index.d.ts",
+          "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+        ],
+      }),
+    ).toBe(true);
+
+    fs.rmSync(packageDtsPath);
+
+    expect(
+      isArtifactSetFresh({
+        rootDir,
+        inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
+        outputPaths: [
+          "dist/plugin-sdk/.boundary-entry-shims.stamp",
+          "dist/plugin-sdk/index.d.ts",
+          "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+        ],
+      }),
+    ).toBe(false);
+    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain("dist/plugin-sdk/index.d.ts");
+    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain(
+      "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+    );
   });
 
   it("parses prep mode and rejects unknown values", () => {

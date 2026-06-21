@@ -1,3 +1,5 @@
+// Cron flat-parameter tests cover model-friendly shorthand recovery before
+// gateway cron RPC dispatch.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayToolMock } = vi.hoisted(() => ({
@@ -8,6 +10,7 @@ vi.mock("../agent-scope.js", () => ({
   resolveSessionAgentId: () => "agent-123",
 }));
 
+import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool flat-params", () => {
@@ -23,6 +26,48 @@ describe("cron tool flat-params", () => {
     }
     return call as [string, unknown, TParams];
   }
+
+  it("presents read-only cron metadata without job content", () => {
+    const tool = createCronTool();
+    const terminalPresentation = getToolTerminalPresentation(tool);
+    if (!terminalPresentation) {
+      throw new Error("expected cron terminal presentation");
+    }
+
+    expect(
+      terminalPresentation(
+        { action: "list" },
+        {
+          content: [],
+          details: {
+            total: 2,
+            jobs: [
+              { id: "one", name: "private reminder", payload: { text: "secret" } },
+              { id: "two", name: "another reminder" },
+            ],
+          },
+        },
+      ),
+    ).toEqual({ text: "Cron jobs listed.\nCount: 2" });
+    expect(
+      terminalPresentation(
+        { action: "list" },
+        {
+          content: [],
+          details: {
+            total: 250,
+            jobs: [{ id: "one" }, { id: "two" }],
+          },
+        },
+      ),
+    ).toEqual({ text: "Cron jobs listed.\nCount: 250" });
+    expect(
+      terminalPresentation(
+        { action: "add" },
+        { content: [], details: { id: "three", name: "private reminder" } },
+      ),
+    ).toBeUndefined();
+  });
 
   it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
     const tool = createCronTool(
@@ -93,6 +138,8 @@ describe("cron tool flat-params", () => {
   });
 
   it("leaves out-of-range flat atMs for gateway validation", async () => {
+    // The gateway owns final schedule validation; flat recovery should preserve
+    // the supplied value instead of silently coercing an invalid date.
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
     const invalidAtMs = 8_640_000_000_000_001;
 

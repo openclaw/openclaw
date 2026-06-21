@@ -1,3 +1,4 @@
+// Arg Utils tests cover arg utils script behavior.
 import { describe, expect, it } from "vitest";
 import {
   floatFlag,
@@ -68,6 +69,18 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     expect(() =>
       parseFlagArgs(["--limit"], { limit: 10 }, [intFlag("--limit", "limit", { min: 1 })]),
     ).toThrow("--limit requires a value");
+    expect(() =>
+      parseFlagArgs(["--limit", "--factor", "1.5"], { factor: 1, limit: 10 }, [
+        intFlag("--limit", "limit", { min: 1 }),
+        floatFlag("--factor", "factor", { min: 0, includeMin: false }),
+      ]),
+    ).toThrow("--limit requires a value");
+    expect(() =>
+      parseFlagArgs(["--factor", "--limit", "2"], { factor: 1, limit: 10 }, [
+        intFlag("--limit", "limit", { min: 1 }),
+        floatFlag("--factor", "factor", { min: 0, includeMin: false }),
+      ]),
+    ).toThrow("--factor requires a value");
     expect(() =>
       parseFlagArgs(["--limit", "20files"], { limit: 10 }, [
         intFlag("--limit", "limit", { min: 1 }),

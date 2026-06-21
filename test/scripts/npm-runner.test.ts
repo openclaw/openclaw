@@ -1,3 +1,4 @@
+// Npm Runner tests cover npm runner script behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mjs";
@@ -20,6 +21,28 @@ describe("resolveNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [expectedNpmCliPath],
+      shell: false,
+    });
+  });
+
+  it("uses the active node executable when its basename is not node", () => {
+    const execPath = "/Users/test/.toolchains/node-24/bin/node24";
+    const expectedNpmCliPath = path.posix.resolve(
+      path.posix.dirname(execPath),
+      "../lib/node_modules/npm/bin/npm-cli.js",
+    );
+
+    const runner = resolveNpmRunner({
+      execPath,
+      env: {},
+      existsSync: (candidate) => candidate === expectedNpmCliPath,
+      npmArgs: ["pack", "openclaw@beta"],
+      platform: "darwin",
+    });
+
+    expect(runner).toEqual({
+      command: execPath,
+      args: [expectedNpmCliPath, "pack", "openclaw@beta"],
       shell: false,
     });
   });

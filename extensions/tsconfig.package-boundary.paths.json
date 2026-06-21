@@ -14,6 +14,9 @@
       "openclaw/plugin-sdk/reply-payload-testing": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/reply-payload-testing.d.ts"
       ],
+      "openclaw/plugin-sdk/sqlite-runtime-testing": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/sqlite-runtime-testing.d.ts"
+      ],
       "openclaw/plugin-sdk/ssrf-runtime-internal": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/ssrf-runtime-internal.d.ts"
       ],
@@ -85,6 +88,9 @@
       ],
       "openclaw/plugin-sdk/error-runtime": [
         "../dist/plugin-sdk/error-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/provider-catalog-live-runtime": [
+        "../dist/plugin-sdk/provider-catalog-live-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/provider-catalog-shared": [
         "../dist/plugin-sdk/provider-catalog-shared.d.ts"

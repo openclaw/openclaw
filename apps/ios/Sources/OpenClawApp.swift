@@ -22,9 +22,22 @@ enum OpenClawAppModelRegistry {
 
 @MainActor
 final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "Push")
-    private let backgroundWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "BackgroundWake")
-    private static let wakeRefreshTaskIdentifier = "ai.openclaw.ios.bgrefresh"
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "Push")
+    private let backgroundWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "BackgroundWake")
+    private static var wakeRefreshTaskIdentifier: String {
+        "\(appBundleIdentifier).bgrefresh"
+    }
+
+    private static var appBundleIdentifier: String {
+        guard let bundleId = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bundleId.isEmpty
+        else {
+            return "ai.openclawfoundation.app"
+        }
+
+        return bundleId
+    }
+
     private var backgroundWakeTask: Task<Bool, Never>?
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
@@ -91,6 +104,10 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     #if DEBUG
     func _test_resolvedAppModel() -> NodeAppModel? {
         self.resolvedAppModel()
+    }
+
+    func _test_wakeRefreshTaskIdentifier() -> String {
+        Self.wakeRefreshTaskIdentifier
     }
     #endif
 
@@ -611,9 +628,21 @@ struct OpenClawApp: App {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
         let appModel = NodeAppModel()
+        #if DEBUG
+        if Self.screenshotModeEnabled {
+            UIView.setAnimationsEnabled(false)
+            UserDefaults.standard.set(true, forKey: "gateway.onboardingComplete")
+            UserDefaults.standard.set(true, forKey: "gateway.hasConnectedOnce")
+            UserDefaults.standard.set(true, forKey: "onboarding.quickSetupDismissed")
+            appModel.enterScreenshotFixtureMode()
+        }
+        #endif
         OpenClawAppModelRegistry.appModel = appModel
         _appModel = State(initialValue: appModel)
-        _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))
+        _gatewayController = State(
+            initialValue: GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: !Self.screenshotModeEnabled))
     }
 
     var body: some Scene {
@@ -647,6 +676,14 @@ struct OpenClawApp: App {
         AppAppearancePreference.launchArgumentPreference
             ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
             ?? .system
+    }
+
+    private static var screenshotModeEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")
+        #else
+        false
+        #endif
     }
 
     @MainActor

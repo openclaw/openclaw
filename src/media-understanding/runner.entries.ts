@@ -1,3 +1,5 @@
+// Media-understanding entry execution handles provider/CLI attempts, auth
+// rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -5,6 +7,12 @@ import {
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
+import {
+  estimateBase64Size,
+  resolveVideoMaxBase64Bytes,
+} from "../../packages/media-understanding-common/src/video.js";
 import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
@@ -35,11 +43,10 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
-import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
-import { extractGeminiResponse } from "./output-extract.js";
+import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
@@ -50,9 +57,8 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
-import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
-export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
 type IsProviderAuthError = typeof import("../agents/model-auth.js").isProviderAuthError;
@@ -442,7 +448,15 @@ type ProviderExecutionAuth =
       providerConfig?: ModelProviderConfig;
     };
 
+function resolveProviderExecutionAuthModelApi(params: {
+  capability: MediaUnderstandingCapability;
+  providerId: string;
+}): string | undefined {
+  return resolveOpenAiAudioAuthModelApi(params);
+}
+
 async function resolveProviderExecutionAuth(params: {
+  capability: MediaUnderstandingCapability;
   providerId: string;
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
@@ -451,6 +465,10 @@ async function resolveProviderExecutionAuth(params: {
   workspaceDir?: string;
 }): Promise<ProviderExecutionAuth> {
   const providerConfig = params.cfg.models?.providers?.[params.providerId];
+  const modelApi = resolveProviderExecutionAuthModelApi({
+    capability: params.capability,
+    providerId: params.providerId,
+  });
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
@@ -519,6 +537,7 @@ async function resolveProviderExecutionAuth(params: {
       preferredProfile: params.entry.preferredProfile,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      modelApi,
     });
     const apiKey = requireApiKey(auth, params.providerId);
     return {
@@ -546,6 +565,7 @@ async function resolveProviderExecutionAuth(params: {
 }
 
 async function resolveProviderExecutionContext(params: {
+  capability: MediaUnderstandingCapability;
   providerId: string;
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
@@ -555,6 +575,7 @@ async function resolveProviderExecutionContext(params: {
   workspaceDir?: string;
 }) {
   const auth = await resolveProviderExecutionAuth({
+    capability: params.capability,
     providerId: params.providerId,
     provider: params.provider,
     cfg: params.cfg,
@@ -740,6 +761,7 @@ export async function runProviderEntry(params: {
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
+      capability,
       providerId,
       provider,
       cfg,
@@ -822,6 +844,7 @@ export async function runProviderEntry(params: {
     );
   }
   const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
+    capability,
     providerId,
     provider,
     cfg,

@@ -1,3 +1,4 @@
+// Live cache-behavior checks for embedded-agent direct provider runs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionDirect } from "./embedded-agent-runner/compact.runtime.js";
 import {
@@ -91,6 +93,8 @@ function makeUserHistoryTurn(content: UserContent): Message {
 }
 
 function makeImageUserTurn(text: string): Message {
+  // Image cache tests use a small repo fixture so payload bytes are stable across
+  // runs and do not require external downloads.
   if (!liveTestPngBase64) {
     throw new Error("live test PNG not loaded");
   }
@@ -117,6 +121,8 @@ function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | und
 }
 
 async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
+  // Trace events are JSONL so live assertions can inspect cache state transitions
+  // after the provider call completes.
   if (!liveCacheTraceFile) {
     throw new Error("live cache trace file not initialized");
   }
@@ -156,6 +162,8 @@ function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): strin
 }
 
 function buildEmbeddedModelDefinition(model: LiveResolvedModel["model"]) {
+  // Live model discovery can return partial metadata; embedded runner tests need
+  // a complete config model definition.
   const contextWindowCandidate = (model as { contextWindow?: unknown }).contextWindow;
   const maxTokensCandidate = (model as { maxTokens?: unknown }).maxTokens;
   const reasoningCandidate = (model as { reasoning?: unknown }).reasoning;
@@ -233,6 +241,8 @@ function normalizeLiveUsage(
 function buildEmbeddedRunnerConfig(
   params: LiveResolvedModel & {
     cacheRetention: "none" | "short" | "long";
+    compactionModel?: string;
+    modelAlias?: string;
     transport?: "sse" | "websocket";
   },
 ): OpenClawConfig {
@@ -256,12 +266,14 @@ function buildEmbeddedRunnerConfig(
       defaults: {
         models: {
           [modelKey]: {
+            ...(params.modelAlias ? { alias: params.modelAlias } : {}),
             params: {
               cacheRetention: params.cacheRetention,
               ...(params.transport ? { transport: params.transport } : {}),
             },
           },
         },
+        ...(params.compactionModel ? { compaction: { model: params.compactionModel } } : {}),
       },
     },
   };
@@ -363,7 +375,9 @@ async function compactLiveCacheSession(params: {
       config: buildEmbeddedRunnerConfig({
         apiKey: params.apiKey,
         cacheRetention: params.cacheRetention,
+        compactionModel: "live-compaction",
         model: params.model,
+        modelAlias: "live-compaction",
       }),
       provider: params.model.provider,
       model: params.model.id,
@@ -764,11 +778,11 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
       prompt: process.env.OPENCLAW_CACHE_TRACE_PROMPT,
       system: process.env.OPENCLAW_CACHE_TRACE_SYSTEM,
     };
-    process.env.OPENCLAW_CACHE_TRACE = "1";
-    process.env.OPENCLAW_CACHE_TRACE_FILE = liveCacheTraceFile;
-    process.env.OPENCLAW_CACHE_TRACE_MESSAGES = "0";
-    process.env.OPENCLAW_CACHE_TRACE_PROMPT = "0";
-    process.env.OPENCLAW_CACHE_TRACE_SYSTEM = "0";
+    setTestEnvValue("OPENCLAW_CACHE_TRACE", "1");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_FILE", liveCacheTraceFile);
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_MESSAGES", "0");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_PROMPT", "0");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_SYSTEM", "0");
   }, 120_000);
 
   afterAll(async () => {
@@ -783,9 +797,9 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         value: string | undefined,
       ) => {
         if (value === undefined) {
-          delete process.env[key];
+          deleteTestEnvValue(key);
         } else {
-          process.env[key] = value;
+          setTestEnvValue(key, value);
         }
       };
       restore("OPENCLAW_CACHE_TRACE", previousCacheTraceEnv.enabled);

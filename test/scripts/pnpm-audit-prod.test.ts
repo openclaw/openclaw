@@ -1,3 +1,4 @@
+// Pnpm Audit Prod tests cover pnpm audit prod script behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   createBulkAdvisoryPayload,
   fetchBulkAdvisories,
   filterFindingsBySeverity,
+  parseArgs,
   parseSnapshotKey,
   readBoundedBulkAdvisoryErrorText,
   runPnpmAuditProd,
@@ -14,6 +16,19 @@ import {
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
 
 describe("pnpm-audit-prod", () => {
+  it("parses explicit audit severity flags", () => {
+    expect(parseArgs(["--min-severity", "critical"])).toEqual({ minSeverity: "critical" });
+    expect(parseArgs(["--audit-level=moderate"])).toEqual({ minSeverity: "moderate" });
+  });
+
+  it("rejects missing audit severity flag values", () => {
+    expect(() => parseArgs(["--min-severity"])).toThrow("--min-severity requires a value");
+    expect(() => parseArgs(["--min-severity", "--audit-level", "critical"])).toThrow(
+      "--min-severity requires a value",
+    );
+    expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
+  });
+
   it("parses scoped snapshot keys with peer suffixes", () => {
     expect(parseSnapshotKey("@scope/pkg@1.2.3(peer@4.5.6)")).toEqual({
       packageName: "@scope/pkg",
@@ -258,6 +273,46 @@ snapshots:
     expect(signal?.aborted).toBe(true);
   });
 
+  it("cancels stalled successful bulk advisory response bodies on request timeout", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull() {
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: 5,
+      fetchImpl: async () => new Response(body, { status: 200 }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels stalled failed bulk advisory response bodies on request timeout", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull() {
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: 5,
+      fetchImpl: async () => new Response(body, { status: 500, statusText: "Internal Error" }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
+    expect(cancelled).toBe(true);
+  });
+
   it("bounds successful bulk advisory response bodies", async () => {
     let cancelled = false;
     const body = new ReadableStream({
@@ -279,6 +334,33 @@ snapshots:
     });
 
     await expect(request).rejects.toThrow(/Bulk advisory response body exceeded 4 bytes/u);
+    expect(cancelled).toBe(true);
+  });
+
+  it("streams non-decimal bulk advisory content-length values through the body cap", async () => {
+    let readStarted = false;
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull(controller) {
+        readStarted = true;
+        controller.enqueue(new TextEncoder().encode("12345"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      responseBodyMaxBytes: 4,
+      fetchImpl: async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-length": "5junk" },
+        }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory response body exceeded 4 bytes/u);
+    expect(readStarted).toBe(true);
     expect(cancelled).toBe(true);
   });
 

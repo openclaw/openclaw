@@ -1,3 +1,4 @@
+/** Row builders used by `openclaw models list` source orchestration. */
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -30,6 +31,7 @@ type RowFilter = {
   local?: boolean;
 };
 
+/** Context shared by every model-list row source builder. */
 export type RowBuilderContext = {
   cfg: OpenClawConfig;
   agentDir: string;
@@ -124,6 +126,7 @@ function shouldSuppressListModel(params: {
     return shouldSuppressBuiltInModelFromManifest({
       provider: params.model.provider,
       id: params.model.id,
+      baseUrl: params.model.baseUrl,
       config: params.context.cfg,
     });
   }
@@ -143,6 +146,7 @@ function normalizeListRowWithProviderPlugin(params: {
     provider: params.model.provider,
     config: params.context.cfg,
     workspaceDir: params.context.workspaceDir,
+    pluginMetadataSnapshot: params.context.metadataSnapshot,
     context: {
       config: params.context.cfg,
       agentDir: params.context.agentDir,
@@ -175,6 +179,7 @@ async function appendVisibleRow(params: {
   seenKeys?: Set<string>;
   allowProviderAvailabilityFallback?: boolean;
   skipSuppression?: boolean;
+  normalizeWithProviderPlugin?: boolean;
 }): Promise<boolean> {
   if (params.seenKeys?.has(params.key)) {
     return false;
@@ -182,19 +187,18 @@ async function appendVisibleRow(params: {
   if (!matchesRowFilter(params.context, params.model)) {
     return false;
   }
-  const normalizedModel = normalizeListRowWithProviderPlugin({
-    model: params.model,
-    context: params.context,
-  });
-  if (
-    !params.skipSuppression &&
-    shouldSuppressListModel({ model: normalizedModel, context: params.context })
-  ) {
+  const model = params.normalizeWithProviderPlugin
+    ? normalizeListRowWithProviderPlugin({
+        model: params.model,
+        context: params.context,
+      })
+    : params.model;
+  if (!params.skipSuppression && shouldSuppressListModel({ model, context: params.context })) {
     return false;
   }
   params.rows.push(
     await buildRow({
-      model: normalizedModel,
+      model,
       key: params.key,
       context: params.context,
       allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback,
@@ -294,6 +298,7 @@ function toFallbackConfiguredListModel(entry: ConfiguredEntry, cfg: OpenClawConf
   );
 }
 
+/** Appends rows discovered from the loaded model registry. */
 export async function appendDiscoveredRows(params: {
   rows: ModelRow[];
   models: Model[];
@@ -344,6 +349,7 @@ export async function appendDiscoveredRows(params: {
   return seenKeys;
 }
 
+/** Appends models explicitly configured under models.providers. */
 export async function appendConfiguredProviderRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
@@ -369,11 +375,13 @@ export async function appendConfiguredProviderRows(params: {
         context: params.context,
         seenKeys: params.seenKeys,
         allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+        normalizeWithProviderPlugin: true,
       });
     }
   }
 }
 
+/** Appends catalog models for providers that have configured auth. */
 export async function appendAuthenticatedCatalogRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
@@ -401,6 +409,7 @@ export async function appendAuthenticatedCatalogRows(params: {
   }
 }
 
+/** Appends normalized model catalog rows into the shared row list. */
 export async function appendModelCatalogRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
@@ -426,6 +435,7 @@ export async function appendModelCatalogRows(params: {
   return appended;
 }
 
+/** Appends manifest catalog rows through the generic catalog-row path. */
 export function appendManifestCatalogRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
@@ -438,6 +448,7 @@ export function appendManifestCatalogRows(params: {
   });
 }
 
+/** Appends catalog rows that are resolvable by the registry but missing from registry output. */
 export async function appendCatalogSupplementRows(params: {
   rows: ModelRow[];
   modelRegistry: ModelRegistry;
@@ -491,6 +502,7 @@ export async function appendCatalogSupplementRows(params: {
   });
 }
 
+/** Appends model rows returned by provider catalog hooks. */
 export async function appendProviderCatalogRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
@@ -528,6 +540,7 @@ export async function appendProviderCatalogRows(params: {
   return appended;
 }
 
+/** Appends rows from default/fallback/configured model references. */
 export async function appendConfiguredRows(params: {
   rows: ModelRow[];
   entries: ConfiguredEntry[];

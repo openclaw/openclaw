@@ -1,3 +1,4 @@
+/** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -10,7 +11,6 @@ import {
   noteOpencodeProviderOverrides,
 } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
@@ -23,6 +23,7 @@ import {
   collectMissingDefaultAccountBindingWarnings,
   collectMissingExplicitDefaultAccountWarnings,
 } from "./doctor/shared/default-account-warnings.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
   const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
@@ -52,6 +53,31 @@ function collectInvalidHookTransformsDirWarnings(
   return [
     `- hooks.transformsDir: ${transformsDir} is outside ${transformsRoot}. Hook transform modules must live under ${transformsRoot}; move custom transforms there or remove hooks.transformsDir.`,
   ];
+}
+
+function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
+  const entries = cfg.hooks?.internal?.entries;
+  if (!entries) {
+    return [];
+  }
+  const unsupportedKeysByEntry = Object.entries(entries)
+    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map(([hookKey, entry]) => {
+      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
+        Object.hasOwn(entry, key),
+      );
+      return { hookKey, unsupportedKeys };
+    })
+    .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
+
+  if (unsupportedKeysByEntry.length === 0) {
+    return [];
+  }
+
+  return unsupportedKeysByEntry.map(
+    ({ hookKey, unsupportedKeys }) =>
+      `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
+  );
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
@@ -103,6 +129,12 @@ async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
   }
 }
 
+/**
+ * Loads config, runs doctor migrations/repairs, and returns the config write plan.
+ *
+ * This is the config-side orchestration boundary for doctor; it keeps preview notes, repair
+ * mutations, gateway auth refreshes, and final write confirmation in one ordered flow.
+ */
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -183,6 +215,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (hookTransformsDirWarnings.length > 0) {
     note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
   }
+  const unsupportedInternalHookEntryWarnings = collectUnsupportedInternalHookEntryWarnings(cfg);
+  if (unsupportedInternalHookEntryWarnings.length > 0) {
+    note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
+  }
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
   if (normalized.changes.length > 0) {
@@ -195,6 +231,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
+  const pluginActivationSourceConfig = candidate;
   const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
   const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
   if (autoEnable.changes.length > 0) {
@@ -293,8 +330,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
     const previewNotes = await collectDoctorPreviewNotes({
       cfg: candidate,
+      activationSourceConfig: pluginActivationSourceConfig,
       doctorFixCommand,
       env: process.env,
+      allowExec: params.options.allowExec === true,
     });
     emitDoctorNotes({
       note,

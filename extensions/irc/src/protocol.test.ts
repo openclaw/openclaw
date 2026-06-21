@@ -1,10 +1,10 @@
+// Irc tests cover protocol plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   parseIrcLine,
   parseIrcPrefix,
   sanitizeIrcOutboundText,
   sanitizeIrcTarget,
-  splitIrcText,
 } from "./protocol.js";
 
 describe("irc protocol", () => {
@@ -34,15 +34,5 @@ describe("irc protocol", () => {
     expect(sanitizeIrcTarget("#openclaw")).toBe("#openclaw");
     expect(() => sanitizeIrcTarget("#bad\\nPING")).toThrow(/Invalid IRC target/);
     expect(() => sanitizeIrcTarget(" user")).toThrow(/Invalid IRC target/);
-  });
-
-  it("splits long text on boundaries", () => {
-    const chunks = splitIrcText("a ".repeat(300), 120);
-    expect(chunks.length).toBeGreaterThan(2);
-    expect(
-      chunks
-        .map((chunk, index) => ({ index, length: chunk.length }))
-        .filter((chunk) => chunk.length > 120),
-    ).toStrictEqual([]);
   });
 });

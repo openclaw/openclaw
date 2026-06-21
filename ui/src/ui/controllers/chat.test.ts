@@ -1,3 +1,4 @@
+// Control UI tests cover chat behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   registerChatAttachmentPayload,
@@ -135,6 +136,113 @@ describe("handleChatEvent", () => {
       state: "final",
     };
     expect(handleChatEvent(state, payload)).toBe(null);
+  });
+
+  it("caches final messages for a switched-away session", () => {
+    const visibleMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "main visible" }],
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatMessages: [visibleMessage],
+      chatMessagesBySession: new Map(),
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "other",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "other final" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatMessages).toEqual([visibleMessage]);
+    expect(state.chatMessagesBySession?.get("agent:main:other")).toEqual([payload.message]);
+  });
+
+  it.each([
+    {
+      name: "canonical default-session finals under the main alias",
+      activeSessionKey: "agent:main:other",
+      payloadSessionKey: "agent:main:main",
+      cacheKey: "agent:main:main",
+      withConfiguredDefaults: false,
+    },
+    {
+      name: "configured default-session finals under runtime aliases",
+      activeSessionKey: "agent:ops:other",
+      payloadSessionKey: "agent:ops:home",
+      cacheKey: "agent:ops:main",
+      withConfiguredDefaults: true,
+    },
+    {
+      name: "canonical non-main finals under the plain session key",
+      activeSessionKey: "main",
+      payloadSessionKey: "agent:main:project",
+      cacheKey: "agent:main:project",
+      withConfiguredDefaults: false,
+    },
+  ])(
+    "caches $name",
+    ({ activeSessionKey, payloadSessionKey, cacheKey, withConfiguredDefaults }) => {
+      const state = createState({ sessionKey: activeSessionKey, chatMessagesBySession: new Map() });
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: payloadSessionKey,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "cached final" }],
+        },
+      };
+
+      if (withConfiguredDefaults) {
+        (state as Record<string, unknown>).hello = {
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "ops",
+              mainKey: "home",
+            },
+          },
+        };
+      }
+
+      expect(handleChatEvent(state, payload)).toBe(null);
+      expect(state.chatMessagesBySession?.get(cacheKey)).toEqual([payload.message]);
+      expect(state.chatMessagesBySession?.size).toBe(1);
+    },
+  );
+
+  it("caches inactive global finals under the payload agent only", () => {
+    const visibleMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "work visible" }],
+    };
+    const state = createState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      chatMessages: [visibleMessage],
+      chatMessagesBySession: new Map(),
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "main final" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatMessages).toEqual([visibleMessage]);
+    expect(state.chatMessagesBySession?.get("agent:main:main")).toEqual([payload.message]);
+    expect(state.chatMessagesBySession?.has("agent:work:main")).toBe(false);
   });
 
   it("does not arm stale active-row suppression for an unowned selected-session final", () => {
@@ -1664,6 +1772,24 @@ describe("loadChatHistory filtering", () => {
       "chat.history",
       expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
     );
+  });
+
+  it("caches global history under the selected agent only", async () => {
+    const messages = [{ role: "assistant", content: [{ type: "text", text: "work history" }] }];
+    const request = vi.fn().mockResolvedValue({ messages });
+    const state = createState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      chatMessagesBySession: new Map(),
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessagesBySession?.get("agent:work:main")).toEqual(messages);
+    expect(state.chatMessagesBySession?.has("agent:main:main")).toBe(false);
   });
 
   it("loads startup history with agents in one request", async () => {

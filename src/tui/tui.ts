@@ -22,6 +22,11 @@ import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+} from "../process/windows-command.js";
+import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
@@ -35,7 +40,11 @@ import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatGoalFooter, formatTokens } from "./tui-formatters.js";
+import {
+  formatGoalFooter,
+  formatRemoteConnectionHostFooter,
+  formatTokens,
+} from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
   readTuiLastSessionKey,
@@ -120,14 +129,24 @@ export function resolveLocalAuthCliInvocation(params?: {
     : { command, args: [runNodePath, "models", "auth", "login"] };
 }
 
-export function resolveLocalAuthSpawnOptions(params: {
+export function resolveLocalAuthSpawnInvocation(params: {
   command: string;
+  args: string[];
   platform?: NodeJS.Platform;
-}): { shell?: true } {
+}): {
+  args: string[];
+  command: string;
+  options: { windowsHide?: true; windowsVerbatimArguments?: true };
+} {
   const platform = params.platform ?? process.platform;
-  return platform === "win32" && /\.(cmd|bat)$/iu.test(params.command.trim())
-    ? { shell: true }
-    : {};
+  if (!isWindowsBatchCommand(params.command.trim(), platform)) {
+    return { command: params.command, args: params.args, options: {} };
+  }
+  return {
+    command: resolveTrustedWindowsCmdExe(platform),
+    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.command, params.args)],
+    options: { windowsHide: true, windowsVerbatimArguments: true },
+  };
 }
 
 export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
@@ -169,6 +188,16 @@ export function resolveTuiSessionKey(params: {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
+}
+
+export function resolveTuiFooterHostLabel(params: {
+  config: OpenClawConfig;
+  connectionUrl: string;
+}): string | null {
+  if (params.config.tui?.footer?.showRemoteHost !== true) {
+    return null;
+  }
+  return formatRemoteConnectionHostFooter(params.connectionUrl);
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -397,6 +426,17 @@ export function isTuiBusyActivityStatus(status: string): boolean {
   return TUI_BUSY_ACTIVITY_STATUSES.has(status);
 }
 
+export function resolveTuiToolsToggleActivityStatus(params: {
+  currentStatus: string;
+  toolsExpanded: boolean;
+}): string {
+  const toolsStatus = params.toolsExpanded ? "tools expanded" : "tools collapsed";
+  if (isTuiBusyActivityStatus(params.currentStatus)) {
+    return params.currentStatus;
+  }
+  return toolsStatus;
+}
+
 export function resolveTuiShutdownHardExitMs(params: { localMode?: boolean } = {}): number {
   return TUI_SHUTDOWN_HARD_EXIT_MS + (params.localMode ? resolveLocalRunShutdownGraceMs() : 0);
 }
@@ -505,6 +545,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let activeChatRunId: string | null = null;
   let pendingOptimisticUserMessage = false;
   let pendingChatRunId: string | null = null;
+  let pendingSubmitDraft: { runId: string; text: string } | null = null;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -594,6 +635,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     },
     set pendingChatRunId(value) {
       pendingChatRunId = value ?? null;
+    },
+    get pendingSubmitDraft() {
+      return pendingSubmitDraft;
+    },
+    set pendingSubmitDraft(value) {
+      pendingSubmitDraft = value ?? null;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -1159,11 +1206,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
                   }
                 }
 
-                const child = spawn(command, args, {
+                const invocation = resolveLocalAuthSpawnInvocation({ command, args });
+                const child = spawn(invocation.command, invocation.args, {
                   cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
                   env: process.env,
                   stdio: "inherit",
-                  ...resolveLocalAuthSpawnOptions({ command }),
+                  ...invocation.options,
                 });
                 child.once("error", reject);
                 child.once("exit", (exitCode, signal) => {
@@ -1192,7 +1240,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+    const hostLabel = resolveTuiFooterHostLabel({ config, connectionUrl: client.connection.url });
     const footerParts = [
+      hostLabel,
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,
@@ -1258,9 +1308,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleChatEvent,
     handleAgentEvent,
     handleBtwEvent,
+    handleSessionsChangedEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
+    isRunObserved,
     flushPendingHistoryRefreshIfIdle,
   } = createEventHandlers({
     chatLog,
@@ -1354,6 +1406,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       forgetLocalRunId,
       forgetLocalBtwRunId,
       consumeCompletedRunForPendingSend,
+      isRunObserved,
       flushPendingHistoryRefreshIfIdle,
       runAuthFlow,
       requestExit,
@@ -1435,7 +1488,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   editor.onCtrlO = () => {
     toolsExpanded = !toolsExpanded;
     chatLog.setToolsExpanded(toolsExpanded);
-    setActivityStatus(toolsExpanded ? "tools expanded" : "tools collapsed");
+    // Ctrl+O is presentation-only; preserve busy activity so the status loader
+    // does not disappear before the run lifecycle ends.
+    setActivityStatus(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: activityStatus,
+        toolsExpanded,
+      }),
+    );
     tui.requestRender();
   };
   editor.onCtrlL = () => {
@@ -1477,6 +1537,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
     }
+    if (evt.event === "sessions.changed") {
+      handleSessionsChangedEvent(evt.payload);
+    }
   };
 
   client.onConnected = () => {
@@ -1489,6 +1552,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }
     setConnectionStatus(isLocalMode ? "local ready" : "connected");
     void (async () => {
+      try {
+        await client.subscribeSessionEvents?.();
+      } catch (err) {
+        chatLog.addSystem(`session event subscribe failed: ${String(err)}`);
+      }
       await refreshAgents();
       await restoreRememberedSession();
       updateHeader();

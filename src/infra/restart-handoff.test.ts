@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  consumeGatewayRestartHandoffForExitedProcessSync,
   formatGatewayRestartHandoffDiagnostic,
   GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME,
   GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
@@ -124,74 +123,6 @@ describe("gateway restart handoff", () => {
     });
   });
 
-  it("consumes a fresh handoff by exited pid instead of current process pid", () => {
-    const env = createHandoffEnv();
-
-    expectWrittenHandoff({
-      env,
-      pid: process.pid + 1,
-      reason: "update.run",
-      restartKind: "update-process",
-      supervisorMode: "systemd",
-      createdAt: 2_000,
-    });
-
-    const consumed = consumeGatewayRestartHandoffForExitedProcessSync({
-      env,
-      exitedPid: process.pid + 1,
-      now: 2_001,
-    });
-    expect(consumed?.pid).toBe(process.pid + 1);
-    expect(consumed?.source).toBe("gateway-update");
-    expect(consumed?.restartKind).toBe("update-process");
-    expect(consumed?.supervisorMode).toBe("systemd");
-    expect(fs.existsSync(handoffPath(env))).toBe(false);
-  });
-
-  it("rejects handoffs for a different exited pid and clears them", () => {
-    const env = createHandoffEnv();
-
-    expectWrittenHandoff({
-      env,
-      pid: 111,
-      restartKind: "full-process",
-      supervisorMode: "external",
-      createdAt: 1_000,
-    });
-
-    expect(
-      consumeGatewayRestartHandoffForExitedProcessSync({
-        env,
-        exitedPid: 222,
-        now: 1_001,
-      }),
-    ).toBeNull();
-    expect(fs.existsSync(handoffPath(env))).toBe(false);
-  });
-
-  it("rejects a handoff when the supplied process instance does not match", () => {
-    const env = createHandoffEnv();
-
-    expectWrittenHandoff({
-      env,
-      pid: 111,
-      processInstanceId: "gateway-instance-1",
-      restartKind: "full-process",
-      supervisorMode: "external",
-      createdAt: 1_000,
-    });
-
-    expect(
-      consumeGatewayRestartHandoffForExitedProcessSync({
-        env,
-        exitedPid: 111,
-        processInstanceId: "gateway-instance-2",
-        now: 1_001,
-      }),
-    ).toBeNull();
-    expect(fs.existsSync(handoffPath(env))).toBe(false);
-  });
-
   it("rejects malformed handoff payloads", () => {
     const env = createHandoffEnv();
 
@@ -229,14 +160,7 @@ describe("gateway restart handoff", () => {
     expect(readGatewayRestartHandoffSync(env, 2_001)).toBeNull();
 
     fs.writeFileSync(handoffPath(env), "x".repeat(8192), { encoding: "utf8", mode: 0o600 });
-    expect(
-      consumeGatewayRestartHandoffForExitedProcessSync({
-        env,
-        exitedPid: 111,
-        now: 2_001,
-      }),
-    ).toBeNull();
-    expect(fs.existsSync(handoffPath(env))).toBe(false);
+    expect(readGatewayRestartHandoffSync(env, 2_001)).toBeNull();
   });
 
   it("rejects persisted handoffs with a ttl longer than the supported window", () => {
@@ -259,14 +183,6 @@ describe("gateway restart handoff", () => {
     );
 
     expect(readGatewayRestartHandoffSync(env, 1_001)).toBeNull();
-    expect(
-      consumeGatewayRestartHandoffForExitedProcessSync({
-        env,
-        exitedPid: 111,
-        now: 1_001,
-      }),
-    ).toBeNull();
-    expect(fs.existsSync(handoffPath(env))).toBe(false);
   });
 
   it("does not follow an existing handoff-path symlink when writing", () => {
@@ -288,12 +204,7 @@ describe("gateway restart handoff", () => {
 
     expect(fs.readFileSync(targetPath, "utf8")).toBe("keep");
     expect(fs.lstatSync(handoffPath(env)).isSymbolicLink()).toBe(false);
-    expect(
-      consumeGatewayRestartHandoffForExitedProcessSync({
-        env,
-        exitedPid: 12_345,
-      })?.pid,
-    ).toBe(12_345);
+    expect(readGatewayRestartHandoffSync(env)?.pid).toBe(12_345);
   });
 
   it("formats a concise diagnostic line for status surfaces", () => {

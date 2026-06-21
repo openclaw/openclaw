@@ -361,6 +361,22 @@ describe("channel-streaming", () => {
     ).toBe("Shelling\n\n• I'm checking whether the generated video exists or if the…");
   });
 
+  it("falls back to plain commentary when compaction drops the closing italic marker", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false, maxLineChars: 32 } } },
+        lines: [
+          {
+            kind: "item",
+            text: `_${"x".repeat(80)}_`,
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe(`${"x".repeat(30)}…`);
+  });
+
   it("keeps compacted raw progress lines from leaking unmatched markdown backticks", () => {
     const line = buildChannelProgressDraftLine(
       {
@@ -538,30 +554,98 @@ describe("channel-streaming", () => {
     ).toBe("🛠️ Exec\n• Checking the app-server stream");
   });
 
-  it("preserves stable ids on named tool and command-output progress lines", () => {
+  it("keeps public command progress ids while replacing by command correlation", () => {
     const toolLine = buildChannelProgressDraftLine({
       event: "tool",
-      itemId: "tool:item-1",
+      itemId: "tool:call-1",
       toolCallId: "call-1",
       name: "bash",
       phase: "start",
     });
     const commandLine = buildChannelProgressDraftLine({
       event: "command-output",
-      itemId: "command:item-1",
+      itemId: "tool:call-1-output",
       toolCallId: "call-1",
       name: "bash",
       phase: "end",
       exitCode: 0,
     });
+    const itemLine = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: "tool:call-1",
+      toolCallId: "call-1",
+      itemKind: "command",
+      name: "bash",
+      phase: "update",
+      progressText: "install dependencies",
+    });
 
-    expect(toolLine).toMatchObject({ id: "tool:item-1", kind: "tool", toolName: "bash" });
+    expect(toolLine).toMatchObject({ id: "tool:call-1", kind: "tool", toolName: "bash" });
+    expect(itemLine).toMatchObject({ id: "tool:call-1", kind: "item", toolName: "bash" });
     expect(commandLine).toMatchObject({
-      id: "command:item-1",
+      id: "tool:call-1-output",
       kind: "command-output",
       status: "completed",
       toolName: "bash",
     });
+
+    if (!toolLine || !itemLine || !commandLine) {
+      throw new Error("expected command progress lines");
+    }
+    const updated = [itemLine, commandLine].reduce(
+      (lines, line) => mergeChannelProgressDraftLine(lines, line, { maxLines: 4 }),
+      mergeChannelProgressDraftLine([], toolLine, { maxLines: 4 }),
+    );
+
+    expect(updated).toHaveLength(1);
+    expect(updated[0]).toMatchObject({
+      id: "tool:call-1-output",
+      kind: "command-output",
+      detail: "install dependencies",
+      status: "completed",
+      text: "🛠️ install dependencies",
+    });
+    expect(
+      formatChannelProgressDraftText({
+        lines: updated,
+        entry: { streaming: { progress: { label: false } } },
+      }),
+    ).toBe("🛠️ install dependencies");
+
+    const recoveredItemLine = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: "command-2",
+      itemKind: "command",
+      name: "bash",
+      phase: "end",
+      status: "failed",
+      progressText: "install dependencies failed",
+    });
+    const recoveredCommandLine = buildChannelProgressDraftLine({
+      event: "command-output",
+      itemId: "command-2",
+      toolCallId: "call-2",
+      name: "bash",
+      phase: "end",
+      exitCode: 0,
+    });
+    if (!recoveredItemLine || !recoveredCommandLine) {
+      throw new Error("expected recovered command progress lines");
+    }
+    const recoveredUpdated = mergeChannelProgressDraftLine(
+      [recoveredItemLine],
+      recoveredCommandLine,
+      { maxLines: 4 },
+    );
+    expect(recoveredUpdated).toMatchObject([
+      {
+        id: "command-2",
+        kind: "command-output",
+        status: "completed",
+        text: "🛠️ Bash",
+      },
+    ]);
+    expect(recoveredUpdated[0]).not.toHaveProperty("detail");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {
@@ -595,17 +679,20 @@ describe("channel-streaming", () => {
 
   it("does not report started when delayed progress startup rejects", async () => {
     vi.useFakeTimers();
+    const error = new Error("draft unavailable");
     const onStart = vi
       .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("draft unavailable"))
+      .mockRejectedValueOnce(error)
       .mockResolvedValueOnce(undefined);
-    const gate = createChannelProgressDraftGate({ onStart });
+    const onStartError = vi.fn();
+    const gate = createChannelProgressDraftGate({ onStart, onStartError });
 
     await expect(gate.noteWork()).resolves.toBe(false);
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(gate.hasStarted).toBe(false);
+    expect(onStartError).toHaveBeenCalledWith(error);
 
     await expect(gate.noteWork()).resolves.toBe(true);
 

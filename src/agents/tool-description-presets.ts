@@ -30,7 +30,7 @@ export function describeSessionsHistoryTool(): string {
 /** Describes the sessions_send tool for model-facing instructions. */
 export function describeSessionsSendTool(): string {
   return [
-    "Send message to visible session by sessionKey/label, or configured agent by agentId.",
+    "Send message to visible session by sessionKey/label, or configured agent by agentId; sessionKey wins when redundant label metadata is present.",
     "Thread-scoped chats rejected; target parent channel session.",
     "Creates missing configured-agent main session; waits for reply when available.",
   ].join(" ");
@@ -45,6 +45,13 @@ export function describeSessionsSpawnTool(options?: {
     options?.acpAvailable === false
       ? 'Spawn clean child session; default `runtime="subagent"`.'
       : 'Spawn clean child session; default `runtime="subagent"`; set `runtime="acp"` explicitly for ACP.';
+  const sessionCompletionGuidance =
+    options?.acpAvailable === false
+      ? "After spawning, do non-overlapping work; run-mode results return, session-mode output stays in thread."
+      : 'After spawning, do non-overlapping work; run-mode results return, session-mode output stays in thread unless ACP uses `streamTo="parent"`.';
+  const completionGuidance = options?.threadAvailable
+    ? sessionCompletionGuidance
+    : "After spawning, do non-overlapping work while run-mode results return.";
   const baseDescription = [
     runtimeDescription,
     options?.threadAvailable
@@ -54,6 +61,9 @@ export function describeSessionsSpawnTool(options?: {
     "Native subagents get task in first visible `[Subagent Task]` message.",
     'Native only: `context="fork"` only when child needs current transcript; else omit or `isolated`.',
     "Use for fresh child-session work.",
+    "Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection.",
+    "Avoid delegating quick lookups or single-file reads unless policy prefers delegation.",
+    completionGuidance,
   ];
   if (options?.acpAvailable === false) {
     return baseDescription.join(" ");

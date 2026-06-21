@@ -1,7 +1,10 @@
+// Subagent spawn attachment tests cover strict base64 decoding, attachment name
+// validation, materialization paths, and cleanup after spawn failures.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -25,8 +28,6 @@ beforeAll(async () => {
     workspaceDir: workspaceDirOverride || os.tmpdir(),
   });
 });
-
-// --- decodeStrictBase64 ---
 
 describe("decodeStrictBase64", () => {
   const maxBytes = 1024;
@@ -61,7 +62,8 @@ describe("decodeStrictBase64", () => {
 
   it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", () => {
     const { decodeStrictBase64 } = subagentSpawnModule;
-    // maxEncodedBytes = ceil(1024/3)*4 = 1368; *2 = 2736
+    // Pre-decode guard rejects obviously oversized payloads before allocating
+    // the decoded buffer.
     const oversized = "A".repeat(2737);
     expect(decodeStrictBase64(oversized, maxBytes)).toBeNull();
   });
@@ -81,8 +83,6 @@ describe("decodeStrictBase64", () => {
     expect(result?.byteLength).toBe(1024);
   });
 });
-
-// --- filename validation via spawnSubagentDirect ---
 
 describe("spawnSubagentDirect filename validation", () => {
   beforeEach(async () => {
@@ -219,28 +219,31 @@ describe("spawnSubagentDirect filename validation", () => {
       return store;
     });
     try {
-      vi.stubEnv("HOME", homeDir);
-      const { spawnSubagentDirect } = subagentSpawnModule;
-      const result = await spawnSubagentDirect(
-        {
-          task: "test",
-          cwd: "~/task-repo",
-          attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
-        },
-        ctx,
-      );
+      await withEnvAsync({ HOME: homeDir }, async () => {
+        const { spawnSubagentDirect } = subagentSpawnModule;
+        const result = await spawnSubagentDirect(
+          {
+            task: "test",
+            cwd: "~/task-repo",
+            attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+          },
+          ctx,
+        );
 
-      expect(result.status).toBe("accepted");
-      const attachmentsRoot = path.join(expectedCwd, ".openclaw", "attachments");
-      expect(fs.existsSync(attachmentsRoot)).toBe(true);
-      const childSessionKey = result.childSessionKey as string;
-      expect(persistedStore?.[childSessionKey]?.spawnedCwd).toBe(expectedCwd);
+        expect(result.status).toBe("accepted");
+        const attachmentsRoot = path.join(expectedCwd, ".openclaw", "attachments");
+        expect(fs.existsSync(attachmentsRoot)).toBe(true);
+        const childSessionKey = result.childSessionKey as string;
+        expect(persistedStore?.[childSessionKey]?.spawnedCwd).toBe(expectedCwd);
+      });
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 
   it("removes materialized attachments when lineage patching fails", async () => {
+    // Attachments are created before the child session lineage patch; failures
+    // must delete both the child session and materialized files.
     const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
     const store: Record<string, Record<string, unknown>> = {};
     updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {

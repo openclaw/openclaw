@@ -1,3 +1,4 @@
+// Scans packaged dist JavaScript for relative imports and missing closure entries.
 import path from "node:path";
 
 const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
@@ -8,6 +9,10 @@ function normalizePackagePath(value) {
 
 function stripSpecifierSuffix(value) {
   return value.replace(/[?#].*$/u, "");
+}
+
+function hasJavaScriptFileExtension(value) {
+  return /\.(?:cjs|js|mjs)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
 }
 
 function resolveDistImportPath(importerPath, specifier) {
@@ -43,6 +48,15 @@ function isImportSpecifierContext(source, index) {
     /^(?:import|export)\b[\s\S]*\bfrom\s*$/u.test(statementPrefix) ||
     /^import\s*$/u.test(statementPrefix)
   );
+}
+
+function isImportMetaUrlContext(source, quoteStart, quoteEnd) {
+  const prefix = source.slice(Math.max(0, quoteStart - 32), quoteStart);
+  if (!/\bnew\s+URL\s*\(\s*$/u.test(prefix)) {
+    return false;
+  }
+  const suffix = source.slice(quoteEnd + 1, quoteEnd + 96);
+  return /^\s*,\s*import\.meta\.url\s*,?\s*\)/u.test(suffix);
 }
 
 function collectImportSpecifiers(source) {
@@ -99,7 +113,10 @@ function collectImportSpecifiers(source) {
     }
 
     if (value.startsWith(".")) {
-      if (isImportSpecifierContext(source, index)) {
+      const isDistDependency =
+        isImportSpecifierContext(source, index) ||
+        (isImportMetaUrlContext(source, index, cursor) && hasJavaScriptFileExtension(value));
+      if (isDistDependency) {
         specifiers.push(value);
       }
     }
@@ -108,6 +125,7 @@ function collectImportSpecifiers(source) {
   return specifiers;
 }
 
+/** Collect missing-file errors for relative imports inside package dist files. */
 export function collectPackageDistImportErrors(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);
@@ -123,6 +141,7 @@ export function collectPackageDistImportErrors(params) {
   return errors;
 }
 
+/** Collect relative dist import edges from package JavaScript files. */
 export function collectPackageDistImports(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const imports = [];
@@ -144,6 +163,7 @@ export function collectPackageDistImports(params) {
   return imports;
 }
 
+/** Expand seed dist files to include all reachable relative dist imports. */
 export function expandPackageDistImportClosure(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);

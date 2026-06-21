@@ -1,3 +1,4 @@
+// Plugin Update Unchanged Docker tests cover plugin update unchanged docker script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +47,17 @@ function runProbeStatus(
   }
 }
 
+function runProbeFileStatus(
+  command: string,
+  filePath: string,
+): { status: number | null; stderr: string } {
+  const result = spawnSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, command, filePath], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  return { status: result.status, stderr: result.stderr };
+}
+
 describe("plugin update unchanged Docker E2E", () => {
   it("seeds current plugin install ledger state before checking config stability", () => {
     const runner = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
@@ -67,13 +79,69 @@ describe("plugin update unchanged Docker E2E", () => {
 
     expect(script).toContain("OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS");
     expect(script).toContain(
+      "openclaw_e2e_read_positive_int_env OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS 180",
+    );
+    expect(script).toContain(
       'openclaw_e2e_maybe_timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update',
+    );
+    expect(script).not.toContain(
+      'plugin_update_timeout_seconds="${OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS:-180}"',
     );
     expect(script).not.toMatch(
       /^\s*timeout "\$\{plugin_update_timeout_seconds\}s" node "\$entry"/mu,
     );
     expect(script).toContain('"--- plugin update output ---"');
     expect(script).toContain('"--- local registry output ---"');
+    expect(script).toContain("openclaw_e2e_print_log /tmp/plugin-update-output.log");
+    expect(script).toContain("openclaw_e2e_print_log /tmp/openclaw-e2e-registry.log");
+    expect(script).not.toContain("cat /tmp/plugin-update-output.log");
+    expect(script).not.toContain("cat /tmp/openclaw-e2e-registry.log");
+  });
+
+  it("bounds assert-output diagnostics to the saved command log tail", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
+    const logPath = path.join(root, "plugin-update-output.log");
+    try {
+      writeFileSync(
+        logPath,
+        `DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG\n${"filler line\n".repeat(12 * 1024)}missing marker tail`,
+        "utf8",
+      );
+
+      const result = runProbeFileStatus("assert-output", logPath);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Expected up-to-date output missing");
+      expect(result.stderr).toContain("Output tail:");
+      expect(result.stderr).toContain("missing marker tail");
+      expect(result.stderr).not.toContain("DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG");
+      expect(result.stderr.length).toBeLessThan(80 * 1024);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects unexpected download output before a large log tail", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
+    const logPath = path.join(root, "plugin-update-output.log");
+    try {
+      writeFileSync(
+        logPath,
+        [
+          "Downloading @example/lossless-claw",
+          "filler line\n".repeat(12 * 1024),
+          "lossless-claw is up to date (0.9.0).",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = runProbeFileStatus("assert-output", logPath);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Unexpected npm download/reinstall path");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("waits for the local registry process during cleanup", () => {
@@ -87,6 +155,12 @@ describe("plugin update unchanged Docker E2E", () => {
     const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
 
     expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
+    expect(script).toContain(
+      "openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900",
+    );
+    expect(script).not.toContain(
+      'update_timeout_seconds="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS:-900}"',
+    );
     expect(
       script.match(/openclaw_e2e_maybe_timeout "\$\{update_timeout_seconds\}s" \\/gu)?.length,
     ).toBe(2);
@@ -101,6 +175,8 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).toContain(
       "updated OpenClaw entry failed or timed out after ${update_timeout_seconds}s",
     );
+    expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(8);
+    expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
   });
 
   it("requires disabled-after-failure corrupt plugin updates to stay warnings", () => {
@@ -131,7 +207,7 @@ describe("plugin update unchanged Docker E2E", () => {
             message:
               `Plugin "${CORRUPT_PLUGIN_ID}" could not be processed after the core update: ` +
               disabledAfterFailure.npm.outcomes[0].message +
-              " Run openclaw doctor --fix to attempt automatic repair. " +
+              " Run openclaw update repair to retry post-update plugin repair. " +
               `Run openclaw plugins inspect ${CORRUPT_PLUGIN_ID} --runtime --json for details.`,
           },
         ],

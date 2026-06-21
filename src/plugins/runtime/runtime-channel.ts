@@ -1,3 +1,4 @@
+// Runtime channel helpers adapt channel plugin APIs into core channel send and reply flows.
 import { convertMarkdownTables } from "../../../packages/markdown-core/src/tables.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
@@ -63,11 +64,11 @@ import {
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import {
-  readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveStorePath,
   updateLastRoute,
 } from "../../config/sessions.js";
+import { readSessionUpdatedAt } from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import {
   fetchRemoteMedia,

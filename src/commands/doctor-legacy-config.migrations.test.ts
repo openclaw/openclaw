@@ -1,9 +1,10 @@
+// Doctor legacy config migration tests cover shipped migration recipes and validation outcomes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupCliBackend: () => undefined,
@@ -184,6 +185,36 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes.some((change) => change.includes("messages.groupChat.visibleReplies"))).toBe(
       false,
     );
+  });
+
+  it("removes null workspace values from agents.list entries", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [
+          { id: "main", workspace: null as unknown as string },
+          { id: "beta", workspace: "/beta" },
+          { id: "gamma" },
+        ],
+      },
+    });
+
+    expect(res.config.agents?.list).toEqual([
+      { id: "main" },
+      { id: "beta", workspace: "/beta" },
+      { id: "gamma" },
+    ]);
+    expect(res.changes).toContain("Removed null workspace value from agents.list entry.");
+  });
+
+  it("does not alter agents.list when no workspace is null", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "main", workspace: "/main" }, { id: "beta" }],
+      },
+    });
+
+    expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
+    expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
   });
 
   it("removes bindings for missing configured agents", () => {
@@ -1245,6 +1276,37 @@ describe("normalizeCompatibilityConfigValues", () => {
     };
 
     const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("does not report talk provider normalization for realtime voice aliases", () => {
+    const input = {
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            voiceId: "voice-123",
+          },
+        },
+        realtime: {
+          provider: "openai",
+          providers: {
+            openai: {
+              model: "gpt-realtime",
+            },
+          },
+          model: "gpt-realtime",
+          voice: "cedar",
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+        },
+      },
+    };
+
+    const res = normalizeCompatibilityConfigValues(input as OpenClawConfig);
 
     expect(res.config).toEqual(input);
     expect(res.changes).toStrictEqual([]);

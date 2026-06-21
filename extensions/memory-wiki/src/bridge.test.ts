@@ -1,3 +1,4 @@
+// Memory Wiki tests cover bridge plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -147,6 +148,46 @@ describe("syncMemoryWikiBridgeSources", () => {
       .trim()
       .split("\n");
     expect(logLines).toHaveLength(2);
+  });
+
+  it("imports bridge artifacts from legacy providers without agent ids", async () => {
+    const workspaceDir = await createBridgeWorkspace("legacy-agentids-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("legacy-agentids-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: memoryPath,
+        contentType: "markdown",
+      } as Omit<MemoryPluginPublicArtifact, "agentIds"> as MemoryPluginPublicArtifact,
+    ]);
+
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+
+    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
+
+    expect(result.importedCount).toBe(1);
+    expect(result.artifactCount).toBe(1);
+    const page = await fs.readFile(path.join(vaultDir, result.pagePaths[0] ?? ""), "utf8");
+    expect(page).toContain("# Memory Bridge: MEMORY");
+    expect(page).toContain("- Agents: unknown");
   });
 
   it("returns a no-op result outside bridge mode", async () => {

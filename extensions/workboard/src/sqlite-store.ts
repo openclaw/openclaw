@@ -1,6 +1,8 @@
+// Workboard plugin module implements sqlite store behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { configureSqliteConnectionPragmas } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type {
   PersistedWorkboardAttachment,
@@ -360,15 +362,6 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
   ).run(`schema-${SCHEMA_VERSION}`, Date.now());
 }
 
-function configureWorkboardDatabase(db: DatabaseSync): void {
-  db.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA synchronous = NORMAL;
-    PRAGMA busy_timeout = ${WORKBOARD_SQLITE_BUSY_TIMEOUT_MS};
-    PRAGMA foreign_keys = ON;
-  `);
-}
-
 function chmodIfExists(targetPath: string, mode: number): void {
   try {
     fs.chmodSync(targetPath, mode);
@@ -384,19 +377,40 @@ function hardenWorkboardDatabaseFiles(dbPath: string): void {
   chmodIfExists(dbPath, WORKBOARD_SQLITE_FILE_MODE);
   chmodIfExists(`${dbPath}-wal`, WORKBOARD_SQLITE_FILE_MODE);
   chmodIfExists(`${dbPath}-shm`, WORKBOARD_SQLITE_FILE_MODE);
+  chmodIfExists(`${dbPath}-journal`, WORKBOARD_SQLITE_FILE_MODE);
 }
 
-function createDatabase(dbPath: string): DatabaseSync {
+function createDatabase(dbPath: string): {
+  db: DatabaseSync;
+  maintenance: ReturnType<typeof configureSqliteConnectionPragmas>;
+} {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: WORKBOARD_SQLITE_DIR_MODE });
   chmodIfExists(path.dirname(dbPath), WORKBOARD_SQLITE_DIR_MODE);
   if (!fs.existsSync(dbPath)) {
     fs.closeSync(fs.openSync(dbPath, "a", WORKBOARD_SQLITE_FILE_MODE));
   }
   const db = new DatabaseSync(dbPath);
-  configureWorkboardDatabase(db);
-  ensureWorkboardSchema(db);
-  hardenWorkboardDatabaseFiles(dbPath);
-  return db;
+  let maintenance: ReturnType<typeof configureSqliteConnectionPragmas> | undefined;
+  try {
+    maintenance = configureSqliteConnectionPragmas(db, {
+      busyTimeoutMs: WORKBOARD_SQLITE_BUSY_TIMEOUT_MS,
+      checkpointIntervalMs: 0,
+      databaseLabel: "workboard database",
+      databasePath: dbPath,
+      foreignKeys: true,
+      synchronous: "NORMAL",
+    });
+    ensureWorkboardSchema(db);
+    hardenWorkboardDatabaseFiles(dbPath);
+    return { db, maintenance };
+  } catch (error) {
+    try {
+      maintenance?.close();
+    } finally {
+      db.close();
+    }
+    throw error;
+  }
 }
 
 function childRows(db: DatabaseSync, table: string, cardId: string): Row[] {
@@ -1400,12 +1414,17 @@ export function createWorkboardSqliteStores(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): WorkboardSqliteStores {
-  const db = createDatabase(options.dbPath ?? resolveWorkboardSqlitePath(options.env));
+  const { db, maintenance } = createDatabase(
+    options.dbPath ?? resolveWorkboardSqlitePath(options.env),
+  );
   return {
     cards: new WorkboardSqliteCardStore(db),
     boards: new WorkboardSqliteBoardStore(db),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
-    close: () => db.close(),
+    close: () => {
+      maintenance.close();
+      db.close();
+    },
   };
 }

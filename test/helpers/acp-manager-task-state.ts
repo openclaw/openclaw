@@ -1,7 +1,9 @@
+// ACP manager task state helper resets task flow state for ACP tests.
 import { resetTaskFlowRegistryForTests } from "../../src/tasks/task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "../../src/tasks/task-flow-registry.store.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../src/tasks/task-registry.js";
 import { withTempDir } from "../../src/test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../../src/test-utils/env.js";
 import { installInMemoryTaskRegistryRuntime } from "../../src/test-utils/task-registry-runtime.js";
 
 // Shared ACP manager task registry setup for tests.
@@ -19,7 +21,8 @@ export async function withAcpManagerTaskStateDir(
   run: (root: string) => Promise<void>,
 ): Promise<void> {
   await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", root);
     resetAcpManagerTaskStateForTests();
     installInMemoryTaskRegistryRuntime();
     configureTaskFlowRegistryRuntime({
@@ -37,6 +40,7 @@ export async function withAcpManagerTaskStateDir(
       await run(root);
     } finally {
       resetAcpManagerTaskStateForTests();
+      envSnapshot.restore();
     }
   });
 }

@@ -1,9 +1,11 @@
+// Codex tests cover trajectory plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCodexTrajectoryRecorder,
+  recordCodexTrajectoryContext,
   resolveCodexTrajectoryAppendFlags,
   resolveCodexTrajectoryPointerFlags,
 } from "./trajectory.js";
@@ -117,6 +119,55 @@ describe("Codex trajectory recorder", () => {
     expect(parsed.provider).toBe("openai");
     expect(parsed.modelApi).toBe("openai-chatgpt-responses");
     expect(parsed.modelId).toBe("gpt-5.5");
+  });
+
+  it("records namespace dynamic tools as callable trajectory tool definitions", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const init = {
+      cwd: tmpDir,
+      attempt: {
+        sessionFile,
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        provider: "codex",
+        modelId: "gpt-5.4",
+        model: { api: "responses" },
+      } as never,
+      env: {},
+      tools: [
+        {
+          type: "namespace",
+          name: "openclaw",
+          description: "",
+          tools: [
+            {
+              type: "function",
+              name: "web_search",
+              description: "Search the web.",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+          ],
+        },
+      ],
+    } satisfies Parameters<typeof createCodexTrajectoryRecorder>[0];
+    const recorder = createCodexTrajectoryRecorder(init);
+
+    recordCodexTrajectoryContext(expectTrajectoryRecorder(recorder), init);
+    await recorder?.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    );
+    expect(parsed.data?.tools).toEqual([
+      {
+        name: "web_search",
+        description: "Search the web.",
+        parameters: { type: "object" },
+      },
+    ]);
   });
 
   it("sanitizes session ids when resolving an override directory", async () => {

@@ -27,6 +27,7 @@ export type CliBackendPrepareExecutionContext = {
   provider: string;
   modelId: string;
   authProfileId?: string;
+  executionMode?: CliBackendExecutionMode;
 };
 
 export type CliBackendPreparedExecution = {
@@ -45,6 +46,8 @@ export type CliBackendThinkingLevel =
   | "adaptive"
   | "max";
 
+export type CliBackendExecutionMode = "agent" | "side-question";
+
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;
   workspaceDir: string;
@@ -52,6 +55,7 @@ export type CliBackendResolveExecutionArgsContext = {
   modelId: string;
   authProfileId?: string;
   thinkingLevel?: CliBackendThinkingLevel;
+  executionMode?: CliBackendExecutionMode;
   useResume: boolean;
   baseArgs: readonly string[];
 };
@@ -63,6 +67,8 @@ export type CliBackendResolveExecutionArgs = (
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
 export type CliBackendNativeToolMode = "none" | "always-on";
+
+export type CliBackendSideQuestionToolMode = "disabled";
 
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
@@ -195,4 +201,12 @@ export type CliBackendPlugin = {
    * closed instead of launching a native harness.
    */
   nativeToolMode?: CliBackendNativeToolMode;
+  /**
+   * Side-question native tool behavior.
+   *
+   * Set to `disabled` only when `executionMode: "side-question"` reliably
+   * launches the CLI without native tools, even if normal agent turns expose
+   * backend-owned tools.
+   */
+  sideQuestionToolMode?: CliBackendSideQuestionToolMode;
 };

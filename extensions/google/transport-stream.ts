@@ -1,3 +1,4 @@
+// Google plugin module implements transport stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   calculateCost,
@@ -27,6 +28,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
+import { stripGoogleProviderPrefix } from "./model-id.js";
 import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import {
   isGoogleGemini25ThinkingBudgetModel,
@@ -322,7 +324,7 @@ function resolveGoogleModelPath(modelId: string): string {
   if (modelId.startsWith("models/") || modelId.startsWith("tunedModels/")) {
     return modelId;
   }
-  return `models/${modelId}`;
+  return `models/${stripGoogleProviderPrefix(modelId)}`;
 }
 
 function buildGoogleGenerativeAiRequestUrl(model: GoogleTransportModel): string {
@@ -355,7 +357,10 @@ function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined
   return location;
 }
 
-function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
+export function resolveGoogleVertexBaseOrigin(
+  model: GoogleTransportModel,
+  location: string,
+): string {
   const configured = normalizeOptionalString(model.baseUrl);
   if (configured && !configured.includes("{location}")) {
     try {
@@ -371,6 +376,12 @@ function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: st
   if (location === "global") {
     return "https://aiplatform.googleapis.com";
   }
+  // Multi-region locations (eu, us) use the dedicated .rep.googleapis.com host
+  // with the location embedded in the host, matching @google/genai SDK behavior.
+  // A regional prefix (eu-aiplatform.googleapis.com) returns an HTML 404.
+  if (location === "eu" || location === "us") {
+    return `https://aiplatform.${location}.rep.googleapis.com`;
+  }
   return `https://${location}-aiplatform.googleapis.com`;
 }
 
@@ -380,7 +391,9 @@ function buildGoogleVertexRequestUrl(
 ): string {
   const project = encodeURIComponent(resolveGoogleVertexProject(options));
   const location = encodeURIComponent(resolveGoogleVertexLocation(options));
-  const modelId = encodeURIComponent(model.id);
+  // Mirror resolveGoogleModelPath: strip the google/ provider prefix so a
+  // provider-qualified id does not become an invalid models/google%2F... path.
+  const modelId = encodeURIComponent(stripGoogleProviderPrefix(model.id));
   const origin = resolveGoogleVertexBaseOrigin(model, decodeURIComponent(location));
   return `${origin}/${GOOGLE_VERTEX_DEFAULT_API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${modelId}:streamGenerateContent?alt=sse`;
 }
@@ -513,7 +526,20 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id),
     },
   );
+  // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
+  // live inside functionResponse, so hold them until the consecutive result run ends.
+  const pendingToolResultImageTurns: Array<Record<string, unknown>> = [];
+  let activeToolResultParts: Array<Record<string, unknown>> | undefined;
+  const flushToolResultRun = (): void => {
+    contents.push(...pendingToolResultImageTurns);
+    pendingToolResultImageTurns.length = 0;
+    activeToolResultParts = undefined;
+  };
+
   for (const msg of transformedMessages) {
+    if (msg.role !== "toolResult") {
+      flushToolResultRun();
+    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         contents.push({
@@ -645,31 +671,32 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           data: imageBlock.data,
         },
       }));
+      const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
       const functionResponse = {
         functionResponse: {
           name: msg.toolName,
           response: msg.isError ? { error: responseValue } : { output: responseValue },
-          ...(supportsMultimodalFunctionResponse(model.id) && imageParts.length > 0
+          ...(modelSupportsMultimodalFunctionResponse && imageParts.length > 0
             ? { parts: imageParts }
             : {}),
           ...(requiresToolCallId(model.id) ? { id: msg.toolCallId } : {}),
         },
       };
-      const last = contents[contents.length - 1];
-      if (
-        last?.role === "user" &&
-        Array.isArray(last.parts) &&
-        last.parts.some((part) => "functionResponse" in part)
-      ) {
-        (last.parts as Array<Record<string, unknown>>).push(functionResponse);
+      if (activeToolResultParts) {
+        activeToolResultParts.push(functionResponse);
       } else {
-        contents.push({ role: "user", parts: [functionResponse] });
+        activeToolResultParts = [functionResponse];
+        contents.push({ role: "user", parts: activeToolResultParts });
       }
-      if (imageParts.length > 0 && !supportsMultimodalFunctionResponse(model.id)) {
-        contents.push({ role: "user", parts: [{ text: "Tool result image:" }, ...imageParts] });
+      if (imageParts.length > 0 && !modelSupportsMultimodalFunctionResponse) {
+        pendingToolResultImageTurns.push({
+          role: "user",
+          parts: [{ text: "Tool result image:" }, ...imageParts],
+        });
       }
     }
   }
+  flushToolResultRun();
   if (contents.length === 0) {
     contents.push({ role: "user", parts: [{ text: " " }] });
   }

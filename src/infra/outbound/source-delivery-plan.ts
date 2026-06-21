@@ -1,3 +1,5 @@
+// Source-delivery plans decide whether final output is visible through the
+// message tool, direct fallback delivery, both, or neither.
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -67,6 +69,7 @@ export type SourceDeliveryPlan = {
     enabled: boolean;
     force: boolean;
     requireExplicitTarget: boolean;
+    requireExplicitTargetEvidence: boolean;
     defaultTarget: boolean;
   };
   fallback: {
@@ -172,6 +175,7 @@ export function createSourceDeliveryPlan(params: {
   messageToolEnabled?: boolean;
   messageToolForced?: boolean;
   requireExplicitMessageTarget?: boolean;
+  requireExplicitMessageTargetEvidence?: boolean;
   directFallback?: boolean;
   skipFallbackWhenMessageToolSentToTarget?: boolean;
   fallbackBestEffort?: boolean;
@@ -195,6 +199,7 @@ export function createSourceDeliveryPlan(params: {
       enabled: params.messageToolEnabled ?? messageToolOwnsDelivery,
       force: params.messageToolForced ?? messageToolOwnsDelivery,
       requireExplicitTarget: params.requireExplicitMessageTarget ?? false,
+      requireExplicitTargetEvidence: params.requireExplicitMessageTargetEvidence ?? false,
       defaultTarget: Boolean(params.target?.channel || params.target?.to),
     },
     fallback: {
@@ -237,11 +242,12 @@ export function resolveSourceDeliveryOutcome(
 ): SourceDeliveryOutcome {
   const didSendViaMessageTool = params.didSendViaMessageTool === true;
   const explicitTargets = params.messageToolSentTargets ?? [];
-  // A send without explicit target metadata still counts when the plan has a default target.
+  // Cron completion accounting needs concrete target evidence. Legacy
+  // message-tool-owned flows may still use the plan target as the implicit send.
   const sentTargets =
     explicitTargets.length > 0
       ? explicitTargets
-      : didSendViaMessageTool
+      : didSendViaMessageTool && !plan.messageTool.requireExplicitTargetEvidence
         ? [resolveImplicitMessageToolDeliveryTarget(plan)].filter(
             (target): target is SourceDeliveryMessageToolTarget => Boolean(target),
           )

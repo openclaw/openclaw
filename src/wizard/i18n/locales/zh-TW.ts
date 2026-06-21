@@ -1,3 +1,4 @@
+// Traditional Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const zh_TW = {
@@ -962,6 +963,7 @@ export const zh_TW = {
       webSearchGetKey: "取得 key：{url}",
       webSearchAuthProfile: "憑證：使用已有 {provider} auth profile。",
       webSearchKeyEnv: "API key：透過 {env} 環境變數提供。",
+      webSearchKeyFree: "Web search 已就緒 —— 此 provider 無需 API key。",
       webSearchKeyRef: "API key：透過 secret reference 設定。",
       webSearchKeyStored: "API key：已存入設定。",
       webSearchNeedsKey: "新增 key 前 web_search 無法運作。",

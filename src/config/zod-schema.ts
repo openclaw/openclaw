@@ -220,6 +220,7 @@ const MemoryQmdSchema = z
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    rerank: z.boolean().optional(),
     searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
@@ -546,6 +547,9 @@ export const OpenClawSchema = z
             traces: z.boolean().optional(),
             metrics: z.boolean().optional(),
             logs: z.boolean().optional(),
+            logsExporter: z
+              .union([z.literal("otlp"), z.literal("stdout"), z.literal("both")])
+              .optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
             captureContent: z
@@ -702,6 +706,17 @@ export const OpenClawSchema = z
           .object({
             name: z.string().max(50).optional(),
             avatar: z.string().max(2_000_000).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    tui: z
+      .object({
+        footer: z
+          .object({
+            showRemoteHost: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -1258,6 +1273,7 @@ export const OpenClawSchema = z
               .strict()
               .optional(),
             approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
+            allowSymlinkTargetWrites: z.boolean().optional(),
             maxPending: z.number().int().min(1).optional(),
             maxSkillBytes: z.number().int().min(1).optional(),
           })

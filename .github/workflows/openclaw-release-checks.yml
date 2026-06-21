@@ -40,7 +40,7 @@ on:
           - stable
           - full
       run_release_soak:
-        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=full
+        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=stable and full
         required: false
         default: false
         type: boolean
@@ -132,7 +132,7 @@ jobs:
             fi
           fi
           if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]] && [[ "${tideclaw_alpha_check}" != "true" ]]; then
-            echo "Release checks must be dispatched from main, release/YYYY.M.D, a Full Release Validation release-ci/<sha>-<timestamp> ref, or a Tideclaw alpha branch for alpha prereleases." >&2
+            echo "Release checks must be dispatched from main, release/YYYY.M.PATCH, a Full Release Validation release-ci/<sha>-<timestamp> ref, or a Tideclaw alpha branch for alpha prereleases." >&2
             exit 1
           fi
 
@@ -152,7 +152,7 @@ jobs:
           fi
 
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ github.ref_name }}
@@ -173,7 +173,7 @@ jobs:
 
       - name: Checkout selected ref for reachability fallback
         if: steps.fast_ref.outputs.fallback == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -330,7 +330,7 @@ jobs:
               exit 1
               ;;
           esac
-          if [[ "$release_profile" == "full" ]]; then
+          if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then
             run_release_soak=true
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
@@ -346,6 +346,7 @@ jobs:
             discord_selected=false
             whatsapp_selected=false
             slack_selected=false
+            disabled_required_lanes=()
 
             IFS=', ' read -r -a filter_tokens <<< "$filter"
             for token in "${filter_tokens[@]}"; do
@@ -361,6 +362,9 @@ jobs:
                   discord_selected="$qa_live_discord_ci_enabled"
                   whatsapp_selected="$qa_live_whatsapp_ci_enabled"
                   slack_selected="$qa_live_slack_ci_enabled"
+                  [[ "$qa_live_discord_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-discord")
+                  [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
+                  [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
                   ;;
                 qa-live-non-slack|qa-non-slack|non-slack|no-slack|without-slack)
                   qa_filter_seen=true
@@ -368,6 +372,8 @@ jobs:
                   telegram_selected=true
                   discord_selected="$qa_live_discord_ci_enabled"
                   whatsapp_selected="$qa_live_whatsapp_ci_enabled"
+                  [[ "$qa_live_discord_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-discord")
+                  [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
                   ;;
                 qa-live-matrix|qa-matrix|matrix)
                   qa_filter_seen=true
@@ -380,17 +386,26 @@ jobs:
                 qa-live-discord|qa-discord|discord)
                   qa_filter_seen=true
                   discord_selected="$qa_live_discord_ci_enabled"
+                  [[ "$qa_live_discord_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-discord")
                   ;;
                 qa-live-whatsapp|qa-whatsapp|whatsapp)
                   qa_filter_seen=true
                   whatsapp_selected="$qa_live_whatsapp_ci_enabled"
+                  [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
                   ;;
                 qa-live-slack|qa-slack|slack)
                   qa_filter_seen=true
                   slack_selected="$qa_live_slack_ci_enabled"
+                  [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
                   ;;
               esac
             done
+
+            if [[ "${#disabled_required_lanes[@]}" -gt 0 ]]; then
+              echo "live_suite_filter explicitly requested disabled QA live lane(s): ${disabled_required_lanes[*]}" >&2
+              echo "Enable the matching OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED repo variable or remove the lane from live_suite_filter." >&2
+              exit 1
+            fi
 
             if [[ "$qa_filter_seen" == "true" ]]; then
               qa_live_matrix_enabled="$matrix_selected"
@@ -492,7 +507,7 @@ jobs:
       source_sha: ${{ steps.package.outputs.source_sha }}
     steps:
       - name: Checkout trusted workflow ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ github.ref_name }}
@@ -544,7 +559,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release package artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-package-under-test
           path: |
@@ -783,7 +798,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -801,6 +816,7 @@ jobs:
         run: node scripts/build-all.mjs qaRuntime
 
       - name: Run parity lane
+        id: run_lane
         env:
           QA_PARITY_LANE: ${{ matrix.lane }}
           QA_PARITY_OUTPUT_DIR: ${{ matrix.output_dir }}
@@ -831,13 +847,60 @@ jobs:
             --output-dir ".artifacts/qa-e2e/${QA_PARITY_OUTPUT_DIR}"
 
       - name: Upload parity lane artifacts
+        id: upload_parity_lane_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_lab_parity_lane_release_checks
+          RELEASE_CHECK_VARIANT: ${{ matrix.lane }}
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_parity_lane_artifacts.outcome }}
+        run: |
+          set -euo pipefail
+          status="success"
+          mark_status() {
+            case "$1" in
+              failure) status="failure" ;;
+              cancelled)
+                if [[ "$status" != "failure" ]]; then
+                  status="cancelled"
+                fi
+                ;;
+              success|skipped|"") ;;
+              *) status="failure" ;;
+            esac
+          }
+          mark_status "${JOB_STATUS:-}"
+          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
+            mark_status "$outcome"
+          done
+          mkdir -p .artifacts/release-check-status
+          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}-${RELEASE_CHECK_VARIANT}.env"
+          {
+            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
+            printf 'variant=%s\n' "$RELEASE_CHECK_VARIANT"
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "${JOB_STATUS:-}"
+            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
+          } > "$status_path"
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/qa_lab_parity_lane_release_checks-${{ matrix.lane }}.env
+          retention-days: 14
+          if-no-files-found: error
 
   qa_lab_parity_report_release_checks:
     name: Run QA Lab parity report
@@ -854,7 +917,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -867,7 +930,7 @@ jobs:
           install-bun: "true"
 
       - name: Download parity lane artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: release-qa-parity-*-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -879,6 +942,7 @@ jobs:
         run: node scripts/build-all.mjs qaRuntime
 
       - name: Generate parity report
+        id: generate_report
         run: |
           pnpm openclaw qa parity-report \
             --repo-root . \
@@ -889,13 +953,58 @@ jobs:
             --output-dir .artifacts/qa-e2e/parity
 
       - name: Upload parity artifacts
+        id: upload_parity_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_lab_parity_report_release_checks
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.generate_report.outcome }} ${{ steps.upload_parity_artifacts.outcome }}
+        run: |
+          set -euo pipefail
+          status="success"
+          mark_status() {
+            case "$1" in
+              failure) status="failure" ;;
+              cancelled)
+                if [[ "$status" != "failure" ]]; then
+                  status="cancelled"
+                fi
+                ;;
+              success|skipped|"") ;;
+              *) status="failure" ;;
+            esac
+          }
+          mark_status "${JOB_STATUS:-}"
+          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
+            mark_status "$outcome"
+          done
+          mkdir -p .artifacts/release-check-status
+          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
+          {
+            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "${JOB_STATUS:-}"
+            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
+          } > "$status_path"
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-parity-report-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/qa_lab_parity_report_release_checks.env
+          retention-days: 14
+          if-no-files-found: error
 
   qa_lab_runtime_parity_release_checks:
     name: Run QA Lab runtime parity lane
@@ -919,7 +1028,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -950,6 +1059,7 @@ jobs:
             --output-dir ".artifacts/qa-e2e/runtime-parity"
 
       - name: Run standard runtime parity tier
+        id: runtime_parity_standard_lane
         if: ${{ always() && steps.runtime_parity_lane.outcome != 'skipped' && steps.runtime_parity_lane.outcome != 'cancelled' }}
         run: |
           set -euo pipefail
@@ -977,6 +1087,7 @@ jobs:
             --output-dir ".artifacts/qa-e2e/runtime-parity-soak"
 
       - name: Generate runtime parity report
+        id: generate_runtime_parity_report
         if: always()
         run: |
           set -euo pipefail
@@ -987,6 +1098,7 @@ jobs:
             --output-dir .artifacts/qa-e2e/runtime-parity-report
 
       - name: Generate standard runtime parity report
+        id: generate_runtime_parity_standard_report
         if: always()
         run: |
           set -euo pipefail
@@ -997,6 +1109,7 @@ jobs:
             --output-dir .artifacts/qa-e2e/runtime-parity-standard-report
 
       - name: Generate soak runtime parity report
+        id: generate_runtime_parity_soak_report
         if: ${{ always() && needs.resolve_target.outputs.run_release_soak == 'true' && steps.runtime_parity_soak_lane.outcome != 'skipped' && steps.runtime_parity_soak_lane.outcome != 'cancelled' }}
         run: |
           set -euo pipefail
@@ -1012,18 +1125,63 @@ jobs:
             --output-dir .artifacts/qa-e2e/runtime-parity-soak-report
 
       - name: Upload runtime parity artifacts
+        id: upload_runtime_parity_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
 
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_lab_runtime_parity_release_checks
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.runtime_parity_lane.outcome }} ${{ steps.runtime_parity_standard_lane.outcome }} ${{ steps.runtime_parity_soak_lane.outcome }} ${{ steps.generate_runtime_parity_report.outcome }} ${{ steps.generate_runtime_parity_standard_report.outcome }} ${{ steps.generate_runtime_parity_soak_report.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
+        run: |
+          set -euo pipefail
+          status="success"
+          mark_status() {
+            case "$1" in
+              failure) status="failure" ;;
+              cancelled)
+                if [[ "$status" != "failure" ]]; then
+                  status="cancelled"
+                fi
+                ;;
+              success|skipped|"") ;;
+              *) status="failure" ;;
+            esac
+          }
+          mark_status "${JOB_STATUS:-}"
+          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
+            mark_status "$outcome"
+          done
+          mkdir -p .artifacts/release-check-status
+          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
+          {
+            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "${JOB_STATUS:-}"
+            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
+          } > "$status_path"
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/qa_lab_runtime_parity_release_checks.env
+          retention-days: 14
+          if-no-files-found: error
+
   runtime_tool_coverage_release_checks:
     name: Enforce QA Lab runtime tool coverage
     needs: [resolve_target, qa_lab_runtime_parity_release_checks]
-    if: always() && contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -1034,7 +1192,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1046,13 +1204,35 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Download runtime parity status
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/
+
+      - name: Verify runtime parity producer status
+        id: verify_runtime_parity_status
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_path=".artifacts/release-check-status/qa_lab_runtime_parity_release_checks.env"
+          status="$(sed -n 's/^status=//p' "$status_path" | tail -n 1)"
+          if [[ "$status" != "success" ]]; then
+            echo "Runtime parity producer status is ${status:-missing}; skipping coverage artifact consumer."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
       - name: Download runtime parity artifacts
-        uses: actions/download-artifact@v8
+        if: steps.verify_runtime_parity_status.outputs.ready == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
 
       - name: Enforce standard runtime tool coverage
+        if: steps.verify_runtime_parity_status.outputs.ready == 'true'
         run: |
           set -euo pipefail
           pnpm openclaw qa coverage \
@@ -1063,7 +1243,7 @@ jobs:
 
       - name: Upload runtime tool coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-runtime-tool-coverage-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/runtime-parity-standard-report/
@@ -1086,7 +1266,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1141,13 +1321,58 @@ jobs:
           done
 
       - name: Upload Matrix QA artifacts
+        id: upload_matrix_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_live_matrix_release_checks
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_matrix_qa_artifacts.outcome }}
+        run: |
+          set -euo pipefail
+          status="success"
+          mark_status() {
+            case "$1" in
+              failure) status="failure" ;;
+              cancelled)
+                if [[ "$status" != "failure" ]]; then
+                  status="cancelled"
+                fi
+                ;;
+              success|skipped|"") ;;
+              *) status="failure" ;;
+            esac
+          }
+          mark_status "${JOB_STATUS:-}"
+          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
+            mark_status "$outcome"
+          done
+          mkdir -p .artifacts/release-check-status
+          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
+          {
+            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "${JOB_STATUS:-}"
+            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
+          } > "$status_path"
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/qa_live_matrix_release_checks.env
+          retention-days: 14
+          if-no-files-found: error
 
   qa_live_telegram_release_checks:
     name: Run QA Lab live Telegram lane
@@ -1165,7 +1390,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1209,7 +1434,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
         run: |
           set -euo pipefail
 
@@ -1237,18 +1461,63 @@ jobs:
           done
 
       - name: Upload Telegram QA artifacts
+        id: upload_telegram_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
 
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_live_telegram_release_checks
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_telegram_qa_artifacts.outcome }}
+        run: |
+          set -euo pipefail
+          status="success"
+          mark_status() {
+            case "$1" in
+              failure) status="failure" ;;
+              cancelled)
+                if [[ "$status" != "failure" ]]; then
+                  status="cancelled"
+                fi
+                ;;
+              success|skipped|"") ;;
+              *) status="failure" ;;
+            esac
+          }
+          mark_status "${JOB_STATUS:-}"
+          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
+            mark_status "$outcome"
+          done
+          mkdir -p .artifacts/release-check-status
+          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
+          {
+            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "${JOB_STATUS:-}"
+            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
+          } > "$status_path"
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/qa_live_telegram_release_checks.env
+          retention-days: 14
+          if-no-files-found: error
+
   qa_live_discord_release_checks:
     name: Run QA Lab live Discord lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED == 'true'
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1261,7 +1530,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1332,18 +1601,63 @@ jobs:
           done
 
       - name: Upload Discord QA artifacts
+        id: upload_discord_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-discord-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
 
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_live_discord_release_checks
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_discord_qa_artifacts.outcome }}
+        run: |
+          set -euo pipefail
+          status="success"
+          mark_status() {
+            case "$1" in
+              failure) status="failure" ;;
+              cancelled)
+                if [[ "$status" != "failure" ]]; then
+                  status="cancelled"
+                fi
+                ;;
+              success|skipped|"") ;;
+              *) status="failure" ;;
+            esac
+          }
+          mark_status "${JOB_STATUS:-}"
+          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
+            mark_status "$outcome"
+          done
+          mkdir -p .artifacts/release-check-status
+          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
+          {
+            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "${JOB_STATUS:-}"
+            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
+          } > "$status_path"
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-live-discord-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/qa_live_discord_release_checks.env
+          retention-days: 14
+          if-no-files-found: error
+
   qa_live_whatsapp_release_checks:
     name: Run QA Lab live WhatsApp lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED == 'true'
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1359,7 +1673,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1430,18 +1744,63 @@ jobs:
           done
 
       - name: Upload WhatsApp QA artifacts
+        id: upload_whatsapp_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
 
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_live_whatsapp_release_checks
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_whatsapp_qa_artifacts.outcome }}
+        run: |
+          set -euo pipefail
+          status="success"
+          mark_status() {
+            case "$1" in
+              failure) status="failure" ;;
+              cancelled)
+                if [[ "$status" != "failure" ]]; then
+                  status="cancelled"
+                fi
+                ;;
+              success|skipped|"") ;;
+              *) status="failure" ;;
+            esac
+          }
+          mark_status "${JOB_STATUS:-}"
+          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
+            mark_status "$outcome"
+          done
+          mkdir -p .artifacts/release-check-status
+          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
+          {
+            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "${JOB_STATUS:-}"
+            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
+          } > "$status_path"
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/qa_live_whatsapp_release_checks.env
+          retention-days: 14
+          if-no-files-found: error
+
   qa_live_slack_release_checks:
     name: Run QA Lab live Slack lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED == 'true'
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1454,7 +1813,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1525,13 +1884,58 @@ jobs:
           done
 
       - name: Upload Slack QA artifacts
+        id: upload_slack_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-slack-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_live_slack_release_checks
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_slack_qa_artifacts.outcome }}
+        run: |
+          set -euo pipefail
+          status="success"
+          mark_status() {
+            case "$1" in
+              failure) status="failure" ;;
+              cancelled)
+                if [[ "$status" != "failure" ]]; then
+                  status="cancelled"
+                fi
+                ;;
+              success|skipped|"") ;;
+              *) status="failure" ;;
+            esac
+          }
+          mark_status "${JOB_STATUS:-}"
+          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
+            mark_status "$outcome"
+          done
+          mkdir -p .artifacts/release-check-status
+          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
+          {
+            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "${JOB_STATUS:-}"
+            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
+          } > "$status_path"
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-live-slack-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/qa_live_slack_release_checks.env
+          retention-days: 14
+          if-no-files-found: error
 
   summary:
     name: Verify release checks
@@ -1553,9 +1957,19 @@ jobs:
       - qa_live_slack_release_checks
     if: always()
     runs-on: ubuntu-24.04
-    permissions: {}
+    permissions:
+      actions: read
     timeout-minutes: 5
     steps:
+      - name: Download advisory status artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-check-status-*
+          path: .artifacts/release-check-status
+          merge-multiple: true
+
       - name: Verify release check results
         shell: bash
         env:
@@ -1567,6 +1981,49 @@ jobs:
           if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha=true
           fi
+          release_check_result() {
+            local name="$1"
+            local fallback="$2"
+            local status_dir=".artifacts/release-check-status"
+            local saw=0
+            local saw_failure=0
+            local saw_cancelled=0
+            if [[ -d "$status_dir" ]]; then
+              while IFS= read -r -d '' file; do
+                saw=1
+                status="$(sed -n 's/^status=//p' "$file" | tail -n 1)"
+                case "$status" in
+                  success|skipped) ;;
+                  cancelled) saw_cancelled=1 ;;
+                  failure|"") saw_failure=1 ;;
+                  *) saw_failure=1 ;;
+                esac
+              done < <(find "$status_dir" -type f -name "${name}*.env" -print0)
+            fi
+            if [[ "$saw_failure" == "1" ]]; then
+              printf 'failure\n'
+            elif [[ "$saw_cancelled" == "1" ]]; then
+              printf 'cancelled\n'
+            elif [[ "$fallback" != "success" && "$fallback" != "skipped" ]]; then
+              printf '%s\n' "$fallback"
+            elif [[ "$saw" == "1" ]]; then
+              printf 'success\n'
+            elif [[ "$fallback" == "success" ]]; then
+              printf 'failure\n'
+            else
+              printf '%s\n' "$fallback"
+            fi
+          }
+          advisory_status_override_allowed() {
+            case "$1" in
+              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_matrix_release_checks|qa_live_telegram_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
           for item in \
             "prepare_release_package=${{ needs.prepare_release_package.result }}" \
             "install_smoke_release_checks=${{ needs.install_smoke_release_checks.result }}" \
@@ -1585,7 +2042,12 @@ jobs:
             "qa_live_slack_release_checks=${{ needs.qa_live_slack_release_checks.result }}"
           do
             name="${item%%=*}"
-            result="${item#*=}"
+            raw_result="${item#*=}"
+            if advisory_status_override_allowed "$name"; then
+              result="$(release_check_result "$name" "$raw_result")"
+            else
+              result="$raw_result"
+            fi
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
               if [[ "$tideclaw_alpha" == "true" ]]; then
                 case "$name" in
@@ -1595,10 +2057,6 @@ jobs:
                     continue
                     ;;
                 esac
-              fi
-              if [[ "$name" == qa_* ]]; then
-                echo "::warning::${name} ended with ${result}; QA release-check lanes are advisory and do not block release validation."
-                continue
               fi
               echo "::error::${name} ended with ${result}"
               failed=1

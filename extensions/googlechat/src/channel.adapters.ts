@@ -1,3 +1,4 @@
+// Googlechat plugin module implements channel.adapters behavior.
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelThreadingContext,
@@ -20,7 +21,9 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./approval-card-actions.js";
 import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
 import {
   type ResolvedGoogleChatAccount,
@@ -64,8 +67,6 @@ function createGoogleChatSendReceipt(params: {
     kind: params.kind,
   });
 }
-
-export const formatAllowFromEntry = formatGoogleChatAllowFromEntry;
 
 const collectGoogleChatGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedGoogleChatAccount>({
@@ -118,7 +119,7 @@ export const googlechatSecurityAdapter = {
     resolvePolicy: (account: ResolvedGoogleChatAccount) => account.config.dm?.policy,
     resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.dm?.allowFrom,
     allowFromPathSuffix: "dm.",
-    normalizeEntry: (raw: string) => formatAllowFromEntry(raw),
+    normalizeEntry: (raw: string) => formatGoogleChatAllowFromEntry(raw),
   },
   collectWarnings: collectGoogleChatSecurityWarnings,
 };
@@ -159,7 +160,7 @@ export const googlechatThreadingAdapter = {
 export const googlechatPairingTextAdapter = {
   idLabel: "googlechatUserId",
   message: PAIRING_APPROVED_MESSAGE,
-  normalizeAllowEntry: (entry: string) => formatAllowFromEntry(entry),
+  normalizeAllowEntry: (entry: string) => formatGoogleChatAllowFromEntry(entry),
   notify: async ({
     cfg,
     id,
@@ -194,6 +195,8 @@ export const googlechatOutboundAdapter = {
     chunkerMode: "markdown" as const,
     textChunkLimit: 4000,
     sanitizeText: ({ text }: { text: string }) => sanitizeForPlainText(text),
+    normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
+      shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {
       const trimmed = normalizeOptionalString(to) ?? "";
 

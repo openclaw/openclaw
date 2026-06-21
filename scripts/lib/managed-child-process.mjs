@@ -1,3 +1,4 @@
+// Runs child commands with process-group signal forwarding and Windows shell normalization.
 import { spawn } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import { buildCmdExeCommandLine } from "../windows-cmd-helpers.mjs";
@@ -8,6 +9,8 @@ const managedChildren = new Set();
 const signalHandlers = new Map();
 
 /**
+ * Return conventional shell exit code for a signal.
+ *
  * @param {NodeJS.Signals} signal
  * @returns {number}
  */
@@ -45,6 +48,8 @@ function terminateManagedChild(child, signal = "SIGTERM") {
 }
 
 /**
+ * Run a child command while forwarding termination signals to the managed process group.
+ *
  * @param {{
  *   bin: string;
  *   args?: string[];
@@ -65,9 +70,9 @@ export async function runManagedCommand({
   cwd,
   env,
   stdio = "inherit",
-  shell = process.platform === "win32",
-  windowsVerbatimArguments,
   platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
   comSpec,
   onReady,
 }) {
@@ -98,6 +103,9 @@ export async function runManagedCommand({
         if (managedChild.forceKillTimer) {
           clearTimeout(managedChild.forceKillTimer);
         }
+        if (managedChild.receivedSignal) {
+          terminateManagedChild(child, "SIGKILL");
+        }
         resolve(
           managedChild.receivedSignal
             ? signalExitCode(managedChild.receivedSignal)
@@ -113,6 +121,8 @@ export async function runManagedCommand({
 }
 
 /**
+ * Build the spawn command, args, and options used by managed command execution.
+ *
  * @param {{
  *   child: import("node:child_process").ChildProcess;
  *   forceKillTimer: ReturnType<typeof setTimeout> | null;
@@ -125,6 +135,8 @@ function addManagedChild(managedChild) {
 }
 
 /**
+ * Build a normalized command invocation, including cmd.exe wrapping on Windows.
+ *
  * @param {{
  *   child: import("node:child_process").ChildProcess;
  *   forceKillTimer: ReturnType<typeof setTimeout> | null;
@@ -188,9 +200,9 @@ export function createManagedCommandSpawnSpec({
   cwd,
   env,
   stdio = "inherit",
-  shell = process.platform === "win32",
-  windowsVerbatimArguments,
   platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
   comSpec,
 }) {
   const invocation = createManagedCommandInvocation({
@@ -232,9 +244,9 @@ export function createManagedCommandInvocation({
   bin,
   args = [],
   env,
-  shell = process.platform === "win32",
-  windowsVerbatimArguments,
   platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
   comSpec,
 }) {
   if (platform === "win32" && shell && args.length > 0) {

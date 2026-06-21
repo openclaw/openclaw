@@ -1,3 +1,5 @@
+// Gateway HTTP/WebSocket runtime state factory.
+// Builds one server runtime with pinned plugin registries and lazy route handlers.
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
@@ -7,8 +9,10 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
   releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -21,6 +25,7 @@ import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-b
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
+  type ChatRunRegistration,
   createChatRunState,
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
@@ -112,7 +117,7 @@ export async function createGatewayRuntimeState(params: {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
-  addChatRun: (sessionId: string, entry: ChatRunEntry) => void;
+  addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -122,6 +127,7 @@ export async function createGatewayRuntimeState(params: {
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
+  pinActivePluginSessionExtensionRegistry(params.pluginRegistry);
   if (params.pinChannelRegistry !== false) {
     pinActivePluginChannelRegistry(params.pluginRegistry);
   } else {
@@ -338,11 +344,10 @@ export async function createGatewayRuntimeState(params: {
 
     return {
       releasePluginRouteRegistry: () => {
-        // Releases both pinned HTTP-route and channel registries set at startup.
-        // Release unconditionally: plugin startup/reload can re-pin these
-        // surfaces to a registry that differs from the original runtime-state
-        // bootstrap registry.
+        // Releases pinned HTTP-route, session-extension, and channel registries.
+        // Startup/reload can re-pin them to a registry that differs from bootstrap.
         releasePinnedPluginHttpRouteRegistry();
+        releasePinnedPluginSessionExtensionRegistry();
         // Release unconditionally (no registry arg): the channel pin may have
         // been re-pinned to a deferred-reload registry that differs from the
         // original params.pluginRegistry, so an identity-guarded release would
@@ -373,6 +378,7 @@ export async function createGatewayRuntimeState(params: {
     // If state creation fails after pins are installed, release them immediately so later
     // in-process gateway starts do not inherit a half-created plugin runtime.
     releasePinnedPluginHttpRouteRegistry();
+    releasePinnedPluginSessionExtensionRegistry();
     releasePinnedPluginChannelRegistry();
     throw err;
   }

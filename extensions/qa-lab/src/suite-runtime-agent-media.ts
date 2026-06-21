@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite runtime agent media behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";
@@ -88,18 +89,22 @@ async function resolveGeneratedImagePath(params: {
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
     if (params.env.mock) {
-      const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
-        `${params.env.mock.baseUrl}/debug/requests`,
-      );
-      for (let index = requests.length - 1; index >= 0; index -= 1) {
-        const request = requests[index];
-        if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
-          continue;
+      try {
+        const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
+          `${params.env.mock.baseUrl}/debug/requests`,
+        );
+        for (let index = requests.length - 1; index >= 0; index -= 1) {
+          const request = requests[index];
+          if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
+            continue;
+          }
+          const mediaPath = extractMediaPathFromText(request.toolOutput);
+          if (mediaPath) {
+            return mediaPath;
+          }
         }
-        const mediaPath = extractMediaPathFromText(request.toolOutput);
-        if (mediaPath) {
-          return mediaPath;
-        }
+      } catch {
+        // The mock debug endpoint is best-effort; generated media files are the durable fallback.
       }
     }
 

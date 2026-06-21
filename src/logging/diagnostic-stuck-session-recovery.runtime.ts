@@ -1,3 +1,4 @@
+// Stuck session recovery runtime helpers inspect embedded sessions for recovery.
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   abortAndDrainEmbeddedAgentRun,
@@ -8,7 +9,11 @@ import {
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
-import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
+import {
+  getCommandLaneActiveTaskIds,
+  getCommandLaneSnapshot,
+  resetCommandLane,
+} from "../process/command-queue.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
@@ -29,7 +34,7 @@ const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
 const recoveriesInFlight = new Set<string>();
 
 /** Request parameters accepted by the stuck-session recovery runtime. */
-export type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
+type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
 
 function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryParams): number {
   const configured = params.staleActiveProgressAbortMs;
@@ -134,6 +139,9 @@ export async function recoverStuckDiagnosticSession(
         params.sessionId)
       : (fileActiveWorkSessionId ?? params.sessionId);
     const sessionLane = key ? resolveEmbeddedSessionLane(key) : null;
+    const preAbortActiveTaskIds = new Set(
+      sessionLane ? getCommandLaneActiveTaskIds(sessionLane) : [],
+    );
     let aborted = false;
     let drained = true;
     let forceCleared = false;
@@ -245,8 +253,18 @@ export async function recoverStuckDiagnosticSession(
     }
 
     const queuedCount = sessionLane ? getCommandLaneSnapshot(sessionLane).queuedCount : 0;
+    // A task id active now but not before the abort means the lane already
+    // unwedged and pumped fresh work; resetting it would double-run the lane.
+    const laneStartedFreshTask =
+      sessionLane !== null &&
+      getCommandLaneActiveTaskIds(sessionLane).some((id) => !preAbortActiveTaskIds.has(id));
+    // Queued turns ride the session queue (params.queueDepth), not only the lane
+    // queue; without this signal a cleanly aborted wedged lane never resets.
+    const hasQueuedSessionWork = (params.queueDepth ?? 0) > 0;
     const released =
-      sessionLane && (queuedCount > 0 || !activeSessionId || !aborted || !drained)
+      sessionLane &&
+      !laneStartedFreshTask &&
+      (queuedCount > 0 || hasQueuedSessionWork || !activeSessionId || !aborted || !drained)
         ? resetCommandLane(sessionLane)
         : 0;
 

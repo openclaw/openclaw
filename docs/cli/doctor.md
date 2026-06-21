@@ -172,10 +172,12 @@ A finding includes:
 | `ocPath`          | Precise `oc://` address when a check can point to one. |
 | `fixHint`         | Suggested operator action or repair summary.           |
 
-This release registers the modernized core doctor checks on the structured
-health path. The `openclaw/plugin-sdk/health` subpath exposes the same
-contract for bundled follow-up consumers, but plugin-backed checks only run
-after their owning package registers them in the active command path.
+Modernized core doctor checks stay attached to the ordered doctor contribution
+that owns their human `doctor` / `doctor --fix` behavior. The shared structured
+health registry is the extension point: bundled and plugin-backed checks run
+after core doctor checks once their owning package registers them in the active
+command path. The `openclaw/plugin-sdk/health` subpath exposes the same
+contract for those extension consumers.
 
 ## Check Selection
 
@@ -230,7 +232,7 @@ Notes:
 - Doctor removes retired `plugins.entries.codex.config.codexDynamicToolsProfile`; Codex app-server always keeps Codex-native workspace tools native.
 - Doctor warns when skills allowed for the default agent are unavailable in the current runtime environment because bins, env vars, config, or OS requirements are missing. `doctor --fix` can disable those unavailable skills with `skills.entries.<skill>.enabled=false`; install/configure the missing requirement instead when you want to keep the skill active.
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
-- If legacy sandbox registry files (`~/.openclaw/sandbox/containers.json` or `~/.openclaw/sandbox/browsers.json`) are present, doctor reports them; `openclaw doctor --fix` migrates valid entries into sharded registry directories and quarantines invalid legacy files.
+- If legacy sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), doctor reports them; `openclaw doctor --fix` migrates valid entries into SQLite and quarantines invalid legacy files.
 - If `gateway.auth.token`/`gateway.auth.password` are SecretRef-managed and unavailable in the current command path, doctor reports a read-only warning and does not write plaintext fallback credentials. For exec-backed SecretRefs, doctor skips execution unless `--allow-exec` is present.
 - If channel SecretRef inspection fails in a fix path, doctor continues and reports a warning instead of exiting early.
 - After state-directory migrations, doctor warns when enabled default Telegram or Discord accounts depend on env fallback and `TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN` is unavailable to the doctor process.

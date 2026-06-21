@@ -1,3 +1,4 @@
+// Agent Core module implements session behavior.
 import type { ImageContent, TextContent } from "../../../../llm-core/src/index.js";
 import type { AgentMessage } from "../../types.js";
 import {
@@ -121,6 +122,10 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     return this.storage.getLeafId();
   }
 
+  private getAppendParentId(): Promise<string | null> {
+    return this.storage.getAppendParentId?.() ?? this.storage.getLeafId();
+  }
+
   getEntry(id: string): Promise<SessionTreeEntry | undefined> {
     return this.storage.getEntry(id);
   }
@@ -156,7 +161,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     return this.appendTypedEntry({
       type: "message",
       id: await this.storage.createEntryId(),
-      parentId: await this.storage.getLeafId(),
+      parentId: await this.getAppendParentId(),
       timestamp: new Date().toISOString(),
       message,
     } satisfies MessageEntry);
@@ -166,7 +171,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     return this.appendTypedEntry({
       type: "thinking_level_change",
       id: await this.storage.createEntryId(),
-      parentId: await this.storage.getLeafId(),
+      parentId: await this.getAppendParentId(),
       timestamp: new Date().toISOString(),
       thinkingLevel,
     } satisfies ThinkingLevelChangeEntry);
@@ -176,7 +181,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     return this.appendTypedEntry({
       type: "model_change",
       id: await this.storage.createEntryId(),
-      parentId: await this.storage.getLeafId(),
+      parentId: await this.getAppendParentId(),
       timestamp: new Date().toISOString(),
       provider,
       modelId,
@@ -193,7 +198,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     return this.appendTypedEntry({
       type: "compaction",
       id: await this.storage.createEntryId(),
-      parentId: await this.storage.getLeafId(),
+      parentId: await this.getAppendParentId(),
       timestamp: new Date().toISOString(),
       summary,
       firstKeptEntryId,
@@ -208,7 +213,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     return this.appendTypedEntry({
       type: "custom",
       id: await this.storage.createEntryId(),
-      parentId: await this.storage.getLeafId(),
+      parentId: await this.getAppendParentId(),
       timestamp: new Date().toISOString(),
       customType,
       data,
@@ -225,7 +230,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     return this.appendTypedEntry({
       type: "custom_message",
       id: await this.storage.createEntryId(),
-      parentId: await this.storage.getLeafId(),
+      parentId: await this.getAppendParentId(),
       timestamp: new Date().toISOString(),
       customType,
       content,
@@ -242,7 +247,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     return this.appendTypedEntry({
       type: "label",
       id: await this.storage.createEntryId(),
-      parentId: await this.storage.getLeafId(),
+      parentId: await this.getAppendParentId(),
       timestamp: new Date().toISOString(),
       targetId,
       label,
@@ -253,7 +258,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     return this.appendTypedEntry({
       type: "session_info",
       id: await this.storage.createEntryId(),
-      parentId: await this.storage.getLeafId(),
+      parentId: await this.getAppendParentId(),
       timestamp: new Date().toISOString(),
       name: name.trim(),
     } satisfies SessionInfoEntry);

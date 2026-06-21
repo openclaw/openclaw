@@ -1,3 +1,4 @@
+// Issue 78851 Model Resolution script supports OpenClaw repository automation.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as inspector from "node:inspector";
 import { tmpdir } from "node:os";
@@ -24,6 +25,23 @@ type Options = {
   runtimeHooks: boolean;
   warmup: number;
 };
+
+const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json", "--keep-temp", "--runtime-hooks"]);
+const VALUE_FLAGS = new Set([
+  "--agents",
+  "--cpu-prof-dir",
+  "--cpu-prof-output",
+  "--lookups",
+  "--models-per-provider",
+  "--output",
+  "--providers",
+  "--runs",
+  "--warmup",
+]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 type PhaseSample = {
   ensureMs: number;
@@ -72,7 +90,11 @@ function parseFlagValue(flag: string): string | undefined {
   if (index === -1) {
     return undefined;
   }
-  return process.argv[index + 1];
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new CliArgumentError(`${flag} requires a value`);
+  }
+  return value;
 }
 
 function hasFlag(flag: string): boolean {
@@ -84,9 +106,12 @@ function parsePositiveInt(flag: string, fallback: number): number {
   if (!raw) {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
+  const value = Number(raw);
   if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${flag} must be a positive integer`);
+    throw new CliArgumentError(`${flag} must be a positive integer`);
+  }
+  if (!Number.isInteger(value)) {
+    throw new CliArgumentError(`${flag} must be a positive integer`);
   }
   return value;
 }
@@ -96,14 +121,32 @@ function parseNonNegativeInt(flag: string, fallback: number): number {
   if (!raw) {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
+  const value = Number(raw);
   if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`${flag} must be a non-negative integer`);
+    throw new CliArgumentError(`${flag} must be a non-negative integer`);
+  }
+  if (!Number.isInteger(value)) {
+    throw new CliArgumentError(`${flag} must be a non-negative integer`);
   }
   return value;
 }
 
+function validateCliArgs(args = process.argv.slice(2)): void {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
+}
+
 function parseOptions(): Options {
+  validateCliArgs();
   return {
     agentCount: parsePositiveInt("--agents", 8),
     cpuProfDir: parseFlagValue("--cpu-prof-dir"),
@@ -493,6 +536,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
+  if (error instanceof CliArgumentError) {
+    process.stderr.write(`${error.message}\n`);
+    process.exit(1);
+  }
   const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
   process.stderr.write(`${message}\n`);
   process.exit(1);

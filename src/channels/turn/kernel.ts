@@ -25,7 +25,6 @@ export {
 export type { BuildChannelInboundEventContextParams } from "../inbound-event/context.js";
 export {
   clearChannelBotPairLoopGuardForTests,
-  listTrackedChannelBotPairsForTests,
   recordChannelBotPairLoopAndCheckSuppression,
 } from "./bot-loop-protection.js";
 export { createChannelHistoryWindow } from "./history-window.js";
@@ -372,6 +371,7 @@ export async function dispatchAssembledChannelTurn(
       storePath: params.storePath,
       ctxPayload: params.ctxPayload,
       recordInboundSession: params.recordInboundSession,
+      afterRecord: params.afterRecord,
       record: params.record,
       history: params.history,
       admission: params.admission,
@@ -425,6 +425,7 @@ export async function dispatchAssembledChannelTurn(
             },
             onError: params.delivery.onError,
           },
+          toolsAllow: params.toolsAllow,
           replyOptions: replyPipeline.replyOptions,
           replyResolver: params.replyResolver,
         }),
@@ -511,6 +512,7 @@ async function runPreparedChannelTurnCoreInTrace<
         admission: admission.kind,
       },
     });
+    await params.afterRecord?.();
   } catch (err) {
     emit({
       ...params,

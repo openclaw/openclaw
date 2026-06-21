@@ -1,6 +1,8 @@
+// Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
@@ -32,13 +34,14 @@ const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.ym
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
+const MACOS_SCRIPT_SCOPE_RE = /^(scripts\/create-dmg\.sh|test\/scripts\/create-dmg\.test\.ts)$/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/plugins\/import-specifier(?:\.test)?\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/format-generated-module\.mjs)$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/format-generated-module\.mjs)$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
-  /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/plugins\/import-specifier\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+  /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
 const TEST_ONLY_PATH_RE =
   /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-support|test-harness|e2e-harness)\.[cm]?[jt]sx?$)/;
 const CONTROL_UI_I18N_SCOPE_RE =
@@ -54,7 +57,7 @@ const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE =
 const NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE =
   /^src\/plugins\/contracts\/(?:inventory\/bundled-capability-metadata|registry|tts-contract-suites)\.ts$/;
 const NODE_FAST_CI_ROUTING_SCOPE_RE =
-  /^(scripts\/(?:ci-changed-scope|check-changed|run-vitest|test-projects(?:\.test-support)?)\.mjs$|scripts\/test-projects\.test-support\.d\.mts$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope\.test\.ts$|test\/scripts\/(?:changed-lanes|run-vitest|test-projects)\.test\.ts$|\.github\/workflows\/ci\.yml$)/;
+  /^(scripts\/(?:ci-changed-scope|check-changed|run-vitest|test-projects(?:\.test-support)?)\.mjs$|scripts\/test-projects\.test-support\.d\.mts$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope\.test\.ts$|test\/scripts\/(?:changed-lanes|run-vitest|test-projects)\.test\.ts$)/;
 const NODE_FAST_SCOPE_RE = new RegExp(
   `${NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE.source}|${NODE_FAST_CI_ROUTING_SCOPE_RE.source}`,
 );
@@ -62,6 +65,9 @@ const NODE_FAST_SCOPE_RE = new RegExp(
 /**
  * @param {string[]} changedPaths
  * @returns {ChangedScope}
+ */
+/**
+ * Detects high-level CI scope from changed file paths.
  */
 export function detectChangedScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
@@ -106,7 +112,10 @@ export function detectChangedScope(changedPaths) {
       runChangedSmoke = true;
     }
 
-    if (!NATIVE_PROTOCOL_GEN_RE.test(path) && MACOS_NATIVE_RE.test(path)) {
+    if (
+      !NATIVE_PROTOCOL_GEN_RE.test(path) &&
+      (MACOS_NATIVE_RE.test(path) || MACOS_SCRIPT_SCOPE_RE.test(path))
+    ) {
       runMacos = true;
     }
 
@@ -157,6 +166,9 @@ export function detectChangedScope(changedPaths) {
  * @param {string[]} changedPaths
  * @returns {NodeFastScope}
  */
+/**
+ * Detects whether node-fast CI can cover the changed paths.
+ */
 export function detectNodeFastScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
     return { runFastOnly: false, runPluginContracts: false, runCiRouting: false };
@@ -206,6 +218,9 @@ function detectInstallSmokeScopeForPath(path) {
  * @param {string[]} changedPaths
  * @returns {InstallSmokeScope}
  */
+/**
+ * Detects whether install-smoke CI should run for changed paths.
+ */
 export function detectInstallSmokeScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
     return { runFastInstallSmoke: true, runFullInstallSmoke: true };
@@ -228,13 +243,29 @@ export function detectInstallSmokeScope(changedPaths) {
 /**
  * @param {string} base
  * @param {string} [head]
+ * @param {string} [cwd]
  * @returns {string[]}
  */
-export function listChangedPaths(base, head = "HEAD") {
+/**
+ * Lists changed paths for CI base/head inputs.
+ */
+export function listChangedPaths(
+  base,
+  head = "HEAD",
+  cwd = process.cwd(),
+  preferMergeHeadFirstParent = false,
+) {
   if (!base) {
     return [];
   }
-  const output = execFileSync("git", ["diff", "--name-only", base, head], {
+  const diffBase = resolveMergeHeadDiffBase({
+    base,
+    head,
+    cwd,
+    preferFirstParent: preferMergeHeadFirstParent,
+  });
+  const output = execFileSync("git", ["diff", "--name-only", diffBase, head], {
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });
@@ -248,6 +279,9 @@ export function listChangedPaths(base, head = "HEAD") {
  * @param {ChangedScope} scope
  * @param {string} [outputPath]
  * @param {InstallSmokeScope} [installSmokeScope]
+ */
+/**
+ * Writes CI scope decisions to GitHub Actions output.
  */
 export function writeGitHubOutput(
   scope,
@@ -292,26 +326,44 @@ function isDirectRun() {
 }
 
 /** @param {string[]} argv */
-function parseArgs(argv) {
-  const args = { base: "", head: "HEAD" };
+function readRefValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+/** @param {string[]} argv */
+export function parseArgs(argv) {
+  const args = { base: "", head: "HEAD", mergeHeadFirstParent: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--base") {
-      args.base = argv[i + 1] ?? "";
+      args.base = readRefValue(argv, i, "--base");
       i += 1;
       continue;
     }
     if (argv[i] === "--head") {
-      args.head = argv[i + 1] ?? "HEAD";
+      args.head = readRefValue(argv, i, "--head");
       i += 1;
+      continue;
+    }
+    if (argv[i] === "--merge-head-first-parent") {
+      args.mergeHeadFirstParent = true;
     }
   }
   return args;
 }
 
 if (isDirectRun()) {
-  const args = parseArgs(process.argv.slice(2));
   try {
-    const changedPaths = listChangedPaths(args.base, args.head);
+    const args = parseArgs(process.argv.slice(2));
+    const changedPaths = listChangedPaths(
+      args.base,
+      args.head,
+      process.cwd(),
+      args.mergeHeadFirstParent,
+    );
     if (changedPaths.length === 0) {
       writeGitHubOutput(EMPTY_SCOPE);
       process.exit(0);

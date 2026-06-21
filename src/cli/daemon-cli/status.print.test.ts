@@ -1,3 +1,4 @@
+// Daemon status print tests cover user-facing service status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -11,6 +12,9 @@ const resolveControlUiLinksMock = vi.hoisted(() =>
 );
 const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
 const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
+const isWSLEnvMock = vi.hoisted(() =>
+  vi.fn((env?: Record<string, string | undefined>) => Boolean(env?.WSL_DISTRO_NAME)),
+);
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
@@ -54,7 +58,7 @@ vi.mock("../../daemon/systemd-hints.js", () => ({
 }));
 
 vi.mock("../../infra/wsl.js", () => ({
-  isWSLEnv: () => false,
+  isWSLEnv: isWSLEnvMock,
 }));
 
 vi.mock("./shared.js", () => ({
@@ -92,6 +96,7 @@ describe("printDaemonStatus", () => {
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
+    isWSLEnvMock.mockClear();
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -178,6 +183,50 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "protocol mismatch after rollback");
   });
 
+  it("uses service command env for WSL systemd unavailable hints", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    isSystemdUnavailableDetailMock.mockReturnValue(true);
+    renderSystemdUnavailableHintsMock.mockReturnValue(["wsl hint"]);
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: {
+              status: "unknown",
+              detail: "System has not been booted with systemd as init system",
+            },
+            command: {
+              programArguments: [],
+              environment: { WSL_DISTRO_NAME: "Ubuntu" },
+            },
+          },
+          rpc: {
+            ok: false,
+            error: "unavailable",
+            url: "ws://127.0.0.1:18789",
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+
+    expect(isWSLEnvMock).toHaveBeenCalledWith({ WSL_DISTRO_NAME: "Ubuntu" });
+    expect(renderSystemdUnavailableHintsMock).toHaveBeenCalledWith({
+      wsl: true,
+      kind: "generic_unavailable",
+      container: false,
+    });
+    expectMockLineContains(runtime.error, "wsl hint");
+  });
+
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus(
       {
@@ -255,6 +304,31 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
     expectMockLineContains(runtime.error, "Errors: suppressed");
+  });
+
+  it("prints GUI-session wording before generic missing-supervision wording", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: false,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: {
+            status: "unknown",
+            missingSupervision: true,
+            missingGuiSession: true,
+            detail: "Bootstrap failed: 125: Domain does not support specified action",
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.error, "macOS has no usable GUI session");
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).not.toContain("launchd has no loaded job");
   });
 
   it("prints probe kind and capability separately", () => {

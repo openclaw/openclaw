@@ -1,3 +1,4 @@
+// Telegram type declarations define plugin contracts.
 import type { ChatFullInfo, Message, UserFromGetMe } from "grammy/types";
 
 /** App-specific stream mode for Telegram stream previews. */
@@ -18,6 +19,7 @@ export type TelegramGetChat = (chatId: number | string) => Promise<TelegramChatD
  */
 export type TelegramContext = {
   message: Message;
+  update?: unknown;
   me?: UserFromGetMe;
   getFile: TelegramGetFile;
 };

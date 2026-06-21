@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
@@ -635,6 +636,35 @@ describe("validateWakeParams", () => {
         anotherExtra: true,
       }),
     ).toBe(true);
+  });
+
+  it("accepts optional sessionKey and agentId so per-session wakes can be routed", () => {
+    // Origin-capture fix for #46886 / #64556 — wakes that name an explicit
+    // session/agent must validate so the gateway handler can forward them
+    // through to the cron service.
+    expect(
+      validateWakeParams({
+        mode: "now",
+        text: "follow up on the report",
+        sessionKey: "agent:main:telegram:8661849123:topic:4052",
+        agentId: "main",
+      }),
+    ).toBe(true);
+    expect(
+      validateWakeParams({
+        mode: "next-heartbeat",
+        text: "tick",
+        sessionKey: "agent:main:discord:guild123:thread456",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects sessionKey or agentId when they are present but empty strings", () => {
+    // NonEmptyString — caller must omit the field entirely to fall back to
+    // the default routing. Explicit empties are an error rather than a
+    // silent no-op.
+    expect(validateWakeParams({ mode: "now", text: "x", sessionKey: "" })).toBe(false);
+    expect(validateWakeParams({ mode: "now", text: "x", agentId: "" })).toBe(false);
   });
 });
 

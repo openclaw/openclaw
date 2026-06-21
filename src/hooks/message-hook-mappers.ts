@@ -42,8 +42,10 @@ export type CanonicalInboundMessageHookContext = {
   senderUsername?: string;
   senderE164?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  replyToIsQuote?: boolean;
   provider?: string;
   surface?: string;
   threadId?: string | number;
@@ -147,8 +149,10 @@ export function deriveInboundMessageHookContext(
     senderUsername: ctx.SenderUsername,
     senderE164: ctx.SenderE164,
     replyToId: ctx.ReplyToId,
+    replyToIdFull: ctx.ReplyToIdFull,
     replyToBody: ctx.ReplyToBody,
     replyToSender: ctx.ReplyToSender,
+    replyToIsQuote: ctx.ReplyToIsQuote,
     provider: ctx.Provider,
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
@@ -249,11 +253,17 @@ export function toPluginMessageContext(
   if ("replyToId" in canonical && canonical.replyToId !== undefined) {
     context.replyToId = canonical.replyToId;
   }
+  if ("replyToIdFull" in canonical && canonical.replyToIdFull !== undefined) {
+    context.replyToIdFull = canonical.replyToIdFull;
+  }
   if ("replyToBody" in canonical && canonical.replyToBody !== undefined) {
     context.replyToBody = canonical.replyToBody;
   }
   if ("replyToSender" in canonical && canonical.replyToSender !== undefined) {
     context.replyToSender = canonical.replyToSender;
+  }
+  if ("replyToIsQuote" in canonical && canonical.replyToIsQuote !== undefined) {
+    context.replyToIsQuote = canonical.replyToIsQuote;
   }
   assignTraceFields(context, canonical.trace);
   if (canonical.callDepth != null) {
@@ -322,11 +332,17 @@ export function toPluginInboundClaimContext(
   if (canonical.replyToId !== undefined) {
     context.replyToId = canonical.replyToId;
   }
+  if (canonical.replyToIdFull !== undefined) {
+    context.replyToIdFull = canonical.replyToIdFull;
+  }
   if (canonical.replyToBody !== undefined) {
     context.replyToBody = canonical.replyToBody;
   }
   if (canonical.replyToSender !== undefined) {
     context.replyToSender = canonical.replyToSender;
+  }
+  if (canonical.replyToIsQuote !== undefined) {
+    context.replyToIsQuote = canonical.replyToIsQuote;
   }
   assignTraceFields(context, canonical.trace);
   return context;
@@ -354,8 +370,10 @@ export function toPluginInboundClaimEvent(
     senderName: canonical.senderName,
     senderUsername: canonical.senderUsername,
     ...(canonical.replyToId !== undefined ? { replyToId: canonical.replyToId } : {}),
+    ...(canonical.replyToIdFull !== undefined ? { replyToIdFull: canonical.replyToIdFull } : {}),
     ...(canonical.replyToBody !== undefined ? { replyToBody: canonical.replyToBody } : {}),
     ...(canonical.replyToSender !== undefined ? { replyToSender: canonical.replyToSender } : {}),
+    ...(canonical.replyToIsQuote !== undefined ? { replyToIsQuote: canonical.replyToIsQuote } : {}),
     threadId: canonical.threadId,
     messageId: canonical.messageId,
     sessionKey: canonical.sessionKey,
@@ -372,8 +390,10 @@ export function toPluginInboundClaimEvent(
       originatingTo: canonical.originatingTo,
       senderE164: canonical.senderE164,
       replyToId: canonical.replyToId,
+      replyToIdFull: canonical.replyToIdFull,
       replyToBody: canonical.replyToBody,
       replyToSender: canonical.replyToSender,
+      replyToIsQuote: canonical.replyToIsQuote,
       mediaPath: canonical.mediaPath,
       mediaUrl: canonical.mediaUrl,
       mediaType: canonical.mediaType,
@@ -401,8 +421,10 @@ export function toPluginMessageReceivedEvent(
     messageId: canonical.messageId,
     senderId: canonical.senderId,
     ...(canonical.replyToId !== undefined ? { replyToId: canonical.replyToId } : {}),
+    ...(canonical.replyToIdFull !== undefined ? { replyToIdFull: canonical.replyToIdFull } : {}),
     ...(canonical.replyToBody !== undefined ? { replyToBody: canonical.replyToBody } : {}),
     ...(canonical.replyToSender !== undefined ? { replyToSender: canonical.replyToSender } : {}),
+    ...(canonical.replyToIsQuote !== undefined ? { replyToIsQuote: canonical.replyToIsQuote } : {}),
     sessionKey: canonical.sessionKey,
     runId: canonical.runId,
     metadata: {
@@ -418,8 +440,10 @@ export function toPluginMessageReceivedEvent(
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
       replyToId: canonical.replyToId,
+      replyToIdFull: canonical.replyToIdFull,
       replyToBody: canonical.replyToBody,
       replyToSender: canonical.replyToSender,
+      replyToIsQuote: canonical.replyToIsQuote,
       mediaPath: canonical.mediaPath,
       mediaUrl: canonical.mediaUrl,
       mediaType: canonical.mediaType,

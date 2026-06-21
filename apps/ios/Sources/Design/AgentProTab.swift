@@ -1,11 +1,15 @@
 import OpenClawKit
-import OpenClawProtocol
 import SwiftUI
 
 struct AgentProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.scenePhase) var scenePhase
+    let directRoute: AgentRoute?
+    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerTitle: String
+    let openSettings: (() -> Void)?
+    @State var navigationPath: [AgentRoute] = []
     @State var overview: AgentOverviewSnapshot?
     @State var overviewErrorText: String?
     @State var overviewLoading: Bool = false
@@ -31,8 +35,9 @@ struct AgentProTab: View {
     @State var cronActionStatusText: String?
 
     enum AgentRoute: Hashable {
+        case agents
         case skills
-        case nodes
+        case instances
         case cron
         case usage
         case dreaming
@@ -63,8 +68,7 @@ struct AgentProTab: View {
     enum AgentRosterFilter: String, CaseIterable, Identifiable {
         case all
         case online
-        case busy
-        case idle
+        case ready
 
         var id: Self {
             self
@@ -74,8 +78,7 @@ struct AgentProTab: View {
             switch self {
             case .all: "All"
             case .online: "Online"
-            case .busy: "Busy"
-            case .idle: "Idle"
+            case .ready: "Ready"
             }
         }
     }
@@ -90,22 +93,19 @@ struct AgentProTab: View {
 
     enum AgentRosterState: Equatable {
         case online
-        case busy
-        case idle
+        case ready
 
         var title: String {
             switch self {
             case .online: "Online"
-            case .busy: "Busy"
-            case .idle: "Idle"
+            case .ready: "Ready"
             }
         }
 
         var color: Color {
             switch self {
             case .online: OpenClawBrand.ok
-            case .busy: OpenClawBrand.warn
-            case .idle: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0)
+            case .ready: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0)
             }
         }
     }
@@ -124,8 +124,40 @@ struct AgentProTab: View {
         }
     }
 
+    init(
+        directRoute: AgentRoute? = nil,
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerTitle: String = "Agents",
+        openSettings: (() -> Void)? = nil)
+    {
+        self.directRoute = directRoute
+        self.headerLeadingAction = headerLeadingAction
+        self.headerTitle = headerTitle
+        self.openSettings = openSettings
+    }
+
     var body: some View {
-        NavigationStack {
+        Group {
+            if let directRoute {
+                self.directDestination(for: directRoute)
+            } else {
+                self.overviewNavigation
+            }
+        }
+        .task(id: self.overviewTaskID) {
+            await self.refreshOverview(force: false)
+        }
+        .sheet(item: self.$skillEditorSelection) { selection in
+            if let skill = self.skillByKey(selection.id) {
+                self.skillEditorSheet(skill)
+            } else {
+                self.missingSkillEditorSheet
+            }
+        }
+    }
+
+    private var overviewNavigation: some View {
+        NavigationStack(path: self.$navigationPath) {
             ZStack {
                 OpenClawProBackground()
                 ScrollView {
@@ -142,22 +174,18 @@ struct AgentProTab: View {
                 .refreshable {
                     await self.refreshOverview(force: true)
                 }
-                .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
             .navigationBarHidden(true)
             .navigationDestination(for: AgentRoute.self) { route in
                 self.destination(for: route)
             }
         }
-        .task(id: self.overviewTaskID) {
-            await self.refreshOverview(force: false)
-        }
-        .sheet(item: self.$skillEditorSelection) { selection in
-            if let skill = self.skillByKey(selection.id) {
-                self.skillEditorSheet(skill)
-            } else {
-                self.missingSkillEditorSheet
-            }
-        }
+    }
+
+    private func directDestination(for route: AgentRoute) -> some View {
+        self.destination(for: route)
+            .toolbar(
+                self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden,
+                for: .navigationBar)
     }
 }

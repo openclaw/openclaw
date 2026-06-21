@@ -1,3 +1,5 @@
+// Gateway pending node-work queue.
+// Stores short-lived per-node prompts until connected nodes drain them.
 import { randomUUID } from "node:crypto";
 import {
   asDateTimestampMs,
@@ -7,8 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 
 // Pending node work is an in-memory per-node queue for gateway prompts such as
-// status/location requests. Nodes drain it opportunistically and acknowledge
-// item ids after handling them.
+// status/location requests. Nodes drain it opportunistically after reconnecting.
 const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
 /** Work item types that connected nodes understand today. */
 export type NodePendingWorkType = (typeof NODE_PENDING_WORK_TYPES)[number];
@@ -69,6 +70,7 @@ function getOrCreateState(nodeId: string): NodePendingWorkState {
 }
 
 function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
+  // Expiry pruning bumps revision so polling nodes can observe that work changed.
   const validNowMs = asDateTimestampMs(nowMs);
   if (validNowMs === undefined) {
     return false;
@@ -142,7 +144,7 @@ export function enqueueNodePendingWork(params: {
   const state = getOrCreateState(nodeId);
   pruneExpired(state, nowMs);
   // Keep one outstanding item per type so repeated status/location requests
-  // collapse until the node has a chance to drain and acknowledge them.
+  // collapse until the node has a chance to drain them.
   const existing = [...state.itemsById.values()].find((item) => item.type === params.type);
   if (existing) {
     return { revision: state.revision, item: existing, deduped: true };
@@ -183,41 +185,20 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   }
   const explicitReturnedCount = items.filter((item) => item.id !== DEFAULT_STATUS_ITEM_ID).length;
   const baselineIncluded = items.some((item) => item.id === DEFAULT_STATUS_ITEM_ID);
+  if (state && explicitReturnedCount > 0) {
+    for (const item of items) {
+      if (item.id !== DEFAULT_STATUS_ITEM_ID) {
+        state.itemsById.delete(item.id);
+      }
+    }
+    state.revision += 1;
+    pruneStateIfEmpty(normalizedNodeId, state);
+  }
   return {
-    revision,
+    revision: state?.revision ?? revision,
     items,
     hasMore: explicitItems.length > explicitReturnedCount || (includeBaseline && !baselineIncluded),
   };
-}
-
-/** Acknowledges completed pending-work ids and advances the node revision. */
-export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: string[] }): {
-  revision: number;
-  removedItemIds: string[];
-} {
-  const nodeId = params.nodeId.trim();
-  if (!nodeId) {
-    return { revision: 0, removedItemIds: [] };
-  }
-  const state = stateByNodeId.get(nodeId);
-  if (!state) {
-    return { revision: 0, removedItemIds: [] };
-  }
-  const removedItemIds: string[] = [];
-  for (const itemId of params.itemIds) {
-    const trimmedId = itemId.trim();
-    if (!trimmedId || trimmedId === DEFAULT_STATUS_ITEM_ID) {
-      continue;
-    }
-    if (state.itemsById.delete(trimmedId)) {
-      removedItemIds.push(trimmedId);
-    }
-  }
-  if (removedItemIds.length > 0) {
-    state.revision += 1;
-  }
-  pruneStateIfEmpty(nodeId, state);
-  return { revision: state.revision, removedItemIds };
 }
 
 /** Clears all pending work state for tests. */

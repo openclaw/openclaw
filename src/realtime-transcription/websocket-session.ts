@@ -1,3 +1,4 @@
+// Realtime transcription websocket session streams audio to transcription providers.
 import { randomUUID } from "node:crypto";
 import WebSocket, { type RawData } from "ws";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
@@ -423,7 +424,19 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   private emitError(error: unknown): void {
-    this.options.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    try {
+      this.options.callbacks.onError?.(normalized);
+    } catch (callbackError) {
+      try {
+        this.captureError(
+          callbackError instanceof Error ? callbackError : new Error(String(callbackError)),
+        );
+      } catch {
+        // Error observers are diagnostic hooks; capture failures must not
+        // replace the original provider/session error.
+      }
+    }
   }
 
   private captureFrame(direction: "inbound" | "outbound", payload: Buffer | string): void {

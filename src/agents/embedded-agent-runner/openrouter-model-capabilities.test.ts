@@ -1,33 +1,43 @@
+// Coverage for OpenRouter model capability loading and cache invalidation.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
+  // Each case gets an isolated state dir because the module persists capability
+  // rows through the plugin state store across imports.
   const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
   resetPluginStateStoreForTests();
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  for (const key of [
-    "ALL_PROXY",
-    "all_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "HTTPS_PROXY",
-    "https_proxy",
-  ]) {
-    vi.stubEnv(key, "");
-  }
   try {
-    await run(stateDir);
+    await withEnvAsync(
+      {
+        OPENCLAW_STATE_DIR: stateDir,
+        ALL_PROXY: "",
+        all_proxy: "",
+        HTTP_PROXY: "",
+        http_proxy: "",
+        HTTPS_PROXY: "",
+        https_proxy: "",
+      },
+      async () => {
+        try {
+          await run(stateDir);
+        } finally {
+          resetPluginStateStoreForTests();
+        }
+      },
+    );
   } finally {
-    resetPluginStateStoreForTests();
     rmSync(stateDir, { recursive: true, force: true });
   }
 }
 
 async function importOpenRouterModelCapabilities(scope: string) {
+  // Import fresh per scope so module-level caches cannot mask persistence bugs.
   return await importFreshModule<typeof import("./openrouter-model-capabilities.js")>(
     import.meta.url,
     `./openrouter-model-capabilities.js?scope=${scope}`,
@@ -38,7 +48,6 @@ describe("openrouter-model-capabilities", () => {
   afterEach(() => {
     resetPluginStateStoreForTests();
     vi.unstubAllGlobals();
-    delete process.env.OPENCLAW_STATE_DIR;
   });
 
   it("uses top-level OpenRouter max token fields when top_provider is absent", async () => {
@@ -96,6 +105,21 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+  it("cancels failed OpenRouter catalog response bodies", async () => {
+    await withOpenRouterStateDir(async () => {
+      const response = new Response("temporarily unavailable", { status: 503 });
+      const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+      const fetchSpy = vi.fn(async () => response);
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const module = await importOpenRouterModelCapabilities("failed-catalog-response");
+      await module.loadOpenRouterModelCapabilities("acme/missing-model");
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+  });
+
   it("uses endpoint-specific OpenRouter context length when top_provider reports one", async () => {
     await withOpenRouterStateDir(async () => {
       vi.stubGlobal(
@@ -139,6 +163,8 @@ describe("openrouter-model-capabilities", () => {
   });
 
   it("does not reuse retired JSON caches with precomputed OpenRouter context windows", async () => {
+    // Old JSON caches stored unnormalized provider context windows; force a live
+    // refresh so endpoint-specific caps are used instead.
     await withOpenRouterStateDir(async (stateDir) => {
       const modelId = "nvidia/nemotron-3-super-120b-a12b:free";
       const cacheDir = join(stateDir, "cache");

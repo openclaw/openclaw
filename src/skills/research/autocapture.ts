@@ -1,8 +1,10 @@
+// Research autocapture helpers decide when skill research signals should be captured.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
 import { listSkillProposals, proposeCreateSkill, proposeUpdateSkill } from "../workshop/service.js";
-import { readWorkspaceSkillFile, resolveSkillProposalTarget } from "../workshop/store.js";
+import { resolveSkillProposalTarget } from "../workshop/store.js";
 import { extractDurableInstructionProposal } from "./signals.js";
 
 type SkillResearchAgentEndEvent = {
@@ -12,16 +14,39 @@ type SkillResearchAgentEndEvent = {
 
 type SkillResearchAgentContext = {
   agentId?: string;
+  runId?: string;
+  sessionKey?: string;
+  trigger?: string;
   workspaceDir?: string;
 };
 
 const log = createSubsystemLogger("skills/research");
+const AUTO_CAPTURE_BLOCKED_TRIGGERS = new Set(["cron", "heartbeat", "memory", "overflow"]);
+const AUTO_CAPTURE_BLOCKED_SESSION_SEGMENTS = new Set(["cron", "hook", "subagent"]);
 
 // Captured updates append below existing skill text so learned context stays auditable.
 function buildAutoCaptureUpdateContent(existingSkill: string, capturedContent: string): string {
   return [existingSkill.trimEnd(), "", "## Captured Update", "", capturedContent.trim(), ""].join(
     "\n",
   );
+}
+
+function isSkillResearchAutoCaptureEligible(ctx: SkillResearchAgentContext): boolean {
+  const trigger = ctx.trigger?.trim().toLowerCase();
+  if (trigger && AUTO_CAPTURE_BLOCKED_TRIGGERS.has(trigger)) {
+    return false;
+  }
+
+  const sessionKey = ctx.sessionKey?.trim().toLowerCase();
+  if (!sessionKey) {
+    return true;
+  }
+  if (sessionKey.includes("active-memory")) {
+    return false;
+  }
+  return !sessionKey
+    .split(":")
+    .some((segment) => AUTO_CAPTURE_BLOCKED_SESSION_SEGMENTS.has(segment));
 }
 
 /** Captures durable skill research signals from a session transcript when enabled. */
@@ -39,6 +64,9 @@ export async function runSkillResearchAutoCapture(params: {
   }
   const workspaceDir = params.ctx.workspaceDir;
   if (!workspaceDir) {
+    return;
+  }
+  if (!isSkillResearchAutoCaptureEligible(params.ctx)) {
     return;
   }
 

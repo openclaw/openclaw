@@ -7,7 +7,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import YAML from "yaml";
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
+  listMissingRequiredPlatformPackages,
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
@@ -21,7 +23,7 @@ const fixtureRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-npm-managed-root-",
 });
 const tempDirs: string[] = [];
-let previousNpmGlobalConfig: string | undefined;
+let npmConfigEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 const successfulSpawn = {
   code: 0,
@@ -40,7 +42,7 @@ async function makeTempRoot(): Promise<string> {
 
 beforeAll(async () => {
   const fixtureRoot = await fixtureRootTracker.setup();
-  previousNpmGlobalConfig = process.env.NPM_CONFIG_GLOBALCONFIG;
+  npmConfigEnvSnapshot = captureEnv(["NPM_CONFIG_GLOBALCONFIG"]);
   const globalConfig = path.join(fixtureRoot, "global-npmrc");
   await fs.writeFile(globalConfig, "", "utf8");
   process.env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
@@ -51,11 +53,8 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  if (previousNpmGlobalConfig === undefined) {
-    delete process.env.NPM_CONFIG_GLOBALCONFIG;
-  } else {
-    process.env.NPM_CONFIG_GLOBALCONFIG = previousNpmGlobalConfig;
-  }
+  npmConfigEnvSnapshot?.restore();
+  npmConfigEnvSnapshot = undefined;
   await fixtureRootTracker.cleanup();
 });
 
@@ -101,6 +100,67 @@ function requireCommandOptions(
 }
 
 describe("managed npm root", () => {
+  it("finds explicitly required optional packages for the current platform", async () => {
+    const npmRoot = await makeTempRoot();
+    const matchingPackage = "@vendor/tool-platform";
+    const scriptedPackage = "@vendor/tool-scripted";
+    const foreignPackage = "@vendor/tool-foreign";
+    const unconstrainedPackage = "@vendor/tool-optional";
+    const unlistedPackage = "@vendor/tool-unlisted";
+    await fs.writeFile(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": {},
+          [`node_modules/${matchingPackage}`]: {
+            optional: true,
+            os: [process.platform],
+            cpu: [process.arch],
+          },
+          [`node_modules/${scriptedPackage}`]: {
+            optional: true,
+            hasInstallScript: true,
+            os: [process.platform],
+            cpu: [process.arch],
+          },
+          [`node_modules/${foreignPackage}`]: {
+            optional: true,
+            os: [`not-${process.platform}`],
+            cpu: [process.arch],
+          },
+          [`node_modules/${unconstrainedPackage}`]: {
+            optional: true,
+          },
+          [`node_modules/${unlistedPackage}`]: {
+            optional: true,
+            os: [process.platform],
+            cpu: [process.arch],
+          },
+        },
+      })}\n`,
+    );
+
+    await expect(
+      listMissingRequiredPlatformPackages({
+        npmRoot,
+        requiredPackageNames: [
+          matchingPackage,
+          scriptedPackage,
+          foreignPackage,
+          unconstrainedPackage,
+        ],
+      }),
+    ).resolves.toEqual(
+      [matchingPackage, scriptedPackage]
+        .map((name) => ({
+          name,
+          packagePath: path.join(npmRoot, "node_modules", ...name.split("/")),
+        }))
+        .toSorted((left, right) => left.packagePath.localeCompare(right.packagePath)),
+    );
+  });
+
   it("keeps existing plugin dependencies when adding another managed plugin", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(

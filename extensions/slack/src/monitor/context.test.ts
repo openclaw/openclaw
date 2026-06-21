@@ -1,14 +1,17 @@
+// Slack tests cover context plugin behavior.
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
 import { createSlackMonitorContext } from "./context.js";
 
-function createTestContext() {
+function createTestContext(params?: {
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+}) {
   return createSlackMonitorContext({
     cfg: {
       channels: { slack: { enabled: true } },
-      session: { dmScope: "main" },
+      session: { dmScope: params?.dmScope ?? "main" },
     } as OpenClawConfig,
     accountId: "default",
     botToken: "xoxb-test",
@@ -96,5 +99,16 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
         threadTs: "1712345678.123456",
       }),
     ).toBe("agent:main:slack:channel:c_thread:thread:1712345678.123456");
+  });
+
+  it("routes channel-less direct interactions to the sender session", () => {
+    const ctx = createTestContext({ dmScope: "per-channel-peer" });
+
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelType: "im",
+        senderId: "U_SHORTCUT",
+      }),
+    ).toBe("agent:main:slack:direct:u_shortcut");
   });
 });

@@ -47,10 +47,25 @@ export type BtwEvent = {
   ts?: number;
 };
 
+export type SessionChangedEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  reason?: string;
+  phase?: string;
+  runId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+};
+
 export type AgentEvent = {
   runId: string;
   stream: string;
   data?: Record<string, unknown>;
+  // Stamped by the gateway on every emitted payload (see infra/agent-events.ts).
+  // Lifecycle events always carry sessionKey, letting the TUI adopt
+  // system-injected runs that never went through the local submit path.
+  sessionKey?: string;
+  agentId?: string;
 };
 
 export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
@@ -68,6 +83,12 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
+  /**
+   * True when `totalTokens` is a known-fresh value (e.g. 0 on a brand-new
+   * session) rather than an unknown/stale total. Lets the footer render `0`
+   * instead of `?` for fresh sessions, mirroring the `/status` fix in #93798.
+   */
+  totalTokensFresh?: boolean;
   goal?: SessionGoal;
   responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
@@ -139,6 +160,7 @@ export type TuiStateAccess = {
   activeChatRunId: string | null;
   pendingOptimisticUserMessage?: boolean;
   pendingChatRunId?: string | null;
+  pendingSubmitDraft?: { runId: string; text: string } | null;
   queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;

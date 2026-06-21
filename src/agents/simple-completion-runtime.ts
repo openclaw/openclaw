@@ -30,6 +30,7 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 type SimpleCompletionAuthStorage = {
@@ -38,7 +39,7 @@ type SimpleCompletionAuthStorage = {
 
 type CompletionRuntimeCredential = {
   apiKey: string;
-  baseUrl?: string;
+  model: Model;
 };
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
@@ -151,14 +152,14 @@ async function setRuntimeApiKeyForCompletion(params: {
   profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
   if (params.model.provider === "github-copilot") {
-    const { resolveCopilotApiToken } = await import("./github-copilot-token.js");
+    const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
     const copilotToken = await resolveCopilotApiToken({
       githubToken: params.apiKey,
     });
     params.authStorage.setRuntimeApiKey(params.model.provider, copilotToken.token);
     return {
       apiKey: copilotToken.token,
-      baseUrl: copilotToken.baseUrl,
+      model: { ...params.model, baseUrl: copilotToken.baseUrl },
     };
   }
   const preparedAuth = await prepareProviderRuntimeAuth({
@@ -182,7 +183,7 @@ async function setRuntimeApiKeyForCompletion(params: {
   params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
   return {
     apiKey: runtimeApiKey,
-    baseUrl: preparedAuth?.baseUrl,
+    model: applyPreparedRuntimeAuthToModel(params.model, preparedAuth),
   };
 }
 
@@ -202,28 +203,30 @@ export async function prepareSimpleCompletionModel(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
+  useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
-  const resolved = params.skipAgentDiscovery
-    ? await (params.modelResolver ?? resolveModelAsync)(
-        params.provider,
-        params.modelId,
-        params.agentDir,
-        params.cfg,
-        {
-          ...(params.allowBundledStaticCatalogFallback !== undefined
-            ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-            : {}),
-          skipAgentDiscovery: true,
+  const resolved =
+    params.useAsyncModelResolution || params.skipAgentDiscovery
+      ? await (params.modelResolver ?? resolveModelAsync)(
+          params.provider,
+          params.modelId,
+          params.agentDir,
+          params.cfg,
+          {
+            ...(params.allowBundledStaticCatalogFallback !== undefined
+              ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+              : {}),
+            ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
+            authProfileId: params.profileId,
+            preferredProfile: params.preferredProfile,
+          },
+        )
+      : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
           authProfileId: params.profileId,
           preferredProfile: params.preferredProfile,
-        },
-      )
-    : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
-        authProfileId: params.profileId,
-        preferredProfile: params.preferredProfile,
-      });
+        });
   if (!resolved.model) {
     return {
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,
@@ -271,13 +274,7 @@ export async function prepareSimpleCompletionModel(params: {
       profileId: auth.profileId,
     });
     resolvedApiKey = runtimeCredential.apiKey;
-    const runtimeBaseUrl = runtimeCredential.baseUrl?.trim();
-    if (runtimeBaseUrl) {
-      resolvedModel = {
-        ...resolvedModel,
-        baseUrl: runtimeBaseUrl,
-      };
-    }
+    resolvedModel = runtimeCredential.model;
   }
 
   const resolvedAuth: ResolvedProviderAuth = {
@@ -298,6 +295,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
+  useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
@@ -322,6 +320,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     ...(params.allowBundledStaticCatalogFallback !== undefined
       ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
       : {}),
+    useAsyncModelResolution: params.useAsyncModelResolution,
     skipAgentDiscovery: params.skipAgentDiscovery,
     modelResolver: params.modelResolver,
   });

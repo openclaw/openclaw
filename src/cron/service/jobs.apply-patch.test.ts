@@ -1,3 +1,4 @@
+// Cron job patch tests cover applying partial updates to scheduled jobs.
 import { describe, expect, it } from "vitest";
 import { resolveFailureDestination } from "../delivery-plan.js";
 import type { CronJob } from "../types.js";
@@ -65,6 +66,16 @@ describe("applyJobPatch delivery merge", () => {
     applyJobPatch(job, patch);
 
     expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
+  it("preserves implicit delivery when clearing an absent override", () => {
+    const job = makeJob({ delivery: undefined });
+
+    applyJobPatch(job, {
+      delivery: { channel: null },
+    });
+
+    expect(job.delivery).toBeUndefined();
   });
 
   it("clears nullable failure destination fields", () => {

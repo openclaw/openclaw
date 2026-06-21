@@ -1,3 +1,5 @@
+// Local embedded Gateway request context.
+// Lets local agent paths reuse Gateway server methods without starting a server.
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -9,6 +11,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+import { createChatRunEntry, type ChatRunEntry } from "./server-chat-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
@@ -50,7 +53,7 @@ export function createLocalGatewayRequestContext(
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
   const sessionEvents = new Set<string>();
-  const chatRuns = new Map<string, { sessionKey: string; agentId?: string; clientRunId: string }>();
+  const chatRuns = new Map<string, ChatRunEntry>();
   const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
   const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
   const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();
@@ -103,7 +106,7 @@ export function createLocalGatewayRequestContext(
     bufferedAgentEvents,
     clearChatRunState,
     addChatRun: (sessionId, entry) => {
-      chatRuns.set(sessionId, entry);
+      chatRuns.set(sessionId, createChatRunEntry(entry));
     },
     removeChatRun: (sessionId, clientRunId, sessionKey) => {
       const entry = chatRuns.get(sessionId);

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Enforces Kysely and SQLite guardrails in infrastructure code.
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -44,7 +45,13 @@ const rawSqliteAllowPathGroups = {
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
   "backup snapshot maintenance": ["src/commands/backup-verify.ts", "src/infra/backup-create.ts"],
-  "doctor legacy state migration": ["src/infra/state-migrations.ts"],
+  "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
+  "read-only SQLite status probes": ["src/commands/status.scan.shared.ts"],
+  "doctor legacy state migration": [
+    "src/infra/state-migrations.ts",
+    "src/infra/state-migrations.debug-proxy.ts",
+  ],
+  "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
     "src/agents/subagent-registry.store.ts",
@@ -57,7 +64,6 @@ const rawSqliteAllowPathGroups = {
     "src/plugins/installed-plugin-index-record-reader.ts",
     "src/plugins/installed-plugin-index-store.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
-    "src/proxy-capture/store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",
     "src/tasks/task-registry.store.sqlite.ts",
     "src/tui/tui-last-session.ts",
@@ -217,6 +223,9 @@ function isPersistedStringCastType(typeText) {
   ].some((pattern) => pattern.test(typeText));
 }
 
+/**
+ * Collects Kysely/raw SQLite violations from one source file.
+ */
 export function collectKyselyGuardrailViolations(content, relativePath) {
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const imports = collectImports(sourceFile);
@@ -338,6 +347,9 @@ export function collectKyselyGuardrailViolations(content, relativePath) {
   return violations;
 }
 
+/**
+ * Collects Kysely guardrail violations across configured source roots.
+ */
 export async function collectKyselyGuardrails() {
   const files = await collectTypeScriptFilesFromRoots(sourceRoots, { includeTests: true });
   const violations = [];
@@ -351,6 +363,9 @@ export async function collectKyselyGuardrails() {
   return violations;
 }
 
+/**
+ * Runs the Kysely guardrail check.
+ */
 export async function main() {
   const violations = await collectKyselyGuardrails();
   if (violations.length === 0) {

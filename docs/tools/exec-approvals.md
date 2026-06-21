@@ -23,7 +23,7 @@ Codex Guardian mapping, and ACPX harness permissions, see
 Effective policy is the **stricter** of `tools.exec.*` and approvals
 defaults; if an approvals field is omitted, the `tools.exec` value is
 used. Host exec also uses local approvals state on that machine - a
-host-local `ask: "always"` in `~/.openclaw/exec-approvals.json` keeps
+host-local `ask: "always"` in the execution host approvals file keeps
 prompting even if session or config defaults request `ask: "on-miss"`.
 </Note>
 
@@ -73,11 +73,19 @@ Exec approvals are enforced locally on the execution host:
 
 ## Settings and storage
 
-Approvals live in a local JSON file on the execution host:
+Approvals live in a local JSON file on the execution host. When
+`OPENCLAW_STATE_DIR` is set, the file follows that state directory;
+otherwise it uses the default OpenClaw state directory:
 
 ```text
+$OPENCLAW_STATE_DIR/exec-approvals.json
+# otherwise
 ~/.openclaw/exec-approvals.json
 ```
+
+The default approval socket follows the same root:
+`$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
+`~/.openclaw/exec-approvals.sock` when the variable is unset.
 
 Example schema:
 
@@ -159,7 +167,8 @@ when set at the narrower session or agent scope.
 ### `askFallback`
 
 <ParamField path="askFallback" type='"deny" | "allowlist" | "full"'>
-  Resolution when a prompt is required but no UI is reachable.
+  Resolution when a prompt is required but no UI is reachable. If this
+  field is omitted, OpenClaw defaults to `deny`.
 
 - `deny` - block.
 - `allowlist` - allow only if allowlist matches.
@@ -209,9 +218,11 @@ agent under `agents.list[].tools.exec.commandHighlighting`.
 If you want host exec to run without approval prompts, you must open
 **both** policy layers - requested exec policy in OpenClaw config
 (`tools.exec.*`) **and** host-local approvals policy in
-`~/.openclaw/exec-approvals.json`.
+the execution host approvals file.
 
-YOLO is the default host behavior unless you tighten it explicitly:
+OpenClaw defaults omitted `askFallback` to `deny`. Set host
+`askFallback` to `full` explicitly when a no-UI approval prompt should
+fall back to allow.
 
 | Layer                 | YOLO setting               |
 | --------------------- | -------------------------- |
@@ -278,7 +289,7 @@ openclaw exec-policy preset yolo
 That local shortcut updates both:
 
 - Local `tools.exec.host/security/ask`.
-- Local `~/.openclaw/exec-approvals.json` defaults.
+- Local approvals file defaults, including `askFallback: "full"`.
 
 It is intentionally local-only. To change gateway-host or node-host
 approvals remotely, use `openclaw approvals set --gateway` or
@@ -421,7 +432,7 @@ shows last-used metadata per pattern so you can keep the list tidy.
 The target selector chooses **Gateway** (local approvals) or a **Node**.
 Nodes must advertise `system.execApprovals.get/set` (macOS app or
 headless node host). If a node does not advertise exec approvals yet,
-edit its local `~/.openclaw/exec-approvals.json` directly.
+edit its local approvals file directly.
 
 CLI: `openclaw approvals` supports gateway or node editing - see
 [Approvals CLI](/cli/approvals).

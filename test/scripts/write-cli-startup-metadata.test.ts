@@ -1,5 +1,8 @@
+// Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
+import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { __testing, writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -68,6 +71,21 @@ async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void>
   throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
 }
 
+async function waitForChildClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 2_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("child did not close before timeout"));
+    }, timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
+}
+
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
 
@@ -133,6 +151,120 @@ describe("write-cli-startup-metadata", () => {
 
       const grandchildPid = Number(readFileSync(markerPath, "utf8"));
       await waitForProcessExit(grandchildPid);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "waits for all command help descendants before re-raising parent signals",
+    async () => {
+      const tempRoot = createTempDir("openclaw-startup-metadata-signal-");
+      const fastCommandPath = path.join(tempRoot, "fast-command.mjs");
+      const fastReadyPath = path.join(tempRoot, "fast-ready");
+      const commandPath = path.join(tempRoot, "command.mjs");
+      const runnerPath = path.join(tempRoot, "runner.mjs");
+      const grandchildPidPath = path.join(tempRoot, "grandchild.pid");
+      const grandchildScript = [
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      writeFixtureFile(
+        tempRoot,
+        "fast-command.mjs",
+        [
+          "import { writeFileSync } from 'node:fs';",
+          `writeFileSync(${JSON.stringify(fastReadyPath)}, "ready");`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+      writeFixtureFile(
+        tempRoot,
+        "command.mjs",
+        [
+          "import { spawn } from 'node:child_process';",
+          "import { writeFileSync } from 'node:fs';",
+          `const grandchild = spawn(process.execPath, ["--eval", ${JSON.stringify(
+            grandchildScript,
+          )}], { stdio: "ignore" });`,
+          `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+      writeFixtureFile(
+        tempRoot,
+        "runner.mjs",
+        [
+          `const { __testing } = await import(${JSON.stringify(
+            pathToFileURL(path.resolve("scripts/write-cli-startup-metadata.ts")).href,
+          )});`,
+          "void __testing.spawnText(",
+          `  [${JSON.stringify(fastCommandPath)}],`,
+          "  {",
+          `    cwd: ${JSON.stringify(tempRoot)},`,
+          "    env: process.env,",
+          "    failureMessage: 'fast render failed',",
+          "    killGraceMs: 100,",
+          "    maxOutputBytes: 1024,",
+          "    timeoutMs: 30_000,",
+          "  },",
+          ").catch(() => undefined);",
+          "void __testing.spawnText(",
+          `  [${JSON.stringify(commandPath)}],`,
+          "  {",
+          `    cwd: ${JSON.stringify(tempRoot)},`,
+          "    env: process.env,",
+          "    failureMessage: 'render failed',",
+          "    killGraceMs: 100,",
+          "    maxOutputBytes: 1024,",
+          "    timeoutMs: 30_000,",
+          "  },",
+          ").catch(() => undefined);",
+        ].join("\n"),
+      );
+
+      const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
+        cwd: process.cwd(),
+        stdio: "ignore",
+      });
+      let grandchildPid = 0;
+
+      try {
+        const deadline = Date.now() + 1_000;
+        while (Date.now() < deadline) {
+          try {
+            grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
+          } catch {}
+          let fastReady = false;
+          try {
+            fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
+          } catch {}
+          if (fastReady && grandchildPid > 0 && processIsAlive(grandchildPid)) {
+            break;
+          }
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10);
+          });
+        }
+        expect(readFileSync(fastReadyPath, "utf8")).toBe("ready");
+        expect(grandchildPid).toBeGreaterThan(0);
+        expect(processIsAlive(grandchildPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await expect(waitForChildClose(runner)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitForProcessExit(grandchildPid, 2_000);
+      } finally {
+        if (runner.pid && processIsAlive(runner.pid)) {
+          runner.kill("SIGKILL");
+        }
+        if (grandchildPid > 0 && processIsAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+      }
     },
   );
 

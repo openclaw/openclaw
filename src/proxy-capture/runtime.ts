@@ -1,3 +1,4 @@
+// Proxy capture runtime coordinates capture sessions, proxy startup, and storage.
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
@@ -41,7 +42,7 @@ const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
 ];
 
 // Runtime capture records HTTP/fetch and websocket events into the SQLite store,
-// redacting sensitive headers and persisting bodies through the blob store.
+// redacting sensitive headers and persisting bodies in capture_blobs.
 type GlobalFetchPatchedState = {
   originalFetch: typeof globalThis.fetch;
 };
@@ -56,7 +57,7 @@ type DebugProxyCaptureStoreLike = Pick<
 >;
 
 export type DebugProxyCaptureRuntimeDeps = {
-  getStore?: (dbPath: string, blobDir: string) => DebugProxyCaptureStoreLike;
+  getStore?: () => DebugProxyCaptureStoreLike;
   closeStore?: typeof closeDebugProxyCaptureStore;
   persistEventPayload?: (
     store: DebugProxyCaptureStoreLike,
@@ -220,7 +221,7 @@ function installDebugProxyGlobalFetchPatch(
       return response;
     } catch (error) {
       if (url && /^https?:/i.test(url)) {
-        const store = runtime.getStore(settings.dbPath, settings.blobDir);
+        const store = runtime.getStore();
         const parsed = new URL(url);
         store.recordEvent({
           sessionId: settings.sessionId,
@@ -277,15 +278,13 @@ export function initializeDebugProxyCapture(
   if (!settings.enabled) {
     return;
   }
-  resolveRuntimeDeps(deps).getStore(settings.dbPath, settings.blobDir).upsertSession({
+  resolveRuntimeDeps(deps).getStore().upsertSession({
     id: settings.sessionId,
     startedAt: Date.now(),
     mode,
     sourceScope: "openclaw",
     sourceProcess: settings.sourceProcess,
     proxyUrl: settings.proxyUrl,
-    dbPath: settings.dbPath,
-    blobDir: settings.blobDir,
   });
   installDebugProxyGlobalFetchPatch(settings, deps);
 }
@@ -301,7 +300,7 @@ export function finalizeDebugProxyCapture(
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
-  runtime.getStore(settings.dbPath, settings.blobDir).endSession(settings.sessionId);
+  runtime.getStore().endSession(settings.sessionId);
   uninstallDebugProxyGlobalFetchPatch(deps);
   runtime.closeStore();
 }
@@ -325,7 +324,7 @@ export function captureHttpExchange(
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
-  const store = runtime.getStore(settings.dbPath, settings.blobDir);
+  const store = runtime.getStore();
   const flowId = params.flowId ?? randomUUID();
   const url = new URL(params.url);
   const requestBody =
@@ -448,7 +447,7 @@ export function captureWsEvent(params: {
   if (!settings.enabled) {
     return;
   }
-  const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+  const store = getDebugProxyCaptureStore();
   const url = new URL(params.url);
   const payload = persistEventPayload(store, {
     data: params.payload,

@@ -1,6 +1,11 @@
+// Gateway server implementation builds runtime state, method registries, HTTP
+// and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
+import {
+  getActiveEmbeddedRunCount,
+  resolveActiveEmbeddedRunSessionId,
+} from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import {
   getLoadedChannelPluginEntryById,
@@ -21,6 +26,7 @@ import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -44,6 +50,7 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -54,6 +61,7 @@ import {
 } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
@@ -68,6 +76,7 @@ import {
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
+import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
@@ -647,6 +656,7 @@ export async function startGatewayServer(
       getTotalQueueSize() +
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
+      getActiveCronJobCount() +
       getActiveTaskCount(),
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
@@ -813,6 +823,7 @@ export async function startGatewayServer(
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
+  const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig);
 
   const controlUiRootState = await startupTrace.measure("control-ui.root", () =>
     resolveGatewayControlUiRootState({
@@ -923,6 +934,7 @@ export async function startGatewayServer(
       getReadiness,
     }),
   );
+  const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
@@ -983,7 +995,10 @@ export async function startGatewayServer(
         runtimeState.skillsRefreshTimer = null;
       },
       skillsChangeUnsub: runtimeState.skillsChangeUnsub,
-      disposeAuthRateLimiter: () => authRateLimiter.dispose(),
+      disposeAuthRateLimiter: () => {
+        authRateLimiter.dispose();
+        nodeReapprovalCoordinator.dispose();
+      },
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
@@ -1044,9 +1059,32 @@ export async function startGatewayServer(
       lifecycleUnsub: runtimeState.lifecycleUnsub,
       chatRunState,
       chatAbortControllers,
+      restartRecoveryCandidates,
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
+      resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
+      markMainSessionsAbortedForRestart: async ({
+        sessionKeys,
+        sessionIds,
+        activeRuns,
+        reason,
+        isActiveRun,
+      }) => {
+        if (sessionKeys.size === 0 && sessionIds.size === 0) {
+          return;
+        }
+        const { markRestartAbortedMainSessions } =
+          await import("../agents/main-session-restart-recovery.js");
+        await markRestartAbortedMainSessions({
+          cfg: getRuntimeConfig(),
+          sessionKeys,
+          sessionIds,
+          activeRuns,
+          isActiveRun,
+          reason,
+        });
+      },
       getPendingReplyCount: getTotalPendingReplies,
       clients,
       configReloader: runtimeState.configReloader,
@@ -1093,6 +1131,7 @@ export async function startGatewayServer(
           logHealth,
           dedupe,
           chatAbortControllers,
+          restartRecoveryCandidates,
           chatRunState,
           chatRunBuffers,
           chatDeltaSentAt,
@@ -1135,6 +1174,7 @@ export async function startGatewayServer(
         sessionEventSubscribers,
         sessionMessageSubscribers,
         chatAbortControllers,
+        restartRecoveryCandidates,
       }),
     );
     Object.assign(runtimeState, runtimeSubscriptions);
@@ -1223,6 +1263,7 @@ export async function startGatewayServer(
         ...listAttachedGatewayMethods(),
       );
       pinActivePluginHttpRouteRegistry(pluginRegistry);
+      pinActivePluginSessionExtensionRegistry(pluginRegistry);
       pinActivePluginChannelRegistry(pluginRegistry);
     };
     const refreshAttachedGatewayDiscovery = async (nextPluginRegistry: typeof pluginRegistry) => {
@@ -1499,6 +1540,7 @@ export async function startGatewayServer(
           getRequiredSharedGatewaySessionGeneration(sharedGatewaySessionGenerationState),
         rateLimiter: authRateLimiter,
         browserRateLimiter: browserAuthRateLimiter,
+        nodeReapprovalCoordinator,
         preauthHandshakeTimeoutMs,
         isStartupPending: isGatewayStartupPending,
         gatewayMethods: runtimeState.gatewayMethods,

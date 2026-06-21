@@ -319,6 +319,7 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.start();
     await runtime.request("exec.approval.resolve", { id: "abc", decision: "deny" });
+    await runtime.request("exec.approval.list", {});
 
     expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
     expectStartGatewayClientCall();
@@ -326,6 +327,33 @@ describe("createExecApprovalChannelRuntime", () => {
       id: "abc",
       decision: "deny",
     });
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
+  });
+
+  it("rejects write RPCs before they reach the approvals-only gateway client", async () => {
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/exec-approvals",
+      clientDisplayName: "Test Exec Approvals",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => [],
+      finalizeResolved: async () => undefined,
+    });
+
+    await runtime.start();
+    mockGatewayClientRequests.mockClear();
+
+    await expect(
+      runtime.request("send", {
+        channel: "slack",
+        to: "channel:C123",
+        message: "hello",
+      }),
+    ).rejects.toThrow(
+      "test/exec-approvals: operator approvals runtime cannot dispatch send; use a write-capable gateway client",
+    );
+    expect(mockGatewayClientRequests).not.toHaveBeenCalled();
   });
 
   it("fails startup when gateway client readiness times out before start", async () => {

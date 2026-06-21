@@ -1,5 +1,9 @@
+// Covers outbound session-route resolution through plugin hooks and fallback
+// target parsing, plus best-effort session metadata persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 
@@ -61,6 +65,33 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
   } as OpenClawConfig;
+
+  it("uses a prepared runtime plugin for session-route resolution", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "external-channel" }),
+      messaging: {
+        resolveOutboundSessionRoute: ({ target }: { target: string }) => ({
+          sessionKey: `agent:main:external-channel:direct:${target}`,
+          baseSessionKey: `agent:main:external-channel:direct:${target}`,
+          peer: { kind: "direct" as const, id: target },
+          chatType: "direct" as const,
+          from: `external-channel:${target}`,
+          to: `user:${target}`,
+        }),
+      },
+    } satisfies ChannelPlugin;
+
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "external-channel",
+      plugin,
+      agentId: "main",
+      target: "u123",
+    });
+
+    expect(route?.to).toBe("user:u123");
+    expect(route?.chatType).toBe("direct");
+  });
 
   async function expectResolvedRoute(params: {
     cfg: OpenClawConfig;
@@ -464,6 +495,23 @@ describe("resolveOutboundSessionRoute", () => {
         sessionKey: "agent:main:boardchat:direct:dthcxgoxhifn3pwh65cut3ud3w",
         from: "boardchat:dthcxgoxhifn3pwh65cut3ud3w",
         to: "user:dthcxgoxhifn3pwh65cut3ud3w",
+        chatType: "direct",
+      },
+    },
+    {
+      name: "uses resolved direct-only channel user targets to avoid phantom group sessions",
+      target: "wxid_abc123@im.wechat",
+      channel: "openclaw-weixin",
+      resolvedTarget: {
+        to: "wxid_abc123@im.wechat",
+        kind: "user" as const,
+        source: "normalized" as const,
+        resolutionSource: "normalized" as const,
+      },
+      expected: {
+        sessionKey: "agent:main:openclaw-weixin:direct:wxid_abc123@im.wechat",
+        from: "openclaw-weixin:wxid_abc123@im.wechat",
+        to: "user:wxid_abc123@im.wechat",
         chatType: "direct",
       },
     },

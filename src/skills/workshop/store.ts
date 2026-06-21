@@ -4,10 +4,15 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
-import { pathExists, root } from "../../infra/fs-safe.js";
+import { root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
-import { isPathInside } from "../../infra/path-safety.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
+import {
+  assertInsideWorkspace,
+  assertWorkspaceSkillSupportPathSetIsFileOnly,
+  MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+  normalizeWorkspaceSkillSupportPath,
+} from "../lifecycle/workspace-skill-write.js";
 import {
   SKILL_WORKSHOP_MANIFEST_SCHEMA,
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
@@ -29,18 +34,9 @@ const MANIFEST_LOCK_REL_PATH = path.join(TARGET_LOCKS_REL_DIR, "proposals-manife
 const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
-/** Maximum bytes accepted for a proposal draft. */
-export const MAX_PROPOSAL_BYTES = 1024 * 1024;
-export const MAX_PROPOSAL_SUPPORT_FILE_BYTES = 256 * 1024;
+const MAX_PROPOSAL_BYTES = 1024 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
-export const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
-const ALLOWED_SUPPORT_FILE_ROOTS = new Set([
-  "assets",
-  "examples",
-  "references",
-  "scripts",
-  "templates",
-]);
+const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
 const SKILL_WORKSHOP_LOCK_OPTIONS: FileLockOptions = {
   retries: {
@@ -80,7 +76,7 @@ function contentSizeBytes(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
 
-export function assertSkillProposalContentSize(content: string): void {
+function assertSkillProposalContentSize(content: string): void {
   if (contentSizeBytes(content) > MAX_PROPOSAL_BYTES) {
     throw new Error("Skill proposal is too large.");
   }
@@ -90,19 +86,12 @@ function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): 
   return path.resolve(options.stateDir ?? resolveStateDir(options.env));
 }
 
-export function resolveWorkshopPath(options: SkillWorkshopStoreOptions = {}): string {
-  return path.join(resolveSkillWorkshopStateDir(options), WORKSHOP_REL_DIR);
-}
-
-export function resolveProposalDir(
-  proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): string {
+function resolveProposalDir(proposalId: string, options: SkillWorkshopStoreOptions = {}): string {
   assertProposalId(proposalId);
   return path.join(resolveSkillWorkshopStateDir(options), proposalRelativeDir(proposalId));
 }
 
-export function resolveProposalRecordPath(
+function resolveProposalRecordPath(
   proposalId: string,
   options: SkillWorkshopStoreOptions = {},
 ): string {
@@ -114,42 +103,6 @@ export function resolveProposalDraftPath(
   options: SkillWorkshopStoreOptions = {},
 ): string {
   return path.join(resolveProposalDir(proposalId, options), PROPOSAL_DRAFT_FILE);
-}
-
-export function normalizeSkillProposalSupportPath(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    throw new Error("Support file path is required.");
-  }
-  if (trimmed.includes("\\")) {
-    throw new Error("Support file paths must use forward slashes.");
-  }
-  if (path.posix.isAbsolute(trimmed)) {
-    throw new Error("Support file paths must be relative.");
-  }
-  const rawParts = trimmed.split("/");
-  if (rawParts.some((part) => !part || part === "." || part === ".." || part.startsWith("."))) {
-    throw new Error("Support file paths must use plain relative path segments.");
-  }
-  const normalized = path.posix.normalize(trimmed);
-  if (
-    !normalized ||
-    normalized === "." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../")
-  ) {
-    throw new Error("Support file paths must stay inside the skill directory.");
-  }
-  const parts = normalized.split("/");
-  if (!ALLOWED_SUPPORT_FILE_ROOTS.has(parts[0] ?? "")) {
-    throw new Error(
-      `Support file paths must be under one of: ${[...ALLOWED_SUPPORT_FILE_ROOTS].join(", ")}.`,
-    );
-  }
-  if (normalized === PROPOSAL_DRAFT_FILE || normalized === "SKILL.md") {
-    throw new Error("Support files cannot replace the proposal or skill markdown file.");
-  }
-  return normalized;
 }
 
 export function prepareSkillProposalSupportFiles(
@@ -165,13 +118,13 @@ export function prepareSkillProposalSupportFiles(
   let totalBytes = 0;
   const files: PreparedSkillProposalSupportFile[] = [];
   for (const file of input) {
-    const filePath = normalizeSkillProposalSupportPath(file.path);
+    const filePath = normalizeWorkspaceSkillSupportPath(file.path);
     if (seen.has(filePath)) {
       throw new Error(`Duplicate support file path: ${filePath}`);
     }
     seen.add(filePath);
     const sizeBytes = contentSizeBytes(file.content);
-    if (sizeBytes > MAX_PROPOSAL_SUPPORT_FILE_BYTES) {
+    if (sizeBytes > MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES) {
       throw new Error(`Support file is too large: ${filePath}`);
     }
     if (file.content.includes("\0")) {
@@ -188,24 +141,8 @@ export function prepareSkillProposalSupportFiles(
       content: file.content,
     });
   }
-  assertSupportPathSetIsFileOnly(files.map((file) => file.path));
+  assertWorkspaceSkillSupportPathSetIsFileOnly(files.map((file) => file.path));
   return files;
-}
-
-function assertSupportPathSetIsFileOnly(paths: readonly string[]): void {
-  const sorted = paths.toSorted((a, b) => a.localeCompare(b));
-  for (const filePath of sorted) {
-    if (!filePath.includes("/")) {
-      throw new Error("Support file paths must include a file below an allowed support directory.");
-    }
-  }
-  for (let index = 1; index < sorted.length; index += 1) {
-    const previous = sorted[index - 1];
-    const current = sorted[index];
-    if (previous && current?.startsWith(`${previous}/`)) {
-      throw new Error(`Support file paths cannot overlap: ${previous} and ${current}`);
-    }
-  }
 }
 
 export function resolveSkillProposalTarget(params: { workspaceDir: string; skillName: string }): {
@@ -318,7 +255,7 @@ export async function replaceSkillProposalDraft(params: {
     trailingNewline: true,
   });
   for (const file of params.previousSupportFiles ?? []) {
-    const filePath = normalizeSkillProposalSupportPath(file.path);
+    const filePath = normalizeWorkspaceSkillSupportPath(file.path);
     if (!nextSupportPaths.has(filePath)) {
       await stateRoot.remove(path.join(relativeDir, filePath)).catch(() => undefined);
     }
@@ -452,19 +389,6 @@ async function withSkillWorkshopLock<T>(lockFile: string, fn: () => Promise<T>):
   }
 }
 
-export async function readWorkspaceSkillFile(filePath: string): Promise<string | null> {
-  if (!(await pathExists(filePath))) {
-    return null;
-  }
-  const skillRoot = await root(path.dirname(filePath));
-  const read = await skillRoot.read(path.basename(filePath), {
-    hardlinks: "reject",
-    maxBytes: MAX_PROPOSAL_BYTES,
-    symlinks: "reject",
-  });
-  return read.buffer.toString("utf8");
-}
-
 export async function readProposalSupportFiles(
   record: SkillProposalRecord,
   options: SkillWorkshopStoreOptions = {},
@@ -472,10 +396,10 @@ export async function readProposalSupportFiles(
   const stateRoot = await root(resolveSkillWorkshopStateDir(options));
   const out: PreparedSkillProposalSupportFile[] = [];
   for (const file of record.supportFiles ?? []) {
-    const filePath = normalizeSkillProposalSupportPath(file.path);
+    const filePath = normalizeWorkspaceSkillSupportPath(file.path);
     const read = await stateRoot.read(path.join(proposalRelativeDir(record.id), filePath), {
       hardlinks: "reject",
-      maxBytes: MAX_PROPOSAL_SUPPORT_FILE_BYTES,
+      maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
       symlinks: "reject",
     });
     const content = read.buffer.toString("utf8");
@@ -486,74 +410,8 @@ export async function readProposalSupportFiles(
     }
     out.push({ path: filePath, sizeBytes, hash, content });
   }
-  assertSupportPathSetIsFileOnly(out.map((file) => file.path));
+  assertWorkspaceSkillSupportPathSetIsFileOnly(out.map((file) => file.path));
   return out;
-}
-
-export async function readWorkspaceSupportFile(params: {
-  skillDir: string;
-  relativePath: string;
-}): Promise<string | null> {
-  const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
-  const absolutePath = path.join(params.skillDir, ...relativePath.split("/"));
-  if (!(await pathExists(absolutePath))) {
-    return null;
-  }
-  const skillRoot = await root(params.skillDir);
-  const read = await skillRoot.read(relativePath, {
-    hardlinks: "reject",
-    maxBytes: MAX_PROPOSAL_SUPPORT_FILE_BYTES,
-    symlinks: "reject",
-  });
-  return read.buffer.toString("utf8");
-}
-
-export async function writeWorkspaceSkillFile(params: {
-  workspaceDir: string;
-  filePath: string;
-  content: string;
-  overwrite?: boolean;
-}): Promise<void> {
-  assertInsideWorkspace(params.workspaceDir, params.filePath, "skill file");
-  const relativePath = path.relative(
-    path.resolve(params.workspaceDir),
-    path.resolve(params.filePath),
-  );
-  const workspaceRoot = await root(params.workspaceDir);
-  await workspaceRoot.write(relativePath, params.content, {
-    encoding: "utf8",
-    mkdir: true,
-    ...(params.overwrite === undefined ? {} : { overwrite: params.overwrite }),
-  });
-}
-
-export async function writeWorkspaceSupportFile(params: {
-  skillDir: string;
-  relativePath: string;
-  content: string;
-  overwrite?: boolean;
-}): Promise<void> {
-  const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
-  await fs.mkdir(params.skillDir, { recursive: true });
-  const skillRoot = await root(params.skillDir);
-  await skillRoot.write(relativePath, params.content, {
-    encoding: "utf8",
-    mkdir: true,
-    ...(params.overwrite === undefined ? {} : { overwrite: params.overwrite }),
-  });
-}
-
-export async function removeWorkspaceSupportFile(params: {
-  skillDir: string;
-  relativePath: string;
-}): Promise<void> {
-  const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
-  const skillRoot = await root(params.skillDir);
-  await skillRoot.remove(relativePath).catch((error: unknown) => {
-    if ((error as { code?: string })?.code !== "ENOENT") {
-      throw error;
-    }
-  });
 }
 
 export function createSkillProposalRollback(params: {
@@ -581,18 +439,7 @@ export function createSkillProposalRollback(params: {
   };
 }
 
-export function assertInsideWorkspace(workspaceDir: string, targetPath: string, label: string) {
-  const resolvedWorkspaceDir = path.resolve(workspaceDir);
-  const resolvedTarget = path.resolve(targetPath);
-  if (
-    resolvedTarget !== resolvedWorkspaceDir &&
-    !isPathInside(resolvedWorkspaceDir, resolvedTarget)
-  ) {
-    throw new Error(`${label} must stay inside the workspace.`);
-  }
-}
-
-export function assertProposalId(proposalId: string): void {
+function assertProposalId(proposalId: string): void {
   if (!PROPOSAL_ID_PATTERN.test(proposalId)) {
     throw new Error("Invalid skill proposal id.");
   }
@@ -682,7 +529,7 @@ function isValidSupportFileList(value: unknown): boolean {
       typeof file.sizeBytes !== "number" ||
       !Number.isSafeInteger(file.sizeBytes) ||
       file.sizeBytes < 0 ||
-      file.sizeBytes > MAX_PROPOSAL_SUPPORT_FILE_BYTES ||
+      file.sizeBytes > MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES ||
       (file.targetExisted !== undefined && typeof file.targetExisted !== "boolean") ||
       (file.targetContentHash !== undefined &&
         (typeof file.targetContentHash !== "string" ||
@@ -692,7 +539,7 @@ function isValidSupportFileList(value: unknown): boolean {
     }
     let normalized: string;
     try {
-      normalized = normalizeSkillProposalSupportPath(file.path);
+      normalized = normalizeWorkspaceSkillSupportPath(file.path);
     } catch {
       return false;
     }

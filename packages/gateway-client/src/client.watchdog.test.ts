@@ -1,3 +1,4 @@
+// Gateway Client tests cover client.watchdog behavior.
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -124,6 +125,11 @@ describe("GatewayClient", () => {
         preauthHandshakeTimeoutMs: 30_000,
       }),
     ).toBe(30_000);
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({
+        env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "6000" },
+      }),
+    ).toBe(6_000);
   });
 
   test("closes on missing ticks", async () => {
@@ -309,6 +315,27 @@ describe("GatewayClient", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("cleans pending request state when websocket send throws", async () => {
+    const client = new GatewayClient({
+      requestTimeoutMs: 25,
+    });
+    const sendError = new Error("synthetic send failure");
+    (
+      client as unknown as {
+        ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+      }
+    ).ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn(() => {
+        throw sendError;
+      }),
+      close: vi.fn(),
+    };
+
+    await expect(client.request("status")).rejects.toThrow("synthetic send failure");
+    expect(getPendingCount(client)).toBe(0);
   });
 
   test("does not auto-timeout expectFinal requests", async () => {

@@ -1,3 +1,4 @@
+// Imessage plugin module implements channel behavior.
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -112,11 +113,16 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         text: ctx.text,
         mediaUrl: ctx.mediaUrl,
         mediaLocalRoots: ctx.mediaLocalRoots,
+        audioAsVoice: ctx.audioAsVoice,
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
       });
-      return toIMessageMessageSendResult(result, "media", ctx.replyToId);
+      return toIMessageMessageSendResult(
+        result,
+        ctx.audioAsVoice ? "voice" : "media",
+        ctx.replyToId,
+      );
     },
   },
 });
@@ -361,6 +367,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           text,
           mediaUrl,
           mediaLocalRoots,
+          audioAsVoice,
           accountId,
           deps,
           replyToId,
@@ -373,6 +380,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             text,
             mediaUrl,
             mediaLocalRoots,
+            audioAsVoice,
             accountId: accountId ?? undefined,
             deps,
             replyToId: replyToId ?? undefined,

@@ -1,3 +1,4 @@
+// Sessions cleanup tests cover stale session cleanup and runtime output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -500,6 +501,104 @@ describe("sessionsCleanupCommand", () => {
       (line) => line.includes("stale") && line.includes("prune-stale"),
     );
     expect(stalePruneLines.length).toBeGreaterThan(0);
+  });
+
+  it("renders a dry-run summary grouped by session label", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 7,
+            afterCount: 3,
+            missing: 0,
+            dmScopeRetired: 0,
+            pruned: 3,
+            capped: 1,
+            unreferencedArtifacts: {
+              scannedFiles: 0,
+              removedFiles: 0,
+              freedBytes: 0,
+              olderThanMs: 604800000,
+            },
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {
+            cronKept: {
+              sessionId: "cron-kept",
+              updatedAt: 4,
+              model: "test:opus",
+              label: "Cron: daily-commit",
+            },
+            cronPruned: {
+              sessionId: "cron-pruned",
+              updatedAt: 3,
+              model: "test:opus",
+              label: "Cron: daily-commit",
+            },
+            directKept: {
+              sessionId: "direct-kept",
+              updatedAt: 2,
+              model: "test:opus",
+            },
+            directCapped: {
+              sessionId: "direct-capped",
+              updatedAt: 1,
+              model: "test:opus",
+            },
+            literalUnlabeled: {
+              sessionId: "literal-unlabeled",
+              updatedAt: 1,
+              model: "test:opus",
+              label: "Unlabeled",
+            },
+            unsafePruned: {
+              sessionId: "unsafe-pruned",
+              updatedAt: 1,
+              model: "test:opus",
+              label: "\u001b[31mAlert\nInjected",
+            },
+            malformedLabelPruned: {
+              sessionId: "malformed-label-pruned",
+              updatedAt: 1,
+              model: "test:opus",
+              label: {} as unknown as string,
+            },
+          },
+          missingKeys: new Set<string>(),
+          staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
+          cappedKeys: new Set(["directCapped"]),
+          budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    expectLogsToInclude(logs, "Summary by Label:");
+    const summaryLogs = logs.slice(logs.indexOf("Summary by Label:") + 1);
+    expectLogsToInclude(logs, "Cron: daily-commit  1 kept, 1 pruned");
+    expect(summaryLogs.find((line) => line.includes("(unlabeled)"))).toContain("1 kept, 2 pruned");
+    expect(summaryLogs.find((line) => line.includes("Unlabeled"))).toContain("1 kept, 0 pruned");
+    expect(summaryLogs.find((line) => line.includes("Alert\\nInjected"))).toContain(
+      "0 kept, 1 pruned",
+    );
+    expect(logs.join("\n")).not.toContain("\u001b[31m");
+    expectLogsToInclude(logs, "Total: 3 kept, 4 pruned");
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {

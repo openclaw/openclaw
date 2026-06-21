@@ -1,3 +1,4 @@
+// Reads response bodies with byte limits, abort handling, and timeout cancellation.
 function defaultTooLargeMessage(label, maxBytes) {
   return `${label} response body exceeded ${maxBytes} bytes`;
 }
@@ -10,6 +11,15 @@ function cancelReaderSoon(reader) {
   void Promise.resolve()
     .then(() => reader.cancel())
     .catch(() => undefined);
+}
+
+function parseContentLengthHeader(headers) {
+  const raw = headers.get("content-length");
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
 async function readResponseChunk(reader, label, signal, markCanceled) {
@@ -67,12 +77,13 @@ async function readResponseChunkWithTimeout(reader, label, signal, timeoutPromis
   }
 }
 
+/** Read response text while enforcing max bytes before and during streaming. */
 export async function readBoundedResponseText(response, label, maxBytes, options = {}) {
   const formatTooLargeMessage = options.formatTooLargeMessage ?? defaultTooLargeMessage;
   const createTooLargeError = options.createTooLargeError ?? defaultTooLargeError;
   const tooLargeError = () => createTooLargeError(formatTooLargeMessage(label, maxBytes));
-  const contentLength = Number(response.headers.get("content-length") ?? "");
-  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+  const contentLength = parseContentLengthHeader(response.headers);
+  if (contentLength !== undefined && contentLength > maxBytes) {
     await response.body?.cancel().catch(() => undefined);
     throw tooLargeError();
   }

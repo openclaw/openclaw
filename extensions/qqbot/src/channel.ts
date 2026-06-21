@@ -1,3 +1,4 @@
+// Qqbot plugin module implements channel behavior.
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
 import {
   createMessageReceiptFromOutboundResults,
@@ -7,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
 import { getQQBotApprovalCapability } from "./bridge/approval/capability.js";
@@ -21,12 +23,15 @@ import { toGatewayAccount, writeOpenClawConfigThroughRuntime } from "./bridge/na
 import { getQQBotRuntime } from "./bridge/runtime.js";
 import { qqbotSetupWizard } from "./bridge/setup/surface.js";
 import { qqbotChannelConfigSchema } from "./config-schema.js";
+import { qqbotDoctor } from "./doctor.js";
 import { loadCredentialBackup, saveCredentialBackup } from "./engine/config/credential-backup.js";
 import { clearAccountCredentials } from "./engine/config/credentials.js";
+import { chunkQQBotMarkdownText } from "./engine/messaging/markdown-table-chunking.js";
 import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
 } from "./engine/messaging/target-parser.js";
+import { resolveQQBotGroupToolPolicy } from "./group-policy.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
 // Shared promise so concurrent multi-account startups serialize the dynamic
@@ -130,8 +135,14 @@ async function sendQQBotMedia(params: {
 }
 
 function toQQBotMessageSendResult(result: Awaited<ReturnType<typeof sendQQBotText>>) {
+  if (result.meta?.error) {
+    throw new Error(result.meta.error);
+  }
+  if (result.receipt.platformMessageIds.length === 0) {
+    throw new Error("QQBot message adapter send did not return a platform message id");
+  }
   return {
-    messageId: result.messageId,
+    messageId: result.messageId || result.receipt.primaryPlatformMessageId,
     receipt: result.receipt,
   } satisfies ChannelMessageSendResult;
 }
@@ -214,6 +225,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   },
   reload: { configPrefixes: ["channels.qqbot"] },
   configSchema: qqbotChannelConfigSchema,
+  doctor: qqbotDoctor,
   config: {
     ...qqbotConfigAdapter,
     /**
@@ -237,6 +249,9 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     ...qqbotSetupAdapterShared,
   },
   approvalCapability: getQQBotApprovalCapability(),
+  groups: {
+    resolveToolPolicy: resolveQQBotGroupToolPolicy,
+  },
   message: qqbotMessageAdapter,
   messaging: {
     targetPrefixes: ["qqbot"],
@@ -250,9 +265,11 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getQQBotRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunker: (text, limit) =>
+      chunkQQBotMarkdownText(text, limit, getQQBotRuntime().channel.text.chunkMarkdownText),
     chunkerMode: "markdown",
     textChunkLimit: 5000,
+    sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
     shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
       shouldSuppressLocalQQBotApprovalPrompt({
         cfg,

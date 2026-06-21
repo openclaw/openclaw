@@ -1,3 +1,4 @@
+// Session store maintenance prunes stale entries, caps count, and handles quota TTL state.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -148,6 +149,7 @@ export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): num
     return 1;
   }
   if (maxEntries <= STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES) {
+    // Small caps run strictly so operator-configured tiny stores do not drift far past the limit.
     return maxEntries + 1;
   }
   const slack = Math.max(
@@ -211,6 +213,46 @@ export interface QuotaSuspensionMaintenanceResult {
   cleared: number;
 }
 
+export type QuotaSuspensionEntryMaintenanceResult = {
+  /** Patch to apply to the entry, or null when no TTL transition is due. */
+  patch: Partial<SessionEntry> | null;
+  /** Present when the entry transitioned from suspended to resuming. */
+  resumed?: { laneId?: string };
+  /** True when the quota-suspension marker should be removed. */
+  cleared: boolean;
+};
+
+/**
+ * Resolves the TTL maintenance patch for one session entry without reading or
+ * mutating the whole store. Attempt hot paths use this before entry-scoped
+ * accessor writes so unrelated sessions stay out of the request path.
+ */
+export function resolveQuotaSuspensionEntryMaintenance(params: {
+  entry: SessionEntry;
+  now: number;
+  ttlMs?: number;
+}): QuotaSuspensionEntryMaintenanceResult {
+  const suspension = params.entry.quotaSuspension;
+  if (!suspension) {
+    return { patch: null, cleared: false };
+  }
+  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
+  const cleanupAfterResumeMs = ttlMs * (QUOTA_SUSPENSION_CLEANUP_FACTOR - 1);
+  const resumeAtMs = suspension.expectedResumeBy ?? suspension.suspendedAt + ttlMs;
+  const cleanupAtMs = resumeAtMs + cleanupAfterResumeMs;
+  if (params.now >= cleanupAtMs) {
+    return { patch: { quotaSuspension: undefined }, cleared: true };
+  }
+  if (suspension.state === "suspended" && params.now >= resumeAtMs) {
+    return {
+      patch: { quotaSuspension: { ...suspension, state: "resuming" } },
+      resumed: { laneId: suspension.laneId },
+      cleared: false,
+    };
+  }
+  return { patch: null, cleared: false };
+}
+
 /**
  * Two-stage TTL maintenance for `quotaSuspension` records:
  *  1. After `ttlMs`, transition `state: "suspended" → "resuming"` so the next
@@ -228,24 +270,25 @@ export function pruneQuotaSuspensions(params: {
   log?: boolean;
 }): QuotaSuspensionMaintenanceResult {
   const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
-  const cleanupAfterResumeMs = ttlMs * (QUOTA_SUSPENSION_CLEANUP_FACTOR - 1);
   const resumed: Array<{ sessionKey: string; laneId?: string }> = [];
   let cleared = 0;
   for (const [sessionKey, entry] of Object.entries(params.store)) {
-    const suspension = entry.quotaSuspension;
-    if (!suspension) {
+    const result = resolveQuotaSuspensionEntryMaintenance({
+      entry,
+      now: params.now,
+      ttlMs,
+    });
+    if (!result.patch) {
       continue;
     }
-    const resumeAtMs = suspension.expectedResumeBy ?? suspension.suspendedAt + ttlMs;
-    const cleanupAtMs = resumeAtMs + cleanupAfterResumeMs;
-    if (params.now >= cleanupAtMs) {
+    if (result.cleared) {
       delete entry.quotaSuspension;
       cleared++;
-      continue;
+    } else if (result.patch.quotaSuspension) {
+      entry.quotaSuspension = result.patch.quotaSuspension;
     }
-    if (suspension.state === "suspended" && params.now >= resumeAtMs) {
-      entry.quotaSuspension = { ...suspension, state: "resuming" };
-      resumed.push({ sessionKey, laneId: suspension.laneId });
+    if (result.resumed) {
+      resumed.push({ sessionKey, laneId: result.resumed.laneId });
     }
   }
   if ((resumed.length > 0 || cleared > 0) && params.log !== false) {
@@ -265,10 +308,12 @@ function getEntryUpdatedAt(entry?: SessionEntry): number {
 function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  // ACP bridge sessions use normal model dispatch, but remain synthetic and disposable.
   return (
     isSubagentSessionKey(sessionKey) ||
     isAcpSessionKey(sessionKey) ||
     isCronSessionKey(sessionKey) ||
+    rest.startsWith("acp-bridge:") ||
     rest.startsWith("hook:") ||
     rest.startsWith("node:") ||
     rest === "heartbeat" ||
@@ -293,6 +338,7 @@ export function isProtectedSessionMaintenanceEntry(
   sessionKey: string,
   entry: SessionEntry | undefined,
 ): boolean {
+  // Human conversation surfaces are protected; synthetic automation sessions are disposable.
   if (isSyntheticSessionMaintenanceKey(sessionKey)) {
     return false;
   }
@@ -384,6 +430,7 @@ function wouldCapActiveSession(params: {
       key !== params.activeSessionKey && isProtectedSessionMaintenanceEntry(key, params.store[key]),
   ).length;
   const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
+  // If protected entries fill the cap, the active unprotected session would be the one removed.
   if (maxRemovableEntries <= 0) {
     return true;
   }
@@ -430,6 +477,7 @@ export function capEntryCount(
     shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
   ).length;
   const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
+  // Protected entries reduce the removable budget instead of being counted as deletion targets.
   const keys = Object.keys(store).filter(
     (key) =>
       !shouldPreserveMaintenanceEntry({

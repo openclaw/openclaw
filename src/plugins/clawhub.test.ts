@@ -6,6 +6,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
 
 const parseClawHubPluginSpecMock = vi.fn();
 const fetchClawHubPackageDetailMock = vi.fn();
@@ -105,31 +106,6 @@ function createLoggerSpies() {
     info: vi.fn(),
     warn: vi.fn(),
   };
-}
-
-function createZipCentralDirectoryArchive(params: {
-  actualEntryCount: number;
-  declaredEntryCount?: number;
-  declaredCentralDirectorySize?: number;
-}): Buffer {
-  const centralDirectory = Buffer.concat(
-    Array.from({ length: params.actualEntryCount }, (_, index) => {
-      const name = Buffer.from(`file-${index}.txt`);
-      const header = Buffer.alloc(46 + name.byteLength);
-      header.writeUInt32LE(0x02014b50, 0);
-      header.writeUInt16LE(name.byteLength, 28);
-      name.copy(header, 46);
-      return header;
-    }),
-  );
-  const declaredEntryCount = params.declaredEntryCount ?? params.actualEntryCount;
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 8);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 10);
-  eocd.writeUInt32LE(params.declaredCentralDirectorySize ?? centralDirectory.byteLength, 12);
-  eocd.writeUInt32LE(0, 16);
-  return Buffer.concat([centralDirectory, eocd]);
 }
 
 function expectClawHubInstallFlow(params: {
@@ -859,7 +835,7 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
-  it("installs when a CalVer correction runtime satisfies the base plugin API range", async () => {
+  it("installs when a release correction runtime satisfies the base plugin API range", async () => {
     resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.3-1");
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {

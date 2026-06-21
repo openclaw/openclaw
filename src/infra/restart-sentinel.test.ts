@@ -3,10 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildRestartSuccessContinuation,
-  consumeRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
@@ -25,15 +24,9 @@ import {
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  try {
-    await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
-      process.env.OPENCLAW_STATE_DIR = tempDir;
-      await run();
-    });
-  } finally {
-    envSnapshot.restore();
-  }
+  await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
+  });
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -57,7 +50,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("restart sentinel", () => {
-  it("writes and consumes a sentinel", async () => {
+  it("writes and reads a sentinel", async () => {
     await withRestartSentinelStateDir(async () => {
       const payload = {
         kind: "update" as const,
@@ -76,13 +69,6 @@ describe("restart sentinel", () => {
       const read = await readRestartSentinel();
       expect(read?.payload.kind).toBe("update");
       expect(read?.payload.continuation).toEqual(payload.continuation);
-
-      const consumed = await consumeRestartSentinel();
-      expect(consumed?.payload.sessionKey).toBe(payload.sessionKey);
-      expect(consumed?.payload.continuation).toEqual(payload.continuation);
-
-      const empty = await readRestartSentinel();
-      expect(empty).toBeNull();
     });
   });
 
@@ -197,7 +183,8 @@ describe("restart sentinel", () => {
     const textA = formatRestartSentinelMessage(payloadA);
     const textB = formatRestartSentinelMessage(payloadB);
     expect(textA).toBe(textB);
-    expect(textA).toContain("Gateway restart restart ok");
+    expect(textA).toContain("Gateway restart ok");
+    expect(textA).not.toContain("Gateway restart restart");
     expect(textA).not.toContain('"ts"');
   });
 
@@ -227,6 +214,37 @@ describe("restart sentinel", () => {
 
       await finalizeUpdateRestartSentinelRunningVersion("actual-version");
 
+      await expect(readRestartSentinel()).resolves.toEqual({
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "ok",
+          ts,
+          stats: {
+            after: {
+              version: "actual-version",
+            },
+          },
+        },
+      });
+    });
+  });
+
+  it("does not rewrite update sentinels when the running version is already current", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts,
+        stats: {
+          after: { version: "actual-version" },
+        },
+      });
+
+      await expect(
+        finalizeUpdateRestartSentinelRunningVersion("actual-version"),
+      ).resolves.toBeNull();
       await expect(readRestartSentinel()).resolves.toEqual({
         version: 1,
         payload: {

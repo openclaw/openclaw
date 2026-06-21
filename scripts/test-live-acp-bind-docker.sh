@@ -17,6 +17,7 @@ CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="$(openclaw_live_default_profile_file)"
 ACP_AGENT_LIST_RAW="${OPENCLAW_LIVE_ACP_BIND_AGENTS:-${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude,codex,gemini}}"
+ACP_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS 180)"
 TEMP_DIRS=()
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 DOCKER_HOME_MOUNT=()
@@ -85,18 +86,37 @@ else
   CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
 fi
 
-mkdir -p "$CLI_TOOLS_DIR"
-mkdir -p "$CACHE_HOME_DIR"
-if openclaw_live_is_ci; then
+openclaw_live_prepare_bind_dir_for_container_user "$CLI_TOOLS_DIR"
+openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
+if openclaw_live_uses_managed_bind_dirs; then
   DOCKER_USER="$(id -u):$(id -g)"
 fi
 
 PROFILE_MOUNT=()
 PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-  PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
   PROFILE_STATUS="$PROFILE_FILE"
 fi
+
+openclaw_live_acp_bind_load_factory_api_key_from_profile() {
+  [[ -z "${FACTORY_API_KEY:-}" ]] || return 0
+  [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]] || return 0
+  [[ "$PROFILE_FILE" != "$HOME/.profile" ]] || return 0
+
+  local line value
+  line="$(sed -nE 's/^(export[[:space:]]+)?FACTORY_API_KEY=//p' "$PROFILE_FILE" | tail -n 1 || true)"
+  [[ -n "$line" ]] || return 0
+  value="$line"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value#\"}"
+    value="${value%\"}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value#\'}"
+    value="${value%\'}"
+  fi
+  [[ -n "$value" ]] || return 0
+  export FACTORY_API_KEY="$value"
+}
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
@@ -111,7 +131,7 @@ mkdir -p "$NPM_CONFIG_PREFIX" "$HOME/.local/bin" "$XDG_CACHE_HOME" "$COREPACK_HO
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$PATH"
 run_setup_command() {
-  local timeout_value="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}s"
+  local timeout_value="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:?missing live ACP bind setup timeout seconds}s"
   local timeout_bin=""
   if command -v timeout >/dev/null 2>&1; then
     timeout_bin="timeout"
@@ -306,10 +326,16 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
 
   DOCKER_HOME_MOUNT=()
   DOCKER_AUTH_PRESTAGED=0
-  if openclaw_live_is_ci; then
+  if openclaw_live_uses_managed_bind_dirs; then
     DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
     TEMP_DIRS+=("$DOCKER_HOME_DIR")
+    openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
     DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
+    if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+      openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
+    fi
+  elif [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+    PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
   fi
 
   if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
@@ -317,6 +343,9 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     DOCKER_AUTH_PRESTAGED=1
   fi
 
+  if [[ "$ACP_AGENT" == "droid" ]]; then
+    openclaw_live_acp_bind_load_factory_api_key_from_profile
+  fi
   if [[ "$ACP_AGENT" == "droid" && -z "${FACTORY_API_KEY:-}" ]]; then
     echo "==> Run ACP bind live test in Docker"
     echo "==> Agent: $ACP_AGENT"
@@ -353,6 +382,14 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   echo "==> Profile file: $PROFILE_STATUS"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
+  if openclaw_live_uses_managed_bind_dirs; then
+    openclaw_live_chown_bind_dirs_for_container_user \
+      "$LIVE_IMAGE_NAME" \
+      "$DOCKER_USER" \
+      "$CLI_TOOLS_DIR" \
+      "$CACHE_HOME_DIR" \
+      "${DOCKER_HOME_DIR:-}"
+  fi
   DOCKER_RUN_ARGS=()
   openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s}"
   DOCKER_RUN_ARGS+=(--rm -t \
@@ -387,7 +424,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
     -e OPENCLAW_LIVE_ACP_BIND_TEST_FILES="${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-}" \
     -e OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL="${OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL:-}" \
-    -e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}" \
+    -e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="$ACP_SETUP_TIMEOUT_SECONDS" \
     -e OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL="${OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL:-opencode/kimi-k2.6}" \
     -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS:-}" \
     -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_AGENT="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_AGENT:-}" \

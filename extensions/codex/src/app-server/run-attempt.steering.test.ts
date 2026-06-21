@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.steering plugin behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
@@ -6,6 +7,7 @@ import {
   createParams,
   createStartedThreadHarness,
   fastWait,
+  mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   setCodexAppServerClientFactoryForTest,
@@ -226,6 +228,7 @@ describe("runCodexAppServerAttempt steering", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;

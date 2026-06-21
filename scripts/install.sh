@@ -524,6 +524,15 @@ run_quiet_step() {
     return 1
 }
 
+run_required_step() {
+    local title="$1"
+    shift
+    if run_quiet_step "$title" "$@"; then
+        return 0
+    fi
+    exit 1
+}
+
 cleanup_legacy_submodules() {
     local repo_dir="$1"
     local legacy_dir="$repo_dir/Peekaboo"
@@ -1747,9 +1756,9 @@ finish_linux_node_install() {
 install_node_with_apk() {
     ui_info "Installing Node.js via apk (Alpine Linux detected)"
     if is_root; then
-        run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm
+        run_required_step "Installing Node.js" apk add --no-cache nodejs npm
     else
-        run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm
+        run_required_step "Installing Node.js" sudo apk add --no-cache nodejs npm
     fi
 
     activate_supported_node_on_path || true
@@ -1763,9 +1772,9 @@ install_node_with_apk() {
     ui_warn "Alpine nodejs package installed ${apk_node_version}, below required v${NODE_MIN_VERSION}+"
     ui_info "Trying Alpine nodejs-current package"
     if is_root; then
-        run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
+        run_required_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
     else
-        run_quiet_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
+        run_required_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
     fi
 
     activate_supported_node_on_path || true
@@ -1810,9 +1819,9 @@ install_node() {
         if command -v pacman &> /dev/null || is_arch_linux; then
             ui_info "Installing Node.js via pacman (Arch-based distribution detected)"
             if is_root; then
-                run_quiet_step "Installing Node.js" pacman -Sy --noconfirm nodejs npm
+                run_required_step "Installing Node.js" pacman -Sy --noconfirm nodejs npm
             else
-                run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
+                run_required_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
             finish_linux_node_install
             return 0
@@ -1827,35 +1836,35 @@ install_node() {
         if command -v apt-get &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" apt_get_install nodejs
+                run_required_step "Configuring NodeSource repository" bash "$tmp"
+                run_required_step "Installing Node.js" apt_get_install nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"
-                run_quiet_step "Installing Node.js" apt_get_install nodejs
+                run_required_step "Configuring NodeSource repository" sudo -E bash "$tmp"
+                run_required_step "Installing Node.js" apt_get_install nodejs
             fi
         elif command -v dnf &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" dnf install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" bash "$tmp"
+                run_required_step "Installing Node.js" dnf install -y -q nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_quiet_step "Installing Node.js" sudo dnf install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
+                run_required_step "Installing Node.js" sudo dnf install -y -q nodejs
             fi
         elif command -v yum &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" yum install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" bash "$tmp"
+                run_required_step "Installing Node.js" yum install -y -q nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_quiet_step "Installing Node.js" sudo yum install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
+                run_required_step "Installing Node.js" sudo yum install -y -q nodejs
             fi
         else
             ui_error "Could not detect package manager"

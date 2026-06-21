@@ -1,3 +1,5 @@
+// Covers source-delivery target matching, message-tool ownership plans, and
+// fallback satisfaction outcomes.
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./target-normalization.js", () => ({
@@ -138,6 +140,46 @@ describe("source delivery plan", () => {
     });
 
     expect(outcome.visibleDeliveries[0]?.verifiedTarget).toBe(true);
+    expect(outcome.verifiedMessageToolDelivery).toBe(false);
+    expect(outcome.satisfiesSourceDelivery).toBe(false);
+    expect(outcome.unverifiedMessageToolDelivery).toBe(false);
+  });
+
+  it("synthesizes the planned target for legacy message-tool sends by default", () => {
+    const contract = createSourceDeliveryPlan({
+      owner: "message_tool_then_direct_fallback",
+      reason: "cron_announce",
+      target: { channel: "slack", to: "channel:C1" },
+    });
+
+    const outcome = resolveSourceDeliveryOutcome(contract, {
+      didSendViaMessageTool: true,
+    });
+
+    expect(outcome.visibleDeliveries).toEqual([
+      {
+        via: "message_tool",
+        verifiedTarget: true,
+        target: { tool: "message", provider: "slack", to: "channel:C1" },
+      },
+    ]);
+    expect(outcome.verifiedMessageToolDelivery).toBe(true);
+    expect(outcome.satisfiesSourceDelivery).toBe(true);
+  });
+
+  it("does not synthesize the planned target when explicit target evidence is required", () => {
+    const contract = createSourceDeliveryPlan({
+      owner: "message_tool_then_direct_fallback",
+      reason: "cron_announce",
+      target: { channel: "slack", to: "channel:C1" },
+      requireExplicitMessageTargetEvidence: true,
+    });
+
+    const outcome = resolveSourceDeliveryOutcome(contract, {
+      didSendViaMessageTool: true,
+    });
+
+    expect(outcome.visibleDeliveries).toEqual([]);
     expect(outcome.verifiedMessageToolDelivery).toBe(false);
     expect(outcome.satisfiesSourceDelivery).toBe(false);
     expect(outcome.unverifiedMessageToolDelivery).toBe(false);

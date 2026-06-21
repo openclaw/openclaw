@@ -1,3 +1,4 @@
+// Discord tests cover manager plugin behavior.
 import { PassThrough, type Readable } from "node:stream";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2387,6 +2388,49 @@ describe("DiscordVoiceManager", () => {
         expect.objectContaining({ mode: "steer", queued: true }),
       ),
     );
+  });
+
+  it("rejects malformed realtime consult tool calls without crashing Discord voice", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => void;
+        }
+      | undefined;
+
+    expect(() =>
+      bridgeParams?.onToolCall?.(
+        {
+          itemId: "item-empty-consult",
+          callId: "call-empty-consult",
+          name: "openclaw_agent_consult",
+          args: {},
+        },
+        realtimeSessionMock,
+      ),
+    ).not.toThrow();
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-empty-consult", {
+      error: "question required",
+    });
   });
 
   it("does not require speaker context for internal exact-speech consults", async () => {

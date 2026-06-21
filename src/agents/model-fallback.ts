@@ -24,6 +24,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
+import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
@@ -75,7 +76,13 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
-import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
+import { isAgentRunRestartAbortReason } from "./run-termination.js";
+import {
+  resolveSessionSuspensionReason,
+  runWithDeferredSessionSuspension,
+  suspendSession,
+  type SessionSuspensionParams,
+} from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -208,6 +215,9 @@ function isTerminalAbort(signal: AbortSignal | undefined): boolean {
   if (!(reason instanceof Error)) {
     return false;
   }
+  if (isAgentRunRestartAbortReason(reason)) {
+    return true;
+  }
   if (reason.name === "TimeoutError") {
     return true;
   }
@@ -264,6 +274,8 @@ export type ModelFallbackResultClassification =
       status?: number;
       code?: string;
       rawError?: string;
+      preserveResultOnExhaustion?: boolean;
+      preserveResultPriority?: number;
     }
   | {
       error: unknown;
@@ -280,11 +292,23 @@ type ModelFallbackResultClassifier<T> = (attempt: {
 }) => ModelFallbackResultClassification | Promise<ModelFallbackResultClassification>;
 
 type ModelFallbackRunResult<T> = {
+  outcome: "completed" | "exhausted";
   result: T;
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
 };
+
+type ModelFallbackExhaustionResult<T> = Pick<
+  ModelFallbackRunResult<T>,
+  "result" | "provider" | "model"
+> & {
+  priority: number;
+};
+type ModelFallbackClassifiedResult<T> = Pick<
+  ModelFallbackRunResult<T>,
+  "result" | "provider" | "model"
+>;
 
 type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
 
@@ -305,6 +329,7 @@ function buildFallbackSuccess<T>(params: {
   attempts: FallbackAttempt[];
 }): ModelFallbackRunResult<T> {
   return {
+    outcome: "completed",
     result: params.result,
     provider: params.provider,
     model: params.model,
@@ -317,13 +342,19 @@ async function runFallbackCandidate<T>(params: {
   provider: string;
   model: string;
   options?: ModelFallbackRunOptions;
+  deferSessionSuspension?: boolean;
+  onDeferredSessionSuspension?: (params: SessionSuspensionParams) => void;
   attribution?: FailoverAttribution;
   abortSignal?: AbortSignal;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
-    const result = params.options
-      ? await params.run(params.provider, params.model, params.options)
-      : await params.run(params.provider, params.model);
+    const run = () =>
+      params.options
+        ? params.run(params.provider, params.model, params.options)
+        : params.run(params.provider, params.model);
+    const result = params.deferSessionSuspension
+      ? await runWithDeferredSessionSuspension(run, params.onDeferredSessionSuspension)
+      : await run();
     return {
       ok: true,
       result,
@@ -359,17 +390,28 @@ async function runFallbackAttempt<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
   options?: ModelFallbackRunOptions;
+  deferSessionSuspension?: boolean;
+  onDeferredSessionSuspension?: (params: SessionSuspensionParams) => void;
   classifyResult?: ModelFallbackResultClassifier<T>;
   attempt: number;
   total: number;
   attribution?: FailoverAttribution;
   abortSignal?: AbortSignal;
-}): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
+}): Promise<
+  | { success: ModelFallbackRunResult<T> }
+  | {
+      error: unknown;
+      classifiedResult?: ModelFallbackClassifiedResult<T>;
+      exhaustionResult?: ModelFallbackExhaustionResult<T>;
+    }
+> {
   const runResult = await runFallbackCandidate({
     run: params.run,
     provider: params.provider,
     model: params.model,
     options: params.options,
+    deferSessionSuspension: params.deferSessionSuspension,
+    onDeferredSessionSuspension: params.onDeferredSessionSuspension,
     attribution: params.attribution,
     abortSignal: params.abortSignal,
   });
@@ -390,7 +432,32 @@ async function runFallbackAttempt<T>(params: {
       if (isTerminalAbort(params.abortSignal)) {
         throw toLintErrorObject(classifiedError, "Non-Error thrown");
       }
-      return { error: classifiedError };
+      const preserveResultOnExhaustion =
+        classification &&
+        "preserveResultOnExhaustion" in classification &&
+        classification.preserveResultOnExhaustion === true;
+      return {
+        error: classifiedError,
+        classifiedResult: {
+          result: runResult.result,
+          provider: params.provider,
+          model: params.model,
+        },
+        ...(preserveResultOnExhaustion
+          ? {
+              exhaustionResult: {
+                result: runResult.result,
+                provider: params.provider,
+                model: params.model,
+                priority:
+                  typeof classification.preserveResultPriority === "number" &&
+                  Number.isFinite(classification.preserveResultPriority)
+                    ? classification.preserveResultPriority
+                    : 0,
+              },
+            }
+          : {}),
+      };
     }
     return {
       success: buildFallbackSuccess({
@@ -453,7 +520,7 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     params.model,
   );
   if (isCliProvider(params.provider, params.cfg)) {
-    return { skipsProviderAuthCooldown: false };
+    return { skipsProviderAuthCooldown: true };
   }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -472,7 +539,9 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
       ? "model"
       : harnessPolicy.runtimeSource;
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
-    return { skipsProviderAuthCooldown: false };
+    // CLI runtimes own their transport/auth, so stale OpenClaw provider
+    // profile state must not block the candidate before the CLI starts.
+    return { skipsProviderAuthCooldown: true };
   }
   if (agentRuntime === "openclaw") {
     return { skipsProviderAuthCooldown: false };
@@ -531,6 +600,7 @@ function recordFailedCandidateAttempt(params: {
     model: params.candidate.model,
     error,
     reason: described.reason ?? "unknown",
+    authMode: described.authMode,
     status: described.status,
     code: described.code,
   });
@@ -566,6 +636,7 @@ function appendFailedCandidateAttempt(params: {
     model: params.candidate.model,
     error: resolveCandidateAttemptError(described, params.candidate),
     reason: described.reason ?? "unknown",
+    authMode: described.authMode,
     status: described.status,
     code: described.code,
   });
@@ -1060,12 +1131,22 @@ function shouldProbePrimaryDuringCooldown(params: {
   profileIds: string[];
   model: string;
 }): boolean {
-  if (!params.isPrimary || !params.hasFallbackCandidates) {
+  if (!params.isPrimary) {
     return false;
   }
 
   if (!isProbeThrottleOpen(params.now, params.throttleKey)) {
     return false;
+  }
+
+  // A single-provider primary has no fallback chain to prefer, so every open
+  // throttle slot is a recovery probe: "is the primary callable yet?" is a
+  // recovery question independent of fallback configuration. Without this, a
+  // fallbacks:[] setup that hits a rate/subscription cap stays suspended until
+  // the provider-reported reset (which can be days out) even though the rolling
+  // cap usually recovers earlier. See #90702.
+  if (!params.hasFallbackCandidates) {
+    return true;
   }
 
   const soonest = params.authRuntime.getSoonestCooldownExpiry(params.authStore, params.profileIds, {
@@ -1163,15 +1244,11 @@ function resolveCooldownDecision(params: {
   }
 
   // Billing is semi-persistent: the user may fix their balance, or a transient
-  // 402 might have been misclassified. Probe single-provider setups on the
-  // standard throttle so they can recover without a restart; when fallbacks
-  // exist, only probe near cooldown expiry so the fallback chain stays preferred.
+  // 402 might have been misclassified. shouldProbe already re-probes
+  // single-provider setups on the throttle (no fallback chain to prefer) and
+  // multi-fallback setups near cooldown expiry, so both recover without a restart.
   if (inferredReason === "billing") {
-    const shouldProbeSingleProviderBilling =
-      params.isPrimary &&
-      !params.hasFallbackCandidates &&
-      isProbeThrottleOpen(params.now, params.probeThrottleKey);
-    if (params.isPrimary && (shouldProbe || shouldProbeSingleProviderBilling)) {
+    if (params.isPrimary && shouldProbe) {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
@@ -1199,32 +1276,80 @@ function resolveCooldownDecision(params: {
   };
 }
 
-export async function runWithModelFallback<T>(
-  params: {
-    cfg: OpenClawConfig | undefined;
+type RunWithModelFallbackParams<T> = {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  model: string;
+  runId?: string;
+  sessionId?: string;
+  agentId?: string;
+  sessionKey?: string;
+  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
+  prepareAgentHarnessRuntime?: (params: {
     provider: string;
     model: string;
-    runId?: string;
-    sessionId?: string;
-    agentId?: string;
-    sessionKey?: string;
-    resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
-    prepareAgentHarnessRuntime?: (params: {
-      provider: string;
-      model: string;
-      agentHarnessRuntimeOverride?: string;
-    }) => Promise<void> | void;
-    lane?: string;
-    agentDir?: string;
-    /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
-    fallbacksOverride?: string[];
-    run: ModelFallbackRunFn<T>;
-    onError?: ModelFallbackErrorHandler;
-    onFallbackStep?: ModelFallbackStepHandler;
-    classifyResult?: ModelFallbackResultClassifier<T>;
-    skipAuthProfileRuntime?: boolean;
-    abortSignal?: AbortSignal;
-  } & ModelManifestNormalizationContext,
+    agentHarnessRuntimeOverride?: string;
+  }) => Promise<void> | void;
+  lane?: string;
+  agentDir?: string;
+  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+  fallbacksOverride?: string[];
+  run: ModelFallbackRunFn<T>;
+  onError?: ModelFallbackErrorHandler;
+  onFallbackStep?: ModelFallbackStepHandler;
+  classifyResult?: ModelFallbackResultClassifier<T>;
+  mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
+  skipAuthProfileRuntime?: boolean;
+  abortSignal?: AbortSignal;
+} & ModelManifestNormalizationContext;
+
+type DeferredSessionSuspensionState = {
+  pending?: SessionSuspensionParams;
+};
+
+function flushDeferredSessionSuspension(state: DeferredSessionSuspensionState): void {
+  const pending = state.pending;
+  if (!pending) {
+    return;
+  }
+  state.pending = undefined;
+  void suspendSession(pending);
+}
+
+function shouldDiscardDeferredSessionSuspension(params: {
+  error: unknown;
+  abortSignal?: AbortSignal;
+}): boolean {
+  return (
+    isTerminalAbort(params.abortSignal) ||
+    shouldRethrowAbort(params.error) ||
+    isCommandLaneTaskTimeoutError(params.error) ||
+    isNonProviderRuntimeCoordinationError(params.error) ||
+    isLikelyContextOverflowError(formatErrorMessage(params.error))
+  );
+}
+
+export async function runWithModelFallback<T>(
+  params: RunWithModelFallbackParams<T>,
+): Promise<ModelFallbackRunResult<T>> {
+  const deferredSuspension: DeferredSessionSuspensionState = {};
+  try {
+    const result = await runWithModelFallbackInternal(params, deferredSuspension);
+    if (result.outcome === "exhausted") {
+      flushDeferredSessionSuspension(deferredSuspension);
+    }
+    return result;
+  } catch (err) {
+    if (!shouldDiscardDeferredSessionSuspension({ error: err, abortSignal: params.abortSignal })) {
+      flushDeferredSessionSuspension(deferredSuspension);
+    }
+    throw err;
+  }
+}
+
+async function runWithModelFallbackInternal<T>(
+  params: RunWithModelFallbackParams<T>,
+  deferredSuspension: DeferredSessionSuspensionState,
 ): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveModelCandidateChain({
     cfg: params.cfg,
@@ -1247,7 +1372,11 @@ export async function runWithModelFallback<T>(
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let latestClassifiedResult: ModelFallbackClassifiedResult<T> | undefined;
+  let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
+  const resolveTerminalSuspensionLane = () =>
+    deferredSuspension.pending ? deferredSuspension.pending.laneId : params.lane;
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
       return;
@@ -1367,6 +1496,10 @@ export async function runWithModelFallback<T>(
           authStore,
           profileIds,
         });
+        const authMode =
+          decision.reason === "billing"
+            ? resolveSubscriptionAuthModeForProfiles({ store: authStore, profileIds })
+            : undefined;
 
         if (decision.type === "suspend_lanes") {
           const error = `Provider ${candidate.provider} is in cooldown (suspending lanes)`;
@@ -1375,8 +1508,13 @@ export async function runWithModelFallback<T>(
             model: candidate.model,
             error,
             reason: decision.reason,
+            authMode,
           });
 
+          // Only lock the lane when no remaining candidates can serve as
+          // fallbacks. Per-provider cooldown state already prevents
+          // re-attempting the failed provider on subsequent turns.
+          const hasRemainingCandidates = i + 1 < candidates.length;
           if (params.sessionId) {
             emitFailoverEvent({
               sessionId: params.sessionId,
@@ -1384,17 +1522,21 @@ export async function runWithModelFallback<T>(
               fromProvider: candidate.provider,
               fromModel: candidate.model,
               reason: decision.reason,
-              suspended: true,
+              suspended: !hasRemainingCandidates,
             });
-            void suspendSession({
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-              sessionId: params.sessionId,
-              laneId: params.lane,
-              reason: resolveSessionSuspensionReason(decision.reason),
-              failedProvider: candidate.provider,
-              failedModel: candidate.model,
-            });
+            if (!hasRemainingCandidates) {
+              const laneId = resolveTerminalSuspensionLane();
+              deferredSuspension.pending = undefined;
+              void suspendSession({
+                cfg: params.cfg,
+                agentDir: params.agentDir,
+                sessionId: params.sessionId,
+                laneId,
+                reason: resolveSessionSuspensionReason(decision.reason),
+                failedProvider: candidate.provider,
+                failedModel: candidate.model,
+              });
+            }
           }
 
           await observeDecision({
@@ -1424,6 +1566,7 @@ export async function runWithModelFallback<T>(
             model: candidate.model,
             error: decision.error,
             reason: decision.reason,
+            authMode,
           });
           await observeDecision({
             decision: "skip_candidate",
@@ -1461,6 +1604,7 @@ export async function runWithModelFallback<T>(
               model: candidate.model,
               error,
               reason: decision.reason,
+              authMode,
             });
             await observeDecision({
               decision: "skip_candidate",
@@ -1514,6 +1658,13 @@ export async function runWithModelFallback<T>(
       ...candidate,
       attempts,
       options: runOptions,
+      // Only the outer fallback loop knows another candidate remains. Carry
+      // that fact through this attempt so the embedded runner does not freeze
+      // the shared lane before the next candidate can run.
+      deferSessionSuspension: i + 1 < candidates.length,
+      onDeferredSessionSuspension: (suspension) => {
+        deferredSuspension.pending = suspension;
+      },
       classifyResult: params.classifyResult,
       attempt: i + 1,
       total: candidates.length,
@@ -1548,6 +1699,15 @@ export async function runWithModelFallback<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
+    if (attemptRun.classifiedResult) {
+      latestClassifiedResult = attemptRun.classifiedResult;
+    }
+    if (
+      attemptRun.exhaustionResult &&
+      (!exhaustionResult || attemptRun.exhaustionResult.priority >= exhaustionResult.priority)
+    ) {
+      exhaustionResult = attemptRun.exhaustionResult;
+    }
     {
       // Local runtime coordination errors (session write-lock timeout, embedded
       // attempt session takeover) are not provider/model failures. Aborting
@@ -1678,6 +1838,28 @@ export async function runWithModelFallback<T>(
     }
   }
 
+  if (exhaustionResult) {
+    if (latestClassifiedResult && params.mergeExhaustedResult) {
+      return {
+        outcome: "exhausted",
+        result: params.mergeExhaustedResult({
+          latestResult: latestClassifiedResult.result,
+          preferredResult: exhaustionResult.result,
+        }),
+        provider: latestClassifiedResult.provider,
+        model: latestClassifiedResult.model,
+        attempts,
+      };
+    }
+    return {
+      outcome: "exhausted",
+      result: exhaustionResult.result,
+      provider: exhaustionResult.provider,
+      model: exhaustionResult.model,
+      attempts,
+    };
+  }
+
   return throwFallbackFailureSummary({
     attempts,
     candidates,
@@ -1694,7 +1876,7 @@ export async function runWithModelFallback<T>(
       cfg: params.cfg,
       candidates,
     }),
-    attribution: { sessionId: params.sessionId, lane: params.lane },
+    attribution: { sessionId: params.sessionId, lane: resolveTerminalSuspensionLane() },
     cfg: params.cfg,
     agentDir: params.agentDir,
   });

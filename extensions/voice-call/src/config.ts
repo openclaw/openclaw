@@ -1,3 +1,4 @@
+// Voice Call helper module supports config behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildSecretInputSchema,
@@ -192,7 +193,6 @@ const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
 const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
-export type VoiceCallSessionScope = z.infer<typeof VoiceCallSessionScopeSchema>;
 
 const OutboundConfigSchema = z
   .object({
@@ -280,9 +280,6 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     includeWorkspaceFiles: true,
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
-export type VoiceCallRealtimeAgentContextConfig = z.infer<
-  typeof VoiceCallRealtimeAgentContextConfigSchema
->;
 
 export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
@@ -294,9 +291,6 @@ export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "adaptive",
   "max",
 ]);
-export type VoiceCallRealtimeConsultThinkingLevel = z.infer<
-  typeof VoiceCallRealtimeConsultThinkingLevelSchema
->;
 
 const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))

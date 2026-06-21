@@ -1,3 +1,4 @@
+// Handshake auth helpers classify browser security context, pairing locality, and connect auth details.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_IDS,
@@ -19,14 +20,14 @@ import type { AuthProvidedKind } from "./auth-messages.js";
 
 export const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
 export const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
-export type PairingLocalityKind =
+type PairingLocalityKind =
   | "direct_local"
   | "cli_container_local"
   | "browser_container_local"
   | "shared_secret_loopback_local"
   | "remote";
 
-export type HandshakeBrowserSecurityContext = {
+type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
   enforceOriginCheckForAnyClient: boolean;
   rateLimitClientIp: string | undefined;

@@ -1,3 +1,4 @@
+// Copilot plugin module implements event bridge behavior.
 import type { MessageOptions, SessionEvent, SessionEventType } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -29,12 +30,22 @@ export interface SessionLike {
     ): (() => void) | void;
     (eventType: string, handler: (event: SessionEvent) => void): (() => void) | void;
   };
+  rpc?: {
+    history?: {
+      cancelBackgroundCompaction?: () => Promise<unknown>;
+    };
+  };
   sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;
   sessionId?: string;
 }
 
 export interface EventBridgeOptions {
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
+  onCompactionComplete?: (payload: {
+    messagesRemoved?: number;
+    success: boolean;
+  }) => void | Promise<void>;
+  onCompactionStart?: () => void | Promise<void>;
   getSdkSessionId: () => string | undefined;
   isAborted: () => boolean;
 }
@@ -56,7 +67,14 @@ export interface BuildAssistantMessageArgs {
 
 export interface EventBridgeController {
   recordSendResult(result: SessionEvent | undefined): boolean;
+  awaitCompactionChain(): Promise<void>;
+  awaitCompactionCompletion(): Promise<void>;
+  awaitSessionIdle(): Promise<void>;
+  settleCompactionWait(): void;
   awaitDeltaChain(): Promise<void>;
+  hasObservedCompaction(): boolean;
+  hasObservedSessionIdle(): boolean;
+  isCompacting(): boolean;
   snapshot(): EventBridgeSnapshot;
   buildAssistantMessage(args: BuildAssistantMessageArgs): AssistantMessage | undefined;
   finalizeAssistantTexts(): string[];
@@ -81,8 +99,18 @@ export function attachEventBridge(
   const toolNamesByCallId = new Map<string, string>();
   let startedCount = 0;
   let completedCount = 0;
+  let activeCompactionCount = 0;
+  let observedCompaction = false;
   let deltaQueue = Promise.resolve();
   let deltaChain = Promise.resolve();
+  let compactionChain = Promise.resolve();
+  let compactionIdle = Promise.resolve();
+  let resolveCompactionIdle: (() => void) | undefined;
+  let observedSessionIdle = false;
+  let resolveSessionIdle: (() => void) | undefined;
+  const sessionIdle = new Promise<void>((resolve) => {
+    resolveSessionIdle = resolve;
+  });
   let firstDeltaError: unknown;
   let detached = false;
   const unsubscribeFns: Array<() => void> = [];
@@ -163,6 +191,48 @@ export function attachEventBridge(
     }
   });
 
+  registerListener(session, unsubscribeFns, "session.compaction_start", (event) => {
+    if (!isRootCompactionEvent(event)) {
+      return;
+    }
+    observedCompaction = true;
+    if (activeCompactionCount === 0) {
+      compactionIdle = new Promise<void>((resolve) => {
+        resolveCompactionIdle = resolve;
+      });
+    }
+    activeCompactionCount += 1;
+    enqueueCompactionCallback(options.onCompactionStart);
+  });
+
+  registerListener(session, unsubscribeFns, "session.compaction_complete", (event) => {
+    if (!isRootCompactionEvent(event)) {
+      return;
+    }
+    activeCompactionCount = Math.max(0, activeCompactionCount - 1);
+    enqueueCompactionCallback(() =>
+      options.onCompactionComplete?.({
+        ...(event.data.messagesRemoved !== undefined
+          ? { messagesRemoved: event.data.messagesRemoved }
+          : {}),
+        success: event.data.success,
+      }),
+    );
+    if (activeCompactionCount === 0) {
+      resolveCompactionIdle?.();
+      resolveCompactionIdle = undefined;
+    }
+  });
+
+  registerListener(session, unsubscribeFns, "session.idle", (event) => {
+    if (!isRootCompactionEvent(event)) {
+      return;
+    }
+    observedSessionIdle = true;
+    resolveSessionIdle?.();
+    resolveSessionIdle = undefined;
+  });
+
   registerListener(session, unsubscribeFns, "session.error", (event) => {
     if (!options.isAborted()) {
       streamError = createPromptError(
@@ -189,8 +259,31 @@ export function attachEventBridge(
       lastAssistantEvent = result;
       return true;
     },
+    awaitCompactionChain() {
+      return compactionChain;
+    },
+    async awaitCompactionCompletion() {
+      await awaitStableCompaction();
+    },
+    awaitSessionIdle() {
+      return observedSessionIdle ? Promise.resolve() : sessionIdle;
+    },
+    settleCompactionWait() {
+      activeCompactionCount = 0;
+      resolveCompactionIdle?.();
+      resolveCompactionIdle = undefined;
+    },
     awaitDeltaChain() {
       return deltaChain;
+    },
+    hasObservedCompaction() {
+      return observedCompaction;
+    },
+    hasObservedSessionIdle() {
+      return observedSessionIdle;
+    },
+    isCompacting() {
+      return activeCompactionCount > 0;
     },
     snapshot() {
       return {
@@ -232,6 +325,28 @@ export function attachEventBridge(
       unsubscribeFns.length = 0;
     },
   };
+
+  function enqueueCompactionCallback(callback: (() => void | Promise<void>) | undefined): void {
+    if (!callback) {
+      return;
+    }
+    const queued = compactionChain.then(callback, callback);
+    compactionChain = queued.catch(() => undefined);
+  }
+
+  async function awaitStableCompaction(): Promise<void> {
+    const idle = activeCompactionCount > 0 ? compactionIdle : undefined;
+    if (idle) {
+      await idle;
+    }
+    const callbacks = compactionChain;
+    await callbacks;
+    // Compaction events can arrive while an earlier hook callback settles.
+    // Recheck both queues before teardown so the root observer stays attached.
+    if (activeCompactionCount > 0 || compactionChain !== callbacks) {
+      await awaitStableCompaction();
+    }
+  }
 }
 
 function buildAssistantMessage(params: {
@@ -329,6 +444,12 @@ function isAssistantMessageEvent(
   event: SessionEvent | undefined,
 ): event is Extract<SessionEvent, { type: "assistant.message" }> {
   return event?.type === "assistant.message";
+}
+
+function isRootCompactionEvent(event: { agentId?: string }): boolean {
+  // SDK session events include subagent compaction; only root compaction
+  // affects the pooled root session's cleanup and reuse lifecycle.
+  return event.agentId === undefined;
 }
 
 function joinReasoning(order: string[], reasoningById: Map<string, string>): string {

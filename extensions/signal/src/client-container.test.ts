@@ -1,3 +1,4 @@
+// Signal tests cover client container plugin behavior.
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
@@ -129,6 +130,22 @@ describe("containerCheck", () => {
     expectFirstFetchCall("http://localhost:8080/v1/about", "GET");
   });
 
+  it("cancels /v1/about response bodies after simple health checks", async () => {
+    const cancel = vi.fn(async () => undefined);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { cancel },
+    });
+
+    await expect(containerCheck("http://localhost:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("returns ok:false when /v1/about returns 404", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
@@ -180,6 +197,19 @@ describe("containerCheck", () => {
       ok: false,
       status: 200,
       error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
+  });
+
+  it("rejects container receive endpoints that close before opening", async () => {
+    wsMockState.behavior = "close";
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
+
+    expect(result).toEqual({
+      ok: false,
+      status: null,
+      error: "Signal container receive WebSocket closed before open (1000: done)",
     });
   });
 });
@@ -621,9 +651,11 @@ describe("containerFetchAttachment", () => {
   });
 
   it("returns null on non-ok response", async () => {
+    const cancel = vi.fn(async () => undefined);
     mockFetch.mockResolvedValue({
       ok: false,
       status: 404,
+      body: { cancel },
     });
 
     const result = await containerFetchAttachment("attachment-123", {
@@ -631,6 +663,7 @@ describe("containerFetchAttachment", () => {
     });
 
     expect(result).toBeNull();
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("encodes attachment ID in URL", async () => {

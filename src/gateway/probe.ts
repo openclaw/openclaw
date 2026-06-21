@@ -1,3 +1,5 @@
+// Gateway reachability probe client.
+// Connects to a gateway and summarizes auth, health, status, and presence.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
@@ -105,6 +107,8 @@ function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
 }
 
 function shouldShortCircuitDeviceRequiredProbe(cacheKey: string, nowMs: number): boolean {
+  // Repeated unauthenticated probes can trigger pairing/device-required closes.
+  // Short-circuit briefly so status checks do not spam the gateway.
   const entry = deviceRequiredProbeCache.get(cacheKey);
   if (!entry) {
     return false;
@@ -373,9 +377,14 @@ export async function probeGateway(opts: {
         connectError = formatErrorMessage(err);
         connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
       },
-      onClose: (code, reason) => {
+      onClose: (code, reason, info) => {
         close = { code, reason };
         if (connectLatencyMs == null) {
+          // Preserve the transport boundary: request-level handshake failures
+          // still prove the listener was reachable once the socket opened.
+          if (info?.transportValidated === true) {
+            connectLatencyMs = Date.now() - startedAt;
+          }
           settleProbe({
             ok: false,
             error: connectError || formatProbeCloseError(close),

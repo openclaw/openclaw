@@ -1,5 +1,8 @@
+// Restart sentinel tests protect queued post-restart delivery recovery and the
+// session/channel context used when the gateway resumes an interrupted run.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { RestartSentinel, RestartSentinelPayload } from "../infra/restart-sentinel.js";
 
 type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
@@ -22,16 +25,23 @@ const mocks = vi.hoisted(() => {
     set queuedSessionDelivery(value: Record<string, unknown> | null) {
       state.queuedSessionDelivery = value;
     },
-    readRestartSentinel: vi.fn(async () => ({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
+    readRestartSentinel: vi.fn(
+      async (): Promise<RestartSentinel> => ({
+        version: 1,
+        payload: {
+          kind: "restart",
+          status: "ok",
+          ts: 123,
+          sessionKey: "agent:main:main",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "+15550002",
+            accountId: "acct-2",
+          },
         },
-      },
-    })),
+      }),
+    ),
+    finalizeUpdateRestartSentinelRunningVersion: vi.fn(async () => null),
     removeRestartSentinelFile: vi.fn(async () => undefined),
     resolveRestartSentinelPath: vi.fn(() => "/tmp/restart-sentinel.json"),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
@@ -171,6 +181,7 @@ vi.mock("../agents/agent-scope.js", async () => {
 });
 
 vi.mock("../infra/restart-sentinel.js", () => ({
+  finalizeUpdateRestartSentinelRunningVersion: mocks.finalizeUpdateRestartSentinelRunningVersion,
   readRestartSentinel: mocks.readRestartSentinel,
   removeRestartSentinelFile: mocks.removeRestartSentinelFile,
   resolveRestartSentinelPath: mocks.resolveRestartSentinelPath,
@@ -290,7 +301,11 @@ vi.mock("./server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: mocks.timestampOptsFromConfig,
 }));
 
-const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
+const {
+  getLatestUpdateRestartSentinel,
+  refreshLatestUpdateRestartSentinel,
+  scheduleRestartSentinelWake,
+} = await import("./server-restart-sentinel.js");
 
 function expectRecordFields(
   record: unknown,
@@ -364,7 +379,11 @@ describe("scheduleRestartSentinelWake", () => {
     vi.useRealTimers();
     mocks.queuedSessionDelivery = null;
     mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
       payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 123,
         sessionKey: "agent:main:main",
         deliveryContext: {
           channel: "whatsapp",
@@ -406,6 +425,8 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.loadPendingSessionDelivery.mockClear();
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue(null);
     mocks.removeRestartSentinelFile.mockClear();
     mocks.injectTimestamp.mockClear();
     mocks.timestampOptsFromConfig.mockClear();
@@ -599,7 +620,7 @@ describe("scheduleRestartSentinelWake", () => {
       },
       {
         Body: "Reply with exactly: Yay! I did it!",
-        BodyForAgent: "stamped:Reply with exactly: Yay! I did it!",
+        BodyForAgent: "Reply with exactly: Yay! I did it!",
         BodyForCommands: "",
         CommandBody: "",
         CommandAuthorized: true,
@@ -1173,7 +1194,7 @@ describe("scheduleRestartSentinelWake", () => {
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
     mocks.recordInboundSessionAndDispatchReply.mockImplementation(async (params) => {
       attempt += 1;
-      if (attempt <= 6) {
+      if (attempt <= 2) {
         await params.deliver({ text: busyReply });
         return;
       }
@@ -1185,7 +1206,10 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(7);
+    expectMockCallFields(mocks.enqueueSessionDelivery, {
+      maxRetries: 20,
+    });
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(3);
     expectContinuationDispatchFields(
       {},
       { MessageSid: "restart-sentinel:agent:main:main:agentTurn:123" },
@@ -1193,8 +1217,8 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expectContinuationDispatchFields(
       {},
-      { MessageSid: "restart-sentinel:agent:main:main:agentTurn:123:retry:6" },
-      6,
+      { MessageSid: "restart-sentinel:agent:main:main:agentTurn:123:retry:2" },
+      2,
     );
     const deliveredBusyReply = (
       mocks.deliverOutboundPayloads.mock.calls as unknown as Array<
@@ -1212,7 +1236,7 @@ describe("scheduleRestartSentinelWake", () => {
       payloads: [{ text: "restart message" }],
     });
     expect(mocks.logWarn.mock.calls).toEqual(
-      Array.from({ length: 6 }, () => [
+      Array.from({ length: 2 }, () => [
         "restart continuation: retry failed for entry session-delivery-1: Error: restart continuation deferred because previous run is still shutting down",
       ]),
     );
@@ -1305,6 +1329,60 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a consumed update sentinel available for reconnect status polling", async () => {
+    const payload: RestartSentinelPayload = {
+      kind: "update",
+      status: "ok",
+      ts: 123,
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "+15550002",
+        accountId: "acct-2",
+      },
+      stats: {
+        mode: "git",
+        root: "/repo",
+        before: { version: "1.0.0" },
+        after: { version: "2.0.0" },
+        steps: [],
+        reason: null,
+        durationMs: 10,
+      },
+    };
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      payload,
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.removeRestartSentinelFile).toHaveBeenCalledWith("/tmp/restart-sentinel.json");
+    expect(getLatestUpdateRestartSentinel()).toEqual(payload);
+  });
+
+  it("does not rewrite pending update sentinels during status refresh", async () => {
+    const payload: RestartSentinelPayload = {
+      kind: "update",
+      status: "skipped",
+      ts: 123,
+      stats: {
+        mode: "git",
+        handoffId: "handoff-1",
+        reason: "managed-service-handoff-started",
+      },
+    };
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      payload,
+    });
+
+    await expect(refreshLatestUpdateRestartSentinel()).resolves.toEqual(payload);
+
+    expect(mocks.finalizeUpdateRestartSentinelRunningVersion).not.toHaveBeenCalled();
+    expect(getLatestUpdateRestartSentinel()).toEqual(payload);
   });
 
   it("does not wake the main session when the sentinel has no sessionKey", async () => {

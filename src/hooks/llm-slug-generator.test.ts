@@ -1,3 +1,4 @@
+// LLM slug generator tests cover generated hook names and collision behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -114,5 +115,67 @@ describe("generateSlugViaLLM", () => {
     const options = requireFirstRunOptions();
     expect(options.provider).toBe("openai");
     expect(options.model).toBe("gpt-5.5");
+  });
+
+  it("rejects error payloads before slugifying them into memory filenames", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          isError: true,
+          text: "Provider API error (429): quota exceeded",
+        },
+      ],
+    });
+
+    await expect(
+      generateSlugViaLLM({
+        sessionContent: "hello",
+        cfg: {} as OpenClawConfig,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it.each([
+    'HTTP 400: {"error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance."}}',
+    "Authentication failed: invalid API key",
+    "Missing token or projectId in Google Cloud credentials. Use /login to re-authenticate.",
+    "Provider API error (429): quota exceeded",
+  ])("rejects provider/auth/quota error text before slugifying: %s", async (text) => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text }],
+    });
+
+    await expect(
+      generateSlugViaLLM({
+        sessionContent: "hello",
+        cfg: {} as OpenClawConfig,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps normal short slugs that mention auth work", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "auth-refresh" }],
+    });
+
+    await expect(
+      generateSlugViaLLM({
+        sessionContent: "hello",
+        cfg: {} as OpenClawConfig,
+      }),
+    ).resolves.toBe("auth-refresh");
+  });
+
+  it("strips leading and trailing dashes after truncating the slug", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "12345678901234567890123456789 trailing" }],
+    });
+
+    await expect(
+      generateSlugViaLLM({
+        sessionContent: "hello",
+        cfg: {} as OpenClawConfig,
+      }),
+    ).resolves.toBe("12345678901234567890123456789");
   });
 });

@@ -1,4 +1,6 @@
+// Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
+import { classifyFailoverReason } from "./errors.js";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
@@ -10,6 +12,7 @@ import {
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
     it("classifies Z.ai 1311 JSON body as billing", () => {
+      // Z.ai 1311 is a plan entitlement failure, not rate limiting.
       const raw =
         '{"code":1311,"message":"The model you requested is not available in your current plan"}';
       expect(isBillingErrorMessage(raw)).toBe(true);
@@ -100,8 +103,69 @@ describe("Z.ai vendor error codes (#48988)", () => {
   });
 });
 
+describe("Chinese provider overload messages", () => {
+  const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
+
+  it("classifies the Zhipu GLM overload body as overloaded", () => {
+    expect(isOverloadedErrorMessage(ZHIPU_OVERLOAD)).toBe(true);
+  });
+
+  it("does not misclassify the GLM overload body as rate limit or auth", () => {
+    expect(isRateLimitErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+    expect(isAuthErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+  });
+});
+
+describe("Volcengine Coding Plan subscription errors", () => {
+  it("classifies InvalidSubscription JSON body as billing", () => {
+    const raw =
+      '{"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}';
+    expect(isBillingErrorMessage(raw)).toBe(true);
+  });
+
+  it("classifies long InvalidSubscription payloads as billing", () => {
+    const raw = JSON.stringify({
+      error: {
+        code: "InvalidSubscription",
+        message:
+          "Your account does not have a valid coding plan subscription, or your subscription has expired.",
+        details: "x".repeat(700),
+      },
+    });
+    expect(raw.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(raw)).toBe(true);
+  });
+
+  it("classifies InvalidSubscription as billing before auth or rate limit", () => {
+    const raw =
+      '{"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}';
+    expect(isRateLimitErrorMessage(raw)).toBe(false);
+    expect(classifyFailoverReason(raw)).toBe("billing");
+  });
+});
+
+describe("agent harness provider mismatch (#91710)", () => {
+  it("classifies harness provider rejection as format error", () => {
+    expect(
+      classifyFailoverReason(
+        'Requested agent harness "codex" does not support openai/gpt-5.3-codex (provider is not one of: codex).',
+      ),
+    ).toBe("format");
+  });
+
+  it("classifies harness provider rejection with multiple providers as format error", () => {
+    expect(
+      classifyFailoverReason(
+        'Requested agent harness "codex" does not support openrouter/gpt-5.4 (provider is not one of: codex, openai).',
+      ),
+    ).toBe("format");
+  });
+});
+
 describe("server error status classification", () => {
   it("classifies a bare internal server error status as server error", () => {
+    // Bare status lines from providers should classify, while prefixed prose is
+    // too ambiguous and tested below as a non-match.
     expect(isServerErrorMessage("status: internal server error")).toBe(true);
   });
 

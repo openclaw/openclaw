@@ -1,10 +1,8 @@
+// Message channel normalization helpers canonicalize channel identifiers and aliases.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { listRegisteredChannelPluginIds } from "../channels/registry.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  type InternalMessageChannel,
-} from "./message-channel-constants.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 import { normalizeMessageChannel as normalizeMessageChannelCore } from "./message-channel-core.js";
 
 type ChannelId = string & { readonly __openclawChannelIdBrand?: never };
@@ -61,5 +59,3 @@ export function resolveMessageChannel(
 ): string | undefined {
   return normalizeMessageChannel(primary) ?? normalizeMessageChannel(fallback);
 }
-
-export type { InternalMessageChannel };

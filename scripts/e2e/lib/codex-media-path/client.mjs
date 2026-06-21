@@ -1,3 +1,4 @@
+// Client helpers for Codex media-path E2E fixtures.
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
@@ -5,9 +6,9 @@ import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-p
 import { createGatewayWsClient } from "../../../lib/gateway-ws-client.ts";
 import { resolveGatewaySuccessPayload } from "../gateway-frame-payload.mjs";
 import { createJsonlRequestTailer } from "./jsonl-request-tail.mjs";
-import { readPositiveIntEnv } from "./limits.mjs";
+import { readPositiveIntEnv, readTcpPortEnv } from "./limits.mjs";
 
-const port = process.env.PORT;
+const portText = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const appServerLog =
   process.env.OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG ??
@@ -18,9 +19,10 @@ const logTailMaxBytes = readPositiveIntEnv(
   2 * 1024 * 1024,
 );
 
-if (!port || !token) {
+if (!portText || !token) {
   throw new Error("missing PORT/OPENCLAW_GATEWAY_TOKEN");
 }
+const port = readTcpPortEnv("PORT", portText);
 
 function assert(condition, message) {
   if (!condition) {

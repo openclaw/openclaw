@@ -1,3 +1,4 @@
+// Onboard custom tests cover custom provider prompts and API-key credential handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
@@ -105,6 +106,27 @@ describe("promptCustomApiConfig", () => {
     expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
     expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text"]);
     expect(prompter.confirm).not.toHaveBeenCalled();
+  });
+
+  it("cancels custom provider verification response bodies", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
+      select: ["plaintext", "openai"],
+    });
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json; charset=utf-8" }),
+        body: { cancel },
+      })),
+    );
+
+    await runPromptCustomApi(prompter);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("handles explicit OpenAI Responses flow", async () => {

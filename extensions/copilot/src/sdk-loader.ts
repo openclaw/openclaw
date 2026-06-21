@@ -1,3 +1,4 @@
+// Copilot plugin module implements sdk loader behavior.
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -8,8 +9,6 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 export function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "npm-runtime", "copilot");
 }
-
-export const COPILOT_SDK_FALLBACK_DIR = resolveCopilotSdkFallbackDir();
 
 export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.0-beta.9";
 

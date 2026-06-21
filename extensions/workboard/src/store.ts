@@ -1,3 +1,4 @@
+// Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
 import {
   isFutureDateTimestampMs,
@@ -208,6 +209,9 @@ export type WorkboardDispatchResult = {
 };
 export type WorkboardListOptions = {
   boardId?: unknown;
+};
+export type WorkboardDispatchOptions = WorkboardListOptions & {
+  now?: unknown;
 };
 export type WorkboardBoardSummary = {
   id: string;
@@ -2966,17 +2970,6 @@ export class WorkboardStore {
     return await this.promoteDependencyReady(nextChild.id);
   }
 
-  async linkParents(childId: string, parentIds: readonly string[]): Promise<WorkboardCard> {
-    let child = await this.get(childId);
-    if (!child) {
-      throw new Error(`card not found: ${childId}`);
-    }
-    for (const parentId of parentIds) {
-      child = await this.linkCards(parentId, child.id);
-    }
-    return child;
-  }
-
   private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
     const scheduledAt = card.metadata?.automation?.scheduledAt;
     const parents = cardParentIds(card);
@@ -4097,14 +4090,18 @@ export class WorkboardStore {
     });
   }
 
-  async dispatch(now = Date.now()): Promise<WorkboardDispatchResult> {
+  async dispatch(
+    input: number | WorkboardDispatchOptions = Date.now(),
+  ): Promise<WorkboardDispatchResult> {
+    const now = typeof input === "number" ? input : normalizeTimestamp(input.now, Date.now());
+    const boardId = typeof input === "number" ? undefined : normalizeBoardId(input.boardId);
     return await this.enqueueMutation(async () => {
       const promoted: WorkboardCard[] = [];
       const reclaimed: WorkboardCard[] = [];
       const blocked: WorkboardCard[] = [];
       const orchestrated: WorkboardCard[] = [];
       const orchestratedByBoard = new Map<string, number>();
-      for (const card of await this.list()) {
+      for (const card of await this.list({ boardId })) {
         let latest = await this.promoteDependencyReady(card.id, now);
         const wasPromoted = latest.status !== card.status;
         const claim = latest.metadata?.claim;
@@ -4178,14 +4175,14 @@ export class WorkboardStore {
           latest = await this.recordDispatch(latest, now);
         }
         if (await this.shouldAutoOrchestrate(latest)) {
-          const boardId = cardBoardId(latest);
-          const board = await this.boardStore.lookup(boardId);
+          const latestBoardId = cardBoardId(latest);
+          const board = await this.boardStore.lookup(latestBoardId);
           const cap = board?.board.orchestration?.autoDecomposePerDispatch ?? 3;
-          const boardCount = orchestratedByBoard.get(boardId) ?? 0;
+          const boardCount = orchestratedByBoard.get(latestBoardId) ?? 0;
           if (boardCount < cap) {
             latest = await this.recordOrchestrationCandidate(latest, now);
             orchestrated.push(latest);
-            orchestratedByBoard.set(boardId, boardCount + 1);
+            orchestratedByBoard.set(latestBoardId, boardCount + 1);
           }
         }
         if (wasPromoted && latest.status !== "blocked") {

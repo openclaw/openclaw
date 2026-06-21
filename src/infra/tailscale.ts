@@ -325,7 +325,7 @@ export async function ensureFunnel(
   try {
     const tailscaleBin = await getTailscaleBinary();
     const statusOut = (await exec(tailscaleBin, ["funnel", "status", "--json"])).stdout.trim();
-    const parsed = statusOut ? (JSON.parse(statusOut) as Record<string, unknown>) : {};
+    const parsed = statusOut ? parsePossiblyNoisyJsonObject(statusOut) : {};
     if (!parsed || Object.keys(parsed).length === 0) {
       runtime.error(danger("Tailscale Funnel is not enabled on this tailnet/device."));
       runtime.error(
@@ -426,17 +426,19 @@ export async function hasTailscaleFunnelRouteForPort(
   port: number,
   exec: typeof runExec = runExec,
 ): Promise<boolean> {
+  let stdout: string;
   try {
     const tailscaleBin = await getTailscaleBinary();
-    const { stdout } = await exec(tailscaleBin, ["funnel", "status", "--json"], {
+    const result = await exec(tailscaleBin, ["funnel", "status", "--json"], {
       maxBuffer: 200_000,
       timeoutMs: 5_000,
     });
-    const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
-    return tailscaleFunnelStatusCoversPort(parsed, port);
+    stdout = result.stdout;
   } catch {
     return false;
   }
+  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+  return tailscaleFunnelStatusCoversPort(parsed, port);
 }
 
 const TAILSCALE_LOOPBACK_PROXY_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
@@ -606,11 +608,11 @@ export async function readTailscaleWhoisIdentity(
   const errorTtlMs = opts?.errorTtlMs ?? 5_000;
   try {
     const tailscaleBin = await getTailscaleBinary();
-    const { stdout } = await exec(tailscaleBin, ["whois", "--json", normalized], {
+    const result = await exec(tailscaleBin, ["whois", "--json", normalized], {
       timeoutMs: opts?.timeoutMs ?? 5_000,
       maxBuffer: 200_000,
     });
-    const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    const parsed = result.stdout ? parsePossiblyNoisyJsonObject(result.stdout) : {};
     const identity = parseWhoisIdentity(parsed);
     writeCachedWhois(normalized, identity, cacheTtlMs);
     return identity;

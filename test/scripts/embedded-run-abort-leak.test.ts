@@ -1,3 +1,4 @@
+// Embedded Run Abort Leak tests cover embedded run abort leak script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,5 +51,13 @@ describe("scripts/embedded-run-abort-leak", () => {
       "error: --iters must be a positive integer",
     );
     expect(readdirSync(looseThresholdProbe.snapDir)).toEqual([]);
+  });
+
+  it("rejects missing snapshot directories before writing heap snapshots", () => {
+    const result = runHarness(["--snap-dir", "--quiet", "--iters", "1", "--batches", "1"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: --snap-dir requires a value");
   });
 });

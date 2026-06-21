@@ -1,3 +1,4 @@
+/** Commands for adding, pasting, and logging into provider model auth profiles. */
 import {
   cancel,
   confirm as clackConfirm,
@@ -40,6 +41,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import {
   applyProviderAuthConfigPatch,
   applyDefaultModel,
@@ -65,7 +67,6 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
-import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
@@ -193,6 +194,8 @@ function validateOpenAICodexApiKeyInput(value: string): string | undefined {
     return undefined;
   }
   if (looksLikeJwtToken(trimmed) || looksLikeStructuredCredential(trimmed)) {
+    // OAuth/token material belongs in token profiles; storing it as an API key
+    // would make provider auth fail later with misleading model errors.
     return `That looks like token or OAuth material, not an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-token --provider openai")} for token auth material.`;
   }
   return "That does not look like an OpenAI API key.";
@@ -583,6 +586,7 @@ async function runProviderAuthMethod(params: {
   });
 }
 
+/** Runs an interactive provider setup-token auth flow. */
 export async function modelsAuthSetupTokenCommand(
   opts: { provider?: string; yes?: boolean; agent?: string },
   runtime: RuntimeEnv,
@@ -639,6 +643,7 @@ export async function modelsAuthSetupTokenCommand(
   });
 }
 
+/** Reads a pasted bearer/setup token and stores it as an auth profile. */
 export async function modelsAuthPasteTokenCommand(
   opts: {
     provider?: string;
@@ -674,7 +679,7 @@ export async function modelsAuthPasteTokenCommand(
   };
   const tokenInput = await readPastedSecret({
     message: `Paste token for ${provider}`,
-    masked: false,
+    masked: true,
     validate: validateTokenInput,
   });
   const token =
@@ -706,6 +711,7 @@ export async function modelsAuthPasteTokenCommand(
   }
 }
 
+/** Reads a pasted API key and stores it as an auth profile. */
 export async function modelsAuthPasteApiKeyCommand(
   opts: {
     provider?: string;
@@ -767,6 +773,7 @@ async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams)
   }
 }
 
+/** Interactive helper for adding token auth profiles, with provider/method prompts. */
 export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: RuntimeEnv) {
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
     rawAgentId: opts.agent,
@@ -906,6 +913,7 @@ async function clearStaleProfileLockouts(provider: string, agentDir: string): Pr
   }
 }
 
+/** Resolves a requested login provider or throws with available provider details. */
 export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
   rawProvider?: string,
@@ -923,6 +931,7 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
   return "oauth";
 }
 
+/** Applies an optional profile-id override to a single returned login profile. */
 export function resolveLoginProfiles(params: {
   result: ProviderAuthResult;
   requestedProfileId?: string;
@@ -951,6 +960,7 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
   );
 }
 
+/** Runs interactive provider auth login and persists returned profiles. */
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error(

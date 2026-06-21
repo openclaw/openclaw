@@ -1,3 +1,4 @@
+// Covers the compaction planning worker boundary and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.js";
@@ -13,11 +14,15 @@ function makeMessage(id: number, text = "x".repeat(4000)): AgentMessage {
 }
 
 function createSyntheticWorkerUrl(source: string): URL {
+  // Synthetic data URLs let timeout/error tests exercise Worker plumbing
+  // without relying on a bundled build artifact.
   return new URL(`data:text/javascript,${encodeURIComponent(source)}`);
 }
 
 describe("compaction planning worker", () => {
   it("resolves the packaged worker URL from stable and hashed dist modules", () => {
+    // Hashed bundle names still resolve to the stable worker sibling emitted by
+    // the build, so runtime imports do not depend on the main chunk hash.
     expect(
       compactionPlanningWorkerTesting.resolveCompactionPlanningWorkerUrl(
         "file:///repo/dist/agents/compaction-planning-worker.js",
@@ -101,6 +106,8 @@ describe("compaction planning worker", () => {
         timeoutMs: Number.MAX_SAFE_INTEGER,
         workerUrl,
       });
+      // Node timers reject values above the signed 32-bit cap; clamping keeps
+      // huge caller timeouts from firing immediately.
       expect(setTimeoutSpy.mock.calls).toContainEqual([expect.any(Function), MAX_TIMER_TIMEOUT_MS]);
     } finally {
       setTimeoutSpy.mockRestore();
@@ -124,6 +131,8 @@ describe("compaction planning worker", () => {
   });
 
   it("keeps timers responsive while planning large histories", async () => {
+    // Planning large histories must happen off the main event loop; a 0ms timer
+    // winning this race proves the worker path yielded control.
     const workerUrl = createSyntheticWorkerUrl(`
       import { parentPort } from "node:worker_threads";
       parentPort.postMessage({

@@ -107,6 +107,7 @@ public struct GatewayConnectOptions: Sendable {
     public var clientId: String
     public var clientMode: String
     public var clientDisplayName: String?
+    public var deviceIdentityProfile: GatewayDeviceIdentityProfile
     /// When false, the connection omits the signed device identity payload and cannot use
     /// device-scoped auth (role/scope upgrades will require pairing). Keep this true for
     /// role/scoped sessions such as operator UI clients.
@@ -122,6 +123,7 @@ public struct GatewayConnectOptions: Sendable {
         clientId: String,
         clientMode: String,
         clientDisplayName: String?,
+        deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary,
         includeDeviceIdentity: Bool = true)
     {
         self.role = role
@@ -133,6 +135,7 @@ public struct GatewayConnectOptions: Sendable {
         self.clientId = clientId
         self.clientMode = clientMode
         self.clientDisplayName = clientDisplayName
+        self.deviceIdentityProfile = deviceIdentityProfile
         self.includeDeviceIdentity = includeDeviceIdentity
     }
 }
@@ -197,6 +200,7 @@ private struct SelectedConnectAuth {
     let storedToken: String?
     let storedScopes: [String]?
     let authSource: GatewayAuthSource
+    let suppressedDeviceTokenRetry: Bool
 }
 
 private enum GatewayConnectErrorCodes {
@@ -435,14 +439,17 @@ public actor GatewayChannelActor {
         let clientId = options.clientId
         let clientMode = options.clientMode
         let role = options.role
+        let deviceIdentityProfile = options.deviceIdentityProfile
         let requestedScopes = options.scopes
         let scopesAreExplicit = options.scopesAreExplicit
         let includeDeviceIdentity = options.includeDeviceIdentity
-        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
+        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate(profile: deviceIdentityProfile) : nil
         let selectedAuth = self.selectConnectAuth(
             role: role,
             includeDeviceIdentity: includeDeviceIdentity,
-            deviceId: identity?.deviceId)
+            deviceIdentityProfile: deviceIdentityProfile,
+            deviceId: identity?.deviceId,
+            requestedScopes: requestedScopes)
         let scopes = self.resolveConnectScopes(
             role: role,
             requestedScopes: requestedScopes,
@@ -479,7 +486,9 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
-        if selectedAuth.authDeviceToken != nil, self.pendingDeviceTokenRetry {
+        if self.pendingDeviceTokenRetry,
+           selectedAuth.authDeviceToken != nil || selectedAuth.suppressedDeviceTokenRetry
+        {
             self.pendingDeviceTokenRetry = false
         }
         self.lastAuthSource = selectedAuth.authSource
@@ -528,7 +537,11 @@ public actor GatewayChannelActor {
         try await self.task?.send(.data(data))
         do {
             let response = try await self.waitForConnectResponse(reqId: reqId)
-            try await self.handleConnectResponse(response, identity: identity, role: role)
+            try await self.handleConnectResponse(
+                response,
+                identity: identity,
+                role: role,
+                deviceIdentityProfile: deviceIdentityProfile)
             self.pendingDeviceTokenRetry = false
             self.deviceTokenRetryBudgetUsed = false
         } catch {
@@ -546,7 +559,10 @@ public actor GatewayChannelActor {
                       self.shouldClearStoredDeviceTokenAfterRetry(error)
             {
                 // Retry failed with an explicit device-token mismatch; clear stale local token.
-                DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
+                DeviceAuthStore.clearToken(
+                    deviceId: identity.deviceId,
+                    role: role,
+                    profile: deviceIdentityProfile)
             }
             throw error
         }
@@ -555,7 +571,9 @@ public actor GatewayChannelActor {
     private func selectConnectAuth(
         role: String,
         includeDeviceIdentity: Bool,
-        deviceId: String?) -> SelectedConnectAuth
+        deviceIdentityProfile: GatewayDeviceIdentityProfile,
+        deviceId: String?,
+        requestedScopes: [String]) -> SelectedConnectAuth
     {
         let explicitToken = self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let explicitBootstrapToken =
@@ -563,12 +581,24 @@ public actor GatewayChannelActor {
         let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let storedEntry =
             (includeDeviceIdentity && deviceId != nil)
-            ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role)
+            ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role, profile: deviceIdentityProfile)
             : nil
         let storedToken = storedEntry?.token
+        let storedScopes = storedEntry?.scopes ?? []
+        let requestedScopesExceedStoredToken = Self.requestedScopesExceedStoredToken(
+            role: role,
+            requestedScopes: requestedScopes,
+            storedToken: storedToken,
+            storedScopes: storedScopes)
+        let suppressedDeviceTokenRetry =
+            includeDeviceIdentity && self.pendingDeviceTokenRetry &&
+            requestedScopesExceedStoredToken && storedToken != nil && explicitToken != nil
+        // Scope upgrades must be judged from the requested scopes. A stale
+        // device-token retry carries the old grant and is rejected before pairing repair.
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
-            storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
+            !requestedScopesExceedStoredToken && storedToken != nil && explicitToken != nil &&
+            self.isTrustedDeviceRetryEndpoint()
         let authToken =
             explicitToken ??
             // A freshly scanned setup code should force the bootstrap pairing path instead of
@@ -598,7 +628,90 @@ public actor GatewayChannelActor {
             signatureToken: authToken ?? authBootstrapToken,
             storedToken: storedToken,
             storedScopes: storedEntry?.scopes,
-            authSource: authSource)
+            authSource: authSource,
+            suppressedDeviceTokenRetry: suppressedDeviceTokenRetry)
+    }
+
+    nonisolated static func _test_requestedScopesExceedStoredToken(
+        role: String,
+        requestedScopes: [String],
+        storedToken: String?,
+        storedScopes: [String]) -> Bool
+    {
+        self.requestedScopesExceedStoredToken(
+            role: role,
+            requestedScopes: requestedScopes,
+            storedToken: storedToken,
+            storedScopes: storedScopes)
+    }
+
+    private nonisolated static func requestedScopesExceedStoredToken(
+        role: String,
+        requestedScopes: [String],
+        storedToken: String?,
+        storedScopes: [String]) -> Bool
+    {
+        storedToken != nil && !storedScopes.isEmpty &&
+            !self.storedDeviceTokenScopesAllow(
+                role: role,
+                requestedScopes: requestedScopes,
+                storedScopes: storedScopes)
+    }
+
+    private nonisolated static func storedDeviceTokenScopesAllow(
+        role: String,
+        requestedScopes: [String],
+        storedScopes: [String]) -> Bool
+    {
+        let requested = self.normalizedScopeList(requestedScopes)
+        if requested.isEmpty {
+            return true
+        }
+        let allowed = self.normalizedScopeList(storedScopes)
+        if allowed.isEmpty {
+            return false
+        }
+        let allowedSet = Set(allowed)
+        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedRole != "operator" {
+            let prefix = "\(normalizedRole)."
+            return requested.allSatisfy { scope in
+                scope.hasPrefix(prefix) && allowedSet.contains(scope)
+            }
+        }
+        return requested.allSatisfy { scope in
+            self.operatorScopeSatisfied(scope, granted: allowedSet)
+        }
+    }
+
+    private nonisolated static func normalizedScopeList(_ scopes: [String]) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        for scope in scopes {
+            let trimmed = scope.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || seen.contains(trimmed) {
+                continue
+            }
+            seen.insert(trimmed)
+            out.append(trimmed)
+        }
+        return out
+    }
+
+    private nonisolated static func operatorScopeSatisfied(_ scope: String, granted: Set<String>) -> Bool {
+        if !scope.hasPrefix("operator.") {
+            return false
+        }
+        if granted.contains("operator.admin") {
+            return true
+        }
+        if scope == "operator.read" {
+            return granted.contains("operator.read") || granted.contains("operator.write")
+        }
+        if scope == "operator.write" {
+            return granted.contains("operator.write")
+        }
+        return granted.contains(scope)
     }
 
     private func shouldPersistBootstrapHandoffTokens() -> Bool {
@@ -656,7 +769,8 @@ public actor GatewayChannelActor {
         deviceId: String,
         role: String,
         token: String,
-        scopes: [String])
+        scopes: [String],
+        deviceIdentityProfile: GatewayDeviceIdentityProfile)
     {
         guard let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: scopes) else {
             return
@@ -665,7 +779,8 @@ public actor GatewayChannelActor {
             deviceId: deviceId,
             role: role,
             token: token,
-            scopes: filteredScopes)
+            scopes: filteredScopes,
+            profile: deviceIdentityProfile)
     }
 
     private func persistIssuedDeviceToken(
@@ -673,7 +788,8 @@ public actor GatewayChannelActor {
         deviceId: String,
         role: String,
         token: String,
-        scopes: [String])
+        scopes: [String],
+        deviceIdentityProfile: GatewayDeviceIdentityProfile)
     {
         if authSource == .bootstrapToken {
             guard self.shouldPersistBootstrapHandoffTokens() else {
@@ -683,20 +799,23 @@ public actor GatewayChannelActor {
                 deviceId: deviceId,
                 role: role,
                 token: token,
-                scopes: scopes)
+                scopes: scopes,
+                deviceIdentityProfile: deviceIdentityProfile)
             return
         }
         _ = DeviceAuthStore.storeToken(
             deviceId: deviceId,
             role: role,
             token: token,
-            scopes: scopes)
+            scopes: scopes,
+            profile: deviceIdentityProfile)
     }
 
     private func handleConnectResponse(
         _ res: ResponseFrame,
         identity: DeviceIdentity?,
-        role: String) async throws
+        role: String,
+        deviceIdentityProfile: GatewayDeviceIdentityProfile) async throws
     {
         if res.ok == false {
             let error = res.error
@@ -755,7 +874,8 @@ public actor GatewayChannelActor {
                     deviceId: identity.deviceId,
                     role: authRole,
                     token: deviceToken,
-                    scopes: scopes)
+                    scopes: scopes,
+                    deviceIdentityProfile: deviceIdentityProfile)
             }
             if self.shouldPersistBootstrapHandoffTokens(),
                let tokenEntries = auth["deviceTokens"]?.value as? [ProtoAnyCodable]
@@ -773,7 +893,8 @@ public actor GatewayChannelActor {
                         deviceId: identity.deviceId,
                         role: authRole,
                         token: deviceToken,
-                        scopes: scopes)
+                        scopes: scopes,
+                        deviceIdentityProfile: deviceIdentityProfile)
                 }
             }
         }

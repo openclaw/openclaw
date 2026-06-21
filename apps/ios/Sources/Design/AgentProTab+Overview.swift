@@ -5,18 +5,19 @@ import SwiftUI
 extension AgentProTab {
     var rosterHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Agents")
-                        .font(.system(size: 28, weight: .bold))
-                    Text("\(self.sortedAgents.count) total")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+            OpenClawAdaptiveHeaderRow(
+                title: self.headerTitle,
+                subtitle: "\(self.sortedAgents.count) total",
+                titleFont: .system(size: 28, weight: .bold),
+                subtitleFont: .subheadline,
+                subtitleLineLimit: 1)
+            {
+                if let headerLeadingAction {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                 }
-
-                Spacer(minLength: 8)
-
+            } accessory: {
                 HStack(spacing: 10) {
+                    self.gatewayPillButton
                     self.headerIconButton(
                         systemName: "magnifyingglass",
                         label: "Search agents",
@@ -54,6 +55,19 @@ extension AgentProTab {
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
         .padding(.top, 6)
+    }
+
+    @ViewBuilder
+    private var gatewayPillButton: some View {
+        if let openSettings {
+            Button(action: openSettings) {
+                OpenClawGatewayCompactPill()
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens Settings / Gateway")
+        } else {
+            OpenClawGatewayCompactPill()
+        }
     }
 
     var agentFilters: some View {
@@ -140,7 +154,7 @@ extension AgentProTab {
                     value: self.instancesValue,
                     detail: self.instancesDetail,
                     color: self.instancesColor,
-                    route: .nodes)
+                    route: .instances)
                 self.metricTile(
                     icon: "clock.arrow.circlepath",
                     title: "Cron",
@@ -285,11 +299,11 @@ extension AgentProTab {
                         Circle().strokeBorder(self.iconButtonStroke, lineWidth: 1)
                     }
             }
-            .accessibilityLabel(isActive ? "Active agent" : "Make active agent")
+            .accessibilityLabel(isActive ? "Default agent" : "Set default agent")
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 13)
-        .frame(minHeight: AgentLayout.rowMinHeight, alignment: .center)
+        .frame(maxWidth: .infinity, minHeight: AgentLayout.rowMinHeight, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture {
             self.appModel.setSelectedAgentId(agent.id)
@@ -514,10 +528,8 @@ extension AgentProTab {
                 true
             case .online:
                 self.agentRosterState(for: agent) == .online
-            case .busy:
-                self.agentRosterState(for: agent) == .busy
-            case .idle:
-                self.agentRosterState(for: agent) == .idle
+            case .ready:
+                self.agentRosterState(for: agent) == .ready
             }
 
             guard matchesFilter else { return false }
@@ -542,6 +554,12 @@ extension AgentProTab {
 
     var gatewayConnected: Bool {
         GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+    }
+
+    var liveGatewayConnected: Bool {
+        !self.appModel.isLocalGatewayFixtureEnabled &&
+            self.gatewayConnected &&
+            self.appModel.isOperatorGatewayConnected
     }
 
     private var searchFieldFill: Color {

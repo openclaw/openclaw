@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot native commands behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Bot, Context } from "grammy";
@@ -64,6 +65,7 @@ import {
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
+import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
@@ -443,7 +445,7 @@ export type RegisterTelegramHandlerParams = {
     replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
     promptContext?: import("./bot-message-context.types.js").TelegramPromptContextEntry[],
     lifecycle?: import("./bot-message.js").TelegramMessageProcessorLifecycle,
-  ) => Promise<boolean>;
+  ) => Promise<TelegramMessageProcessingResult>;
   logger: ReturnType<typeof getChildLogger>;
 };
 
@@ -949,6 +951,7 @@ export const registerTelegramNativeCommands = ({
       cfg: runtimeCfg,
       channel: "telegram",
       accountId: route.accountId,
+      supportsBlockTables: true,
     });
     const chunkMode = nativeCommandRuntime.resolveChunkMode(
       runtimeCfg,
@@ -970,6 +973,7 @@ export const registerTelegramNativeCommands = ({
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: TelegramChunkMode;
     linkPreview?: boolean;
+    richMessages?: boolean;
   }) => ({
     cfg: params.cfg,
     chatId: String(params.chatId),
@@ -989,6 +993,7 @@ export const registerTelegramNativeCommands = ({
     tableMode: params.tableMode,
     chunkMode: params.chunkMode,
     linkPreview: params.linkPreview,
+    richMessages: params.richMessages,
   });
   const resolveCommandTargetSessionKey = (params: {
     runtimeCfg: OpenClawConfig;
@@ -1130,12 +1135,18 @@ export const registerTelegramNativeCommands = ({
                 sessionKey: await resolveTargetSessionKey(),
               })
             : {};
+        // Native /think choices need live-discovery metadata; empty keeps config fallback.
+        const menuModelCatalog =
+          commandDefinition?.key === "think" && menuNeedsModelContext
+            ? await loadModelCatalog({ config: runtimeCfg })
+            : undefined;
         const menu = commandDefinition
           ? resolveCommandArgMenu({
               command: commandDefinition,
               args: commandArgs,
               cfg: runtimeCfg,
               ...menuModelContext,
+              ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
             })
           : null;
         if (menu && commandDefinition) {
@@ -1206,6 +1217,7 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          richMessages: runtimeTelegramCfg.richMessages,
         });
         let topicName: string | undefined;
         if (isForum && resolvedThreadId != null) {
@@ -1428,6 +1440,7 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          richMessages: runtimeTelegramCfg.richMessages,
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
         const to = `telegram:${chatId}`;

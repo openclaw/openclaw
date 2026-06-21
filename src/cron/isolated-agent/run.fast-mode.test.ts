@@ -1,9 +1,7 @@
+// Fast mode tests cover isolated cron run behavior in fast execution mode.
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
@@ -77,7 +75,7 @@ async function runFastModeCase(params: {
   });
 
   const result = await runCronIsolatedAgentTurn(
-    makeIsolatedAgentTurnParams({
+    makeIsolatedAgentParamsFixture({
       cfg: {
         agents: {
           defaults: {
@@ -91,7 +89,7 @@ async function runFastModeCase(params: {
           },
         },
       },
-      job: makeIsolatedAgentTurnJob({
+      job: makeIsolatedAgentJobFixture({
         sessionTarget: params.sessionTarget ?? "isolated",
         payload: {
           kind: "agentTurn",

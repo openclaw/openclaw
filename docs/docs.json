@@ -61,6 +61,14 @@
       "destination": "/channels/matrix-migration"
     },
     {
+      "source": "/concepts/openclaw-sdk",
+      "destination": "/gateway/external-apps"
+    },
+    {
+      "source": "/reference/openclaw-sdk-api-design",
+      "destination": "/gateway/external-apps"
+    },
+    {
       "source": "/mcp",
       "destination": "/cli/mcp"
     },
@@ -307,6 +315,10 @@
     {
       "source": "/providers/zalo",
       "destination": "/channels/zalo"
+    },
+    {
+      "source": "/channels/openclaw-zaloclawbot",
+      "destination": "/channels/zaloclawbot"
     },
     {
       "source": "/providers/whatsapp",
@@ -1124,6 +1136,7 @@
                   "channels/feishu",
                   "channels/yuanbao",
                   "channels/zalo",
+                  "channels/zaloclawbot",
                   "channels/zalouser"
                 ]
               },
@@ -1241,6 +1254,7 @@
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/llama-cpp",
                   "plugins/memory-lancedb",
                   "plugins/oc-path",
                   "plugins/zalouser"
@@ -1331,6 +1345,7 @@
                       "tools/kimi-search",
                       "tools/minimax-search",
                       "tools/ollama-search",
+                      "tools/parallel-search",
                       "tools/perplexity-search",
                       "tools/searxng-search",
                       "tools/tavily"
@@ -1365,7 +1380,6 @@
                   "clawhub/cli",
                   "clawhub/publishing",
                   "clawhub/skill-format",
-                  "clawhub/soul-format",
                   "clawhub/auth",
                   "clawhub/telemetry",
                   "clawhub/troubleshooting"
@@ -1376,7 +1390,9 @@
                 "pages": [
                   "clawhub/api",
                   "clawhub/http-api",
-                  "clawhub/acceptable-usage"
+                  "clawhub/acceptable-usage",
+                  "clawhub/moderation",
+                  "clawhub/security-audits"
                 ]
               }
             ]
@@ -1403,6 +1419,7 @@
                   "providers/azure-speech",
                   "providers/cerebras",
                   "providers/chutes",
+                  "providers/cohere",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
@@ -1740,8 +1757,7 @@
                 "group": "RPC and API",
                 "pages": [
                   "reference/rpc",
-                  "concepts/openclaw-sdk",
-                  "reference/openclaw-sdk-api-design",
+                  "gateway/external-apps",
                   "reference/code-mode",
                   "reference/device-models"
                 ]

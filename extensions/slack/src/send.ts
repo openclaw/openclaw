@@ -1,3 +1,4 @@
+// Slack plugin module implements send behavior.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
@@ -359,10 +360,18 @@ async function postSlackMessageBestEffort(params: {
   }
 }
 
+function resolvePostedMessageThreadTs(response: {
+  message?: { thread_ts?: unknown };
+}): string | undefined {
+  const threadTs = response.message?.thread_ts;
+  return typeof threadTs === "string" ? normalizeSlackThreadTsCandidate(threadTs) : undefined;
+}
+
 export type SlackSendResult = {
   messageId: string;
   channelId: string;
   receipt: MessageReceipt;
+  threadTs?: string;
 };
 
 function createSlackSendReceipt(params: {
@@ -663,7 +672,7 @@ export async function sendMessageSlack(
       blocks,
     }),
   );
-  const threadTs = normalizeSlackThreadTsCandidate(opts.threadTs);
+  const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs);
   if (threadTs && result.channelId && account.accountId) {
     recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);
   }
@@ -736,14 +745,17 @@ async function sendMessageSlackQueuedInner(params: {
     });
     const messageId = response.ts ?? "unknown";
     const deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
+    const deliveredThreadTs =
+      resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
     return {
       messageId,
       channelId: deliveredChannelId,
+      threadTs: deliveredThreadTs,
       receipt: createSlackSendReceipt({
         platformMessageIds: [messageId],
         channelId: deliveredChannelId,
         kind: "card",
-        threadTs: opts.threadTs,
+        threadTs: deliveredThreadTs,
       }),
     };
   }
@@ -773,6 +785,7 @@ async function sendMessageSlackQueuedInner(params: {
   const sentMessageIds: string[] = [];
   let lastMessageId = "";
   let deliveredChannelId = channelId;
+  let canonicalDeliveredThreadTs: string | undefined;
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
@@ -802,6 +815,7 @@ async function sendMessageSlackQueuedInner(params: {
       });
       lastMessageId = response.ts ?? lastMessageId;
       deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
+      canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
       if (response.ts) {
         sentMessageIds.push(response.ts);
       }
@@ -820,6 +834,7 @@ async function sendMessageSlackQueuedInner(params: {
       });
       lastMessageId = response.ts ?? lastMessageId;
       deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
+      canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
       if (response.ts) {
         sentMessageIds.push(response.ts);
       }
@@ -827,14 +842,17 @@ async function sendMessageSlackQueuedInner(params: {
   }
 
   const messageId = lastMessageId || "unknown";
+  const deliveredThreadTs =
+    canonicalDeliveredThreadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs);
   return {
     messageId,
     channelId: deliveredChannelId,
+    threadTs: deliveredThreadTs,
     receipt: createSlackSendReceipt({
       platformMessageIds: sentMessageIds.length ? sentMessageIds : [messageId],
       channelId: deliveredChannelId,
       kind: opts.mediaUrl ? "media" : "text",
-      threadTs: opts.threadTs,
+      threadTs: deliveredThreadTs,
     }),
   };
 }

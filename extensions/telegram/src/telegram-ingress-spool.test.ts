@@ -1,3 +1,4 @@
+// Telegram tests cover telegram ingress spool plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -273,5 +274,23 @@ describe("Telegram ingress spool", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("treats fresh claims with reused pids and different owner ids as live-owned", () => {
+    const now = Date.now();
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
+        updateId: 50,
+        path: path.join(os.tmpdir(), "50.json.processing"),
+        pendingPath: path.join(os.tmpdir(), "50.json"),
+        update: { update_id: 50 },
+        receivedAt: now,
+        claim: {
+          processId: "other-process",
+          processPid: process.pid,
+          claimedAt: now,
+        },
+      }),
+    ).toBe(true);
   });
 });

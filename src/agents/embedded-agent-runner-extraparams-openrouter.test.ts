@@ -1,3 +1,4 @@
+// Covers OpenRouter-specific extra-params payload and header behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -12,6 +13,8 @@ import {
 } from "./embedded-agent-runner/extra-params.js";
 
 beforeEach(() => {
+  // OpenRouter behavior is supplied through the provider-runtime seam so tests
+  // exercise the same wrapper boundary as production.
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
     resolveProviderExtraParamsForTransport: () => undefined,
@@ -111,6 +114,8 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   });
 
   it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
+    // Model-level camelCase config is narrower than broad defaults and should
+    // override snake_case aliases from defaults.
     const calls: Array<{ headers?: Record<string, string> }> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push({ headers: options?.headers });
@@ -158,6 +163,54 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
     expect(headers?.["X-OpenRouter-Cache"]).toBe("true");
     expect(headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
     expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
+  });
+
+  it("forwards Fusion plugin config through extraBody", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        analysis_models: [
+                          "google/gemini-3.5-flash",
+                          "moonshotai/kimi-k2.6",
+                          "deepseek/deepseek-v4-pro",
+                        ],
+                        model: "google/gemini-3.5-flash",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      payload: { model: "openrouter/fusion" },
+    });
+
+    expect(payload).toEqual({
+      model: "openrouter/fusion",
+      plugins: [
+        {
+          id: "fusion",
+          analysis_models: [
+            "google/gemini-3.5-flash",
+            "moonshotai/kimi-k2.6",
+            "deepseek/deepseek-v4-pro",
+          ],
+          model: "google/gemini-3.5-flash",
+        },
+      ],
+    });
   });
 
   it("uses configured long retention for OpenRouter Anthropic cache markers", () => {
@@ -236,6 +289,8 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   });
 
   it("does not inject effort when payload already has reasoning.max_tokens", () => {
+    // max_tokens and effort are mutually exclusive in OpenRouter reasoning
+    // payloads; caller-provided max_tokens must stay intact.
     const payload = runExtraParamsPayloadCase({
       provider: "openrouter",
       modelId: "openrouter/auto",

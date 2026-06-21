@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime flow plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
@@ -207,7 +208,7 @@ describe("qa suite runtime flow", () => {
     const scenario = {
       id: "session-memory-ranking",
       title: "Session memory ranking",
-      sourcePath: "qa/scenarios/session-memory-ranking.md",
+      sourcePath: "qa/scenarios/session-memory-ranking.yaml",
       surface: "qa-channel",
       objective: "test",
       successCriteria: ["test"],

@@ -1,3 +1,4 @@
+// Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyConfigSnapshot,
@@ -44,6 +45,7 @@ function createState(): ConfigState {
     connected: false,
     lastError: null,
     pendingUpdateExpectedVersion: null,
+    pendingUpdateHandoff: false,
     updateStatusBanner: null,
     updateRunning: false,
   };
@@ -1156,6 +1158,27 @@ describe("runUpdate", () => {
     await runUpdate(state);
 
     expect(state.pendingUpdateExpectedVersion).toBe("2.0.0");
+    expect(state.pendingUpdateHandoff).toBe(false);
+    expect(state.updateStatusBanner).toBeNull();
+  });
+
+  it("tracks managed-service handoff updates for reconnect verification", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      result: {
+        status: "skipped",
+        reason: "managed-service-handoff-started",
+      },
+      handoff: { status: "started" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.pendingUpdateExpectedVersion).toBeNull();
+    expect(state.pendingUpdateHandoff).toBe(true);
     expect(state.updateStatusBanner).toBeNull();
   });
 });

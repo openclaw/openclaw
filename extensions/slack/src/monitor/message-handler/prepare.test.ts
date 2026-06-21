@@ -1,4 +1,4 @@
-import fs from "node:fs";
+// Slack tests cover prepare plugin behavior.
 import type { App } from "@slack/bolt";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
@@ -157,14 +158,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   }
 
-  it("queues inbound message system events as untrusted", async () => {
-    const prepared = await prepareWithDefaultCtx(createSlackMessage({}));
+  it("queues inbound message system events without duplicating body text", async () => {
+    const body =
+      "please summarize the deployment, rollback checks, health checks, and follow-up items";
+    const prepared = await prepareWithDefaultCtx(createSlackMessage({ text: body }));
 
     assertPrepared(prepared);
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack DM from Alice: hi", {
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack DM from Alice", {
       sessionKey: prepared.ctxPayload.SessionKey,
       contextKey: "slack:message:D123:1.000",
     });
+    expect(prepared.ctxPayload.BodyForAgent).toContain(body);
   });
 
   it("prepares wildcard open-policy account DMs", async () => {
@@ -1730,9 +1734,15 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     });
 
     history.mockClear();
-    fs.writeFileSync(
+    await saveSessionStore(
       storePath,
-      JSON.stringify({ [prepared.ctxPayload.SessionKey!]: { updatedAt: Date.now() } }, null, 2),
+      {
+        [prepared.ctxPayload.SessionKey!]: {
+          sessionId: "existing-channel-session",
+          updatedAt: Date.now(),
+        },
+      },
+      { skipMaintenance: true },
     );
     const existing = await prepareMessageWith(
       slackCtx,
@@ -1860,9 +1870,15 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       baseSessionKey: route.sessionKey,
       threadId: "200.000",
     });
-    fs.writeFileSync(
+    await saveSessionStore(
       storePath,
-      JSON.stringify({ [threadKeys.sessionKey]: { updatedAt: Date.now() } }, null, 2),
+      {
+        [threadKeys.sessionKey]: {
+          sessionId: "existing-thread-session",
+          updatedAt: Date.now(),
+        },
+      },
+      { skipMaintenance: true },
     );
 
     const replies = vi.fn().mockResolvedValueOnce({
@@ -2063,16 +2079,16 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
   it("preserves Slack thread history when an existing DM session receives a thread reply", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
-    fs.writeFileSync(
+    await saveSessionStore(
       storePath,
-      JSON.stringify(
-        {
-          "agent:main:main": { updatedAt: Date.now() },
-          "agent:main:main:thread:650.000": { updatedAt: Date.now() },
+      {
+        "agent:main:main": { sessionId: "existing-dm-session", updatedAt: Date.now() },
+        "agent:main:main:thread:650.000": {
+          sessionId: "existing-dm-thread-session",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
+      },
+      { skipMaintenance: true },
     );
     const replies = vi
       .fn()

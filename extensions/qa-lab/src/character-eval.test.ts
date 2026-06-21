@@ -1,3 +1,4 @@
+// Qa Lab tests cover character eval plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -89,17 +90,52 @@ function createConcurrencyGate(expectedActive: number) {
   };
 }
 
-function makeSuiteResult(params: { outputDir: string; model: string; transcript: string }) {
+async function makeSuiteResult(params: {
+  outputDir: string;
+  model: string;
+  transcript: string;
+  resultStatus?: "pass" | "fail";
+  summaryStatus?: "pass" | "fail";
+  summaryFailedCount?: number;
+}) {
+  const resultStatus = params.resultStatus ?? "pass";
+  const summaryStatus = params.summaryStatus ?? resultStatus;
+  const summaryFailedCount = params.summaryFailedCount ?? (summaryStatus === "fail" ? 1 : 0);
+  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
+  await fs.mkdir(params.outputDir, { recursive: true });
+  await fs.writeFile(
+    summaryPath,
+    `${JSON.stringify(
+      {
+        counts: {
+          total: 1,
+          passed: summaryFailedCount > 0 ? 0 : 1,
+          failed: summaryFailedCount,
+        },
+        scenarios: [
+          {
+            name: "Character vibes",
+            status: summaryStatus,
+            steps: [],
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
   return {
     outputDir: params.outputDir,
+    evidencePath: path.join(params.outputDir, "qa-evidence.json"),
     reportPath: path.join(params.outputDir, "qa-suite-report.md"),
-    summaryPath: path.join(params.outputDir, "qa-suite-summary.json"),
+    summaryPath,
     report: "# report",
     watchUrl: "http://127.0.0.1:43124",
     scenarios: [
       {
         name: "Character vibes",
-        status: "pass",
+        status: resultStatus,
         steps: [
           {
             name: `transcript for ${params.model}`,
@@ -427,6 +463,33 @@ describe("runQaCharacterEval", () => {
       model: "qwen/qwen3.6-plus",
       error: "model unsupported error leaked into transcript",
     });
+  });
+
+  it("marks candidates failed when the suite summary has failed scenarios", async () => {
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript: "USER Alice: hi\n\nASSISTANT openclaw: outwardly fine",
+        summaryStatus: "fail",
+        summaryFailedCount: 1,
+      }),
+    );
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.5", rank: 1, score: 0.5, summary: "failed" },
+    ]);
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["openai/gpt-5.5"],
+      judgeModels: ["openai/gpt-5.5"],
+      runSuite,
+      runJudge,
+    });
+
+    expect(result.runs[0]?.status).toBe("fail");
+    expect(result.runs[0]?.error).toBeUndefined();
   });
 
   it("marks raw tool failure transcripts as failed output", async () => {
