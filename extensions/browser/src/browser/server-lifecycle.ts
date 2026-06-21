@@ -3,6 +3,7 @@
  */
 import { emitNodeGatewayEvent, getRegisteredNodeIdentity } from "./node-gateway-emitter.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { ensureExtensionBridge, stopExtensionBridge } from "./extension-bridge-manager.js";
@@ -41,12 +42,23 @@ export async function ensureExtensionRelayForProfiles(params: {
   const needsBridge = Object.values(profiles).some((p) => p?.driver === "extension-bridge");
   if (!needsBridge) {return;}
   try {
+    // Resolve the EFFECTIVE gateway auth token (materialize SecretRefs + apply
+    // env-provided tokens) the same way the gateway derives the token it
+    // authenticates against -- and the same way the control relay does
+    // (control-auth.ts) -- instead of the raw config literal, which would HMAC an
+    // unresolved SecretRef or miss an env-only token and miscalibrate the
+    // relay/CDP auth gate.
+    const ensuredGatewayAuth = await ensureGatewayStartupAuth({
+      cfg: getRuntimeConfig(),
+      env: process.env,
+      persist: true,
+    });
     await ensureExtensionBridge({
       onWarn: params.onWarn,
-      // Require the extension to present the configured gateway token (as an HMAC)
+      // Require the extension to present the effective gateway token (as an HMAC)
       // before it can drive the browser or originate turns; undefined on a
       // tokenless loopback gateway, where the bridge stays trusted-local.
-      authToken: getRuntimeConfig().gateway?.auth?.token,
+      authToken: ensuredGatewayAuth.auth.token,
       // Surface the hosting node's identity on /whoami so the side panel knows
       // this bridge is node-hosted (not gateway-only) and fails closed on a
       // dropped node route instead of an unconfined direct gateway turn.
