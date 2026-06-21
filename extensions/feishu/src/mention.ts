@@ -77,29 +77,10 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
 }
 
 /**
- * Format @mention for text message
- */
-function formatMentionForText(target: MentionTarget): string {
-  return `<at user_id="${target.openId}">${target.name}</at>`;
-}
-
-/**
  * Format @mention for card message (lark_md)
  */
 function formatMentionForCard(target: MentionTarget): string {
   return `<at id=${target.openId}></at>`;
-}
-
-/**
- * Build complete message with @mentions (text format)
- */
-export function buildMentionedMessage(targets: MentionTarget[], message: string): string {
-  if (targets.length === 0) {
-    return message;
-  }
-
-  const mentionParts = targets.map((t) => formatMentionForText(t));
-  return `${mentionParts.join(" ")} ${message}`;
 }
 
 /**

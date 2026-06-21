@@ -529,7 +529,7 @@ Notes:
 - `socketMode` is ignored in HTTP Request URL mode.
 - Base `channels.slack.socketMode` settings apply to all Slack accounts unless overridden. Per-account overrides use `channels.slack.accounts.<accountId>.socketMode`; because this is an object override, include every socket tuning field you want for that account.
 - Only `clientPingTimeout` has an OpenClaw default (`15000`). `serverPingTimeout` and `pingPongLoggingEnabled` are passed to the Slack SDK only when configured.
-- Socket Mode restart backoff starts around 2 seconds and caps around 30 seconds. Consecutive recoverable start/start-wait failures stop after 12 attempts; after a successful connection, later recoverable disconnects start a fresh retry cycle. Non-recoverable Slack auth errors such as `invalid_auth`, revoked tokens, or missing scopes fail fast instead of retrying forever.
+- Socket Mode restart backoff starts around 2 seconds and caps around 30 seconds. Recoverable start, start-wait, and disconnect failures retry until the channel stops. Permanent account and credential errors such as invalid auth, revoked tokens, or missing scopes fail fast instead of retrying forever.
 
 ## Manifest and scope checklist
 
@@ -1409,9 +1409,13 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
-- Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
+- Block actions, shortcuts, and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
+  - global shortcuts: callback and actor metadata, routed to the actor's direct session
+  - message shortcuts: callback, actor, channel, thread, and selected-message context
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
+
+Define global or message shortcuts in your Slack app configuration and use any non-empty callback ID. OpenClaw acknowledges matching shortcut payloads, applies the same DM/channel sender policy as other Slack interactions, and queues the sanitized event for the routed agent session. Trigger IDs and response URLs are redacted from agent context.
 
 ## Configuration reference
 

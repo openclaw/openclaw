@@ -4,7 +4,7 @@
  * provider transport hooks.
  */
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -196,6 +196,10 @@ describe("anthropic transport stream", () => {
     guardedFetchMock.mockResolvedValue(createSseResponse());
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("uses the guarded fetch transport for api-key Anthropic requests", async () => {
     const model = makeAnthropicTransportModel({
       headers: { "X-Provider": "anthropic" },
@@ -264,6 +268,81 @@ describe("anthropic transport stream", () => {
     expect(headers.get("api-key")).toBeNull();
     expect(headers.get("x-api-key")).toBeNull();
     expect(headers.get("X-Provider")).toBe("foundry");
+  });
+
+  it("bounds streamed Anthropic error responses without content-length", async () => {
+    const encoder = new TextEncoder();
+    let pullCount = 0;
+    let cancelCount = 0;
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pullCount += 1;
+            if (pullCount === 1) {
+              controller.enqueue(encoder.encode("x".repeat(8 * 1024)));
+              return;
+            }
+            controller.enqueue(encoder.encode("y"));
+          },
+          cancel() {
+            cancelCount += 1;
+          },
+        }),
+        { status: 500 },
+      ),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(`${"x".repeat(400)}…`);
+    expect(pullCount).toBeGreaterThanOrEqual(2);
+    expect(cancelCount).toBe(1);
+  });
+
+  it("aborts stalled streamed Anthropic error responses", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    let cancelReason: unknown;
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode("partial failure detail"));
+          },
+          cancel(reason) {
+            cancelReason = reason;
+          },
+        }),
+        { status: 500 },
+      ),
+    );
+
+    const resultPromise = runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await resultPromise;
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(
+      "Anthropic Messages error response stalled: no data received for 10000ms",
+    );
+    expect(cancelReason).toBeInstanceOf(Error);
+    expect((cancelReason as Error).message).toBe(result.errorMessage);
   });
 
   it("honors ANTHROPIC_BASE_URL when model base URL is blank", async () => {

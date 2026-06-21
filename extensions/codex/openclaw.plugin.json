@@ -152,10 +152,10 @@
             ]
           },
           "url": { "type": "string" },
-          "authToken": { "type": "string" },
+          "authToken": { "type": ["string", "object"] },
           "headers": {
             "type": "object",
-            "additionalProperties": { "type": "string" }
+            "additionalProperties": { "type": ["string", "object"] }
           },
           "clearEnv": {
             "type": "array",
@@ -252,6 +252,14 @@
           }
         }
       }
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "appServer.authToken", "expected": "string" },
+        { "path": "appServer.headers.*", "expected": "string" }
+      ]
     }
   },
   "uiHints": {
@@ -382,6 +390,7 @@
     "appServer.headers": {
       "label": "Headers",
       "help": "Additional headers sent to the WebSocket app-server.",
+      "sensitive": true,
       "advanced": true
     },
     "appServer.clearEnv": {

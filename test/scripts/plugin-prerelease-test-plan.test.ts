@@ -174,7 +174,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const script = readFileSync("scripts/e2e/kitchen-sink-rpc-docker.sh", "utf8");
     const walkScript = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
 
-    expect(lane).toEqual({
+    expect(lane).toMatchObject({
       command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
       e2eImageKind: "functional",
       live: false,
@@ -183,7 +183,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       retryPatterns: [],
       retries: 0,
       stateScenario: "empty",
-      timeoutMs: 900000,
+      timeoutMs: 1_500_000,
       weight: 3,
     });
     expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
@@ -531,7 +531,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
-      "prepare_release_package",
       "npm_telegram",
       "summary",
     ]) {

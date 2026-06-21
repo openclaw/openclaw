@@ -14,7 +14,6 @@ import {
   runWikiStatus,
 } from "./cli.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
-import { resolveMemoryWikiImportRunRecordPath } from "./import-runs-state.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import type { MemoryWikiDoctorReport, MemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -29,6 +28,10 @@ const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
 let stdoutWriteMock: ReturnType<typeof vi.fn>;
+
+function resolveLegacyImportRunRecordPath(vaultRoot: string, runId: string): string {
+  return path.join(vaultRoot, ".openclaw-wiki", "import-runs", `${runId}.json`);
+}
 
 describe("memory-wiki cli", () => {
   beforeAll(async () => {
@@ -636,7 +639,7 @@ cli note
     expect(applied.runId).toMatch(/^chatgpt-[a-f0-9]{12}$/u);
     expect(applied.createdCount).toBe(1);
     await expect(
-      fs.stat(resolveMemoryWikiImportRunRecordPath(rootDir, applied.runId ?? "")),
+      fs.stat(resolveLegacyImportRunRecordPath(rootDir, applied.runId ?? "")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
       (entry) => entry !== "index.md",

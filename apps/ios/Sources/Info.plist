@@ -78,6 +78,8 @@
 	<string>OpenClaw uses on-device speech recognition for talk mode and voice wake.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>OpenClawAppGroupIdentifier</key>
+	<string>$(OPENCLAW_APP_GROUP_ID)</string>
 	<key>OpenClawCanonicalVersion</key>
 	<string>$(OPENCLAW_IOS_VERSION)</string>
 	<key>OpenClawPushAPNsEnvironment</key>

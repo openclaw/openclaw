@@ -219,6 +219,24 @@ describe("resolveNpmChannelTag", () => {
     );
   });
 
+  it("cancels public registry HTTP failure bodies", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const fetch = vi.fn(
+      async () => ({ ok: false, status: 503, body: { cancel } }) as unknown as Response,
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 503",
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to latest when beta is older", async () => {
     versionByTag.beta = "1.0.0-beta.1";
     versionByTag.latest = "1.0.1-1";

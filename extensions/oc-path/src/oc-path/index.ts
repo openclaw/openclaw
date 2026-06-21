@@ -24,15 +24,6 @@
  * @module @openclaw/oc-path
  */
 
-/**
- * SDK version this build of `@openclaw/oc-path` exposes. Bumped on
- * every breaking change to AST shape, OcPath syntax, or universal
- * verbs (`resolveOcPath`, `setOcPath`, `findOcPaths`, `parseXxx`,
- * `emitXxx`). Plugin packs that depend on the substrate declare the
- * version they were authored against and the host warns on mismatch.
- */
-export const SDK_VERSION = "0.1.0";
-
 // AST types
 export type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult, MdAst } from "./ast.js";
 export type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
@@ -65,7 +56,7 @@ export {
 
 // `evaluatePredicate`, `getPathLayout`, `parseOrdinalSeg`,
 // `parsePredicateSeg`, `parseUnionSeg`, `quoteSeg`, `unquoteSeg`,
-// `repackPath`, `resolvePositionalSeg`, `splitRespectingBrackets`
+// `resolvePositionalSeg`, `splitRespectingBrackets`
 // were exported from earlier prototypes. They're substrate-internal
 // helpers — used by `find.ts`, the per-kind resolvers, and the parser
 // itself, but not part of the upstream-portable public surface.

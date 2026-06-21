@@ -124,6 +124,23 @@ afterEach(() => {
 });
 
 describe("scripts/android-release-signing.mjs", () => {
+  it.each([
+    ["--mode"],
+    ["--mode", "--manifest"],
+    ["--manifest"],
+    ["--workspace", "--mode"],
+    ["--materialized-dir", "--mode"],
+    ["--keystore", "--mode"],
+    ["--properties", "--mode"],
+  ])("rejects missing values for %s before release signing work", (...args) => {
+    const result = runNode(args);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
+    expect(result.stderr).not.toContain("ENOENT");
+    expect(result.stdout).toBe("");
+  });
+
   it("documents the canonical Android release signing plan", () => {
     const result = runNode(["--mode", "plan"]);
 

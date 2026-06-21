@@ -19,7 +19,6 @@ import {
   createRunningTaskRun as createRunningTaskRunOrNull,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  retryBlockedFlowAsQueuedTaskRun,
   runTaskInFlow,
   runTaskInFlowForOwner,
   setDetachedTaskDeliveryStatusByRunId,
@@ -378,75 +377,6 @@ describe("task-executor", () => {
 
       expect(created.parentFlowId).toBeUndefined();
       expect(listTaskFlowRecords()).toStrictEqual([]);
-    });
-  });
-
-  it("records blocked metadata on one-task flows and reuses the same flow for queued retries", async () => {
-    await withTaskExecutorStateDir(async () => {
-      const created = createRunningTaskRun({
-        runtime: "acp",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        requesterOrigin: {
-          channel: "notifychat",
-          to: "notifychat:123",
-        },
-        childSessionKey: "agent:codex:acp:child",
-        runId: "run-executor-blocked",
-        task: "Patch file",
-        startedAt: 10,
-        deliveryStatus: "pending",
-      });
-
-      completeTaskRunByRunId({
-        runId: "run-executor-blocked",
-        endedAt: 40,
-        lastEventAt: 40,
-        terminalOutcome: "blocked",
-        terminalSummary: "Writable session required.",
-      });
-
-      const blockedTask = getTaskById(created.taskId);
-      expect(blockedTask?.taskId).toBe(created.taskId);
-      expect(blockedTask?.status).toBe("succeeded");
-      expect(blockedTask?.terminalOutcome).toBe("blocked");
-      expect(blockedTask?.terminalSummary).toBe("Writable session required.");
-      const parentFlowId = expectParentFlowId(created);
-      const blockedFlow = getTaskFlowById(parentFlowId);
-      expect(blockedFlow?.flowId).toBe(parentFlowId);
-      expect(blockedFlow?.status).toBe("blocked");
-      expect(blockedFlow?.blockedTaskId).toBe(created.taskId);
-      expect(blockedFlow?.blockedSummary).toBe("Writable session required.");
-      expect(blockedFlow?.endedAt).toBe(40);
-
-      const retried = retryBlockedFlowAsQueuedTaskRun({
-        flowId: parentFlowId,
-        runId: "run-executor-retry",
-        childSessionKey: "agent:codex:acp:retry-child",
-      });
-
-      expect(retried.found).toBe(true);
-      expect(retried.retried).toBe(true);
-      if (!retried.retried) {
-        throw new Error("Expected blocked flow retry");
-      }
-      if (!retried.previousTask || !retried.task) {
-        throw new Error("Expected retry result payload");
-      }
-      expect(retried.previousTask.taskId).toBe(created.taskId);
-      expect(retried.task.parentFlowId).toBe(parentFlowId);
-      expect(retried.task.parentTaskId).toBe(created.taskId);
-      expect(retried.task.status).toBe("queued");
-      expect(retried.task.runId).toBe("run-executor-retry");
-      const queuedFlow = getTaskFlowById(parentFlowId);
-      expect(queuedFlow?.flowId).toBe(parentFlowId);
-      expect(queuedFlow?.status).toBe("queued");
-      expect(findLatestTaskForFlowId(parentFlowId)?.runId).toBe("run-executor-retry");
-      const original = findTaskByRunId("run-executor-blocked");
-      expect(original?.taskId).toBe(created.taskId);
-      expect(original?.status).toBe("succeeded");
-      expect(original?.terminalOutcome).toBe("blocked");
-      expect(original?.terminalSummary).toBe("Writable session required.");
     });
   });
 

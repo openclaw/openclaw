@@ -57,7 +57,12 @@ function parseMemoryMiB(raw) {
 }
 
 function parseCpuPercent(raw) {
-  const parsed = Number(String(raw || "").replace(/%$/u, ""));
+  const text = String(raw ?? "").trim();
+  const valueText = text.endsWith("%") ? text.slice(0, -1).trim() : text;
+  if (!NON_NEGATIVE_DECIMAL_PATTERN.test(valueText)) {
+    return undefined;
+  }
+  const parsed = Number(valueText);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

@@ -154,7 +154,8 @@ See [Web tools](/tools/web).
 
 ### 5) Web fetch tool (Firecrawl)
 
-`web_fetch` can call **Firecrawl** when an API key is present:
+`web_fetch` can call **Firecrawl** with keyless starter access. Add an API key
+for higher limits:
 
 - `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webFetch.apiKey`
 

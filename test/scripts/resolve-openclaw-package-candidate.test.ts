@@ -5,10 +5,13 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
+  assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
+  cleanPackedOpenClawTarballsForTest,
   downloadUrl,
   findSingleTarballForTest,
   loadTrustedPackageSource,
@@ -18,8 +21,13 @@ import {
   readPackageBuildSourceSha,
   resolveNpmPackageCandidatePackRunner,
   runCommandForTest,
+  signalChildProcessTree,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 const tempDirs: string[] = [];
 
@@ -212,6 +220,75 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
+  it("signals Windows package runner process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    signalChildProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows package runner process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("keeps npm pack filenames inside the package candidate output directory", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
     tempDirs.push(dir);
@@ -261,6 +338,23 @@ describe("resolve-openclaw-package-candidate", () => {
         ),
       ).rejects.toThrow("npm pack reported unsafe OpenClaw tarball filename");
     }
+  });
+
+  it("cleans stale package tarballs before npm fallback scanning", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-stale-"));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, "openclaw-9999.1.1.tgz"), "stale");
+    await writeFile(path.join(dir, "openclaw-C:evil.tgz"), "unsafe");
+
+    await cleanPackedOpenClawTarballsForTest(dir);
+    await writeFile(path.join(dir, "openclaw-2026.6.17.tgz"), "current");
+
+    await expect(
+      moveNewestPackedTarballForTest(dir, "npm notice\n", "openclaw-current.tgz"),
+    ).resolves.toBe(path.join(dir, "openclaw-current.tgz"));
+    await expect(missing(path.join(dir, "openclaw-9999.1.1.tgz"))).resolves.toBe(true);
+    await expect(readFile(path.join(dir, "openclaw-C:evil.tgz"), "utf8")).resolves.toBe("unsafe");
+    await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe("current");
   });
 
   it("bounds captured command stderr tails on failures", async () => {
@@ -330,6 +424,63 @@ describe("resolve-openclaw-package-candidate", () => {
         process.kill(childPid, "SIGKILL");
       }
     }
+  });
+
+  it("rejects timed-out package runner commands when descendants exit cleanly", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-runner-timeout-clean-"));
+    tempDirs.push(dir);
+    const childPidPath = path.join(dir, "child.pid");
+    const readyPath = path.join(dir, "child.ready");
+    const cleanupPath = path.join(dir, "child.cleanup");
+
+    const childScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {",
+      "  fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_CLEANUP, 'clean');",
+      "  setTimeout(() => process.exit(0), 75);",
+      "});",
+      "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_READY, 'ready');",
+      "setInterval(() => {}, 1000);",
+    ].join("");
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {`,
+      "  stdio: 'ignore',",
+      "  env: {",
+      "    ...process.env,",
+      "    OPENCLAW_TEST_CHILD_CLEANUP: process.env.OPENCLAW_TEST_CHILD_CLEANUP,",
+      "    OPENCLAW_TEST_CHILD_READY: process.env.OPENCLAW_TEST_CHILD_READY,",
+      "  },",
+      "});",
+      "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+      "process.on('SIGTERM', () => process.exit(0));",
+      "setInterval(() => {}, 1000);",
+    ].join("");
+
+    const startedAt = Date.now();
+    const timeoutAssertion = expect(
+      runCommandForTest(process.execPath, ["-e", parentScript], {
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_CHILD_CLEANUP: cleanupPath,
+          OPENCLAW_TEST_CHILD_PID: childPidPath,
+          OPENCLAW_TEST_CHILD_READY: readyPath,
+        },
+        killAfterMs: 1000,
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(/timed out after 1000ms/u);
+
+    await waitForFile(readyPath, 2_000);
+    await timeoutAssertion;
+
+    expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
+    expect(Date.now() - startedAt).toBeLessThan(1_700);
   });
 
   it("forwards external termination to package runner process groups", async () => {
@@ -542,7 +693,7 @@ describe("resolve-openclaw-package-candidate", () => {
           status: 200,
         });
       },
-      lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+      lookupHost: lookupAddresses([{ address: "203.0.113.8", family: 4 }]),
       maxBytes: 3,
       trustedSource,
     });
@@ -562,7 +713,44 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(
       downloadUrl("https://packages.internal:8443/other/openclaw.tgz", target, {
         fetchImpl: unexpectedFetch,
-        lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+        lookupHost: lookupAddresses([{ address: "203.0.113.8", family: 4 }]),
+        trustedSource,
+      }),
+    ).rejects.toThrow("path is not allowed by trusted package source enterprise-artifactory");
+  });
+
+  it("matches trusted package_url path prefixes on path segment boundaries", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    const trustedSource = {
+      allowPrivateNetwork: true,
+      hosts: ["packages.internal"],
+      id: "enterprise-artifactory",
+      pathPrefixes: ["/artifactory/openclaw"],
+      ports: [8443],
+      redirectHosts: ["packages.internal"],
+    };
+    const requestedUrls: string[] = [];
+
+    await downloadUrl("https://packages.internal:8443/artifactory/openclaw/pkg.tgz", target, {
+      fetchImpl: async (url: URL) => {
+        requestedUrls.push(url.toString());
+        return new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-length": "3" },
+          status: 200,
+        });
+      },
+      lookupHost: lookupAddresses([{ address: "203.0.113.8", family: 4 }]),
+      maxBytes: 3,
+      trustedSource,
+    });
+
+    expect(requestedUrls).toEqual(["https://packages.internal:8443/artifactory/openclaw/pkg.tgz"]);
+    await expect(
+      downloadUrl("https://packages.internal:8443/artifactory/openclaw-malicious/pkg.tgz", target, {
+        fetchImpl: unexpectedFetch,
+        lookupHost: lookupAddresses([{ address: "203.0.113.8", family: 4 }]),
         trustedSource,
       }),
     ).rejects.toThrow("path is not allowed by trusted package source enterprise-artifactory");
@@ -592,6 +780,60 @@ describe("resolve-openclaw-package-candidate", () => {
         trustedSource,
       }),
     ).rejects.toThrow("is not allowed by trusted package source enterprise-artifactory");
+  });
+
+  it("does not forward trusted package auth headers to redirect hosts", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    const previousToken = process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN;
+    process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN = "token-123";
+    const trustedSource = {
+      allowPrivateNetwork: true,
+      auth: { type: "bearer" },
+      hosts: ["packages.internal"],
+      id: "enterprise-artifactory",
+      pathPrefixes: ["/artifactory/openclaw/"],
+      ports: [8443],
+      redirectHosts: ["packages.internal", "mirror.internal"],
+    };
+    const requestHeaders: Array<Record<string, string> | undefined> = [];
+
+    try {
+      await downloadUrl(
+        "https://packages.internal:8443/artifactory/openclaw/openclaw.tgz",
+        target,
+        {
+          fetchImpl: async (_url: URL, init?: RequestInit) => {
+            requestHeaders.push(init?.headers as Record<string, string> | undefined);
+            if (requestHeaders.length === 1) {
+              return new Response(null, {
+                headers: {
+                  location: "https://mirror.internal:8443/artifactory/openclaw/openclaw.tgz",
+                },
+                status: 302,
+              });
+            }
+            return new Response(new Uint8Array([4, 5, 6]), {
+              headers: { "content-length": "3" },
+              status: 200,
+            });
+          },
+          lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+          maxBytes: 3,
+          trustedSource,
+        },
+      );
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN;
+      } else {
+        process.env.OPENCLAW_TRUSTED_PACKAGE_TOKEN = previousToken;
+      }
+    }
+
+    expect(requestHeaders).toEqual([{ authorization: "Bearer token-123" }, undefined]);
+    await expect(readFile(target)).resolves.toEqual(Buffer.from([4, 5, 6]));
   });
 
   it("validates redirects for package_url downloads", async () => {
@@ -726,6 +968,50 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(bodyCancelled).toBe(true);
   });
 
+  it("rejects unsafe decimal package_url content-length values before reading", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    let readStarted = false;
+    let bodyCancelled = false;
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () =>
+          ({
+            body: {
+              cancel() {
+                bodyCancelled = true;
+                return Promise.resolve();
+              },
+              getReader() {
+                return {
+                  cancel() {
+                    bodyCancelled = true;
+                    return Promise.resolve();
+                  },
+                  read() {
+                    readStarted = true;
+                    return new Promise(() => {});
+                  },
+                  releaseLock() {},
+                };
+              },
+            },
+            headers: new Headers({ "content-length": "9007199254740993" }),
+            status: 200,
+          }) as Response,
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        maxBytes: 1024,
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow(/exceeds maximum download size/u);
+    expect(readStarted).toBe(false);
+    expect(bodyCancelled).toBe(true);
+    await expect(missing(target)).resolves.toBe(true);
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
+  });
+
   it("bounds package_url downloads and writes completed files atomically", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
@@ -758,6 +1044,74 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
+  it("times out stalled package_url response bodies", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-timeout-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    let bodyCancelled = false;
+    const startedAt = Date.now();
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () =>
+          new Response(
+            new ReadableStream({
+              pull() {
+                return new Promise(() => {});
+              },
+              cancel() {
+                bodyCancelled = true;
+              },
+            }),
+            { status: 200 },
+          ),
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow(
+      "package_url download timed out after 25ms: https://packages.example/openclaw.tgz",
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(bodyCancelled).toBe(true);
+    await expect(missing(target)).resolves.toBe(true);
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
+  });
+
+  it("streams non-decimal package_url content-length values through the download cap", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    let readStarted = false;
+    let bodyCancelled = false;
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () => {
+          const body = new ReadableStream({
+            pull(controller) {
+              readStarted = true;
+              controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+            },
+            cancel() {
+              bodyCancelled = true;
+            },
+          });
+          return new Response(body, {
+            headers: { "content-length": "1e3" },
+            status: 200,
+          });
+        },
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        maxBytes: 3,
+      }),
+    ).rejects.toThrow("package_url exceeds maximum download size");
+    expect(readStarted).toBe(true);
+    expect(bodyCancelled).toBe(true);
+    await expect(missing(target)).resolves.toBe(true);
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
+  });
+
   it("reads package source metadata from package artifacts", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-"));
     tempDirs.push(dir);
@@ -783,6 +1137,61 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
+  it("normalizes artifact package source SHAs before workflow output", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-sha-"));
+    tempDirs.push(dir);
+    await writeFile(
+      path.join(dir, "package-candidate.json"),
+      JSON.stringify({
+        packageSourceSha: "66CE632B9B7C5C7FDD3E66C739687D51638AD6E2",
+      }),
+    );
+
+    await expect(readArtifactPackageCandidateMetadata(dir)).resolves.toEqual({
+      packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
+    });
+  });
+
+  it("normalizes whitespace-only artifact package source SHAs to absent", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-empty-sha-"));
+    tempDirs.push(dir);
+    await writeFile(
+      path.join(dir, "package-candidate.json"),
+      JSON.stringify({
+        packageSourceSha: " \r\n ",
+      }),
+    );
+
+    await expect(readArtifactPackageCandidateMetadata(dir)).resolves.toEqual({
+      packageSourceSha: "",
+    });
+  });
+
+  it("rejects malformed artifact package source SHAs", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-bad-sha-"));
+    tempDirs.push(dir);
+    await writeFile(
+      path.join(dir, "package-candidate.json"),
+      JSON.stringify({
+        packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2\r\nsource=main",
+      }),
+    );
+
+    await expect(readArtifactPackageCandidateMetadata(dir)).rejects.toThrow(
+      "artifact package-candidate.json packageSourceSha must be a 40-character commit SHA",
+    );
+  });
+
+  it("accepts uppercase package artifact SHA-256 metadata", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-sha-"));
+    tempDirs.push(dir);
+    const file = path.join(dir, "openclaw.tgz");
+    await writeFile(file, "openclaw package bytes");
+    const digest = "ae0b98d18c80dbf9447fa48560a139195595db2d337ad33421ca2183b0dd3e99";
+
+    await expect(assertExpectedSha256ForTest(file, digest.toUpperCase())).resolves.toBe(digest);
+  });
+
   it("rejects source artifact scans that exceed the filesystem entry limit", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-scan-"));
     tempDirs.push(dir);
@@ -803,9 +1212,14 @@ describe("resolve-openclaw-package-candidate", () => {
     await writeFile(path.join(dir, "openclaw-a.tgz"), "a");
     await writeFile(path.join(dir, "nested.tar.gz"), "b");
 
-    await expect(findSingleTarballForTest(dir)).rejects.toThrow(
-      "source=artifact requires exactly one .tgz",
-    );
+    const error = await findSingleTarballForTest(dir).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("source=artifact requires exactly one .tgz");
+    expect(message).toContain("nested.tar.gz");
+    expect(message).toContain("openclaw-a.tgz");
+    expect(message).not.toContain(path.join(dir, "nested.tar.gz"));
+    expect(message).not.toContain(path.join(dir, "openclaw-a.tgz"));
   });
 
   it("reads the source SHA from packed npm build metadata", async () => {

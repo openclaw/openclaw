@@ -21,6 +21,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -66,7 +67,6 @@ import {
 } from "./embedding-providers.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { toSafeImportPath } from "./import-specifier.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
@@ -1770,6 +1770,28 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
   diagnostics.push(...append);
 }
 
+function pushPluginValidationError(params: {
+  registry: PluginRegistry;
+  seenIds: Map<string, PluginRecord["origin"]>;
+  pluginId: string;
+  origin: PluginRecord["origin"];
+  record: PluginRecord;
+  message: string;
+}) {
+  params.record.status = "error";
+  params.record.error = params.message;
+  params.record.failedAt = new Date();
+  params.record.failurePhase = "validation";
+  params.registry.plugins.push(params.record);
+  params.seenIds.set(params.pluginId, params.origin);
+  params.registry.diagnostics.push({
+    level: "error",
+    pluginId: params.record.id,
+    source: params.record.source,
+    message: params.record.error,
+  });
+}
+
 function maybeThrowOnPluginLoadError(
   registry: PluginRegistry,
   throwOnLoadError: boolean | undefined,
@@ -2193,20 +2215,15 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         manifestRecord.channels.length > 0 &&
         candidate.origin !== "bundled" &&
         !trustedLocalScopedChannelSetupImport;
-      const pushPluginLoadError = (message: string) => {
-        record.status = "error";
-        record.error = message;
-        record.failedAt = new Date();
-        record.failurePhase = "validation";
-        registry.plugins.push(record);
-        seenIds.set(pluginId, candidate.origin);
-        registry.diagnostics.push({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: record.error,
+      const pushPluginLoadError = (message: string) =>
+        pushPluginValidationError({
+          registry,
+          seenIds,
+          pluginId,
+          origin: candidate.origin,
+          record,
+          message,
         });
-      };
       if (blockUntrustedLocalScopedChannelSetupImport) {
         record.status = "disabled";
         record.error =
@@ -3160,20 +3177,15 @@ export async function loadOpenClawPluginCliRegistry(
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;
     record.configJsonSchema = manifestRecord.configSchema;
-    const pushPluginLoadError = (message: string) => {
-      record.status = "error";
-      record.error = message;
-      record.failedAt = new Date();
-      record.failurePhase = "validation";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
+    const pushPluginLoadError = (message: string) =>
+      pushPluginValidationError({
+        registry,
+        seenIds,
+        pluginId,
+        origin: candidate.origin,
+        record,
+        message,
       });
-    };
 
     if (!enableState.enabled) {
       record.status = "disabled";

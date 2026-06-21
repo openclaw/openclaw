@@ -113,10 +113,7 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
-type DiscordReplySkipReason =
-  | "aborted before delivery"
-  | "reasoning payload"
-  | "internal-only payload";
+type DiscordReplySkipReason = "aborted before delivery" | "internal-only payload";
 
 export function formatDiscordReplySkip(params: {
   kind: "tool" | "block" | "final";
@@ -609,18 +606,6 @@ async function processDiscordMessageInner(
       );
       return null;
     }
-    if (payload.isReasoning) {
-      // Reasoning/thinking payloads should not be delivered to Discord.
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "reasoning payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
-      return null;
-    }
     if (draftPreview.draftStream && draftPreview.isProgressMode && info.kind === "block") {
       const reply = resolveSendableOutboundReplyParts(payload);
       if (!reply.hasMedia && !payload.isError) {
@@ -652,18 +637,6 @@ async function processDiscordMessageInner(
       return { visibleReplySent: false };
     }
     const isFinal = info.kind === "final";
-    if (payload.isReasoning) {
-      // Reasoning/thinking payloads should not be delivered to Discord.
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "reasoning payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
-      return { visibleReplySent: false };
-    }
     if (
       isFinal &&
       !options?.allowFallbackOnlyToolWarning &&

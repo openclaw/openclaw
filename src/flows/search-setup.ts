@@ -353,6 +353,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
 
 type SetupSearchOptions = {
   quickstartDefaults?: boolean;
+  preserveDisabledSearchState?: boolean;
   secretInputMode?: SecretInputMode;
 };
 
@@ -388,7 +389,9 @@ async function finalizeSearchProviderSetup(params: {
     }
     next = installed.cfg;
   }
-  next = preserveDisabledState(params.originalConfig, next);
+  if (params.opts?.preserveDisabledSearchState !== false) {
+    next = preserveDisabledState(params.originalConfig, next);
+  }
   if (!params.entry.runSetup) {
     return next;
   }
@@ -399,7 +402,9 @@ async function finalizeSearchProviderSetup(params: {
     quickstartDefaults: params.opts?.quickstartDefaults,
     secretInputMode: params.opts?.secretInputMode,
   });
-  return preserveDisabledState(params.originalConfig, next);
+  return params.opts?.preserveDisabledSearchState === false
+    ? next
+    : preserveDisabledState(params.originalConfig, next);
 }
 
 export async function runSearchSetupFlow(
@@ -686,16 +691,20 @@ export async function runSearchSetupFlow(
 
   const search: SearchConfig = {
     ...config.tools?.web?.search,
+    enabled: false,
     provider: choice,
   };
-  return {
-    ...config,
-    tools: {
-      ...config.tools,
-      web: {
-        ...config.tools?.web,
-        search,
+  return applySearchProviderSelectionConfig(
+    {
+      ...config,
+      tools: {
+        ...config.tools,
+        web: {
+          ...config.tools?.web,
+          search,
+        },
       },
     },
-  };
+    entry,
+  );
 }

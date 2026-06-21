@@ -548,6 +548,108 @@ describe("handleSlackMessageAction", () => {
       }),
     ).rejects.toThrow(/fileId/i);
   });
+
+  it("defaults member-info userId to the inbound sender when omitted", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "member-info",
+        cfg: {},
+        params: {},
+        accountId: "OPS",
+        requesterAccountId: "ops",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: " Slack " },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U123" }),
+      expect.any(Object),
+    );
+  });
+
+  it("defaults member-info userId through the configured default Slack account", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "member-info",
+        cfg: { channels: { slack: { defaultAccount: "ops", accounts: { ops: {} } } } },
+        params: {},
+        requesterAccountId: "OPS",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "slack" },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U123" }),
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    ["has no inbound sender", { toolContext: { currentChannelProvider: "slack" } }],
+    ["has no source provider", { requesterSenderId: "U123" }],
+    [
+      "has no source account",
+      {
+        accountId: "default",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "slack" },
+      },
+    ],
+    [
+      "targets another Slack account",
+      {
+        accountId: "other",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "slack" },
+      },
+    ],
+    [
+      "comes from another provider",
+      { requesterSenderId: "U123", toolContext: { currentChannelProvider: "telegram" } },
+    ],
+  ])("rejects member-info without userId when the request %s", async (_label, context) => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: { action: "member-info", cfg: {}, params: {}, ...context } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/member-info requires a userId/i);
+  });
+
+  it("prefers an explicit member-info userId over the inbound sender", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "member-info",
+        cfg: {},
+        params: { userId: "U999" },
+        accountId: "other",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "telegram" },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U999" }),
+      expect.any(Object),
+    );
+  });
 });
 
 describe("extractSlackToolSend", () => {

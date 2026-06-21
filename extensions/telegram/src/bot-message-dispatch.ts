@@ -137,7 +137,6 @@ import {
   buildTelegramNonInterruptingReplyFenceKey,
   buildTelegramReplyFenceLaneKey,
   endTelegramReplyFence,
-  getTelegramReplyFenceSizeForTests,
   isTelegramReplyFenceSuperseded,
   releaseTelegramReplyFenceAbortController,
   resetTelegramReplyFenceForTests,
@@ -146,13 +145,14 @@ import {
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
 
-export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
+export { resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+const DRAFT_MIN_INITIAL_DELAY_MS = 5_000;
 
 type DraftPartialTextUpdate = {
   text: string;
@@ -467,6 +467,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
 function renderTelegramProgressDraftPreview(
   text: string,
   lines: readonly ChannelProgressDraftCompositorLine[],
+  richMessages: boolean,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   const [heading] = trimmed.split(/\r?\n/u, 1);
@@ -474,9 +475,13 @@ function renderTelegramProgressDraftPreview(
   const htmlParts = heading?.trim()
     ? [`<b>${escapeTelegramProgressHtml(heading.trim())}</b>`, ...renderedLines]
     : renderedLines;
+  const html = htmlParts.join("<br>");
+  if (!richMessages) {
+    return { text: html, parseMode: "HTML" };
+  }
   return {
     text: trimmed,
-    richMessage: buildTelegramRichHtml(htmlParts.join("<br>"), { skipEntityDetection: true }),
+    richMessage: buildTelegramRichHtml(html, { skipEntityDetection: true }),
   };
 }
 
@@ -1001,6 +1006,7 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           richMessages: telegramCfg.richMessages,
           minInitialChars: draftMinInitialChars,
+          minInitialDelayMs: draftMinInitialChars > 0 ? DRAFT_MIN_INITIAL_DELAY_MS : undefined,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
             if (superseded.retain) {
@@ -1075,7 +1081,11 @@ export const dispatchTelegramMessage = async ({
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
       answerLane.stream?.updatePreview(
-        renderTelegramProgressDraftPreview(streamText, options?.lines ?? []),
+        renderTelegramProgressDraftPreview(
+          streamText,
+          options?.lines ?? [],
+          telegramCfg.richMessages === true,
+        ),
       );
       if (options?.flush) {
         await answerLane.stream?.flush();
@@ -1356,7 +1366,7 @@ export const dispatchTelegramMessage = async ({
       recomputeQueuedAnswerBlockRotations();
     }
   };
-  const updateDraftFromPartial = (lane: DraftLaneState, update: DraftPartialTextUpdate) => {
+  const updateDraftFromPartial = async (lane: DraftLaneState, update: DraftPartialTextUpdate) => {
     const laneStream = lane.stream;
     if (!laneStream || !update.text) {
       return;
@@ -1368,6 +1378,7 @@ export const dispatchTelegramMessage = async ({
     }
     if (lane === answerLane) {
       if (streamMode === "progress") {
+        await progressDraft.noteActivity();
         return;
       }
       resetAnswerToolProgressDraft();
@@ -1394,7 +1405,7 @@ export const dispatchTelegramMessage = async ({
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
       }
-      updateDraftFromPartial(lanes[segment.lane], segment.update);
+      await updateDraftFromPartial(lanes[segment.lane], segment.update);
     }
   };
   const flushDraftLane = async (lane: DraftLaneState) => {
@@ -2110,8 +2121,9 @@ export const dispatchTelegramMessage = async ({
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
                         if (verboseProgressActive()) {
-                          // Durable lane owns tool payloads: send standalone instead
-                          // of diverting into the draft, which is discarded at final.
+                          if (streamMode === "progress") {
+                            await rotateAnswerLaneAfterToolProgress();
+                          }
                           if (
                             await sendPayload(
                               applyTextToPayload(effectivePayload, segment.update.text),
@@ -2122,10 +2134,6 @@ export const dispatchTelegramMessage = async ({
                           continue;
                         }
                         if (streamMode === "progress" && answerLane.stream) {
-                          // Progress-mode streams render tool status in the
-                          // live draft. Do not also emit text-only tool output
-                          // as answer text, or simple commands duplicate and
-                          // restart the progress draft.
                           continue;
                         }
                         await prepareAnswerLaneForToolProgress();
@@ -2266,6 +2274,9 @@ export const dispatchTelegramMessage = async ({
                         await flushBufferedFinalAnswer();
                       }
                       return;
+                    }
+                    if (streamMode === "progress" && info.kind === "tool") {
+                      await rotateAnswerLaneAfterToolProgress();
                     }
                     const delivered = await sendPayload(effectivePayload, {
                       durable: info.kind === "final",

@@ -181,6 +181,10 @@ function resolveHarnessAuthProfileSelection(params: {
     };
   }
 
+  if (!params.allowHarnessAuthProfileForwarding) {
+    return { authProfileProvider: params.authProfileProvider };
+  }
+
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
     provider: params.provider,
     authProfileProvider: params.authProfileProvider,
@@ -689,6 +693,7 @@ export function runAgentAttempt(params: {
         currentChannelId: params.runContext.currentChannelId,
         currentThreadTs: params.runContext.currentThreadTs,
         currentInboundAudio: params.runContext.currentInboundAudio,
+        approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
@@ -783,6 +788,7 @@ export function runAgentAttempt(params: {
     fastMode: params.fastMode,
     verboseLevel: params.resolvedVerboseLevel,
     bashElevated: params.opts.bashElevated,
+    approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
@@ -981,9 +987,6 @@ export function emitAcpLifecycleError(params: {
     },
   });
 }
-
-/** @deprecated use formatAcpErrorChain from src/acp/runtime/errors.ts */
-export const formatAcpLifecycleError = formatAcpErrorChain;
 
 export function emitAcpAssistantDelta(params: { runId: string; text: string; delta: string }) {
   emitAgentEvent({

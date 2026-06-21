@@ -7,7 +7,10 @@ import {
   type MSTeamsMessageHandlerDeps,
   registerMSTeamsHandlers,
 } from "./monitor-handler.js";
-import { installMSTeamsTestRuntime } from "./monitor-handler.test-helpers.js";
+import {
+  createActivityHandler,
+  installMSTeamsTestRuntime,
+} from "./monitor-handler.test-helpers.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const runtimeApiMockState = vi.hoisted(() => ({
@@ -67,33 +70,6 @@ function createDeps(): MSTeamsMessageHandlerDeps {
   };
 }
 
-function createActivityHandler() {
-  const messageHandlers: Array<(context: unknown, next: () => Promise<void>) => Promise<void>> = [];
-  const run = vi.fn(async (context: unknown) => {
-    const activityType = (context as MSTeamsTurnContext).activity?.type;
-    if (activityType !== "message") {
-      return;
-    }
-    for (const handler of messageHandlers) {
-      await handler(context, async () => {});
-    }
-  });
-  const handler: MSTeamsActivityHandler & {
-    run: NonNullable<MSTeamsActivityHandler["run"]>;
-  } = {
-    onMessage: (nextHandler) => {
-      messageHandlers.push(nextHandler);
-      return handler;
-    },
-    onMembersAdded: () => handler,
-    onReactionsAdded: () => handler,
-    onReactionsRemoved: () => handler,
-    run,
-  };
-
-  return { handler, run };
-}
-
 async function runAdaptiveCardInvoke(
   registered: MSTeamsActivityHandler & {
     run: NonNullable<MSTeamsActivityHandler["run"]>;
@@ -146,7 +122,8 @@ describe("msteams adaptive card action invoke", () => {
 
   it("forwards adaptive card submitted data to the agent as message text", async () => {
     const deps = createDeps();
-    const { handler, run } = createActivityHandler();
+    const run = vi.fn(async () => undefined);
+    const handler = createActivityHandler(run);
     const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
@@ -178,7 +155,7 @@ describe("msteams adaptive card action invoke", () => {
 
   it("routes Teams imBack actions as the submitted message text", async () => {
     const deps = createDeps();
-    const { handler } = createActivityHandler();
+    const handler = createActivityHandler();
     const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
@@ -197,7 +174,7 @@ describe("msteams adaptive card action invoke", () => {
 
   it("routes typed command submit actions as command text", async () => {
     const deps = createDeps();
-    const { handler } = createActivityHandler();
+    const handler = createActivityHandler();
     const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
@@ -216,7 +193,7 @@ describe("msteams adaptive card action invoke", () => {
 
   it("preserves legacy presentation submit values as structured data", async () => {
     const deps = createDeps();
-    const { handler } = createActivityHandler();
+    const handler = createActivityHandler();
     const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
@@ -236,7 +213,7 @@ describe("msteams adaptive card action invoke", () => {
 
   it("preserves arbitrary submitted data with a value field", async () => {
     const deps = createDeps();
-    const { handler } = createActivityHandler();
+    const handler = createActivityHandler();
     const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
@@ -256,7 +233,7 @@ describe("msteams adaptive card action invoke", () => {
 
   it("preserves generic Action.Execute verb metadata", async () => {
     const deps = createDeps();
-    const { handler } = createActivityHandler();
+    const handler = createActivityHandler();
     const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };

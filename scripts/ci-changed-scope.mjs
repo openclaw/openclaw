@@ -34,14 +34,15 @@ const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.ym
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
-const MACOS_SCRIPT_SCOPE_RE = /^(scripts\/create-dmg\.sh|test\/scripts\/create-dmg\.test\.ts)$/;
+const MACOS_SCRIPT_SCOPE_RE =
+  /^(?:scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh|scripts\/lib\/plistbuddy\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts)$/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/plugins\/import-specifier(?:\.test)?\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/format-generated-module\.mjs)$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/format-generated-module\.mjs)$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
-  /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/plugins\/import-specifier\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+  /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
 const TEST_ONLY_PATH_RE =
   /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-support|test-harness|e2e-harness)\.[cm]?[jt]sx?$)/;
 const CONTROL_UI_I18N_SCOPE_RE =
@@ -328,7 +329,7 @@ function isDirectRun() {
 /** @param {string[]} argv */
 function readRefValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;

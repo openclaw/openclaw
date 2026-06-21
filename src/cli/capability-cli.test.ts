@@ -1603,7 +1603,47 @@ describe("capability cli", () => {
     expect(generationCall?.providerOptions).toBeUndefined();
   });
 
-  it("passes image output format and OpenAI background hints through to edit runtime", async () => {
+  it("passes image quality and OpenAI moderation hints through to generation runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "draft.png",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--prompt",
+        "low-cost draft",
+        "--quality",
+        "low",
+        "--openai-moderation",
+        "low",
+        "--json",
+      ],
+    });
+
+    const generationCall = firstImageGenerationCall();
+    expect(generationCall?.prompt).toBe("low-cost draft");
+    expect(generationCall?.quality).toBe("low");
+    expect(generationCall?.providerOptions).toEqual({
+      openai: {
+        moderation: "low",
+      },
+    });
+  });
+
+  it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
     mocks.generateImage.mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1.5",
@@ -1635,6 +1675,10 @@ describe("capability cli", () => {
         "png",
         "--openai-background",
         "transparent",
+        "--openai-moderation",
+        "auto",
+        "--quality",
+        "high",
         "--json",
       ],
     });
@@ -1644,10 +1688,12 @@ describe("capability cli", () => {
     expect(generationCall?.prompt).toBe("make background transparent");
     expect(generationCall?.modelOverride).toBe("openai/gpt-image-1.5");
     expect(generationCall?.outputFormat).toBe("png");
+    expect(generationCall?.quality).toBe("high");
     expect(generationCall?.background).toBeUndefined();
     expect(generationCall?.providerOptions).toEqual({
       openai: {
         background: "transparent",
+        moderation: "auto",
       },
     });
     expect(inputImages).toHaveLength(1);
@@ -1712,6 +1758,46 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       "Error: --background must be one of transparent, opaque, or auto",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--quality",
+          "expensive",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --quality must be one of low, medium, high, or auto",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--openai-moderation",
+          "none",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --openai-moderation must be one of low or auto",
     );
   });
 
@@ -1789,6 +1875,33 @@ describe("capability cli", () => {
       "--output-format",
       "--background",
       "--openai-background",
+      "--openai-moderation",
+      "--quality",
+      "--timeout-ms",
+      "--output",
+      "--json",
+    ]);
+  });
+
+  it("reports the expanded image.generate flags in capability inspect", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "inspect", "--name", "image.generate", "--json"],
+    });
+
+    expect(firstJsonOutput()?.id).toBe("image.generate");
+    expect(firstJsonOutput()?.flags).toEqual([
+      "--prompt",
+      "--model",
+      "--count",
+      "--size",
+      "--aspect-ratio",
+      "--resolution",
+      "--output-format",
+      "--background",
+      "--openai-background",
+      "--openai-moderation",
+      "--quality",
       "--timeout-ms",
       "--output",
       "--json",

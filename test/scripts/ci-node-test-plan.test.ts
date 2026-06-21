@@ -321,6 +321,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: ["test/vitest/vitest.infra.config.ts"],
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-misc",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
         shardName: "core-runtime-infra-misc-dedupe-disk",
       },
       {
@@ -473,6 +479,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       "core-runtime-infra-gateway-watch",
       "core-runtime-infra-heartbeat-core",
       "core-runtime-infra-heartbeat-runner",
+      "core-runtime-infra-misc",
       "core-runtime-infra-misc-dedupe-disk",
       "core-runtime-infra-misc-os",
       "core-runtime-infra-misc-values",

@@ -13,9 +13,10 @@ import {
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
-import { createPluginRegistry, type PluginRecord } from "./registry.js";
+import { createPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { createBundledPluginRecord } from "./status.test-helpers.js";
 
 const completionMocks = vi.hoisted(() => ({
   prepareSimpleCompletionModelForAgent: vi.fn(),
@@ -46,44 +47,6 @@ function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginC
     handler: async () => ({ text: "ok" }),
     ...overrides,
   };
-}
-
-function createBundledPluginRecord(id: string): PluginRecord {
-  return {
-    id,
-    name: id,
-    source: `bundled:${id}`,
-    rootDir: `/bundled/${id}`,
-    origin: "bundled",
-    enabled: true,
-    status: "loaded",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    embeddingProviderIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    transcriptSourceProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
-    agentHarnessIds: [],
-    cliCommands: [],
-    services: [],
-    gatewayDiscoveryServiceIds: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: false,
-  } as PluginRecord;
 }
 
 function registerHostTrustedReservedCommandForTest(

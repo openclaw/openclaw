@@ -247,7 +247,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   const width = getTerminalTableWidth();
   const opts: FormatOpts = { width };
 
-  if (result.handledBy === "dry-run") {
+  if (result.dryRun) {
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
   }
 

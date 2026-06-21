@@ -5,6 +5,23 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-release-signing.mjs");
 
+function runSigningResult(args: string[]): { ok: boolean; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { ok: true, stdout, stderr: "" };
+  } catch (error) {
+    const e = error as { stdout?: unknown; stderr?: unknown };
+    return {
+      ok: false,
+      stdout: Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf8") : String(e.stdout ?? ""),
+      stderr: Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : String(e.stderr ?? ""),
+    };
+  }
+}
+
 function runSigning(mode: string): string {
   return execFileSync(process.execPath, [SCRIPT, "--mode", mode], {
     encoding: "utf8",
@@ -13,11 +30,25 @@ function runSigning(mode: string): string {
 }
 
 describe("scripts/ios-release-signing.mjs", () => {
+  it.each([
+    ["--mode"],
+    ["--mode", "--manifest"],
+    ["--manifest"],
+  ])("rejects missing values for %s before reading signing manifests", (...args) => {
+    const result = runSigningResult(args);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
+    expect(result.stderr).not.toContain("ENOENT");
+    expect(result.stdout).toBe("");
+  });
+
   it("emits manual App Store profile settings for every signed target", () => {
     const output = runSigning("xcconfig");
 
     expect(output).toContain("OPENCLAW_CODE_SIGN_STYLE = Manual");
     expect(output).toContain("OPENCLAW_CODE_SIGN_IDENTITY = Apple Distribution");
+    expect(output).toContain("OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.shared");
     expect(output).toContain("OPENCLAW_APP_PROFILE = OpenClaw App Store ai.openclawfoundation.app");
     expect(output).toContain(
       "OPENCLAW_SHARE_PROFILE = OpenClaw App Store ai.openclawfoundation.app.share",
@@ -28,9 +59,7 @@ describe("scripts/ios-release-signing.mjs", () => {
     expect(output).toContain(
       "OPENCLAW_WATCH_APP_PROFILE = OpenClaw App Store ai.openclawfoundation.app.watchkitapp",
     );
-    expect(output).toContain(
-      "OPENCLAW_WATCH_EXTENSION_PROFILE = OpenClaw App Store ai.openclawfoundation.app.watchkitapp.extension",
-    );
+    expect(output).not.toContain("OPENCLAW_WATCH_EXTENSION_PROFILE");
   });
 
   it("documents the canonical release signing plan", () => {
@@ -40,9 +69,8 @@ describe("scripts/ios-release-signing.mjs", () => {
     expect(output).toContain("Signing repo: git@github.com:openclaw/apps-signing.git");
     expect(output).toContain("Signing branch: main");
     expect(output).toContain("Signing setup and sync: Fastlane match");
-    expect(output).toContain(
-      "OpenClawWatchExtension: ai.openclawfoundation.app.watchkitapp.extension",
-    );
-    expect(output).toContain("capabilities: PUSH_NOTIFICATIONS");
+    expect(output).not.toContain("OpenClawWatchExtension");
+    expect(output).toContain("capabilities: PUSH_NOTIFICATIONS, APP_GROUPS");
+    expect(output).toContain("app groups: group.ai.openclawfoundation.app.shared");
   });
 });
