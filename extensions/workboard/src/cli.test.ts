@@ -155,7 +155,7 @@ describe("registerWorkboardCli", () => {
 
   it("hides archived cards from workboard list by default", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const active = await store.create({ title: "active-card" });
+    const _active = await store.create({ title: "active-card" });
     const archived = await store.create({ title: "archived-card" });
     await store.update(archived.id, { metadata: { archivedAt: Date.now() } });
     const program = createProgram(store);
@@ -170,7 +170,7 @@ describe("registerWorkboardCli", () => {
 
   it("shows archived cards with --include-archived flag", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const active = await store.create({ title: "active-card" });
+    const _active = await store.create({ title: "active-card" });
     const archived = await store.create({ title: "archived-card" });
     await store.update(archived.id, { metadata: { archivedAt: Date.now() } });
     const program = createProgram(store);
@@ -206,7 +206,9 @@ describe("registerWorkboardCli", () => {
     const program = createProgram(store);
 
     const output = await captureStdout(async () => {
-      await program.parseAsync(["workboard", "list", "--json", "--include-archived"], { from: "user" });
+      await program.parseAsync(["workboard", "list", "--json", "--include-archived"], {
+        from: "user",
+      });
     });
 
     expect(output).toContain("active-card");
