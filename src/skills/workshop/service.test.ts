@@ -183,6 +183,95 @@ describe("skill workshop proposals", () => {
     },
   );
 
+  it("rejects update proposals that are delta notes instead of full skill bodies", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "blog-publishing");
+    const originalBody = [
+      "# Blog Publishing",
+      "",
+      "## Workflow",
+      "Read the canonical protocol before publishing.",
+      "",
+      "## Sanitization",
+      "Fail closed on private evidence.",
+      "",
+      "## Optimization",
+      "Run the optimization pass.",
+      "",
+      "## Closeout",
+      "Verify live outputs before final status.",
+      "",
+    ].join("\n");
+    await writeSkill({
+      dir: skillDir,
+      name: "blog-publishing",
+      description: "Publish sanitized blog posts",
+      body: originalBody,
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "blog-publishing",
+      description: "Harden dogfood audit trail",
+      content: [
+        "# Update Proposal: blog-publishing — Dogfood Hardening",
+        "",
+        "## Context",
+        "The previous run exposed audit gaps.",
+        "",
+        "## Proposed skill changes",
+        "Add the following subsection under optimization.",
+        "",
+      ].join("\n"),
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("delta/proposal note, not a complete replacement SKILL.md");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "## Sanitization",
+    );
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("pending");
+  });
+
+  it("rejects update proposals that drop most existing sections", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "sectioned-skill");
+    const originalBody = [
+      "# Sectioned Skill",
+      "",
+      "## One",
+      "Keep this.",
+      "",
+      "## Two",
+      "Keep this.",
+      "",
+      "## Three",
+      "Keep this.",
+      "",
+      "## Four",
+      "Keep this.",
+      "",
+    ].join("\n");
+    await writeSkill({
+      dir: skillDir,
+      name: "sectioned-skill",
+      description: "Has several sections",
+      body: originalBody,
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "sectioned-skill",
+      content: "# Sectioned Skill\n\n## One\nKeep this and add one sentence.\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("drops most existing sections");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "## Four",
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "blocks trusted workspace skills symlink writes until workshop writes are enabled",
     async () => {

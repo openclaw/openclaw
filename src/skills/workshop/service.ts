@@ -561,6 +561,12 @@ export async function applySkillProposal(
     });
 
     const skillContent = stripProposalFrontmatterForSkill(content);
+    if (record.kind === "update" && targetState.previousContent !== null) {
+      assertCompleteSkillUpdateDraft({
+        previousContent: targetState.previousContent,
+        proposedContent: skillContent,
+      });
+    }
     await writeWorkspaceSkill({
       workspaceDir: input.workspaceDir,
       skillDir: record.target.skillDir,
@@ -653,6 +659,107 @@ async function readApplyTargetState(
     }
   }
   return { previousContent, previousSupportFiles };
+}
+
+function assertCompleteSkillUpdateDraft(params: {
+  previousContent: string;
+  proposedContent: string;
+}): void {
+  const previousBody = stripSkillFrontmatter(params.previousContent);
+  const proposedBody = stripSkillFrontmatter(params.proposedContent);
+  const previousH1 = firstMarkdownHeading(previousBody, 1);
+  const proposedH1 = firstMarkdownHeading(proposedBody, 1);
+  const proposedBodyLower = proposedBody.toLowerCase();
+  const proposalLikeMarkers = [
+    "# update proposal",
+    "# skill update proposal",
+    "## proposed skill changes",
+    "## proposed changes",
+    "## evidence from",
+    "add the following subsection",
+    "add this subsection",
+  ];
+  if (proposalLikeMarkers.some((marker) => proposedBodyLower.includes(marker))) {
+    throw new Error(
+      "Skill update proposal content appears to be a delta/proposal note, " +
+        "not a complete replacement SKILL.md. Revise the proposal with the full " +
+        "updated skill body before applying.",
+    );
+  }
+  if (
+    previousH1 &&
+    proposedH1 &&
+    normalizeHeadingForComparison(previousH1) !== normalizeHeadingForComparison(proposedH1)
+  ) {
+    throw new Error(
+      "Skill update proposal content appears to replace the existing skill identity " +
+        `(${previousH1}) with ${proposedH1}. Revise the proposal with a complete ` +
+        "replacement SKILL.md that preserves the existing skill heading, or create a new skill.",
+    );
+  }
+
+  const previousH2Headings = markdownHeadings(previousBody, 2).map(
+    normalizeHeadingForComparison,
+  );
+  const proposedH2Headings = new Set(
+    markdownHeadings(proposedBody, 2).map(normalizeHeadingForComparison),
+  );
+  if (previousH2Headings.length >= 4) {
+    const retained = previousH2Headings.filter((heading) => proposedH2Headings.has(heading)).length;
+    const proposedBytes = Buffer.byteLength(proposedBody, "utf8");
+    const previousBytes = Buffer.byteLength(previousBody, "utf8");
+    if (
+      retained < Math.ceil(previousH2Headings.length / 2) &&
+      proposedBytes < previousBytes * 0.75
+    ) {
+      throw new Error(
+        "Skill update proposal content drops most existing sections and is much " +
+          "shorter than the current skill. Revise the proposal with the full " +
+          "updated SKILL.md before applying destructive reductions.",
+      );
+    }
+  }
+}
+
+function stripSkillFrontmatter(content: string): string {
+  const normalized = content
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+  if (!normalized.startsWith("---\n")) {
+    return normalized;
+  }
+  const endIndex = normalized.indexOf("\n---", 4);
+  if (endIndex === -1) {
+    return normalized;
+  }
+  return normalized.slice(endIndex + "\n---".length).replace(/^\n+/, "");
+}
+
+function firstMarkdownHeading(content: string, level: number): string | undefined {
+  return markdownHeadings(content, level)[0];
+}
+
+function markdownHeadings(content: string, level: number): string[] {
+  const prefix = "#".repeat(level);
+  const re = new RegExp(`^${prefix}\\s+(?!#)(.+?)\\s*#*\\s*$`, "gm");
+  const out: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content)) !== null) {
+    const heading = match[1]?.trim();
+    if (heading) {
+      out.push(heading);
+    }
+  }
+  return out;
+}
+
+function normalizeHeadingForComparison(heading: string): string {
+  return heading
+    .toLowerCase()
+    .replace(/[`*_~]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function scanProposalBundle(
