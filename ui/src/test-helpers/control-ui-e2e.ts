@@ -52,15 +52,6 @@ export type ControlUiMockGatewayScenario = {
   sessionKey?: string;
 };
 
-export type ControlUiMockGatewayMethodResponseCase = {
-  match?: Record<string, unknown>;
-  response: unknown;
-};
-
-export type ControlUiMockGatewayMethodResponseCases = {
-  cases: ControlUiMockGatewayMethodResponseCase[];
-};
-
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
 
 export type ControlUiE2eServer = {
@@ -432,6 +423,23 @@ function installControlUiMockGateway(input: {
           workspace: "",
         };
       case "agents.files.get":
+        return null;
+      case "sessions.files.list":
+        return {
+          browser: {
+            entries: [],
+            path: "",
+          },
+          files: [],
+          root: "",
+          sessionKey:
+            isRecord(params) && typeof params.sessionKey === "string" ? params.sessionKey : "main",
+        };
+      case "sessions.files.get":
+        return null;
+      case "artifacts.list":
+        return { artifacts: [] };
+      case "artifacts.download":
         return null;
       case "chat.history":
         return {

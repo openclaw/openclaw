@@ -64,11 +64,11 @@ import {
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import {
-  readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveStorePath,
   updateLastRoute,
 } from "../../config/sessions.js";
+import { readSessionUpdatedAt } from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import {
   fetchRemoteMedia,

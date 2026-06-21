@@ -1,7 +1,7 @@
 // Anthropic provider tests cover stream events, tools, and message mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
-import type { Context, Model } from "../types.js";
+import type { Context, Model, Tool } from "../types.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -240,6 +240,148 @@ describe("Anthropic provider", () => {
       },
     ]);
     expect(result.responseModel).toBe("claude-fable-5");
+  });
+
+  it.each([
+    {
+      label: "omitted",
+      thinkingEnabled: undefined,
+      expectedThinking: undefined,
+      visibleText: undefined,
+      expectedContent: [{ type: "text", text: "[assistant reasoning omitted]" }],
+    },
+    {
+      label: "explicitly disabled",
+      thinkingEnabled: false,
+      expectedThinking: { type: "disabled" },
+      visibleText: "Visible answer.",
+      expectedContent: [{ type: "text", text: "Visible answer." }],
+    },
+  ])(
+    "omits completed-turn thinking when thinking is $label",
+    async ({ thinkingEnabled, expectedThinking, visibleText, expectedContent }) => {
+      let capturedPayload: unknown;
+      const stream = streamAnthropic(
+        makeAnthropicModel(),
+        {
+          messages: [
+            { role: "user", content: "hello", timestamp: 0 },
+            {
+              role: "assistant",
+              provider: "anthropic",
+              api: "anthropic-messages",
+              model: "claude-sonnet-4-6",
+              stopReason: "stop",
+              timestamp: 0,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              content: [
+                {
+                  type: "thinking",
+                  thinking: "private reasoning",
+                  thinkingSignature: "sig_1",
+                },
+                {
+                  type: "thinking",
+                  thinking: "[Reasoning redacted]",
+                  thinkingSignature: "opaque_1",
+                  redacted: true,
+                },
+                ...(visibleText ? [{ type: "text" as const, text: visibleText }] : []),
+              ],
+            },
+            { role: "user", content: "again", timestamp: 0 },
+          ],
+        },
+        {
+          apiKey: "sk-ant-provider",
+          thinkingEnabled,
+          onPayload: (payload) => {
+            capturedPayload = payload;
+            throw new Error("stop before network");
+          },
+        },
+      );
+
+      await stream.result();
+
+      const payload = capturedPayload as {
+        messages: Array<{ role: string; content: unknown[] }>;
+        thinking?: unknown;
+      };
+      expect(payload.thinking).toEqual(expectedThinking);
+      expect(payload.messages.find((message) => message.role === "assistant")?.content).toEqual(
+        expectedContent,
+      );
+    },
+  );
+
+  it("preserves signed thinking for an active tool turn when new thinking is disabled", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [
+          { role: "user", content: "look it up", timestamp: 0 },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [
+              {
+                type: "thinking",
+                thinking: "call lookup",
+                thinkingSignature: "sig_tool",
+              },
+              { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "42" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        thinkingEnabled: false,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: unknown[] }>;
+    };
+    expect(payload.messages.find((message) => message.role === "assistant")?.content).toEqual([
+      { type: "thinking", thinking: "call lookup", signature: "sig_tool" },
+      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+    ]);
   });
 
   it.each([
@@ -860,6 +1002,101 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect((capturedPayload as { stop_sequences?: unknown }).stop_sequences).toEqual(["STOP"]);
+  });
+
+  it("skips unreadable Anthropic provider tools while preserving healthy siblings", async () => {
+    let capturedPayload: unknown;
+    const unreadableTool = {
+      name: "unreadable_plugin_tool",
+      description: "unreadable schema",
+      get parameters(): Tool["parameters"] {
+        throw new Error("fuzz parameters getter exploded");
+      },
+    } as Tool;
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          unreadableTool,
+          {
+            name: "invalid_required_tool",
+            description: "invalid required",
+            parameters: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: "query",
+            },
+          } as unknown as Tool,
+          {
+            name: "healthy_tool",
+            description: "healthy schema",
+            parameters: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: ["query"],
+            },
+          } as Tool,
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    const payload = capturedPayload as {
+      tools?: Array<{ name?: string; input_schema?: unknown }>;
+    };
+
+    expect(result.stopReason).toBe("error");
+    expect(payload.tools?.map((tool) => tool.name)).toEqual(["healthy_tool"]);
+    expect(payload.tools?.[0]?.input_schema).toMatchObject({
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    });
+  });
+
+  it("fails locally when a pinned Anthropic provider tool is skipped", async () => {
+    const unreadableTool = {
+      name: "unreadable_plugin_tool",
+      description: "unreadable schema",
+      get parameters(): Tool["parameters"] {
+        throw new Error("fuzz parameters getter exploded");
+      },
+    } as Tool;
+    const onPayload = vi.fn();
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          unreadableTool,
+          {
+            name: "healthy_tool",
+            description: "healthy schema",
+            parameters: { type: "object", properties: {} },
+          } as Tool,
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        toolChoice: { type: "tool", name: "unreadable_plugin_tool" },
+        onPayload,
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      'Anthropic tool_choice requested unavailable tool "unreadable_plugin_tool"',
+    );
+    expect(onPayload).not.toHaveBeenCalled();
   });
 
   it("splits the system prompt cache boundary into cached and uncached Anthropic blocks", async () => {

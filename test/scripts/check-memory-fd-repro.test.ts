@@ -19,29 +19,7 @@ import {
   waitForGatewayReady,
   writeConfig,
 } from "../../scripts/check-memory-fd-repro.mjs";
-
-function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return callback();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
+import { withEnv } from "../../src/test-utils/env.js";
 
 describe("check-memory-fd-repro", () => {
   it("parses file, fd, and timing limits as strict integers", () => {

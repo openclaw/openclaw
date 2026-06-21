@@ -9,7 +9,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import type { ReadSessionMessagesAsyncOptions } from "../../gateway/session-utils.fs.js";
+import type {
+  ReadSessionMessagesAsyncOptions,
+  SessionTranscriptReadScope,
+} from "../../gateway/session-transcript-readers.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -71,9 +74,7 @@ interface EmbeddedGatewayRuntime {
     entry: Record<string, unknown> | undefined;
   };
   readSessionMessagesAsync: (
-    sessionId: string,
-    storePath: string,
-    sessionFile: string | undefined,
+    scope: SessionTranscriptReadScope,
     opts: ReadSessionMessagesAsyncOptions,
   ) => Promise<unknown[]>;
   resolveSessionModelRef: (
@@ -118,6 +119,9 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   if (!resolved.ok) {
     throw new Error(resolved.error.message);
   }
+  if ("missing" in resolved) {
+    return { ok: false };
+  }
   return { ok: true, key: resolved.key };
 }
 
@@ -151,17 +155,29 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
+  const sessionEntry =
+    typeof entry?.sessionId === "string"
+      ? {
+          sessionId: entry.sessionId,
+          ...(typeof entry.sessionFile === "string" ? { sessionFile: entry.sessionFile } : {}),
+        }
+      : undefined;
 
   const localMessages =
     sessionId && storePath
       ? await rt.readSessionMessagesAsync(
-          sessionId,
-          storePath,
-          entry?.sessionFile as string | undefined,
+          {
+            agentId: sessionAgentId,
+            sessionEntry,
+            sessionId,
+            sessionKey,
+            storePath,
+          },
           {
             mode: "recent",
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+            allowResetArchiveFallback: true,
           },
         )
       : [];

@@ -69,7 +69,12 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isWithinDir } from "./path-safety.js";
+import {
+  detectLegacyDebugProxyCaptureSidecar,
+  migrateLegacyDebugProxyCaptureSidecar,
+} from "./state-migrations.debug-proxy.js";
 import {
   ensureDir,
   existsDir,
@@ -113,6 +118,11 @@ export type LegacyStateDetection = {
   };
   pluginInstallIndex: {
     sourcePath: string;
+    hasLegacy: boolean;
+  };
+  debugProxyCaptureSidecar: {
+    sourcePath: string;
+    blobDir: string;
     hasLegacy: boolean;
   };
   stateSchema: {
@@ -175,8 +185,11 @@ type DetectedPluginDoctorStateMigrationPlan = {
   preview: string[];
 };
 
-const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+// Move the canonical database first so a partial archive never leaves a
+// readable database separated from committed WAL rows. Pending sidecars are
+// detected and archived without reopening the migrated database.
+const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
+const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 const LEGACY_DELIVERY_QUEUE_DIRS = [
   { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
   { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
@@ -322,6 +335,14 @@ function isLegacyPluginStateRowExpired(row: LegacyPluginStateSidecarRow, now: nu
   return expiresAt !== null && expiresAt <= now;
 }
 
+function hasPendingSqliteSidecarArchive(sourcePath: string, suffixes: readonly string[]): boolean {
+  return (
+    !fileExists(sourcePath) &&
+    fileExists(`${sourcePath}.migrated`) &&
+    suffixes.some((suffix) => suffix !== "" && fileExists(`${sourcePath}${suffix}`))
+  );
+}
+
 function archiveLegacyPluginStateSidecar(params: {
   sourcePath: string;
   changes: string[];
@@ -330,6 +351,9 @@ function archiveLegacyPluginStateSidecar(params: {
   const existingSources = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES.map(
     (suffix) => `${params.sourcePath}${suffix}`,
   ).filter(fileExists);
+  if (existingSources.length === 0) {
+    return;
+  }
   const existingArchives = existingSources
     .map((sourcePath) => `${sourcePath}.migrated`)
     .filter(fileExists);
@@ -458,12 +482,53 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
 }
 
+function readAuthoritativeCurrentNpmIdentity(
+  record: InstalledPluginIndex["installRecords"][string],
+): { name: string; version: string } | null {
+  const resolvedName = readInstallRecordStringField(record, "resolvedName");
+  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  if (resolvedName && resolvedVersion) {
+    return { name: resolvedName, version: resolvedVersion };
+  }
+  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
+  const parsed = resolvedSpec ? parseRegistryNpmSpec(resolvedSpec) : null;
+  if (parsed?.selectorKind === "exact-version" && parsed.selector) {
+    return { name: parsed.name, version: parsed.selector };
+  }
+  return null;
+}
+
+function legacyNpmInstallRecordSupersededByCurrent(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
+    return false;
+  }
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  const legacyParsedSpec = legacySpec ? parseRegistryNpmSpec(legacySpec) : null;
+  if (legacyParsedSpec?.selectorKind !== "exact-version") {
+    return false;
+  }
+  const currentIdentity = readAuthoritativeCurrentNpmIdentity(currentRecord);
+  return Boolean(
+    currentIdentity &&
+    legacyParsedSpec.selector &&
+    currentIdentity.name === legacyParsedSpec.name &&
+    currentIdentity.version === legacyParsedSpec.selector,
+  );
+}
+
 function legacyInstallRecordCoveredByCurrent(
   currentRecord: InstalledPluginIndex["installRecords"][string],
   legacyRecord: InstalledPluginIndex["installRecords"][string],
 ): boolean {
   if (currentRecord.source !== legacyRecord.source) {
     return false;
+  }
+  if (legacyNpmInstallRecordSupersededByCurrent({ currentRecord, legacyRecord })) {
+    return true;
   }
   for (const key of Object.keys(legacyRecord).toSorted()) {
     const currentValue = readInstallRecordField(currentRecord, key);
@@ -543,6 +608,9 @@ function archiveLegacyTaskStateSidecar(params: {
   const existingSources = TASK_STATE_SQLITE_SIDECAR_SUFFIXES.map(
     (suffix) => `${params.sourcePath}${suffix}`,
   ).filter(fileExists);
+  if (existingSources.length === 0) {
+    return;
+  }
   const existingArchives = existingSources
     .map((sourcePath) => `${sourcePath}.migrated`)
     .filter(fileExists);
@@ -658,6 +726,19 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
   const ownerKey = ownerRaw || requesterRaw || `system:${runtime}:${sourceId || taskId}`;
   const scopeRaw = typeof row.scope_kind === "string" ? row.scope_kind : "";
   const scopeKind = scopeRaw === "system" || ownerKey.startsWith("system:") ? "system" : "session";
+  const childSessionKey =
+    typeof row.child_session_key === "string" ? row.child_session_key.trim() : "";
+  const persistedAgentId = typeof row.agent_id === "string" ? row.agent_id.trim() : "";
+  const isSpawnRuntime = runtime === "subagent" || runtime === "acp";
+  const childAgentId = isSpawnRuntime ? parseAgentSessionKey(childSessionKey)?.agentId : undefined;
+  const requesterAgentId =
+    (typeof row.requester_agent_id === "string" ? row.requester_agent_id.trim() : "") ||
+    (isSpawnRuntime
+      ? (parseAgentSessionKey(ownerKey)?.agentId ??
+        parseAgentSessionKey(requesterRaw)?.agentId ??
+        (childAgentId && persistedAgentId !== childAgentId ? persistedAgentId : ""))
+      : "");
+  const executorAgentId = requesterAgentId ? childAgentId || persistedAgentId : persistedAgentId;
   return {
     task_id: taskId,
     runtime,
@@ -666,10 +747,11 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
     requester_session_key: scopeKind === "system" ? "" : requesterRaw || ownerKey,
     owner_key: ownerKey,
     scope_kind: scopeKind,
-    child_session_key: legacyBindValue(row.child_session_key),
+    child_session_key: childSessionKey || null,
     parent_flow_id: legacyBindValue(row.parent_flow_id),
     parent_task_id: legacyBindValue(row.parent_task_id),
-    agent_id: legacyBindValue(row.agent_id),
+    agent_id: executorAgentId || null,
+    requester_agent_id: requesterAgentId || null,
     run_id: legacyBindValue(row.run_id),
     label: legacyBindValue(row.label),
     task: legacyBindValue(row.task ?? ""),
@@ -760,6 +842,7 @@ function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
       pickLegacyColumn(columns, "parent_flow_id"),
       pickLegacyColumn(columns, "parent_task_id"),
       pickLegacyColumn(columns, "agent_id"),
+      pickLegacyColumn(columns, "requester_agent_id"),
       pickLegacyColumn(columns, "run_id"),
       pickLegacyColumn(columns, "label"),
       "task",
@@ -851,15 +934,15 @@ function insertTaskRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
     `
       INSERT INTO task_runs (
         task_id, runtime, task_kind, source_id, requester_session_key, owner_key, scope_kind,
-        child_session_key, parent_flow_id, parent_task_id, agent_id, run_id, label, task, status,
-        delivery_status, notify_policy, created_at, started_at, ended_at, last_event_at,
-        cleanup_after, error, progress_summary, terminal_summary, terminal_outcome
+        child_session_key, parent_flow_id, parent_task_id, agent_id, requester_agent_id, run_id,
+        label, task, status, delivery_status, notify_policy, created_at, started_at, ended_at,
+        last_event_at, cleanup_after, error, progress_summary, terminal_summary, terminal_outcome
       ) VALUES (
         @task_id, @runtime, @task_kind, @source_id, @requester_session_key, @owner_key,
-        @scope_kind, @child_session_key, @parent_flow_id, @parent_task_id, @agent_id, @run_id,
-        @label, @task, @status, @delivery_status, @notify_policy, @created_at, @started_at,
-        @ended_at, @last_event_at, @cleanup_after, @error, @progress_summary, @terminal_summary,
-        @terminal_outcome
+        @scope_kind, @child_session_key, @parent_flow_id, @parent_task_id, @agent_id,
+        @requester_agent_id, @run_id, @label, @task, @status, @delivery_status, @notify_policy,
+        @created_at, @started_at, @ended_at, @last_event_at, @cleanup_after, @error,
+        @progress_summary, @terminal_summary, @terminal_outcome
       )
     `,
   ).run(row);
@@ -899,7 +982,12 @@ async function migrateLegacyTaskRunsSidecar(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyTaskRunsSidecarPath(params.stateDir);
   if (!fileExists(sourcePath)) {
-    return { changes: [], warnings: [] };
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
+      archiveLegacyTaskStateSidecar({ sourcePath, label: "task registry", changes, warnings });
+    }
+    return { changes, warnings };
   }
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -933,6 +1021,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
           "parent_flow_id",
           "parent_task_id",
           "agent_id",
+          "requester_agent_id",
           "run_id",
           "label",
           "task",
@@ -1030,7 +1119,12 @@ async function migrateLegacyFlowRunsSidecar(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyFlowRunsSidecarPath(params.stateDir);
   if (!fileExists(sourcePath)) {
-    return { changes: [], warnings: [] };
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
+      archiveLegacyTaskStateSidecar({ sourcePath, label: "task flow", changes, warnings });
+    }
+    return { changes, warnings };
   }
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -1406,7 +1500,12 @@ async function migrateLegacyPluginStateSidecar(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyPluginStateSidecarPath(params.stateDir);
   if (!fileExists(sourcePath)) {
-    return { changes: [], warnings: [] };
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    if (hasPendingSqliteSidecarArchive(sourcePath, PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES)) {
+      archiveLegacyPluginStateSidecar({ sourcePath, changes, warnings });
+    }
+    return { changes, warnings };
   }
 
   const changes: string[] = [];
@@ -2353,10 +2452,6 @@ export function resetAutoMigrateLegacyStateForTest() {
   cachedLegacySessionSurfaces = null;
 }
 
-export function resetAutoMigrateLegacyAgentDirForTest() {
-  resetAutoMigrateLegacyStateForTest();
-}
-
 export function resetAutoMigrateLegacyStateDirForTest() {
   autoMigrateStateDirChecked = false;
 }
@@ -2785,14 +2880,31 @@ export async function detectLegacyStateMigrations(params: {
   const hasLegacyAgentDir = existsDir(legacyAgentDir);
   const pluginStateSidecarPath = resolveLegacyPluginStateSidecarPath(stateDir);
   const hasPluginStateSidecar = fileExists(pluginStateSidecarPath);
+  const hasPendingPluginStateSidecarArchive = hasPendingSqliteSidecarArchive(
+    pluginStateSidecarPath,
+    PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
+  );
   const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
   const hasPluginInstallIndex = fileExists(pluginInstallIndexPath);
+  const debugProxyCaptureSidecar = detectLegacyDebugProxyCaptureSidecar(stateDir, env);
   const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
   const taskRunsSidecarPath = resolveLegacyTaskRunsSidecarPath(stateDir);
   const flowRunsSidecarPath = resolveLegacyFlowRunsSidecarPath(stateDir);
-  const hasTaskStateSidecars = fileExists(taskRunsSidecarPath) || fileExists(flowRunsSidecarPath);
+  const hasPendingTaskRunsSidecarArchive = hasPendingSqliteSidecarArchive(
+    taskRunsSidecarPath,
+    TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
+  );
+  const hasPendingFlowRunsSidecarArchive = hasPendingSqliteSidecarArchive(
+    flowRunsSidecarPath,
+    TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
+  );
+  const hasTaskStateSidecars =
+    fileExists(taskRunsSidecarPath) ||
+    fileExists(flowRunsSidecarPath) ||
+    hasPendingTaskRunsSidecarArchive ||
+    hasPendingFlowRunsSidecarArchive;
   const deliveryQueuePaths = {
     outboundPath: resolveLegacyDeliveryQueuePath(stateDir, "delivery-queue"),
     sessionPath: resolveLegacyDeliveryQueuePath(stateDir, "session-delivery-queue"),
@@ -2833,9 +2945,16 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (hasPluginStateSidecar) {
     preview.push(`- Plugin state sidecar: ${pluginStateSidecarPath} → shared SQLite state`);
+  } else if (hasPendingPluginStateSidecarArchive) {
+    preview.push(`- Plugin state sidecar: finish archive cleanup for ${pluginStateSidecarPath}`);
   }
   if (hasPluginInstallIndex) {
     preview.push(`- Plugin install index: ${pluginInstallIndexPath} → shared SQLite state`);
+  }
+  if (debugProxyCaptureSidecar.hasLegacy) {
+    preview.push(
+      `- Debug proxy capture sidecar: ${debugProxyCaptureSidecar.sourcePath} → shared SQLite state`,
+    );
   }
   if (stateSchemaMigrations.length > 0) {
     preview.push("- Shared SQLite schema: agent database registry primary key → agent_id,path");
@@ -2845,9 +2964,13 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (fileExists(taskRunsSidecarPath)) {
     preview.push(`- Task registry sidecar: ${taskRunsSidecarPath} → shared SQLite state`);
+  } else if (hasPendingTaskRunsSidecarArchive) {
+    preview.push(`- Task registry sidecar: finish archive cleanup for ${taskRunsSidecarPath}`);
   }
   if (fileExists(flowRunsSidecarPath)) {
     preview.push(`- Task flow sidecar: ${flowRunsSidecarPath} → shared SQLite state`);
+  } else if (hasPendingFlowRunsSidecarArchive) {
+    preview.push(`- Task flow sidecar: finish archive cleanup for ${flowRunsSidecarPath}`);
   }
   if (hasDeliveryQueues) {
     preview.push("- Delivery queues: legacy JSON queue files → shared SQLite state");
@@ -2891,12 +3014,13 @@ export async function detectLegacyStateMigrations(params: {
     },
     pluginStateSidecar: {
       sourcePath: pluginStateSidecarPath,
-      hasLegacy: hasPluginStateSidecar,
+      hasLegacy: hasPluginStateSidecar || hasPendingPluginStateSidecarArchive,
     },
     pluginInstallIndex: {
       sourcePath: pluginInstallIndexPath,
       hasLegacy: hasPluginInstallIndex,
     },
+    debugProxyCaptureSidecar,
     stateSchema: {
       hasLegacy: stateSchemaMigrations.length > 0,
       preview: stateSchemaMigrations.map((migration) => migration.path),
@@ -3418,6 +3542,10 @@ export async function runLegacyStateMigrations(params: {
   const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
     stateDir: detected.stateDir,
   });
+  const debugProxyCaptureSidecar = migrateLegacyDebugProxyCaptureSidecar({
+    stateDir: detected.stateDir,
+    detected: detected.debugProxyCaptureSidecar,
+  });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
     stateDir: detected.stateDir,
   });
@@ -3451,6 +3579,7 @@ export async function runLegacyStateMigrations(params: {
       ...stateSchema.changes,
       ...pluginStateSidecar.changes,
       ...pluginInstallIndex.changes,
+      ...debugProxyCaptureSidecar.changes,
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
       ...execApprovals.changes,
@@ -3465,6 +3594,7 @@ export async function runLegacyStateMigrations(params: {
       ...stateSchema.warnings,
       ...pluginStateSidecar.warnings,
       ...pluginInstallIndex.warnings,
+      ...debugProxyCaptureSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
       ...execApprovals.warnings,
@@ -3476,21 +3606,6 @@ export async function runLegacyStateMigrations(params: {
       ...channelPlans.warnings,
     ],
   };
-}
-
-export async function autoMigrateLegacyAgentDir(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-  now?: () => number;
-}): Promise<{
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-}> {
-  return await autoMigrateLegacyState(params);
 }
 
 /**
@@ -3793,6 +3908,10 @@ export async function autoMigrateLegacyState(params: {
     const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
       stateDir: detected.stateDir,
     });
+    const debugProxyCaptureSidecar = migrateLegacyDebugProxyCaptureSidecar({
+      stateDir: detected.stateDir,
+      detected: detected.debugProxyCaptureSidecar,
+    });
     const taskStateSidecars = await migrateLegacyTaskStateSidecars({
       stateDir: detected.stateDir,
     });
@@ -3814,6 +3933,7 @@ export async function autoMigrateLegacyState(params: {
       ...acpSessionMetadata.changes,
       ...pluginStateSidecar.changes,
       ...pluginInstallIndex.changes,
+      ...debugProxyCaptureSidecar.changes,
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
       ...execApprovals.changes,
@@ -3827,6 +3947,7 @@ export async function autoMigrateLegacyState(params: {
       ...acpSessionMetadata.warnings,
       ...pluginStateSidecar.warnings,
       ...pluginInstallIndex.warnings,
+      ...debugProxyCaptureSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
       ...execApprovals.warnings,
@@ -3842,6 +3963,7 @@ export async function autoMigrateLegacyState(params: {
         acpSessionMetadata.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
         pluginInstallIndex.changes.length > 0 ||
+        debugProxyCaptureSidecar.changes.length > 0 ||
         taskStateSidecars.changes.length > 0 ||
         deliveryQueues.changes.length > 0 ||
         execApprovals.changes.length > 0 ||
@@ -3859,6 +3981,7 @@ export async function autoMigrateLegacyState(params: {
     !detected.pluginPlans?.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
     !detected.pluginInstallIndex.hasLegacy &&
+    !detected.debugProxyCaptureSidecar.hasLegacy &&
     !detected.stateSchema.hasLegacy &&
     !detected.taskStateSidecars.hasLegacy &&
     !detected.deliveryQueues.hasLegacy &&
@@ -3896,6 +4019,10 @@ export async function autoMigrateLegacyState(params: {
   const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
     stateDir: detected.stateDir,
   });
+  const debugProxyCaptureSidecar = migrateLegacyDebugProxyCaptureSidecar({
+    stateDir: detected.stateDir,
+    detected: detected.debugProxyCaptureSidecar,
+  });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
     stateDir: detected.stateDir,
   });
@@ -3929,6 +4056,7 @@ export async function autoMigrateLegacyState(params: {
     ...acpSessionMetadata.changes,
     ...pluginStateSidecar.changes,
     ...pluginInstallIndex.changes,
+    ...debugProxyCaptureSidecar.changes,
     ...taskStateSidecars.changes,
     ...deliveryQueues.changes,
     ...execApprovals.changes,
@@ -3946,6 +4074,7 @@ export async function autoMigrateLegacyState(params: {
     ...acpSessionMetadata.warnings,
     ...pluginStateSidecar.warnings,
     ...pluginInstallIndex.warnings,
+    ...debugProxyCaptureSidecar.warnings,
     ...taskStateSidecars.warnings,
     ...deliveryQueues.warnings,
     ...execApprovals.warnings,

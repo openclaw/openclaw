@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
@@ -202,6 +203,21 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
+export function getMockServerVersion() {
+  return "0.132.0";
+}
+
+export function getMockRuntimeIdentity() {
+  return { serverVersion: getMockServerVersion() };
+}
+
+export function mockClientRuntimeMethods() {
+  return {
+    getRuntimeIdentity: getMockRuntimeIdentity,
+    getServerVersion: getMockServerVersion,
+  };
+}
+
 export function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
@@ -296,7 +312,7 @@ export function createAppServerHarness(
   setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
     options.onStart?.(authProfileId, agentDir);
     return {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
       addNotificationHandler: (
         handler: (notification: CodexServerNotification) => Promise<void>,
@@ -495,6 +511,7 @@ export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
     vi.useRealTimers();
     clearInternalHooks();
+    clearMemoryPluginState();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
@@ -512,6 +529,7 @@ export function setupRunAttemptTestHooks(): void {
     testing.clearPendingCodexNativeHookRelayUnregistersForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    clearMemoryPluginState();
     clearPluginCommands();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();

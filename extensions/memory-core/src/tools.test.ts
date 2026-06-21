@@ -1,6 +1,7 @@
 // Memory Core tests cover tools plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
@@ -10,7 +11,7 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
-} from "./memory-tool-manager-mock.js";
+} from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
 import {
@@ -257,6 +258,59 @@ describe("memory_search unavailable payloads", () => {
     ]);
     expect(searchCalls).toBe(2);
     expect(getMemorySearchManagerMockCalls()).toBe(2);
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({ purpose: undefined }),
+      expect.objectContaining({ purpose: undefined }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(0);
+  });
+
+  it("re-resolves and closes one-shot CLI managers when a cached sqlite handle was closed", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        throw new Error("database is not open");
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Thread-hidden codename: ORBIT-22.",
+          source: "memory" as const,
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+      oneShotCliRun: true,
+    });
+    const result = await tool.execute("closed-db-cli", { query: "hidden thread codename" });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results).toEqual([
+      {
+        corpus: "memory",
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: "Thread-hidden codename: ORBIT-22.",
+        source: "memory",
+      },
+    ]);
+    expect(searchCalls).toBe(2);
+    expect(getMemorySearchManagerMockCalls()).toBe(2);
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({ purpose: "cli" }),
+      expect.objectContaining({ purpose: "cli" }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
   it("forces a sync and retries once when the first search has zero hits", async () => {

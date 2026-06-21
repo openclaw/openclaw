@@ -9,7 +9,9 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
+import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
   defaultQaModelForMode,
@@ -19,12 +21,17 @@ import {
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
-  type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
+import {
+  assertApprovalDecisionResult,
+  formatApprovalResultValue,
+  readAcceptedApprovalRequestId,
+} from "../shared/live-approval-result.js";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
 } from "../shared/live-artifacts.js";
+import { inferQaCredentialSource as inferSlackCredentialSource } from "../shared/live-credential-source.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
@@ -215,6 +222,7 @@ type SlackQaScenarioResult = {
     responseObservedAt: string;
     source: "approval-request-to-resolution" | "request-to-observed-message";
   };
+  standardId?: string;
   status: "fail" | "pass";
   title: string;
 };
@@ -226,26 +234,6 @@ export type SlackQaRunResult = {
   reportPath: string;
   scenarios: SlackQaScenarioResult[];
   summaryPath: string;
-};
-
-type SlackQaSummary = {
-  channelId: string;
-  cleanupIssues: string[];
-  counts: {
-    failed: number;
-    passed: number;
-    total: number;
-  };
-  credentials: {
-    credentialId?: string;
-    kind: string;
-    ownerId?: string;
-    role?: QaCredentialRole;
-    source: "convex" | "env";
-  };
-  finishedAt: string;
-  scenarios: SlackQaScenarioResult[];
-  startedAt: string;
 };
 
 type SlackCredentialLease = Awaited<ReturnType<typeof acquireQaCredentialLease<SlackQaRuntimeEnv>>>;
@@ -523,28 +511,6 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof SLACK_QA_ENV_KEYS)
   return value;
 }
 
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function inferSlackCredentialSource(
-  value: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): "convex" | "env" {
-  const normalized =
-    value?.trim().toLowerCase() || env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim().toLowerCase();
-  return normalized === "convex" ? "convex" : "env";
-}
-
-function inferSlackCredentialRole(value: string | undefined): QaCredentialRole | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "ci" || normalized === "maintainer") {
-    return normalized;
-  }
-  return undefined;
-}
-
 function normalizeSlackId(value: string, label: string) {
   const normalized = value.trim();
   if (!/^[A-Z][A-Z0-9]+$/.test(normalized)) {
@@ -747,39 +713,6 @@ async function listSlackThreadMessages(params: {
     }),
   );
   return replies.messages ?? [];
-}
-
-function formatApprovalResultValue(value: unknown) {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value == null) {
-    return "<missing>";
-  }
-  return JSON.stringify(value) ?? "<unserializable>";
-}
-
-function readAcceptedApprovalRequest(result: unknown) {
-  const accepted =
-    typeof result === "object" && result !== null
-      ? (result as { id?: unknown; status?: unknown })
-      : null;
-  if (accepted?.status !== "accepted") {
-    throw new Error(
-      `approval request status was ${formatApprovalResultValue(
-        accepted?.status,
-      )} instead of accepted`,
-    );
-  }
-  return accepted;
-}
-
-function readAcceptedApprovalRequestId(result: unknown) {
-  const id = readAcceptedApprovalRequest(result).id;
-  if (typeof id !== "string" || id.trim().length === 0) {
-    throw new Error(`approval request id was ${formatApprovalResultValue(id)}`);
-  }
-  return id;
 }
 
 function collectSlackBlockStringFields(
@@ -1413,21 +1346,6 @@ async function resolveApprovalDecision(params: {
   );
 }
 
-function assertApprovalDecisionResult(params: {
-  decision: SlackQaApprovalDecision;
-  result: unknown;
-}) {
-  const resultDecision =
-    typeof params.result === "object" && params.result !== null
-      ? (params.result as { decision?: unknown }).decision
-      : undefined;
-  if (resultDecision !== params.decision) {
-    throw new Error(
-      `approval decision was ${formatApprovalResultValue(resultDecision)} instead of ${params.decision}`,
-    );
-  }
-}
-
 async function runSlackApprovalScenario(params: {
   channelId: string;
   context: Omit<SlackQaScenarioContext, "sentTs">;
@@ -1804,7 +1722,6 @@ export async function runSlackQaLive(params: {
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findScenario(params.scenarioIds);
   const requestedCredentialSource = inferSlackCredentialSource(params.credentialSource);
-  const requestedCredentialRole = inferSlackCredentialRole(params.credentialRole);
   const redactPublicMetadata = isTruthyOptIn(process.env[QA_REDACT_PUBLIC_METADATA_ENV]);
   const includeObservedMessageContent = isTruthyOptIn(process.env[SLACK_QA_CAPTURE_CONTENT_ENV]);
   const startedAt = new Date().toISOString();
@@ -1916,6 +1833,7 @@ export async function runSlackQaLive(params: {
               approval: approval.artifact,
               id: scenario.id,
               title: scenario.title,
+              standardId: scenario.standardId,
               status: "pass",
               details: [
                 `${scenarioRun.approvalKind} approval resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
@@ -1972,6 +1890,7 @@ export async function runSlackQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
+              standardId: scenario.standardId,
               status: "pass",
               details: [
                 `reply matched in ${rttMs}ms`,
@@ -2006,6 +1925,7 @@ export async function runSlackQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
+              standardId: scenario.standardId,
               status: "pass",
               details:
                 scenarioAttempt > 1 ? `no reply; retried ${scenarioAttempt - 1}x` : "no reply",
@@ -2023,6 +1943,7 @@ export async function runSlackQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
+            standardId: scenario.standardId,
             status: "fail",
             details:
               scenarioAttempt > 1
@@ -2071,6 +1992,7 @@ export async function runSlackQaLive(params: {
     scenarioResults.push({
       id: "slack-canary",
       title: "Slack canary echo",
+      standardId: "canary",
       status: "fail",
       details: formatErrorMessage(error),
     });
@@ -2093,44 +2015,29 @@ export async function runSlackQaLive(params: {
 
   const finishedAt = new Date().toISOString();
   const reportPath = path.join(outputDir, "slack-qa-report.md");
-  const summaryPath = path.join(outputDir, "slack-qa-summary.json");
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_FILENAME);
   const observedMessagesPath = path.join(outputDir, "slack-qa-observed-messages.json");
-  const passed = scenarioResults.filter((entry) => entry.status === "pass").length;
-  const failed = scenarioResults.filter((entry) => entry.status === "fail").length;
   const artifactScenarioResults = toSlackQaScenarioArtifactResults({
     scenarios: scenarioResults,
     includeContent: includeObservedMessageContent,
     redactMetadata: redactPublicMetadata,
   });
-  const summary: SlackQaSummary = {
-    credentials: credentialLease
-      ? {
-          source: credentialLease.source,
-          kind: credentialLease.kind,
-          role: credentialLease.role,
-          credentialId: redactPublicMetadata ? undefined : credentialLease.credentialId,
-          ownerId: redactPublicMetadata ? undefined : credentialLease.ownerId,
-        }
-      : {
-          source: requestedCredentialSource,
-          kind: "slack",
-          role: requestedCredentialRole,
-        },
-    channelId: runtimeEnv
-      ? redactPublicMetadata
-        ? "<redacted>"
-        : runtimeEnv.channelId
-      : "<unavailable>",
-    startedAt,
-    finishedAt,
-    cleanupIssues,
-    counts: {
-      total: scenarioResults.length,
-      passed,
-      failed,
-    },
-    scenarios: artifactScenarioResults,
-  };
+  const evidence = buildLiveTransportEvidenceSummary({
+    artifactPaths: [
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      { kind: "transport-observations", path: path.basename(observedMessagesPath) },
+    ],
+    checks: artifactScenarioResults.map(({ standardId, ...check }) => ({
+      ...check,
+      coverageIds: standardId ? [`channels.slack.${standardId}`] : undefined,
+    })),
+    env: process.env,
+    generatedAt: finishedAt,
+    primaryModel,
+    providerMode,
+    transportId: "slack",
+  });
   await fs.writeFile(
     observedMessagesPath,
     `${JSON.stringify(
@@ -2143,7 +2050,7 @@ export async function runSlackQaLive(params: {
       2,
     )}\n`,
   );
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+  await fs.writeFile(summaryPath, `${JSON.stringify(evidence, null, 2)}\n`);
   await fs.writeFile(
     reportPath,
     `${renderSlackQaMarkdown({

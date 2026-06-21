@@ -20,7 +20,7 @@ let rssHookPath = null;
 
 function readPositiveIntEnv(name, fallback, env = process.env) {
   const value = readPositiveNumberEnv(name, fallback, env);
-  if (!Number.isInteger(value)) {
+  if (!Number.isSafeInteger(value)) {
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
@@ -386,7 +386,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     runStartupMemoryCheck();
   } catch (error) {
-    console.error(error instanceof Error ? error.stack : String(error));
+    console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }

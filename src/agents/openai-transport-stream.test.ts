@@ -1,7 +1,12 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
+import OpenAI from "openai";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import {
+  classifyAssistantFailoverReason,
+  formatUserFacingAssistantErrorText,
+} from "./embedded-agent-helpers.js";
 import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
@@ -489,6 +494,38 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("skips unreadable model payload tool names in debug summaries", () => {
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
+    try {
+      expect(
+        testing.summarizeResponsesTools([
+          {
+            type: "function",
+            get function(): { name: string } {
+              throw new Error("responses debug tool function getter exploded");
+            },
+          },
+          {
+            type: "function",
+            function: {
+              get name(): string {
+                throw new Error("responses debug nested name getter exploded");
+              },
+            },
+          },
+          { type: "function", function: { name: "wait" } },
+        ]),
+      ).toBe("count=3 names=wait");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
+  });
+
   it("redacts full model payload debug summaries", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
@@ -524,6 +561,36 @@ describe("openai transport stream", () => {
     testing.enforceCodeModeResponsesToolSurface(payload);
     testing.assertCodeModeResponsesToolSurface(payload);
     expect(payload.tools).toHaveLength(2);
+  });
+
+  it("skips unreadable code mode response payload tool names", () => {
+    const payload = {
+      tools: [
+        { type: "function", name: "exec" },
+        {
+          type: "function",
+          get function(): { name: string } {
+            throw new Error("responses code mode function getter exploded");
+          },
+        },
+        {
+          type: "function",
+          function: {
+            get name(): string {
+              throw new Error("responses code mode nested name getter exploded");
+            },
+          },
+        },
+        { type: "function", function: { name: "wait" } },
+      ],
+    };
+
+    testing.enforceCodeModeResponsesToolSurface(payload);
+    testing.assertCodeModeResponsesToolSurface(payload);
+    expect(payload.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "function", function: { name: "wait" } },
+    ]);
   });
 
   it("fails closed when the code mode final payload tool surface is not exec/wait", () => {
@@ -598,6 +665,50 @@ describe("openai transport stream", () => {
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
+    expect(headers.Accept).toBeUndefined();
+    expect(headers.accept).toBeUndefined();
+  });
+
+  it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
+    const codexModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400000,
+      maxTokens: 128000,
+    } satisfies Model<"openai-chatgpt-responses">;
+    const transportAliasModel = {
+      ...codexModel,
+      api: "openclaw-openai-responses-transport" as Api,
+    } satisfies Model;
+    const nonNativeChatGPTModel = {
+      ...codexModel,
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Model<"openai-chatgpt-responses">;
+    const openAIModel = {
+      ...codexModel,
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Model<"openai-responses">;
+
+    expect(testing.buildOpenAISdkRequestOptions(codexModel, undefined, { stream: true })).toEqual({
+      headers: { Accept: "text/event-stream" },
+    });
+    expect(
+      testing.buildOpenAISdkRequestOptions(transportAliasModel, undefined, { stream: true }),
+    ).toEqual({ headers: { Accept: "text/event-stream" } });
+    expect(testing.buildOpenAISdkRequestOptions(codexModel)).toBeUndefined();
+    expect(
+      testing.buildOpenAISdkRequestOptions(nonNativeChatGPTModel, undefined, { stream: true }),
+    ).toBeUndefined();
+    expect(
+      testing.buildOpenAISdkRequestOptions(openAIModel, undefined, { stream: true }),
+    ).toBeUndefined();
   });
 
   it("moves Azure OpenAI completions api-version headers into default query params", () => {
@@ -1572,6 +1683,83 @@ describe("openai transport stream", () => {
       });
       expect(String(errorPayload?.errorBody)).toContain("Quota exceeded");
       expect(String(errorPayload?.errorBody)).not.toContain("sk-secret1234567890abcd");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("classifies OpenAI-compatible unsupported-model detail from failed chat requests", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(400, {
+          "content-type": "application/json; charset=utf-8",
+          "x-request-id": "req_not_supported_model",
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              code: "400",
+              message: "Param Incorrect",
+              param: "Not supported model some-model-id",
+            },
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "some-model-id",
+        name: "Some Model",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let errorPayload: Record<string, unknown> | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "error") {
+          errorPayload = event.error;
+        }
+      }
+
+      expect(errorPayload).toMatchObject({
+        stopReason: "error",
+        errorMessage: "400 Param Incorrect",
+        errorCode: "400",
+      });
+      expect(String(errorPayload?.errorBody)).toContain("Not supported model some-model-id");
+      expect(classifyAssistantFailoverReason(errorPayload as never)).toBe("model_not_found");
+      expect(formatUserFacingAssistantErrorText(errorPayload as never)).toBe(
+        "The selected model was not found by the provider. Check the model id or choose a different model.",
+      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -3758,6 +3946,104 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("preserves Responses replay item ids for store-capable third-party opt-in routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "store-capable-model",
+        name: "Store-capable model",
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        baseUrl: "https://custom.example.com/v1",
+        compat: { supportsStore: true } as never,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "custom-openai-responses",
+            model: "store-capable-model",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  summary: [],
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { replayResponsesItemIds: true, sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        summary?: unknown;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      id: "rs_prior",
+      summary: [],
+    });
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expectRecordFields(assistantMessage, {
+      type: "message",
+      role: "assistant",
+      id: "msg_prior",
+      phase: "commentary",
+    });
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      id: "fc_prior",
+      call_id: "call_abc",
+    });
+  });
+
   it("omits prior Responses replay item ids when store is disabled for custom Codex-compatible responses", () => {
     const model = {
       id: "gpt-5.4",
@@ -4259,6 +4545,86 @@ describe("openai transport stream", () => {
     expect(stripped.input[0]).not.toHaveProperty("encrypted_content");
     expect(stripped.input[0].nested).not.toHaveProperty("encrypted_content");
     expect(stripped.input[1]).toEqual(params.input[1]);
+  });
+
+  it("retries thinking_signature_invalid once without encrypted reasoning content", async () => {
+    const request = {
+      model: "gpt-5.5",
+      stream: true,
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_prior",
+          encrypted_content: "ciphertext",
+          summary: [],
+        },
+        {
+          type: "message",
+          id: "msg_prior",
+          role: "assistant",
+          content: [{ type: "output_text", text: "visible answer" }],
+        },
+        {
+          type: "function_call",
+          id: "fc_prior",
+          call_id: "call_abc",
+          name: "price_lookup",
+          arguments: "{}",
+        },
+      ],
+    };
+    const recoveredStream = streamChunks([]);
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new OpenAI.BadRequestError(
+          400,
+          {
+            code: "thinking_signature_invalid",
+            message:
+              "The encrypted content for item rs_prior could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+            type: "invalid_request_error",
+          },
+          undefined,
+          new Headers(),
+        ),
+      )
+      .mockResolvedValueOnce(recoveredStream);
+
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: { responses: { create } } as never,
+        request: request as never,
+        requestOptions: undefined,
+        model: {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      }),
+    ).resolves.toBe(recoveredStream);
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[0]).toBe(request);
+    expect(create.mock.calls[1]?.[0]).toEqual({
+      ...request,
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_prior",
+          summary: [],
+        },
+        request.input[1],
+        request.input[2],
+      ],
+    });
   });
 
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
@@ -4886,6 +5252,247 @@ describe("openai transport stream", () => {
     expect(params.tool_choice).toBe("required");
   });
 
+  it("keeps healthy Responses tools when a sibling schema is unreadable", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {},
+          },
+        ],
+      } as never,
+      { toolChoice: { type: "function", name: "lookup" } },
+    ) as {
+      tools?: Array<{ name?: string; strict?: boolean }>;
+      tool_choice?: unknown;
+    };
+
+    expect(params.tools).toEqual([expect.objectContaining({ name: "lookup", strict: true })]);
+    expect(params.tool_choice).toEqual({ type: "function", name: "lookup" });
+  });
+
+  it("fails locally when a pinned Responses tool is unreadable", () => {
+    expect(() =>
+      buildOpenAIResponsesParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-responses">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "broken",
+              get parameters(): never {
+                throw new Error("parameters exploded");
+              },
+            },
+          ],
+        } as never,
+        { toolChoice: { type: "function", name: "broken" } },
+      ),
+    ).toThrow('requested unavailable tool "broken"');
+  });
+
+  it("filters official Responses allowed_tools against projected functions", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {},
+          },
+        ],
+      } as never,
+      {
+        toolChoice: {
+          type: "allowed_tools",
+          mode: "required",
+          tools: [
+            { type: "function", name: "broken" },
+            { type: "function", name: "lookup" },
+          ],
+        },
+      },
+    ) as { tool_choice?: unknown };
+
+    expect(params.tool_choice).toEqual({
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "function", name: "lookup" }],
+    });
+  });
+
+  it("fails locally when required Chat Completions has no usable tools", () => {
+    expect(() =>
+      buildOpenAICompletionsParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-completions",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "broken",
+              get parameters(): never {
+                throw new Error("parameters exploded");
+              },
+            },
+          ],
+        } as never,
+        { toolChoice: "required" },
+      ),
+    ).toThrow("no tools survived schema conversion");
+  });
+
+  it("preserves the native empty tools marker for tool history after quarantining every schema", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc",
+                name: "lookup",
+                arguments: {},
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "done" }],
+            toolCallId: "call_abc",
+          },
+          { role: "user", content: "continue", timestamp: 1 },
+        ],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken tool.",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: unknown[] };
+
+    expect(params.tools).toEqual([]);
+  });
+
+  it("does not reread an unreadable tool inventory length", () => {
+    const tools = new Proxy([], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const responsesModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const completionsModel = {
+      ...responsesModel,
+      api: "openai-completions",
+      reasoning: false,
+    } satisfies Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      tools,
+    } as never;
+
+    expect(buildOpenAIResponsesParams(responsesModel, context, undefined)).not.toHaveProperty(
+      "tools",
+    );
+    expect(buildOpenAICompletionsParams(completionsModel, context, undefined)).not.toHaveProperty(
+      "tools",
+    );
+  });
+
   it("sorts Responses tools by name for stable prompt-cache payloads", () => {
     const model = {
       id: "gpt-5.4",
@@ -5074,6 +5681,66 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean }> };
 
     expect(params.tools?.[0]).not.toHaveProperty("strict");
+  });
+
+  it("keeps native responses strict mode for projected tools after dropping bad schemas", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{
+        name?: string;
+        strict?: boolean;
+        parameters?: Record<string, unknown>;
+      }>;
+    };
+
+    expect(params.tools).toEqual([
+      {
+        type: "function",
+        name: "lookup_weather",
+        description: "Get forecast",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
   });
 
   it("still normalizes responses tool parameters when strict is omitted", () => {
@@ -5477,6 +6144,150 @@ describe("openai transport stream", () => {
     expectRecordFields(tool, { type: "function" });
     expectRecordFields(tool.function, { name: "lookup_weather" });
     expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
+  it.each([
+    ["implicit default", ""],
+    ["default", "https://api.openai.com/v1"],
+  ])(
+    "omits reasoning_effort for OpenAI %s gpt-5.5 Chat Completions tool payloads",
+    (_label, baseUrl) => {
+      const params = buildOpenAICompletionsParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-completions",
+          provider: "openai",
+          baseUrl,
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000000,
+          maxTokens: 128000,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "lookup_weather",
+              description: "Get forecast",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          ],
+        } as never,
+        {
+          reasoning: "medium",
+        } as never,
+      ) as { reasoning_effort?: unknown; tools?: unknown };
+
+      expect(params.tools).toHaveLength(1);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
+  it.each([
+    ["Azure OpenAI", "https://example.openai.azure.com/openai/v1"],
+    ["Foundry", "https://example.services.ai.azure.com/openai/v1"],
+    ["Cognitive Services", "https://example.cognitiveservices.azure.com/openai/v1"],
+  ])(
+    "omits reasoning_effort for %s gpt-5.5 deployment aliases with tool payloads",
+    (_label, baseUrl) => {
+      const params = buildOpenAICompletionsParams(
+        {
+          id: "prod-spud",
+          name: "GPT-5.5 (Azure)",
+          api: "openai-completions",
+          provider: "azure-openai",
+          baseUrl,
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000000,
+          maxTokens: 128000,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "lookup_weather",
+              description: "Get forecast",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          ],
+        } as never,
+        {
+          reasoning: "medium",
+        } as never,
+      ) as { reasoning_effort?: unknown; tools?: unknown };
+
+      expect(params.tools).toHaveLength(1);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
+  it("keeps reasoning_effort for custom gpt-5.5 Chat Completions tool payloads", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider: "custom-openai",
+        baseUrl: "https://models.example.com/v1",
+        compat: { supportsReasoningEffort: true },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toHaveLength(1);
+    expect(params.reasoning_effort).toBe("medium");
+  });
+
+  it("keeps reasoning_effort for gpt-5.5 Chat Completions payloads without tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toHaveLength(0);
+    expect(params.reasoning_effort).toBe("medium");
   });
 
   it("keeps reasoning_effort for gpt-5.4-mini Chat Completions payloads without tools", () => {
@@ -6648,6 +7459,67 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
     expect(params.tools?.[0]?.function?.strict).toBe(true);
+  });
+
+  it("keeps native completions strict mode for projected tools after dropping bad schemas", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{
+        function?: {
+          name?: string;
+          strict?: boolean;
+          parameters?: Record<string, unknown>;
+        };
+      }>;
+    };
+
+    expect(params.tools?.map((tool) => tool.function)).toEqual([
+      {
+        name: "lookup_weather",
+        description: "Get forecast",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
   });
 
   it("falls back to completions strict:false when a native OpenAI tool schema is not strict-compatible", () => {
@@ -9975,6 +10847,15 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 32_000,
   } satisfies Model<"openai-completions">;
 
+  const staleKimiK27Model = {
+    ...customKimiProxyModel,
+    id: "kimi-k2.7-code",
+    name: "Kimi K2.7 Code",
+    provider: "moonshot",
+    baseUrl: "https://api.moonshot.ai/v1",
+    reasoning: false,
+  } satisfies Model<"openai-completions">;
+
   const customQwenReasoningModel = {
     id: "Qwen3.6-35B-A3B",
     name: "Qwen3.6 35B",
@@ -10183,9 +11064,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   });
 
   it("preserves reasoning_content replay for Gemma 4 openai-completions models", () => {
-    const assistant = getAssistantMessage(
-      buildReplayParams(gemma4Model, "reasoning_content"),
-    );
+    const assistant = getAssistantMessage(buildReplayParams(gemma4Model, "reasoning_content"));
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
     expect(assistant).not.toHaveProperty("reasoning_details");
@@ -10233,6 +11112,17 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   it("preserves reasoning_content replay for custom Kimi K2 proxy routes", () => {
     const assistant = getAssistantMessage(
       buildReplayParams(customKimiProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves Kimi K2.7 reasoning_content replay with stale reasoning metadata", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(staleKimiK27Model, "reasoning_content"),
     );
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");

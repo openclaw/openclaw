@@ -15,11 +15,13 @@ import {
   FIREWORKS_DEFAULT_CONTEXT_WINDOW,
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
+  isFireworksCatalogModelId,
 } from "./provider-catalog.js";
 import { wrapFireworksProviderStream } from "./stream.js";
 import { resolveFireworksThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "fireworks";
+
 function isFireworksGlmModelId(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   const lastSegment = normalized.split("/").pop() ?? normalized;
@@ -35,6 +37,11 @@ function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
   if (!modelId) {
     return undefined;
   }
+
+  if (isFireworksCatalogModelId(modelId)) {
+    return undefined;
+  }
+
   const isKimiModel = isFireworksKimiModelId(modelId);
   const input = resolveFireworksDynamicInput(modelId);
 

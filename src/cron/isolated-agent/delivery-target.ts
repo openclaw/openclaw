@@ -5,7 +5,7 @@ import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/targ
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { readSessionEntry } from "../../config/sessions/store-load.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -177,10 +177,14 @@ export async function resolveDeliveryTarget(
       } satisfies SessionEntry)
     : undefined;
   const threadEntry = threadSessionKey
-    ? (readSessionEntry(storePath, threadSessionKey) as SessionEntry | undefined)
+    ? loadSessionEntry({ agentId, sessionKey: threadSessionKey, storePath })
     : undefined;
-  const mainEntry = readSessionEntry(storePath, mainSessionKey) as SessionEntry | undefined;
+  const mainEntry = loadSessionEntry({ agentId, sessionKey: mainSessionKey, storePath });
   const main = storedDeliveryEntry ?? threadEntry ?? mainEntry;
+  // True when the cron has no delivery identity of its own (no per-job target, no own
+  // sessionKey, no stored/creation delivery context) and therefore fell back to the SHARED
+  // agent-main session bucket. See the #91613 refusal below.
+  const usedSharedMainFallback = mainEntry !== undefined && main === mainEntry;
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -294,6 +298,45 @@ export async function resolveDeliveryTarget(
         toCandidate = allowFromOverride[0];
       }
     }
+  }
+
+  // Issue #91613: refuse a KEYLESS implicit isolated cron whose delivery target was only inherited
+  // from the SHARED agent-main session bucket's last recipient. That bucket is last-writer-wins
+  // across every conversation the agent handles, so the inherited `lastTo` can be a different
+  // conversation's room — the wrong room — which the durable delivery queue then replays verbatim
+  // after a restart. Returning ok:false (instead of a separate flag callers must remember to check)
+  // routes the refusal through the delivery dispatch !ok gate, the failure-notification path, and
+  // the delivery preview alike: every consumer honors ok:false, the dispatch gate refuses the send
+  // WITHOUT reaching the durable enqueue, so recovery replays nothing. (The agent turn still runs;
+  // only delivery is refused, at the dispatch gate — there is no pre-execution preflight.) Narrowed:
+  //   - keyless only (`!rawSessionKey`) — a cron with its own session key/target resolves via that
+  //     session, not the shared bucket, so it is never refused here;
+  //   - evaluated AFTER the allowFrom reroute above (`toCandidate === resolved.lastTo`) — a cron
+  //     whose stale target was rerouted to a configured allow-from peer is delivering to that
+  //     allowed peer, not the inherited room, so it is not refused.
+  if (
+    !rawSessionKey &&
+    mode === "implicit" &&
+    !explicitTo &&
+    usedSharedMainFallback &&
+    toCandidate != null &&
+    toCandidate === resolved.lastTo
+  ) {
+    return {
+      ok: false,
+      channel,
+      to: undefined,
+      accountId,
+      threadId: explicitThreadId,
+      mode,
+      error: new Error(
+        "Refusing implicit isolated cron delivery: the target would be inherited from the shared " +
+          "agent-main session bucket's last recipient, which is ambiguous across conversations and " +
+          "can deliver to the wrong room (and replay there after a restart). Set delivery.channel " +
+          "and delivery.to explicitly, or run the cron from a session that carries its own " +
+          "delivery context.",
+      ),
+    };
   }
 
   const preResolvedRouteTargetCandidate = toCandidate;

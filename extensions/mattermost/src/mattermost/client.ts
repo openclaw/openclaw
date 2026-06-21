@@ -1,5 +1,6 @@
 // Mattermost plugin module implements client behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
@@ -10,6 +11,9 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+
+const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -82,14 +86,79 @@ function buildMattermostApiUrl(baseUrl: string, path: string): string {
 
 export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    const data = (await res.json()) as { message?: string } | undefined;
-    if (data?.message) {
-      return data.message;
+  if (!res.body) {
+    if (contentType.includes("application/json")) {
+      const data = (await res.json()) as { message?: string } | undefined;
+      if (data?.message) {
+        return data.message;
+      }
+      return JSON.stringify(data);
     }
-    return JSON.stringify(data);
+    return await res.text();
   }
-  return await res.text();
+  const text = await readResponseTextLimited(res, MATTERMOST_ERROR_BODY_LIMIT_BYTES);
+  if (contentType.includes("application/json")) {
+    try {
+      const data = JSON.parse(text) as { message?: string } | undefined;
+      if (data?.message) {
+        return data.message;
+      }
+      return JSON.stringify(data);
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+function responseWithRelease(response: Response, release: () => Promise<void>): Response {
+  let released = false;
+  const releaseOnce = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    await release();
+  };
+
+  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
+    void releaseOnce();
+    return new Response(null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          await releaseOnce();
+          controller.close();
+          return;
+        }
+        if (value) {
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        await releaseOnce();
+        throw error;
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => undefined);
+      await releaseOnce();
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 export function createMattermostClient(params: {
@@ -110,11 +179,6 @@ export function createMattermostClient(params: {
   // A custom fetchImpl is accepted for testing and special cases.
   const externalFetchImpl = params.fetchImpl;
 
-  // Guarded fetch adapter: calls fetchWithSsrFGuard and returns a plain Response.
-  // Body is buffered before releasing the dispatcher so callers get a complete Response.
-  // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
-  const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
-
   const guardedFetchImpl: MattermostFetch = async (input, init) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -124,14 +188,7 @@ export function createMattermostClient(params: {
       auditContext: "mattermost-api",
       policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
     });
-    try {
-      const bodyBytes = NULL_BODY_STATUSES.has(response.status)
-        ? null
-        : await response.arrayBuffer();
-      return new Response(bodyBytes, { status: response.status, headers: response.headers });
-    } finally {
-      await release();
-    }
+    return responseWithRelease(response, release);
   };
 
   const fetchImpl = externalFetchImpl ?? guardedFetchImpl;
@@ -241,6 +298,35 @@ export type CreateDmChannelRetryOptions = {
   /** Optional logger for retry events */
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
+
+const DM_REPLY_DELIVERY_BARRIER_SLACK_MS = 60_000;
+
+/** Covers DM creation retries without extending channel-delivery stalls. */
+export function resolveMattermostReplyDeliveryBarrierTimeoutMs(params: {
+  isDirect: boolean;
+  dmRetryOptions?: CreateDmChannelRetryOptions;
+  queuedCounts: Readonly<Record<"tool" | "block" | "final", number>>;
+  humanDelayBudgetMs?: number;
+}): number | undefined {
+  if (!params.isDirect) {
+    return undefined;
+  }
+  const deliveryCount = Object.values(params.queuedCounts).reduce((sum, count) => sum + count, 0);
+  if (deliveryCount === 0) {
+    return undefined;
+  }
+  const maxRetries = params.dmRetryOptions?.maxRetries ?? 3;
+  const maxDelayMs = params.dmRetryOptions?.maxDelayMs ?? 10_000;
+  const timeoutMs = params.dmRetryOptions?.timeoutMs ?? 30_000;
+  const perDeliveryTimeoutMs =
+    (maxRetries + 1) * timeoutMs + maxRetries * maxDelayMs + DM_REPLY_DELIVERY_BARRIER_SLACK_MS;
+  const totalTimeoutMs =
+    perDeliveryTimeoutMs * deliveryCount + Math.max(0, params.humanDelayBudgetMs ?? 0);
+  return resolveTimerTimeoutMs(
+    Number.isFinite(totalTimeoutMs) ? totalTimeoutMs : Number.MAX_SAFE_INTEGER,
+    perDeliveryTimeoutMs,
+  );
+}
 
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   "ECONNRESET",

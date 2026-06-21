@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
@@ -19,9 +20,11 @@ const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
 const PACKAGE_URL_DOWNLOAD_TIMEOUT_MS = 60_000;
 const PACKAGE_URL_MAX_BYTES = 250 * 1024 * 1024;
 const PACKAGE_URL_MAX_REDIRECTS = 5;
+export const ARTIFACT_TARBALL_SCAN_MAX_ENTRIES = 10_000;
 const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
+const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -130,7 +133,29 @@ export function parseArgs(argv) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
+  validateOutputName(options.outputName);
   return options;
+}
+
+function validateOutputName(value) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
+    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
+  }
+}
+
+function resolvePackedOpenClawTarballFilename(value) {
+  const filename = typeof value === "string" ? value.trim() : "";
+  if (
+    !/^openclaw-[A-Za-z0-9._-]+\.tgz$/u.test(filename) ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
+    throw new Error(
+      `npm pack reported unsafe OpenClaw tarball filename: ${JSON.stringify(filename)}`,
+    );
+  }
+  return filename;
 }
 
 export function validateOpenClawPackageSpec(spec) {
@@ -171,7 +196,7 @@ function run(command, args, options = {}) {
     });
     let timedOut = false;
     let killTimer;
-    let timeoutReject;
+    let forceKillAt;
     const killChild = (signal) => {
       if (useProcessGroup && child.pid) {
         try {
@@ -185,11 +210,13 @@ function run(command, args, options = {}) {
     };
     const terminateChild = () => {
       killChild("SIGTERM");
+      const killAfterMs = options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS;
+      forceKillAt = Date.now() + killAfterMs;
       killTimer = setTimeout(() => {
         killTimer = undefined;
+        forceKillAt = undefined;
         killChild("SIGKILL");
-        timeoutReject?.();
-      }, options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS);
+      }, killAfterMs);
     };
     const timeout =
       options.timeoutMs === undefined
@@ -220,6 +247,7 @@ function run(command, args, options = {}) {
       }
       if (killTimer && !timedOut) {
         clearTimeout(killTimer);
+        forceKillAt = undefined;
       }
       ACTIVE_CHILD_KILLERS.delete(killChild);
       if (
@@ -237,7 +265,13 @@ function run(command, args, options = {}) {
           `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`,
         );
         if (killTimer) {
-          timeoutReject = () => reject(timeoutError);
+          void finishTimedOutProcessTree(child, {
+            forceKillAt,
+            killChild,
+            killTimer,
+            killAfterMs: options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS,
+            useProcessGroup,
+          }).then(() => reject(timeoutError), reject);
           return;
         }
         reject(timeoutError);
@@ -262,6 +296,54 @@ function run(command, args, options = {}) {
   });
 }
 
+async function finishTimedOutProcessTree(
+  child,
+  { forceKillAt, killAfterMs, killChild, killTimer, useProcessGroup },
+) {
+  const graceRemainingMs =
+    forceKillAt === undefined ? killAfterMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForProcessTreeExit(child, graceRemainingMs, useProcessGroup);
+  }
+  clearTimeout(killTimer);
+  if (processTreeIsAlive(child, useProcessGroup)) {
+    killChild("SIGKILL");
+    await waitForProcessTreeExit(child, killAfterMs, useProcessGroup);
+  }
+}
+
+function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function processTreeIsAlive(child, useProcessGroup) {
+  if (!child || typeof child.pid !== "number") {
+    return false;
+  }
+  if (!useProcessGroup) {
+    return !childHasExited(child);
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForProcessTreeExit(child, timeoutMs, useProcessGroup) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!processTreeIsAlive(child, useProcessGroup)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !processTreeIsAlive(child, useProcessGroup);
+}
+
 function appendBoundedCommandOutput(buffer, chunk, maxChars) {
   const nextText = buffer.text + String(chunk);
   if (nextText.length <= maxChars) {
@@ -280,20 +362,6 @@ function formatCapturedCommandOutput(buffer) {
 
 export const runCommandForTest = run;
 
-async function walkFiles(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    const absolute = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await walkFiles(absolute)));
-    } else if (entry.isFile()) {
-      files.push(absolute);
-    }
-  }
-  return files;
-}
-
 async function sha256(file) {
   const hash = createHash("sha256");
   const handle = await fs.open(file, "r");
@@ -308,7 +376,7 @@ async function sha256(file) {
 }
 
 function assertSha256(value) {
-  if (!/^[a-f0-9]{64}$/u.test(value)) {
+  if (!/^[a-f0-9]{64}$/iu.test(value)) {
     throw new Error(`package_sha256 must be a lowercase or uppercase 64-character SHA-256 digest`);
   }
 }
@@ -325,17 +393,56 @@ async function assertExpectedSha256(file, expected) {
   return actual;
 }
 
+export const assertExpectedSha256ForTest = assertExpectedSha256;
+
 async function findSingleTarball(dir) {
-  const files = (await walkFiles(path.resolve(ROOT_DIR, dir)))
-    .filter((file) => /\.t(?:ar\.)?gz$/u.test(path.basename(file)))
-    .toSorted((a, b) => a.localeCompare(b));
-  if (files.length !== 1) {
+  const root = path.resolve(ROOT_DIR, dir);
+  const pending = [root];
+  const tarballs = [];
+  let scannedEntries = 0;
+
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    const handle = await fs.opendir(currentDir);
+    for await (const entry of handle) {
+      scannedEntries += 1;
+      if (scannedEntries > ARTIFACT_TARBALL_SCAN_MAX_ENTRIES) {
+        throw new Error(
+          `source=artifact scan exceeded ${ARTIFACT_TARBALL_SCAN_MAX_ENTRIES} filesystem entries under ${dir}; provide a smaller artifact directory containing exactly one .tgz.`,
+        );
+      }
+
+      const absolute = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(absolute);
+        continue;
+      }
+      if (entry.isFile() && /\.t(?:ar\.)?gz$/u.test(entry.name)) {
+        tarballs.push(absolute);
+        if (tarballs.length > 1) {
+          const relativeTarballs = tarballs
+            .map((tarball) => path.relative(root, tarball))
+            .toSorted((a, b) => a.localeCompare(b));
+          throw new Error(
+            `source=artifact requires exactly one .tgz under ${dir}; found at least 2: ${relativeTarballs.join(", ")}`,
+          );
+        }
+      }
+    }
+  }
+
+  if (tarballs.length !== 1) {
     throw new Error(
-      `source=artifact requires exactly one .tgz under ${dir}; found ${files.length}: ${files.join(", ")}`,
+      `source=artifact requires exactly one .tgz under ${dir}; found ${tarballs.length}: ${tarballs.join(", ")}`,
     );
   }
-  return files[0];
+  return tarballs[0];
 }
+
+export const findSingleTarballForTest = findSingleTarball;
 
 export async function readArtifactPackageCandidateMetadata(dir) {
   const metadataPath = path.join(path.resolve(ROOT_DIR, dir), "package-candidate.json");
@@ -474,24 +581,41 @@ async function installPackageSourceDeps(sourceDir) {
 
 async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   let filename = "";
+  let parsed;
   try {
-    const parsed = JSON.parse(packOutput);
-    if (Array.isArray(parsed)) {
-      filename = parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
-    }
+    parsed = JSON.parse(packOutput);
   } catch {}
+  if (Array.isArray(parsed)) {
+    const packedFilename =
+      parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
+    if (packedFilename) {
+      filename = resolvePackedOpenClawTarballFilename(packedFilename);
+    }
+  }
   if (!filename) {
     for (const line of packOutput.split(/\r?\n/u)) {
       const trimmed = line.trim();
-      if (/^openclaw-.*\.tgz$/u.test(trimmed)) {
-        filename = trimmed;
+      if (
+        trimmed.endsWith(".tgz") &&
+        (trimmed.startsWith("openclaw-") ||
+          trimmed.includes(":") ||
+          trimmed.includes("/") ||
+          trimmed.includes("\\"))
+      ) {
+        filename = resolvePackedOpenClawTarballFilename(trimmed);
       }
     }
   }
   if (!filename) {
     const entries = await fs.readdir(outputDir);
     filename = entries
-      .filter((entry) => /^openclaw-.*\.tgz$/u.test(entry))
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawTarballFilename(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
       .toSorted((a, b) => a.localeCompare(b))
       .at(-1);
   }
@@ -506,6 +630,34 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   }
   return target;
 }
+
+export const moveNewestPackedTarballForTest = moveNewestPackedTarball;
+
+async function cleanPackedOpenClawTarballs(outputDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(outputDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      entries = [];
+    } else {
+      throw error;
+    }
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawTarballFilename(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
+      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
+  );
+}
+
+export const cleanPackedOpenClawTarballsForTest = cleanPackedOpenClawTarballs;
 
 function normalizeUrlHostname(hostname) {
   return hostname.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.+$/u, "").toLowerCase();
@@ -693,11 +845,21 @@ function toTrustedPorts(value, sourceId) {
   if (!Array.isArray(ports) || ports.length === 0) {
     throw new Error(`trusted package source ${sourceId} must define non-empty ports`);
   }
-  const normalized = ports.map((port) => Number(port));
+  const normalized = ports.map((port) => parseTrustedPort(port));
   if (normalized.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
     throw new Error(`trusted package source ${sourceId} has invalid ports`);
   }
   return [...new Set(normalized)].toSorted((a, b) => a - b);
+}
+
+function parseTrustedPort(value) {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string" && /^[0-9]+$/u.test(value)) {
+    return Number(value);
+  }
+  return Number.NaN;
 }
 
 function toPathPrefixes(value, sourceId) {
@@ -803,8 +965,11 @@ function validateTrustedPackageDownloadUrl(parsed, trustedSource, options = {}) 
   }
 }
 
-function createTrustedPackageAuthHeaders(trustedSource) {
+function createTrustedPackageAuthHeaders(trustedSource, parsed, initialOrigin) {
   if (!trustedSource?.auth) {
+    return undefined;
+  }
+  if (parsed.origin !== initialOrigin) {
     return undefined;
   }
   const token = process.env[TRUSTED_PACKAGE_SOURCE_TOKEN_ENV];
@@ -915,6 +1080,15 @@ function responseHeader(response, name) {
   return response.headers?.get?.(name) ?? null;
 }
 
+function createPackageDownloadTimeoutError(parsed, timeoutMs) {
+  return Object.assign(
+    new Error(`package_url download timed out after ${timeoutMs}ms: ${parsed.toString()}`),
+    {
+      code: "ETIMEDOUT",
+    },
+  );
+}
+
 async function closeResponseBody(body) {
   if (!body) {
     return;
@@ -930,8 +1104,16 @@ async function closeResponseBody(body) {
 
 async function openFetchPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-  timeout.unref?.();
+  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, options.timeoutMs);
+    timeout.unref?.();
+  });
+  timeoutPromise.catch(() => {});
   const response = await options
     .fetchImpl(parsed, {
       headers: options.headers,
@@ -941,12 +1123,7 @@ async function openFetchPackageDownloadResponse(parsed, options) {
     .catch((error) => {
       clearTimeout(timeout);
       if (error?.name === "AbortError") {
-        throw new Error(
-          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
+        throw Object.assign(timeoutError, { cause: error });
       }
       throw error;
     });
@@ -954,14 +1131,23 @@ async function openFetchPackageDownloadResponse(parsed, options) {
     close: async () => closeResponseBody(response.body),
     response,
     timeout,
+    timeoutPromise,
     timeoutMs: options.timeoutMs,
   };
 }
 
 async function openHttpsPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-  timeout.unref?.();
+  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, options.timeoutMs);
+    timeout.unref?.();
+  });
+  timeoutPromise.catch(() => {});
   const lookup = createPinnedLookup(parsed.hostname, options.addresses);
   const response = await new Promise((resolve, reject) => {
     const request = httpsRequest(
@@ -993,12 +1179,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     /** @param {unknown} error */ (error) => {
       clearTimeout(timeout);
       if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
-        throw new Error(
-          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
+        throw Object.assign(timeoutError, { cause: error });
       }
       throw error;
     },
@@ -1007,6 +1188,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     close: async () => closeResponseBody(response.body),
     response,
     timeout,
+    timeoutPromise,
     timeoutMs: options.timeoutMs,
   };
 }
@@ -1016,8 +1198,8 @@ async function openPackageDownloadResponse(url, options) {
   const timeoutMs = options.timeoutMs ?? PACKAGE_URL_DOWNLOAD_TIMEOUT_MS;
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
-  const headers = createTrustedPackageAuthHeaders(trustedSource);
   let parsed = new URL(url);
+  const initialOrigin = parsed.origin;
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
     if (trustedSource) {
       validateTrustedPackageDownloadUrl(parsed, trustedSource, { isRedirect: redirectCount > 0 });
@@ -1025,6 +1207,7 @@ async function openPackageDownloadResponse(url, options) {
       validatePackageDownloadUrl(parsed);
     }
     const addresses = await resolvePackageDownloadAddresses(parsed, lookupHost, trustedSource);
+    const headers = createTrustedPackageAuthHeaders(trustedSource, parsed, initialOrigin);
     const opened = options.fetchImpl
       ? await openFetchPackageDownloadResponse(parsed, {
           fetchImpl: options.fetchImpl,
@@ -1052,7 +1235,47 @@ async function openPackageDownloadResponse(url, options) {
   throw new Error(`package_url exceeded ${maxRedirects} redirects: ${url}`);
 }
 
-async function* limitResponseBody(body, maxBytes) {
+async function* limitWebResponseBody(body, maxBytes, timeoutPromise) {
+  let downloaded = 0;
+  const reader = body.getReader();
+  let timedOut = false;
+  let timeoutFailure;
+  const timeoutRead = timeoutPromise?.catch((error) => {
+    timedOut = true;
+    timeoutFailure = error;
+    void reader.cancel().catch(() => {});
+    throw error;
+  });
+  try {
+    for (;;) {
+      const next = reader.read();
+      const { done, value } = timeoutRead ? await Promise.race([next, timeoutRead]) : await next;
+      if (timedOut) {
+        throw toLintErrorObject(timeoutFailure, "package_url download timed out");
+      }
+      if (done) {
+        return;
+      }
+      const size = typeof value === "string" ? Buffer.byteLength(value) : value.byteLength;
+      downloaded += size;
+      if (downloaded > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
+      }
+      yield value;
+    }
+  } finally {
+    if (!timedOut) {
+      reader.releaseLock();
+    }
+  }
+}
+
+async function* limitResponseBody(body, maxBytes, timeoutPromise) {
+  if (typeof body.getReader === "function") {
+    yield* limitWebResponseBody(body, maxBytes, timeoutPromise);
+    return;
+  }
   let downloaded = 0;
   for await (const chunk of body) {
     const size = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
@@ -1066,20 +1289,33 @@ async function* limitResponseBody(body, maxBytes) {
 
 export async function downloadUrl(url, target, options = {}) {
   const maxBytes = options.maxBytes ?? PACKAGE_URL_MAX_BYTES;
-  const { close, response, timeout, timeoutMs } = await openPackageDownloadResponse(url, options);
+  const { close, response, timeout, timeoutMs, timeoutPromise } = await openPackageDownloadResponse(
+    url,
+    options,
+  );
   const tempTarget = `${target}.tmp`;
+  let output;
   try {
     if (!responseOk(response) || !response.body) {
       throw new Error(`failed to download package_url: HTTP ${responseStatus(response)}`);
     }
-    const contentLength = Number(responseHeader(response, "content-length") ?? "");
-    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    const rawContentLength = responseHeader(response, "content-length");
+    const contentLength =
+      rawContentLength && /^\d+$/u.test(rawContentLength) ? Number(rawContentLength) : undefined;
+    if (
+      contentLength !== undefined &&
+      (!Number.isSafeInteger(contentLength) || contentLength > maxBytes)
+    ) {
       throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
     }
     await fs.rm(tempTarget, { force: true });
-    await pipeline(limitResponseBody(response.body, maxBytes), createWriteStream(tempTarget));
+    output = createWriteStream(tempTarget);
+    await pipeline(limitResponseBody(response.body, maxBytes, timeoutPromise), output);
     await fs.rename(tempTarget, target);
   } catch (error) {
+    if (error?.code === "ETIMEDOUT") {
+      throw error;
+    }
     if (error?.name === "AbortError") {
       throw new Error(`package_url download timed out after ${timeoutMs}ms: ${url}`, {
         cause: error,
@@ -1089,6 +1325,9 @@ export async function downloadUrl(url, target, options = {}) {
   } finally {
     clearTimeout(timeout);
     await close();
+    if (output && !output.closed) {
+      await once(output, "close").catch(() => {});
+    }
     await fs.rm(tempTarget, { force: true });
   }
 }
@@ -1161,6 +1400,7 @@ async function resolveCandidate(options) {
       const npmPackRunner = resolveNpmPackageCandidatePackRunner(options.packageSpec, outputDir, {
         env: process.env,
       });
+      await cleanPackedOpenClawTarballs(outputDir);
       const packOutput = await run(npmPackRunner.command, npmPackRunner.args, {
         capture: true,
         env: npmPackRunner.env,

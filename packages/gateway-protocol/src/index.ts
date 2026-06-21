@@ -210,7 +210,9 @@ import {
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
   type PluginsUiDescriptorsParams,
+  type PluginsUiDescriptorsResult,
   PluginsUiDescriptorsParamsSchema,
+  PluginsUiDescriptorsResultSchema,
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
@@ -321,6 +323,16 @@ import {
   SessionsCompactionListParamsSchema,
   type SessionsCompactionRestoreParams,
   SessionsCompactionRestoreParamsSchema,
+  type SessionFileBrowserEntry,
+  SessionFileBrowserEntrySchema,
+  type SessionFileBrowserResult,
+  SessionFileBrowserResultSchema,
+  type SessionFileEntry,
+  SessionFileEntrySchema,
+  type SessionFileKind,
+  SessionFileKindSchema,
+  type SessionFileRelevance,
+  SessionFileRelevanceSchema,
   type SessionOperationEvent,
   type SessionsCreateParams,
   SessionsCreateParamsSchema,
@@ -328,6 +340,14 @@ import {
   SessionsDeleteParamsSchema,
   type SessionsDescribeParams,
   SessionsDescribeParamsSchema,
+  type SessionsFilesGetParams,
+  SessionsFilesGetParamsSchema,
+  type SessionsFilesGetResult,
+  SessionsFilesGetResultSchema,
+  type SessionsFilesListParams,
+  SessionsFilesListParamsSchema,
+  type SessionsFilesListResult,
+  SessionsFilesListResultSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
   type SessionsMessagesSubscribeParams,
@@ -630,6 +650,12 @@ export const validateSessionsDescribeParams = lazyCompile<SessionsDescribeParams
 export const validateSessionsResolveParams = lazyCompile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
 );
+export const validateSessionsFilesListParams = lazyCompile<SessionsFilesListParams>(
+  SessionsFilesListParamsSchema,
+);
+export const validateSessionsFilesGetParams = lazyCompile<SessionsFilesGetParams>(
+  SessionsFilesGetParamsSchema,
+);
 export const validateSessionsCreateParams = lazyCompile<SessionsCreateParams>(
   SessionsCreateParamsSchema,
 );
@@ -856,6 +882,9 @@ export const validatePluginApprovalResolveParams = lazyCompile<PluginApprovalRes
 export const validatePluginsUiDescriptorsParams = lazyCompile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );
+export const validatePluginsUiDescriptorsResult = lazyCompile<PluginsUiDescriptorsResult>(
+  PluginsUiDescriptorsResultSchema,
+);
 export const validatePluginsSessionActionParams = lazyCompile<PluginsSessionActionParams>(
   PluginsSessionActionParamsSchema,
 );
@@ -1005,6 +1034,15 @@ export {
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
   SessionsResolveParamsSchema,
+  SessionFileBrowserEntrySchema,
+  SessionFileBrowserResultSchema,
+  SessionFileEntrySchema,
+  SessionFileKindSchema,
+  SessionFileRelevanceSchema,
+  SessionsFilesGetParamsSchema,
+  SessionsFilesGetResultSchema,
+  SessionsFilesListParamsSchema,
+  SessionsFilesListResultSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
@@ -1100,6 +1138,7 @@ export {
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
   PluginsUiDescriptorsParamsSchema,
+  PluginsUiDescriptorsResultSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
@@ -1248,6 +1287,15 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  SessionFileBrowserEntry,
+  SessionFileBrowserResult,
+  SessionFileEntry,
+  SessionFileKind,
+  SessionFileRelevance,
+  SessionsFilesListParams,
+  SessionsFilesListResult,
+  SessionsFilesGetParams,
+  SessionsFilesGetResult,
   ArtifactSummary,
   ArtifactsListParams,
   ArtifactsListResult,

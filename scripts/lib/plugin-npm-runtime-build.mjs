@@ -21,9 +21,12 @@ function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-/** Return whether a plugin package is marked for npm publishing. */
+/** Return whether a plugin package publishes through an artifact release workflow. */
 export function isPublishablePluginPackage(packageJson) {
-  return packageJson.openclaw?.release?.publishToNpm === true;
+  return (
+    packageJson.openclaw?.release?.publishToNpm === true ||
+    packageJson.openclaw?.release?.publishToClawHub === true
+  );
 }
 
 function normalizePackageEntry(value) {
@@ -93,7 +96,7 @@ function packageRelativePathExists(packageDir, relativePath) {
   return fs.existsSync(path.join(packageDir, relativePath));
 }
 
-/** List extension package dirs whose package metadata enables npm publishing. */
+/** List extension package dirs whose package metadata enables artifact publishing. */
 export function listPublishablePluginPackageDirs(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -294,22 +297,38 @@ export async function buildPluginNpmRuntime(params) {
   };
 }
 
+function usage() {
+  return "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>";
+}
+
 function readPackageDirArg(argv) {
-  const packageDir = argv[0];
-  if (!packageDir || packageDir.startsWith("--")) {
-    throw new Error("usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>");
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const packageDir = args[0];
+  if (packageDir === "--help" || packageDir === "-h") {
+    return { help: true, packageDir: "" };
   }
-  return packageDir;
+  if (!packageDir || packageDir.startsWith("--")) {
+    throw new Error(usage());
+  }
+  const extraArg = args[1];
+  if (extraArg) {
+    throw new Error(`unexpected plugin npm runtime build argument: ${extraArg}`);
+  }
+  return { packageDir };
 }
 
 export function parseArgs(argv) {
-  const packageDir = readPackageDirArg(argv);
-  return { packageDir };
+  return readPackageDirArg(argv);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const { packageDir } = parseArgs(process.argv.slice(2));
+    const args = parseArgs(process.argv.slice(2));
+    if (args.help) {
+      console.log(usage());
+      process.exit(0);
+    }
+    const { packageDir } = args;
     const result = await buildPluginNpmRuntime({ packageDir });
     if (result) {
       console.error(

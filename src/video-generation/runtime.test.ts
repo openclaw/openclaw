@@ -5,7 +5,6 @@ import {
   generateVideo,
   listRuntimeVideoGenerationProviders,
   type GenerateVideoParams,
-  type VideoGenerationRuntimeDeps,
 } from "./runtime.js";
 import type { VideoGenerationProvider, VideoGenerationProviderOptionType } from "./types.js";
 
@@ -13,7 +12,7 @@ let providers: VideoGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];
 let providerEnvVars: Record<string, string[]> = {};
 
-const runtimeDeps: VideoGenerationRuntimeDeps = {
+const runtimeDeps = {
   getProvider: (providerId) => providers.find((provider) => provider.id === providerId),
   listProviders: (config) => {
     listedConfigs.push(config);
@@ -24,7 +23,7 @@ const runtimeDeps: VideoGenerationRuntimeDeps = {
     debug: () => {},
     warn: () => {},
   },
-};
+} satisfies NonNullable<Parameters<typeof generateVideo>[1]>;
 
 function runGenerateVideo(params: GenerateVideoParams) {
   return generateVideo(params, runtimeDeps);

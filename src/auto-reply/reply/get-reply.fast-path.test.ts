@@ -222,6 +222,34 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
   });
 
+  it("reports the prepared session binding after session bootstrap", async () => {
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
+    mocks.initSessionState.mockResolvedValue(
+      createGetReplySessionState({
+        sessionKey: "agent:main:slack:channel:C123",
+        sessionId: "rotated-session",
+        storePath: "/tmp/custom-sessions.json",
+      }),
+    );
+    const onSessionPrepared = vi.fn();
+
+    await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:channel:C123",
+      }),
+      { onSessionPrepared } as never,
+      {} as OpenClawConfig,
+    );
+
+    expect(onSessionPrepared).toHaveBeenCalledWith({
+      sessionKey: "agent:main:slack:channel:C123",
+      sessionId: "rotated-session",
+      storePath: "/tmp/custom-sessions.json",
+    });
+  });
+
   it("marks configs through withFastReplyConfig()", async () => {
     const cfg = withFastReplyConfig({ session: { store: "/tmp/sessions.json" } } as OpenClawConfig);
 
@@ -657,6 +685,24 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(command.channelId).toBe("slack");
     expect(command.from).toBe("gateway-client");
     expect(command.to).toBe("user:U123");
+  });
+
+  it("preserves multiline slash skill payloads in fast command context", () => {
+    const body = "/skill demo_skill first line\nsecond line";
+    const command = buildFastReplyCommandContext({
+      ctx: buildGetReplyCtx({
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
+      }),
+      cfg: {} as OpenClawConfig,
+      sessionKey: "main",
+      isGroup: false,
+      triggerBodyNormalized: body,
+      commandAuthorized: true,
+    });
+
+    expect(command.commandBodyNormalized).toBe("/skill demo_skill first line\nsecond line");
   });
 
   it("keeps the existing session for /reset newline soft during fast bootstrap", async () => {

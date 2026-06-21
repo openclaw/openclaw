@@ -946,16 +946,19 @@ export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBloc
   return blockers;
 }
 
-export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
-  return summarizeTaskRecords(reconcileInspectableTasks());
+export function getInspectableTaskRegistrySummary(
+  tasks: TaskRecord[] = reconcileInspectableTasks(),
+): TaskRegistrySummary {
+  return summarizeTaskRecords(tasks);
 }
 
 export function getInspectableTaskAuditSummary(): TaskAuditSummary {
   return summarizeTaskAuditFindings(getInspectableTaskAuditFindings());
 }
 
-export function getInspectableTaskAuditFindings(): TaskAuditFinding[] {
-  const tasks = reconcileInspectableTasks();
+export function getInspectableTaskAuditFindings(
+  tasks: TaskRecord[] = reconcileInspectableTasks(),
+): TaskAuditFinding[] {
   return listTaskAuditFindings({ tasks });
 }
 
@@ -1289,8 +1292,6 @@ export function stopTaskRegistryMaintenance() {
   sweepInProgress = false;
 }
 
-export const stopTaskRegistryMaintenanceForTests = stopTaskRegistryMaintenance;
-
 export function setTaskRegistryMaintenanceRuntimeForTests(
   runtime: TaskRegistryMaintenanceRuntime,
 ): void {
@@ -1311,9 +1312,4 @@ export function configureTaskRegistryMaintenance(options: {
   if (options.runtimeAuthoritative !== undefined) {
     configuredRuntimeAuthoritative = options.runtimeAuthoritative;
   }
-}
-
-export function getReconciledTaskById(taskId: string): TaskRecord | undefined {
-  const task = getTaskById(taskId);
-  return task ? reconcileTaskRecordForOperatorInspection(task) : undefined;
 }

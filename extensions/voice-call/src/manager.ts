@@ -47,6 +47,13 @@ function incrementRestoreStatusCount(
   counts.set(key, (counts.get(key) ?? 0) + 1);
 }
 
+function resolveRestoredMaxDurationAnchor(call: CallRecord): number | undefined {
+  return (
+    call.answeredAt ??
+    (call.state === "speaking" || call.state === "listening" ? call.startedAt : undefined)
+  );
+}
+
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
   const rawOverride = storePath?.trim() || config.store?.trim();
   if (rawOverride) {
@@ -126,11 +133,12 @@ export class CallManager {
       }
     }
 
-    // Restart max-duration timers for restored calls that are past the answered state
+    // Restart max-duration timers for restored calls that are past the answered/live state.
     let skippedAlreadyElapsedTimers = 0;
     for (const [callId, call] of verified) {
-      if (call.answeredAt && !TerminalStates.has(call.state)) {
-        const elapsed = Date.now() - call.answeredAt;
+      const maxDurationAnchor = resolveRestoredMaxDurationAnchor(call);
+      if (maxDurationAnchor !== undefined && !TerminalStates.has(call.state)) {
+        const elapsed = Date.now() - maxDurationAnchor;
         const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
         if (elapsed >= maxDurationMs) {
           // Already expired — remove instead of keeping
@@ -140,6 +148,12 @@ export class CallManager {
           }
           skippedAlreadyElapsedTimers += 1;
           continue;
+        }
+        if (call.answeredAt === undefined) {
+          // Twilio streams can restore directly in speaking/listening without an
+          // answered webhook; anchoring at startedAt preserves bounded duration.
+          call.answeredAt = maxDurationAnchor;
+          persistCallRecord(this.storePath, call);
         }
         startMaxDurationTimer({
           ctx: this.getContext(),

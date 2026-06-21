@@ -62,6 +62,21 @@ type RootHelpRenderContext = Pick<RootHelpRenderOptions, "config" | "env">;
 type Awaitable<T> = T | Promise<T>;
 type SourceCommandHelpCommand = "nodes" | "secrets" | PrecomputedSubcommandHelpCommand;
 type SourceCommandHelpText = Record<SourceCommandHelpCommand, string>;
+type SpawnTextParentSignalState = {
+  done: boolean;
+  signal: NodeJS.Signals | null;
+};
+
+const activeSpawnTextParentSignals = new Set<SpawnTextParentSignalState>();
+
+function maybeReraiseSpawnTextParentSignal(signal: NodeJS.Signals): void {
+  for (const state of activeSpawnTextParentSignals) {
+    if (state.signal === null || !state.done) {
+      return;
+    }
+  }
+  process.kill(process.pid, signal);
+}
 
 function resolveRootHelpBundleIdentity(
   distDirOverride: string = distDir,
@@ -225,12 +240,6 @@ export function readBundledChannelCatalog(
   };
 }
 
-export function readBundledChannelCatalogIds(
-  extensionsDirOverride: string = extensionsDir,
-): string[] {
-  return readBundledChannelCatalog(extensionsDirOverride).ids;
-}
-
 function createIsolatedRootHelpRenderContext(
   bundledPluginsDir: string = extensionsDir,
 ): RootHelpRenderContext {
@@ -318,6 +327,9 @@ async function spawnText(
     let waitingForKillGrace = false;
     let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let parentSignalPending: NodeJS.Signals | null = null;
+    const parentSignalState: SpawnTextParentSignalState = { done: false, signal: null };
+    activeSpawnTextParentSignals.add(parentSignalState);
     const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
     const cleanupParentSignalHandlers = () => {
       for (const { signal, handler } of parentSignalHandlers) {
@@ -340,9 +352,28 @@ async function spawnText(
     };
     const relayParentSignal = (signal: NodeJS.Signals) => {
       const handler = () => {
+        parentSignalPending = signal;
+        parentSignalState.signal = signal;
         signalChild(signal);
         cleanupParentSignalHandlers();
-        process.kill(process.pid, signal);
+        if (!processGroupIsAlive()) {
+          parentSignalState.done = true;
+          maybeReraiseSpawnTextParentSignal(signal);
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        // Keep this timer ref'ed so parent signal relay waits long enough to
+        // force-kill stubborn detached descendants before re-raising.
+        waitingForKillGrace = true;
+        killTimer = setTimeout(() => {
+          waitingForKillGrace = false;
+          killTimer = undefined;
+          signalChild("SIGKILL");
+          parentSignalState.done = true;
+          maybeReraiseSpawnTextParentSignal(signal);
+        }, killGraceMs);
       };
       parentSignalHandlers.push({ handler, signal });
       process.once(signal, handler);
@@ -369,8 +400,11 @@ async function spawnText(
       }
       settled = true;
       clearTimeout(timeout);
-      if (killTimer) {
+      if (!parentSignalPending && killTimer) {
         clearTimeout(killTimer);
+      }
+      if (!parentSignalPending) {
+        activeSpawnTextParentSignals.delete(parentSignalState);
       }
       cleanupParentSignalHandlers();
       callback();
@@ -454,6 +488,19 @@ async function spawnText(
     });
     child.once("close", (code, signal) => {
       const result = { code, signal };
+      if (parentSignalPending) {
+        if (processGroupIsAlive()) {
+          childClosedResult = result;
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+          killTimer = undefined;
+        }
+        parentSignalState.done = true;
+        maybeReraiseSpawnTextParentSignal(parentSignalPending);
+        return;
+      }
       if (waitingForKillGrace && processGroupIsAlive()) {
         childClosedResult = result;
         return;

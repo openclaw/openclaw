@@ -18,6 +18,7 @@ export type ReleaseVerifyBetaArgs = {
   repo: string;
   registry: string;
   workflowRef?: string;
+  clawHubWorkflowRef?: string;
   pluginSelection: string[];
   evidenceOut?: string;
   skipPostpublish: boolean;
@@ -29,6 +30,7 @@ export type ReleaseVerifyBetaArgs = {
     openclawNpm?: string;
     pluginNpm?: string;
     pluginClawHub?: string;
+    pluginClawHubBootstrap?: string;
     npmTelegram?: string;
   };
 };
@@ -37,6 +39,12 @@ export type NpmViewFields = {
   version?: string;
   distTagVersion?: string;
   integrity?: string;
+  tarball?: string;
+};
+
+type FetchWithRetryResult = {
+  response: Response;
+  signal: AbortSignal;
 };
 
 type WorkflowRunSummary = {
@@ -50,6 +58,10 @@ const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
 const CLAWHUB_REQUEST_TIMEOUT_MS = 20_000;
 const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
+// Trusted publish can finish before npm registry metadata converges. Keep the
+// verifier on the same release train instead of forcing a republish/correction.
+const NPM_VIEW_ATTEMPTS = 30;
+const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -81,6 +93,38 @@ function runCommandInherited(command: string, args: string[]): void {
   });
 }
 
+export async function runNpmViewWithRetry(
+  args: string[],
+  options: {
+    attempts?: number;
+    delay?: (delayMs: number) => Promise<void>;
+    run?: (args: string[]) => string;
+  } = {},
+): Promise<string> {
+  const attempts = options.attempts ?? NPM_VIEW_ATTEMPTS;
+  const delay =
+    options.delay ??
+    ((delayMs: number) =>
+      new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, delayMs);
+      }));
+  const run = options.run ?? ((npmArgs: string[]) => runCommand("npm", npmArgs));
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return run([...args, "--prefer-online"]);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts) {
+      await delay(Math.min(attempt * 1000, NPM_VIEW_RETRY_MAX_DELAY_MS));
+    }
+  }
+
+  throw lastError;
+}
+
 function parseJson(raw: string, label: string): unknown {
   try {
     return JSON.parse(raw) as unknown;
@@ -97,6 +141,7 @@ export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields 
       version: readString(parsed[0]),
       distTagVersion: readString(parsed[1]),
       integrity: readString(parsed[2]),
+      tarball: readString(parsed[3]),
     };
   }
   if (!isRecord(parsed)) {
@@ -108,6 +153,7 @@ export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields 
     version: readString(parsed.version),
     distTagVersion: readString(parsed[`dist-tags.${distTag}`]) ?? readString(distTags?.[distTag]),
     integrity: readString(parsed["dist.integrity"]) ?? readString(dist?.integrity),
+    tarball: readString(parsed["dist.tarball"]) ?? readString(dist?.tarball),
   };
 }
 
@@ -119,7 +165,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   const version = values.shift();
   if (!version || version.startsWith("-")) {
     throw new Error(
-      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--npm-telegram-run ID] [--skip-github-release] [--skip-clawhub]",
+      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--clawhub-workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--plugin-clawhub-bootstrap-run ID] [--npm-telegram-run ID] [--skip-github-release] [--skip-clawhub]",
     );
   }
 
@@ -130,6 +176,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     repo: DEFAULT_REPO,
     registry: DEFAULT_CLAWHUB_REGISTRY,
     workflowRef: undefined,
+    clawHubWorkflowRef: undefined,
     pluginSelection: [],
     evidenceOut: undefined,
     skipPostpublish: false,
@@ -166,6 +213,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       case "--workflow-ref":
         parsed.workflowRef = next();
         break;
+      case "--clawhub-workflow-ref":
+        parsed.clawHubWorkflowRef = next();
+        break;
       case "--plugins":
         parsed.pluginSelection = parsePluginReleaseSelection(next());
         if (parsed.pluginSelection.length === 0) {
@@ -186,6 +236,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
         break;
       case "--plugin-clawhub-run":
         parsed.workflowRuns.pluginClawHub = next();
+        break;
+      case "--plugin-clawhub-bootstrap-run":
+        parsed.workflowRuns.pluginClawHubBootstrap = next();
         break;
       case "--npm-telegram-run":
         parsed.workflowRuns.npmTelegram = next();
@@ -214,17 +267,19 @@ async function fetchWithRetry(
   url: string,
   options: RequestInit,
   attempts: number,
-): Promise<Response> {
+): Promise<FetchWithRetryResult> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
+      const signal = AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS);
       const response = await fetch(url, {
         ...options,
-        signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
+        signal,
       });
       if (response.status !== 429 && response.status < 500) {
-        return response;
+        return { response, signal };
       }
+      await cancelResponseBody(response);
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
       lastError = error;
@@ -239,34 +294,52 @@ async function fetchWithRetry(
   throw new Error(`${url} did not return a stable response: ${message}`);
 }
 
+async function cancelResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 async function fetchJsonWithRetry(url: string): Promise<unknown> {
-  const response = await fetchWithRetry(url, { headers: { accept: "application/json" } }, 5);
+  const { response, signal } = await fetchWithRetry(
+    url,
+    { headers: { accept: "application/json" } },
+    5,
+  );
   if (!response.ok) {
     throw new Error(`${url} returned HTTP ${response.status}.`);
   }
-  return await readBoundedJsonResponse(response, url);
+  return await readBoundedJsonResponse(response, url, undefined, { signal });
 }
 
 export async function readBoundedJsonResponse(
   response: Response,
   label: string,
   maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+  options: { signal?: AbortSignal } = {},
 ): Promise<unknown> {
-  return parseJson(await readBoundedResponseText(response, label, maxBytes), label);
+  return parseJson(await readBoundedResponseText(response, label, maxBytes, options), label);
 }
 
-async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
-  const response = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
-  return response.status;
+export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
+  const { response } = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
+  try {
+    return response.status;
+  } finally {
+    await cancelResponseBody(response);
+  }
 }
 
-function verifyNpmPackage(packageName: string, version: string, distTag: string): NpmViewFields {
-  const raw = runCommand("npm", [
+async function verifyNpmPackage(
+  packageName: string,
+  version: string,
+  distTag: string,
+): Promise<NpmViewFields> {
+  const raw = await runNpmViewWithRetry([
     "view",
     `${packageName}@${version}`,
     "version",
     `dist-tags.${distTag}`,
     "dist.integrity",
+    "dist.tarball",
     "--json",
   ]);
   const fields = parseNpmViewFields(raw, distTag);
@@ -282,6 +355,9 @@ function verifyNpmPackage(packageName: string, version: string, distTag: string)
   }
   if (fields.integrity === undefined) {
     throw new Error(`${packageName}: npm dist.integrity missing for ${version}.`);
+  }
+  if (fields.tarball === undefined) {
+    throw new Error(`${packageName}: npm dist.tarball missing for ${version}.`);
   }
   return fields;
 }
@@ -491,7 +567,7 @@ export async function verifyBetaRelease(
     lines.push(`GitHub release OK: ${releaseUrl}`);
   }
 
-  const openclawNpm = verifyNpmPackage("openclaw", args.version, args.distTag);
+  const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
   lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
 
   if (!args.skipPostpublish) {
@@ -513,7 +589,7 @@ export async function verifyBetaRelease(
     packages: npmPlugins,
   });
   for (const plugin of npmPlugins) {
-    verifyNpmPackage(plugin.packageName, args.version, args.distTag);
+    await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
   }
   lines.push(`plugin npm OK: ${npmPlugins.length}`);
 
@@ -567,14 +643,28 @@ export async function verifyBetaRelease(
     );
   }
   if (args.workflowRuns.pluginClawHub !== undefined) {
+    const clawHubWorkflowRef = args.clawHubWorkflowRef ?? args.workflowRef;
     workflowRuns.push(
       verifyWorkflowRun({
         id: args.workflowRuns.pluginClawHub,
         label: "Plugin ClawHub Release",
         repo: args.repo,
         expectedWorkflowName: "Plugin ClawHub Release",
-        expectedHeadBranch: args.workflowRef,
+        expectedHeadBranch: clawHubWorkflowRef,
         rerunFailed: args.rerunFailedClawHub,
+      }),
+    );
+  }
+  if (args.workflowRuns.pluginClawHubBootstrap !== undefined) {
+    const clawHubWorkflowRef = args.clawHubWorkflowRef ?? args.workflowRef;
+    workflowRuns.push(
+      verifyWorkflowRun({
+        id: args.workflowRuns.pluginClawHubBootstrap,
+        label: "Plugin ClawHub New",
+        repo: args.repo,
+        expectedWorkflowName: "Plugin ClawHub New",
+        expectedHeadBranch: clawHubWorkflowRef,
+        rerunFailed: false,
       }),
     );
   }
@@ -597,7 +687,7 @@ export async function verifyBetaRelease(
         label: "NPM Telegram Beta E2E",
         repo: args.repo,
         expectedWorkflowName: "NPM Telegram Beta E2E",
-        expectedHeadBranch: args.workflowRef,
+        allowedHeadBranches: ["main", args.workflowRef],
         rerunFailed: false,
       }),
     );
@@ -621,6 +711,9 @@ export async function verifyBetaRelease(
           npmDistTag: args.distTag,
           pluginSelection: args.pluginSelection,
           openclawNpmIntegrity: openclawNpm.integrity,
+          openclawNpmTarball: openclawNpm.tarball,
+          npmRegistrySignaturesVerified: args.skipPostpublish ? null : true,
+          npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
           githubReleaseUrl: releaseUrl ?? null,
           pluginNpmPackageCount: npmPlugins.length,
           clawHubPackageCount: clawHubPlugins.length,

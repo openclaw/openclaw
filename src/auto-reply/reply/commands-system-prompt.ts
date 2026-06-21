@@ -231,6 +231,8 @@ export async function resolveCommandsSystemPromptBundle(
     workspaceDir,
     cwd: process.cwd(),
     runtime: {
+      sessionKey: params.sessionKey,
+      sessionId: targetSessionEntry?.sessionId,
       host: "unknown",
       os: "unknown",
       arch: "unknown",

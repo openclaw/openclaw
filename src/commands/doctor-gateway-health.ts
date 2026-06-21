@@ -8,6 +8,7 @@ import {
   callGateway,
   isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
+import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -18,10 +19,10 @@ import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatHealthCheckFailure } from "./health-format.js";
+import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import type { StatusSummary } from "./status.types.js";
 
-export type GatewayMemoryProbe = {
+type GatewayMemoryProbe = {
   checked: boolean;
   ready: boolean;
   error?: string;
@@ -36,6 +37,10 @@ export type GatewayMemoryProbe = {
 
 function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
+}
+
+function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
+  return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
 }
 
 function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
@@ -102,7 +107,7 @@ export async function checkGatewayHealth(params: {
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {
-    if (isGatewayCredentialsRequiredError(err)) {
+    if (isGatewayHealthAuthUnavailableError(err)) {
       const probeDetails = await buildGatewayProbeConnectionDetails({ config: params.cfg });
       const probe = await probeGatewayStatus({
         url: probeDetails.url,
@@ -124,7 +129,12 @@ export async function checkGatewayHealth(params: {
     const message = String(err);
     if (message.includes("gateway closed")) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
-      note("Gateway not running.", "Gateway");
+      const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+      if (closedDiagnostic) {
+        note(closedDiagnostic, "Gateway");
+      } else {
+        note("Gateway not running.", "Gateway");
+      }
       note(gatewayDetails.message, "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));

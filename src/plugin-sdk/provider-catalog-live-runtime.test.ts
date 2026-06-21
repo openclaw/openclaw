@@ -159,8 +159,10 @@ describe("provider-catalog-live-runtime", () => {
 
   it("throws structured HTTP errors after releasing guarded fetches", async () => {
     const release = vi.fn(async () => undefined);
+    const response = new Response("{}", { status: 401 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-      response: new Response("{}", { status: 401 }),
+      response,
       finalUrl: "https://provider.example.test/v1/models",
       release,
     }));
@@ -173,6 +175,7 @@ describe("provider-catalog-live-runtime", () => {
 
     expect(error).toBeInstanceOf(LiveModelCatalogHttpError);
     expect(error).toMatchObject({ status: 401 });
+    expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledTimes(1);
   });
 

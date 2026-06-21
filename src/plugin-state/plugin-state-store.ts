@@ -37,7 +37,6 @@ export type {
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
   closePluginStateDatabase,
-  closePluginStateSqliteStore,
   countPluginStateLiveEntries,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
@@ -228,6 +227,25 @@ function prepareRegisterParams(
   };
 }
 
+function prepareUpdateValueJson<T>(
+  key: string,
+  updateValue: (current: T | undefined) => T | undefined,
+  defaultTtlMs?: number,
+  opts?: { ttlMs?: number },
+): (current: unknown) => { valueJson: string; ttlMs?: number } | undefined {
+  return (current) => {
+    const next = updateValue(current as T | undefined);
+    if (next === undefined) {
+      return undefined;
+    }
+    const prepared = prepareRegisterParams(key, next, defaultTtlMs, opts);
+    return {
+      valueJson: prepared.valueJson,
+      ...(prepared.ttlMs != null ? { ttlMs: prepared.ttlMs } : {}),
+    };
+  };
+}
+
 function assertConsistentOptions(
   pluginId: string,
   namespace: string,
@@ -294,17 +312,7 @@ function createKeyedStoreForPluginId<T>(
         namespace,
         key: normalizedKey,
         maxEntries,
-        updateValueJson: (current) => {
-          const next = updateValue(current as T | undefined);
-          if (next === undefined) {
-            return undefined;
-          }
-          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
-          return {
-            valueJson: params.valueJson,
-            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
-          };
-        },
+        updateValueJson: prepareUpdateValueJson(normalizedKey, updateValue, defaultTtlMs, opts),
         ...(env ? { env } : {}),
       });
     },
@@ -390,17 +398,7 @@ function createSyncKeyedStoreForPluginId<T>(
         namespace,
         key: normalizedKey,
         maxEntries,
-        updateValueJson: (current) => {
-          const next = updateValue(current as T | undefined);
-          if (next === undefined) {
-            return undefined;
-          }
-          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
-          return {
-            valueJson: params.valueJson,
-            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
-          };
-        },
+        updateValueJson: prepareUpdateValueJson(normalizedKey, updateValue, defaultTtlMs, opts),
         ...(env ? { env } : {}),
       });
     },

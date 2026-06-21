@@ -16,7 +16,6 @@ import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
-import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   buildAfterTurnRuntimeContext,
@@ -329,23 +328,6 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
-  });
-});
-
-describe("resolveBootstrapContextTargets", () => {
-  it("keeps BOOTSTRAP.md in system Project Context only for full bootstrap turns", () => {
-    expect(resolveBootstrapContextTargets({ bootstrapMode: "full" })).toEqual({
-      includeBootstrapInSystemContext: true,
-      includeBootstrapInRuntimeContext: false,
-    });
-    expect(resolveBootstrapContextTargets({ bootstrapMode: "limited" })).toEqual({
-      includeBootstrapInSystemContext: false,
-      includeBootstrapInRuntimeContext: false,
-    });
-    expect(resolveBootstrapContextTargets({ bootstrapMode: "none" })).toEqual({
-      includeBootstrapInSystemContext: false,
-      includeBootstrapInRuntimeContext: false,
-    });
   });
 });
 
@@ -1617,6 +1599,43 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       preserveSignatures: true,
       dropThinkingBlocks: false,
     } as never);
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = firstBaseContext(baseFn);
+    expect(seenContext.messages).toBe(messages);
+  });
+
+  it("preserves deferred directory tool calls allowed only for replay", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_hidden", name: "hidden_catalog_tool", arguments: {} },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "call_hidden",
+        content: [{ type: "toolResult", result: { ok: true } }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["tool_describe", "tool_call", "hidden_catalog_tool"]),
+      {
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      } as never,
+    );
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
       | Promise<FakeWrappedStream>;
@@ -3359,8 +3378,13 @@ describe("buildAfterTurnRuntimeContext", () => {
         config: {
           agents: {
             defaults: {
+              models: {
+                "openrouter/anthropic/claude-sonnet-4-5": {
+                  alias: "summary",
+                },
+              },
               compaction: {
-                model: "openrouter/anthropic/claude-sonnet-4-5",
+                model: "summary",
               },
             },
           },
@@ -3378,9 +3402,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    // buildEmbeddedCompactionRuntimeContext now resolves the override eagerly
-    // so that context engines (including third-party ones) receive the correct
-    // compaction model in the runtime context.
+    // Resolve aliases before handing runtime context to any context engine;
+    // otherwise third-party engines can dispatch the bare alias as a model id.
     expect(legacy.provider).toBe("openrouter");
     expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
     // Auth profile dropped because provider changed from openai to openrouter.

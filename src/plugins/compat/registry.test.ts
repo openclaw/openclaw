@@ -219,6 +219,11 @@ const knownDeprecatedSurfaceMarkers = [
     file: "extensions/whatsapp/src/inbound/types.ts",
     marker: "DeprecatedWebInboundMessageFlatAliases",
   },
+  {
+    code: "whatsapp-web-inbound-admission-top-level-fields",
+    file: "extensions/whatsapp/src/inbound/types.ts",
+    marker: "DeprecatedWebInboundAdmissionTopLevelFields",
+  },
 ] as const;
 
 function parseDate(date: string): Date {

@@ -96,10 +96,8 @@ export async function launchTuiCli(
             : {}),
         }
       : process.env;
-  const stdinWasPaused =
-    typeof process.stdin.isPaused === "function" ? process.stdin.isPaused() : false;
-
-  // Pause parent stdin while the child owns the terminal, then restore the previous state.
+  // Pause parent stdin while the inherited-stdio child owns the terminal.
+  // Keep it paused afterward so setup/container parents with stdin_open can exit.
   process.stdin.pause();
 
   await new Promise<void>((resolve, reject) => {
@@ -126,9 +124,5 @@ export async function launchTuiCli(
       }
       resolve();
     });
-  }).finally(() => {
-    if (!stdinWasPaused) {
-      process.stdin.resume();
-    }
   });
 }
