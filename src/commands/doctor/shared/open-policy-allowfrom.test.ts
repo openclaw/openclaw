@@ -66,7 +66,7 @@ describe("doctor open-policy allowFrom repair", () => {
     expect(result.config.channels?.matrix?.dm?.allowFrom).toEqual(["*"]);
   });
 
-  it("appends wildcard to discord nested dm allowFrom when top-level is absent", () => {
+  it("moves a discord nested narrowed dm allowFrom to canonical without widening it", () => {
     const result = maybeRepairOpenPolicyAllowFrom({
       channels: {
         discord: {
@@ -81,13 +81,13 @@ describe("doctor open-policy allowFrom repair", () => {
     expect(result.changes).toEqual([
       '- channels.discord.dmPolicy: set to "open" (migrated from channels.discord.dm.policy)',
       "- channels.discord.dm.allowFrom: removed after moving allowlist to channels.discord.allowFrom",
-      '- channels.discord.allowFrom: added "*" (required by dmPolicy="open")',
+      "- channels.discord.allowFrom: moved allowlist from channels.discord.dm.allowFrom",
     ]);
-    expect(result.config.channels?.discord?.allowFrom).toEqual(["123", "*"]);
+    expect(result.config.channels?.discord?.allowFrom).toEqual(["123"]);
     expect(result.config.channels?.discord?.dm).toBeUndefined();
   });
 
-  it("appends wildcard to existing top-level allowFrom", () => {
+  it("preserves an existing top-level narrowed allowFrom", () => {
     const result = maybeRepairOpenPolicyAllowFrom({
       channels: {
         slack: {
@@ -97,7 +97,8 @@ describe("doctor open-policy allowFrom repair", () => {
       },
     });
 
-    expect(result.config.channels?.slack?.allowFrom).toEqual(["U123", "*"]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.config.channels?.slack?.allowFrom).toEqual(["U123"]);
   });
 
   it("skips top-level allowFrom that already includes a wildcard", () => {
@@ -112,6 +113,24 @@ describe("doctor open-policy allowFrom repair", () => {
 
     expect(result.changes).toStrictEqual([]);
     expect(result.config.channels?.discord?.allowFrom).toEqual(["*"]);
+  });
+
+  it("preserves a per-account narrowed allowFrom", () => {
+    const result = maybeRepairOpenPolicyAllowFrom({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              dmPolicy: "open",
+              allowFrom: ["u_alpha"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.config.channels?.discord?.accounts?.work?.allowFrom).toEqual(["u_alpha"]);
   });
 
   it("repairs per-account open dmPolicy without allowFrom", () => {

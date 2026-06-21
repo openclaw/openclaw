@@ -301,10 +301,6 @@ export function normalizeLegacyDmAliases(params: {
   return { entry: updated, changed };
 }
 
-function hasWildcard(list?: Array<string | number>) {
-  return list?.some((value) => String(value).trim() === "*") ?? false;
-}
-
 /**
  * Ensures `dmPolicy="open"` has the wildcard allowlist required by access gates.
  */
@@ -344,29 +340,26 @@ export function ensureOpenDmPolicyAllowFromWildcard(params: {
       ? (legacyAllowFrom as Array<string | number>)
       : undefined;
 
-  if (hasWildcard(sourceAllowFrom)) {
-    if (canonicalAllowFrom === undefined && sourceAllowFrom) {
+  if (sourceAllowFrom !== undefined && sourceAllowFrom.length > 0) {
+    if (canonicalAllowFrom === undefined) {
       setCanonicalDmAllowFrom({
         entry: params.entry,
         mode: params.mode,
         allowFrom: sourceAllowFrom,
         pathPrefix: params.pathPrefix,
         changes: params.changes,
-        reason: `moved wildcard allowlist from ${formatPath(params.pathPrefix, allowPaths.legacyPath)}`,
+        reason: `moved allowlist from ${formatPath(params.pathPrefix, allowPaths.legacyPath)}`,
       });
     }
     return;
   }
 
-  const nextAllowFrom = [...(sourceAllowFrom ?? []), "*"];
   setCanonicalDmAllowFrom({
     entry: params.entry,
     mode: params.mode,
-    allowFrom: nextAllowFrom,
+    allowFrom: ["*"],
     pathPrefix: params.pathPrefix,
     changes: params.changes,
-    reason: Array.isArray(sourceAllowFrom)
-      ? 'added "*" (required by dmPolicy="open")'
-      : 'set to ["*"] (required by dmPolicy="open")',
+    reason: 'set to ["*"] (required by dmPolicy="open")',
   });
 }
