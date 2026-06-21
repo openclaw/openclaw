@@ -10780,6 +10780,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     ...openRouterModel,
     id: "openrouter/minimax/minimax-m3",
     name: "MiniMax M3 (custom)", provider: "my-provider", baseUrl: "https://api.my-provider.com/v1",
+    reasoning: false,
   } satisfies Model<"openai-completions">;
 
   const openAIModel = {
