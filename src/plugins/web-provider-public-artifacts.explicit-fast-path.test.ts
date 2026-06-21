@@ -145,13 +145,33 @@ describe("web provider public artifacts explicit fast path", () => {
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("throws when every matching bundled web provider factory fails", () => {
-    expect(() =>
+  it("skips plugins whose bundled web provider factories all fail", () => {
+    expect(
       resolveBundledWebSearchProvidersFromPublicArtifacts({
         onlyPluginIds: ["fuzzplugin"],
       }),
-    ).toThrow("Unable to initialize web providers for plugin fuzzplugin");
+    ).toEqual([]);
 
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "fuzzplugin",
+      artifactBasename: "web-search-contract-api.js",
+    });
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps healthy bundled web providers when another selected plugin factory fails", () => {
+    const provider = expectSingleProvider(
+      resolveBundledWebSearchProvidersFromPublicArtifacts({
+        onlyPluginIds: ["fuzzplugin", "brave"],
+      }),
+    );
+
+    expect(provider.pluginId).toBe("brave");
+    expect(provider.id).toBe("brave");
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "brave",
+      artifactBasename: "web-search-contract-api.js",
+    });
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "fuzzplugin",
       artifactBasename: "web-search-contract-api.js",
