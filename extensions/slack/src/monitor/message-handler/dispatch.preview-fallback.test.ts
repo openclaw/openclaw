@@ -1290,6 +1290,18 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
   });
 
+  it("does not use native Slack streaming when a custom identity is active", async () => {
+    mockedNativeStreaming = true;
+    const relayIdentity = { username: "Nik Team Claw" };
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
+
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
+  });
+
   it("does not create a Slack thread for top-level messages when replyToMode is off", async () => {
     mockedSlackStreamingMode = "off";
     mockedSlackIsThreadReply = false;
