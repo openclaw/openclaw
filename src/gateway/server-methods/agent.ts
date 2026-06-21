@@ -1137,7 +1137,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       continuationTrigger?: ContinuationTrigger;
       traceparent?: string;
     };
-    const senderIsOwner = clientHasAdminScope(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
@@ -2835,7 +2834,6 @@ export const agentHandlers: GatewayRequestHandlers = {
                 sessionEntry,
               }),
               allowModelOverride,
-              senderIsOwner,
             },
             runId,
             dedupeKeys: agentDedupeKeys,
