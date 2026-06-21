@@ -1581,6 +1581,8 @@ export async function spawnSubagentDirect(
         cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
+        model: resolvedModel || undefined,
+        allowModelOverride: true,
         timeout: runTimeoutSeconds,
         label: label || undefined,
         ...(bootstrapContextMode

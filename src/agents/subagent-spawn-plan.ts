@@ -106,6 +106,8 @@ export function resolveSubagentModelAndThinkingPlan(params: {
       }
     : undefined;
 
+  const resolvedModelParts = resolvedModel ? splitModelRef(resolvedModel) : undefined;
+
   return {
     status: "ok" as const,
     resolvedModel,
@@ -116,6 +118,14 @@ export function resolveSubagentModelAndThinkingPlan(params: {
         ? {
             model: resolvedModel,
             modelOverrideSource,
+            ...(resolvedModelParts?.model
+              ? {
+                  modelOverride: resolvedModelParts.model,
+                  ...(resolvedModelParts.provider
+                    ? { providerOverride: resolvedModelParts.provider }
+                    : {}),
+                }
+              : {}),
             ...(modelOrigin
               ? {
                   // Config-selected models are session overrides, not legacy fallback residue.
