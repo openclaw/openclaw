@@ -79,7 +79,7 @@ const appendSessionTranscriptMessage = vi.hoisted(() =>
 const emitSessionTranscriptUpdate = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const readLatestAssistantTextFromSessionTranscript = vi.hoisted(() => vi.fn());
-const readTailAssistantTextFromSessionTranscript = vi.hoisted(() => vi.fn());
+const isDeliveryMirrorTailDuplicate = vi.hoisted(() => vi.fn(async () => false));
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const resolveAndPersistSessionFile = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -153,9 +153,9 @@ vi.mock("./send.js", () => ({
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
+  isDeliveryMirrorTailDuplicate,
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,
-  readTailAssistantTextFromSessionTranscript,
   resolveAndPersistSessionFile,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode,
@@ -270,7 +270,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     appendSessionTranscriptMessage.mockReset();
     emitSessionTranscriptUpdate.mockReset();
     readLatestAssistantTextFromSessionTranscript.mockReset();
-    readTailAssistantTextFromSessionTranscript.mockReset();
+    isDeliveryMirrorTailDuplicate.mockReset();
+    isDeliveryMirrorTailDuplicate.mockResolvedValue(false);
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
     resolveAndPersistSessionFile.mockReset();
@@ -1805,7 +1806,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       timestamp: 1,
     });
     // Tail is the current user turn: no assistant reply recorded for it yet.
-    readTailAssistantTextFromSessionTranscript.mockResolvedValue(undefined);
+    isDeliveryMirrorTailDuplicate.mockResolvedValue(false);
     deliverReplies.mockImplementation(
       async (params: {
         replies?: Array<{ text?: string }>;
@@ -1855,9 +1856,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     // Primary runner already recorded this turn's reply as the tail, so the
     // mirror skip should fire.
-    readTailAssistantTextFromSessionTranscript.mockResolvedValue({
-      text: fullAnswer,
-    });
+    isDeliveryMirrorTailDuplicate.mockResolvedValue(true);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({ text: fullAnswer });

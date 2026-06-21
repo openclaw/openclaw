@@ -2,11 +2,11 @@
 export {
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,
-  readTailAssistantTextFromSessionTranscript,
   resolveAndPersistSessionFile,
   resolveSessionStoreEntry,
   updateSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+export { isDeliveryMirrorTailDuplicate } from "openclaw/plugin-sdk/session-transcript-runtime";
 export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";

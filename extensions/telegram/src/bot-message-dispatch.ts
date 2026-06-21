@@ -70,9 +70,9 @@ import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
+  isDeliveryMirrorTailDuplicate,
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,
-  readTailAssistantTextFromSessionTranscript,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
@@ -345,14 +345,12 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     agentId: params.route.agentId,
     sessionsDir: path.dirname(storePath),
   });
-  // Tail reader (stops at this turn's user line), not latest reader (scans past
-  // user lines): else an identical reply on a new "say it again" turn is taken
-  // for a duplicate and dropped. Normalize whitespace; delivery may rejoin blocks.
-  const existing = await readTailAssistantTextFromSessionTranscript(sessionFile);
-  if (
-    existing?.text &&
-    existing.text.trim().replace(/\s+/g, " ") === text.trim().replace(/\s+/g, " ")
-  ) {
+  // Tail-scoped guard (stops at this turn's user line), not a latest-reply scan:
+  // else an identical reply on a new "say it again" turn is taken for a duplicate
+  // and dropped. Redacts both sides and collapses whitespace internally, so a
+  // secret-shaped reply compares against the redacted persisted row and delivery
+  // rejoining streamed blocks does not defeat the skip.
+  if (await isDeliveryMirrorTailDuplicate(sessionFile, text, params.cfg)) {
     return;
   }
   const message = {
