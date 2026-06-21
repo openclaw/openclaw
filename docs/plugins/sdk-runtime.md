@@ -255,6 +255,8 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     Plugins that expose dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`. The policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls and higher-level plugin tools share the same enforcement path.
 
+    A node-host command may also declare an optional `onNodeHostStart(ctx)` hook, run once when the node-host process starts. Use it to bring up long-lived node-anchored services (for example the bundled browser extension bridge) before the first command dial; the hook must be idempotent and self-guarding. The ctx carries only the node-host's `nodeId`. The privileged node->gateway event emitter (which originates node-attributed agent turns) is deliberately **not** exposed on this public ctx -- it is delivered out-of-band solely to the bundled browser bridge, gated on the registry plugin's trusted bundled origin and identity, so a config-loaded plugin's hook cannot originate node-attributed turns.
+
   </Accordion>
   <Accordion title="api.runtime.tasks.managedFlows">
     Bind a Task Flow runtime to an existing OpenClaw session key or trusted tool context, then create and manage Task Flows without passing an owner on every call.
