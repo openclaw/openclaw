@@ -5,11 +5,6 @@ import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import {
-  clearPersistentPreferenceField,
-  hasPersistentPreferenceField,
-  setPersistentPreferenceField,
-} from "../../config/sessions/persistent-preferences.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -393,22 +388,12 @@ export async function handleDirectiveOnly(
   if (shouldPersistSessionEntry) {
     if (directives.clearThinkLevel) {
       delete sessionEntry.thinkingLevel;
-      if (directives.persist) {
-        setPersistentPreferenceField(sessionEntry, "thinkingLevel");
-      } else {
-        clearPersistentPreferenceField(sessionEntry, "thinkingLevel");
-      }
     } else if (
       directives.hasThinkDirective &&
       directives.thinkLevel &&
       resolvedDirectiveThinkLevel
     ) {
       sessionEntry.thinkingLevel = resolvedDirectiveThinkLevel;
-      if (directives.persist) {
-        setPersistentPreferenceField(sessionEntry, "thinkingLevel");
-      } else {
-        clearPersistentPreferenceField(sessionEntry, "thinkingLevel");
-      }
     }
     if (directives.clearFastMode) {
       delete sessionEntry.fastMode;
@@ -416,11 +401,7 @@ export async function handleDirectiveOnly(
       sessionEntry.fastMode = directives.fastMode;
     }
     if (shouldRemapUnsupportedThinkLevel && remappedUnsupportedThinkLevel) {
-      const keepThinkingPersistent = hasPersistentPreferenceField(sessionEntry, "thinkingLevel");
       sessionEntry.thinkingLevel = remappedUnsupportedThinkLevel;
-      if (keepThinkingPersistent) {
-        setPersistentPreferenceField(sessionEntry, "thinkingLevel");
-      }
     }
     if (
       directives.hasVerboseDirective &&
@@ -472,11 +453,6 @@ export async function handleDirectiveOnly(
         markLiveSwitchPending: true,
       });
       modelSelectionUpdated = applied.updated;
-      if (directives.persist) {
-        setPersistentPreferenceField(sessionEntry, "modelOverride");
-      } else {
-        clearPersistentPreferenceField(sessionEntry, "modelOverride");
-      }
     }
     if (directives.hasQueueDirective && directives.queueReset) {
       delete sessionEntry.queueMode;
@@ -661,9 +637,6 @@ export async function handleDirectiveOnly(
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);
     }
-  }
-  if (directives.persist && (directives.hasThinkDirective || modelSelection)) {
-    parts.push(formatDirectiveAck("Persisted across session resets."));
   }
   if (directives.hasQueueDirective && directives.queueMode) {
     parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));

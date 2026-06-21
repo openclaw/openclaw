@@ -5,7 +5,6 @@ import type { InlineDirectives } from "./directive-handling.js";
 export function createEmptyInlineDirectives(): InlineDirectives {
   return {
     cleaned: "",
-    persist: false,
     hasThinkDirective: false,
     clearThinkLevel: false,
     hasVerboseDirective: false,

@@ -213,24 +213,21 @@ describe("directive parsing", () => {
     expect(think.thinkLevel).toBe("high");
   });
 
-  it("strips --persist and marks directives as persistent", () => {
+  it("keeps --persist as ordinary text for inline directives", () => {
     const model = parseInlineDirectives("please sync /model openai/gpt-4.1-mini --persist now");
-    expect(model.persist).toBe(true);
-    expect(model.cleaned).toBe("please sync now");
+    expect(model.cleaned).toBe("please sync --persist now");
     expect(model.hasModelDirective).toBe(true);
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
 
     const think = parseInlineDirectives("/think high --persist");
-    expect(think.persist).toBe(true);
-    expect(think.cleaned).toBe("");
+    expect(think.cleaned).toBe("--persist");
     expect(think.hasThinkDirective).toBe(true);
     expect(think.thinkLevel).toBe("high");
   });
 
-  it("keeps --persist in ordinary messages without persistable directives", () => {
+  it("keeps --persist in ordinary messages", () => {
     const parsed = parseInlineDirectives("please keep --persist in this text");
 
-    expect(parsed.persist).toBe(false);
     expect(parsed.cleaned).toBe("please keep --persist in this text");
   });
 

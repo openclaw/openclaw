@@ -21,7 +21,6 @@ import {
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
-import { hasPersistentPreferenceField } from "../../config/sessions/persistent-preferences.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -305,7 +304,6 @@ export async function initSessionState(params: {
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedResponseUsage: SessionEntry["responseUsage"];
-  let persistedPreferenceFields: SessionEntry["persistentPreferenceFields"];
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
   let persistedModelOverrideSource: SessionEntry["modelOverrideSource"];
@@ -509,7 +507,6 @@ export async function initSessionState(params: {
     persistedReasoning = entry.reasoningLevel;
     persistedTtsAuto = entry.ttsAuto;
     persistedResponseUsage = entry.responseUsage;
-    persistedPreferenceFields = entry.persistentPreferenceFields;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
     persistedModelOverrideSource = entry.modelOverrideSource;
@@ -551,10 +548,7 @@ export async function initSessionState(params: {
       persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedPreferenceFields = entry.persistentPreferenceFields;
-      if (hasPersistentPreferenceField(entry, "responseUsage")) {
-        persistedResponseUsage = entry.responseUsage;
-      }
+      persistedResponseUsage = entry.responseUsage;
     }
     // When a reset trigger (/new, /reset) starts a new session, also rotate the
     // underlying CLI conversation and carry forward spawn lineage/label.
@@ -672,7 +666,6 @@ export async function initSessionState(params: {
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
     responseUsage: persistedResponseUsage ?? baseEntry?.responseUsage,
-    persistentPreferenceFields: persistedPreferenceFields ?? baseEntry?.persistentPreferenceFields,
     usageFamilyKey,
     usageFamilySessionIds,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,

@@ -38,7 +38,6 @@ function parseInlineDirectivesForTest(body: string) {
   if (normalized === "/reasoning stream") {
     return {
       cleaned: "",
-      persist: false,
       hasThinkDirective: false,
       hasVerboseDirective: false,
       hasTraceDirective: false,
@@ -66,7 +65,6 @@ function parseInlineDirectivesForTest(body: string) {
   if (normalized === "/trace on") {
     return {
       cleaned: "",
-      persist: false,
       hasThinkDirective: false,
       hasVerboseDirective: false,
       hasTraceDirective: true,
@@ -92,7 +90,6 @@ function parseInlineDirectivesForTest(body: string) {
   }
   return {
     cleaned: body,
-    persist: false,
     hasThinkDirective: false,
     hasVerboseDirective: false,
     hasTraceDirective: false,

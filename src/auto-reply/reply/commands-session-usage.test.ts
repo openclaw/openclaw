@@ -206,46 +206,13 @@ describe("handleUsageCommand", () => {
     expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
   });
 
-  it("marks usage footer mode persistent with --persist", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/usage full --persist";
-    params.sessionEntry = {
-      sessionId: "target-session",
-      updatedAt: Date.now(),
-    };
-    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
-
-    const result = await handleUsageCommand(params, true);
-
-    expect(result?.reply?.text).toBe("⚙️ Usage footer: full. Persisted across session resets.");
-    expect(params.sessionEntry.responseUsage).toBe("full");
-    expect(params.sessionEntry.persistentPreferenceFields).toEqual(["responseUsage"]);
-  });
-
-  it("accepts --persist before the usage mode", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/usage --persist tokens";
-    params.sessionEntry = {
-      sessionId: "target-session",
-      updatedAt: Date.now(),
-    };
-    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
-
-    const result = await handleUsageCommand(params, true);
-
-    expect(result?.reply?.text).toBe("⚙️ Usage footer: tokens. Persisted across session resets.");
-    expect(params.sessionEntry.responseUsage).toBe("tokens");
-    expect(params.sessionEntry.persistentPreferenceFields).toEqual(["responseUsage"]);
-  });
-
-  it("clears usage persistence marker on non-persistent mode updates", async () => {
+  it("updates usage footer mode as a session preference", async () => {
     const params = buildUsageParams();
     params.command.commandBodyNormalized = "/usage tokens";
     params.sessionEntry = {
       sessionId: "target-session",
       updatedAt: Date.now(),
       responseUsage: "full",
-      persistentPreferenceFields: ["responseUsage"],
     };
     params.sessionStore = { [params.sessionKey]: params.sessionEntry };
 
@@ -253,17 +220,15 @@ describe("handleUsageCommand", () => {
 
     expect(result?.reply?.text).toBe("⚙️ Usage footer: tokens.");
     expect(params.sessionEntry.responseUsage).toBe("tokens");
-    expect(params.sessionEntry.persistentPreferenceFields).toBeUndefined();
   });
 
-  it("clears usage persistence marker on non-persistent off updates", async () => {
+  it("clears usage footer mode on off updates", async () => {
     const params = buildUsageParams();
     params.command.commandBodyNormalized = "/usage off";
     params.sessionEntry = {
       sessionId: "target-session",
       updatedAt: Date.now(),
       responseUsage: "full",
-      persistentPreferenceFields: ["responseUsage"],
     };
     params.sessionStore = { [params.sessionKey]: params.sessionEntry };
 
@@ -271,7 +236,6 @@ describe("handleUsageCommand", () => {
 
     expect(result?.reply?.text).toBe("⚙️ Usage footer: off.");
     expect(params.sessionEntry.responseUsage).toBeUndefined();
-    expect(params.sessionEntry.persistentPreferenceFields).toBeUndefined();
   });
 });
 

@@ -19,14 +19,12 @@ import {
   extractThinkDirective,
   extractVerboseDirective,
 } from "./directives.js";
-import { extractPersistFlag } from "./persist-flag.js";
 import { extractQueueDirective } from "./queue/directive.js";
 import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
 
 /** Parsed inline directives removed from a user message before agent execution. */
 export type InlineDirectives = {
   cleaned: string;
-  persist: boolean;
   hasThinkDirective: boolean;
   thinkLevel?: ThinkLevel;
   rawThinkLevel?: string;
@@ -186,13 +184,9 @@ export function parseInlineDirectives(
     hasStatusDirective ||
     hasModelDirective ||
     hasQueueDirective;
-  const persistFlag = extractPersistFlag(queueCleaned);
-  const persistApplies = persistFlag.persist && (hasThinkDirective || hasModelDirective);
-
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
-    cleaned: persistApplies ? persistFlag.cleaned : hasAnyDirective ? queueCleaned : body.trim(),
-    persist: persistApplies,
+    cleaned: hasAnyDirective ? queueCleaned : body.trim(),
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,

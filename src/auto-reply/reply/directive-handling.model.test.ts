@@ -1244,20 +1244,6 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
-  it("clears model persistence marker on non-persistent mixed-content model switches", async () => {
-    const { sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o hello",
-      allowedModelKeys: ["openai/gpt-4o"],
-      sessionEntry: createSessionEntry({
-        persistentPreferenceFields: ["modelOverride"],
-      }),
-    });
-
-    expect(sessionEntry.providerOverride).toBe("openai");
-    expect(sessionEntry.modelOverride).toBe("gpt-4o");
-    expect(sessionEntry.persistentPreferenceFields).toBeUndefined();
-  });
-
   it("ignores provider-compatible runtime overrides for mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o --runtime codex hello",
@@ -1538,40 +1524,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(otherEntry.modelOverrideSource).toBeUndefined();
   });
 
-  it("marks model override persistent with --persist", async () => {
-    const sessionEntry = createSessionEntry();
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o --persist"),
-        sessionEntry,
-      }),
-    );
-
-    expect(result?.text).toContain("Model set to openai/gpt-4o for this session.");
-    expect(result?.text).toContain("Persisted across session resets.");
-    expect(sessionEntry.providerOverride).toBe("openai");
-    expect(sessionEntry.modelOverride).toBe("gpt-4o");
-    expect(sessionEntry.persistentPreferenceFields).toEqual(["modelOverride"]);
-  });
-
-  it("clears model persistence marker on non-persistent model switches", async () => {
-    const sessionEntry = createSessionEntry({
-      persistentPreferenceFields: ["modelOverride"],
-    });
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o"),
-        sessionEntry,
-      }),
-    );
-
-    expect(result?.text).toContain("Model set to openai/gpt-4o for this session.");
-    expect(result?.text ?? "").not.toContain("Persisted across session resets.");
-    expect(sessionEntry.providerOverride).toBe("openai");
-    expect(sessionEntry.modelOverride).toBe("gpt-4o");
-    expect(sessionEntry.persistentPreferenceFields).toBeUndefined();
-  });
-
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
     const { persisted } = await persistModelDirectiveForTest({
@@ -1748,64 +1700,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
-  });
-
-  it("marks thinking level persistent with --persist", async () => {
-    const directives = parseInlineDirectives("/think high --persist");
-    const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-        sessionStore,
-      }),
-    );
-
-    expect(result?.text).toContain("Thinking level set to high.");
-    expect(result?.text).toContain("Persisted across session resets.");
-    expect(sessionEntry.thinkingLevel).toBe("high");
-    expect(sessionEntry.persistentPreferenceFields).toEqual(["thinkingLevel"]);
-  });
-
-  it("clears thinking persistence marker on non-persistent thinking updates", async () => {
-    const directives = parseInlineDirectives("/think low");
-    const sessionEntry = createSessionEntry({
-      thinkingLevel: "high",
-      persistentPreferenceFields: ["thinkingLevel"],
-    });
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-        sessionStore,
-      }),
-    );
-
-    expect(result?.text).toContain("Thinking level set to low.");
-    expect(result?.text ?? "").not.toContain("Persisted across session resets.");
-    expect(sessionEntry.thinkingLevel).toBe("low");
-    expect(sessionEntry.persistentPreferenceFields).toBeUndefined();
-  });
-
-  it("clears thinking persistence marker on default directives", async () => {
-    const sessionEntry = createSessionEntry({
-      thinkingLevel: "high",
-      persistentPreferenceFields: ["thinkingLevel"],
-    });
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/think default"),
-        sessionEntry,
-        sessionStore,
-      }),
-    );
-
-    expect(result?.text).toContain("Thinking level reset to default.");
-    expect(sessionEntry.thinkingLevel).toBeUndefined();
-    expect(sessionEntry.persistentPreferenceFields).toBeUndefined();
   });
 
   it("clears thinking override for default directives", async () => {
@@ -2185,35 +2079,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 });
 
 describe("persistInlineDirectives session directive persistence policy", () => {
-  it("clears thinking persistence marker on non-persistent mixed-content thinking updates", async () => {
-    const sessionEntry = createSessionEntry({
-      thinkingLevel: "high",
-      persistentPreferenceFields: ["thinkingLevel"],
-    });
-    await persistInlineDirectives({
-      directives: parseInlineDirectives("/think low hello"),
-      cfg: baseConfig(),
-      sessionEntry,
-      sessionStore: { "agent:main:dm:1": sessionEntry },
-      sessionKey: "agent:main:dm:1",
-      storePath: undefined,
-      elevatedEnabled: false,
-      elevatedAllowed: false,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      initialModelLabel: "anthropic/claude-opus-4-6",
-      formatModelSwitchEvent: (label) => label,
-      agentCfg: undefined,
-    });
-
-    expect(sessionEntry.thinkingLevel).toBe("low");
-    expect(sessionEntry.persistentPreferenceFields).toBeUndefined();
-  });
-
   it("skips exec persistence for internal operator.write callers", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective(
       "/exec host=node security=allowlist ask=always node=worker-1",
