@@ -403,7 +403,7 @@ export function renderAgentOverview(params: {
         </label>
       </div>
 
-      ${ttsProvider === "elevenlabs" || (!ttsProvider && ttsEnabled)
+      ${ttsProvider === "elevenlabs"
         ? html`
             <div class="agent-model-fields" style="margin-top: 12px;">
               <label class="field">

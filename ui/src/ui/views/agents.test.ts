@@ -593,6 +593,96 @@ describe("renderAgents", () => {
     expect(toggle?.checked).toBe(true);
   });
 
+  it("does not render ElevenLabs fields when resolved provider is openai", async () => {
+    // P1: ElevenLabs-only controls must be gated on the resolved provider
+    // being "elevenlabs". When the inherited provider is "openai", the
+    // API key / voice ID / model fields must NOT appear.
+    const container = document.createElement("div");
+    const configForm = {
+      messages: {
+        tts: {
+          auto: "always",
+          provider: "openai",
+          providers: {
+            openai: { apiKey: "sk-test" },
+          },
+        },
+      },
+      agents: {
+        defaults: {},
+        list: [{ id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: { form: configForm, loading: false, saving: false, dirty: false },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // Voice/TTS card title should render
+    const card = Array.from(container.querySelectorAll("section.card")).find((el) =>
+      el.textContent?.includes(t("agents.voice.title")),
+    );
+    expect(card).toBeTruthy();
+
+    // The toggle should be ON (auto: always)
+    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(true);
+
+    // No password input for API key should exist
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeNull();
+
+    // No voice ID text input with ElevenLabs model select should exist
+    const selects = container.querySelectorAll<HTMLSelectElement>("select");
+    const ttsModelSelect = Array.from(selects).find((sel) =>
+      Array.from(sel.options).some((opt) => opt.value === "eleven_multilingual_v2"),
+    );
+    expect(ttsModelSelect).toBeUndefined();
+  });
+
+  it("does not render ElevenLabs fields when provider is unset and TTS is enabled", async () => {
+    // P1: When no provider is set (empty inheritance) but TTS is enabled,
+    // ElevenLabs fields should NOT render — the user must select a provider first.
+    const container = document.createElement("div");
+    const configForm = {
+      messages: {
+        tts: { auto: "always" },
+      },
+      agents: {
+        defaults: {},
+        list: [{ id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: { form: configForm, loading: false, saving: false, dirty: false },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // The toggle should be ON (auto: always)
+    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(true);
+
+    // No password input for API key
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeNull();
+  });
+
   it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("zh-CN");
