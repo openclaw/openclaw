@@ -21,6 +21,10 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+} from "../../infra/windows-install-roots.js";
 import { APP_NAME, getBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
@@ -235,14 +239,7 @@ function extractTarGzArchive(archivePath: string, extractDir: string, assetName:
 }
 
 function getWindowsTarCommand(): string {
-  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-  if (systemRoot) {
-    const systemTar = join(systemRoot, "System32", "tar.exe");
-    if (existsSync(systemTar)) {
-      return systemTar;
-    }
-  }
-  return "tar.exe";
+  return getWindowsSystem32ExePath("tar.exe");
 }
 
 function extractZipArchive(archivePath: string, extractDir: string, assetName: string): void {
@@ -264,7 +261,7 @@ function extractZipArchive(archivePath: string, extractDir: string, assetName: s
 
     const script =
       "& { param($archive, $destination) $ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force }";
-    const powershellFailure = runExtractionCommand("powershell.exe", [
+    const powershellFailure = runExtractionCommand(getWindowsPowerShellExePath(), [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",

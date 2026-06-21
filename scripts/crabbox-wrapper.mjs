@@ -19,7 +19,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
+import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
@@ -119,7 +119,7 @@ function spawnInvocation(command, commandArgs, env, platform) {
   const extension = extname(command).toLowerCase();
   if (platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
     return {
-      command: env.ComSpec ?? "cmd.exe",
+      command: resolveWindowsCmdExePath(env),
       args: ["/d", "/s", "/c", buildBatchCommandLine(command, commandArgs)],
       windowsVerbatimArguments: true,
     };

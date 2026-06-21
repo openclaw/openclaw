@@ -162,6 +162,17 @@ cleanup_notary_zip() {
   fi
 }
 
+cleanup_tmp_dsym() {
+  rm -rf "$TMP_DSYM"
+}
+
+copy_dsym_to_tmp() {
+  if ! cp -R "$1" "$TMP_DSYM"; then
+    cleanup_tmp_dsym
+    exit 1
+  fi
+}
+
 if [[ "$SKIP_NOTARIZE" == "1" ]]; then
   NOTARIZE=0
 fi
@@ -245,25 +256,30 @@ if [[ "$SKIP_DSYM" != "1" ]]; then
     TMP_DSYM="$ROOT_DIR/dist/$PRODUCT.dSYM"
     rm -rf "$TMP_DSYM"
     if [[ "${#DSYM_PATHS[@]}" -gt 1 ]]; then
-      cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"
+      copy_dsym_to_tmp "${DSYM_PATHS[0]}"
       DWARF_OUT="$TMP_DSYM/Contents/Resources/DWARF/$PRODUCT"
       DWARF_INPUTS=()
       for dsym in "${DSYM_PATHS[@]}"; do
         DWARF_INPUT="$dsym/Contents/Resources/DWARF/$PRODUCT"
         if [[ ! -f "$DWARF_INPUT" ]]; then
           echo "Error: missing DWARF binaries for dSYM merge (set SKIP_DSYM=1 to skip symbols)" >&2
+          cleanup_tmp_dsym
           exit 1
         fi
         DWARF_INPUTS+=("$DWARF_INPUT")
       done
       if [[ "${#DWARF_INPUTS[@]}" -gt 1 ]]; then
-        /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"
+        if ! /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"; then
+          cleanup_tmp_dsym
+          exit 1
+        fi
       else
         echo "Error: missing DWARF binaries for dSYM merge (set SKIP_DSYM=1 to skip symbols)" >&2
+        cleanup_tmp_dsym
         exit 1
       fi
     else
-      cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"
+      copy_dsym_to_tmp "${DSYM_PATHS[0]}"
     fi
     echo "🧩 dSYM: $DSYM_ZIP"
     rm -f "$DSYM_ZIP"

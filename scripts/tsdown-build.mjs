@@ -579,7 +579,7 @@ export function resolveTsdownBuildInvocation(params = {}) {
     pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec ?? env.ComSpec,
+    comSpec: params.comSpec,
     platform: params.platform ?? process.platform,
   });
   return {

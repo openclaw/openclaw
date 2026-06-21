@@ -263,6 +263,13 @@ describe("package-mac-dist plist validation", () => {
     expect(dsymBlock).toContain("Error: missing DWARF binaries for dSYM merge");
     expect(dsymBlock).toContain("Error: dSYM not found");
     expect(dsymBlock).toContain("exit 1");
+    expect(script).toContain('if ! cp -R "$1" "$TMP_DSYM"; then');
+    expect(dsymBlock).toContain("cleanup_tmp_dsym");
+    expect(dsymBlock).toContain('copy_dsym_to_tmp "${DSYM_PATHS[0]}"');
+    expect(dsymBlock).not.toContain('cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"');
+    expect(dsymBlock).toContain(
+      'if ! /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"; then',
+    );
     expect(dsymBlock).toContain('if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then');
     expect(dsymBlock).toContain('rm -rf "$TMP_DSYM"');
     expect(dsymBlock).not.toContain("WARN:");

@@ -8,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { resolveMatrixQaWindowsSystem32ExePath } from "../../windows-system-tools.js";
 
 export type MatrixQaCliRunResult = {
   args: string[];
@@ -111,16 +112,17 @@ function killMatrixQaCliChild(
 ): void {
   if (process.platform === "win32") {
     if (child.pid) {
+      const taskkillPath = resolveMatrixQaWindowsSystem32ExePath("taskkill.exe");
       const args = ["/PID", String(child.pid), "/T"];
       if (signal === "SIGKILL") {
         args.push("/F");
       }
-      const result = runTaskkill("taskkill", args, { stdio: "ignore", windowsHide: true });
+      const result = runTaskkill(taskkillPath, args, { stdio: "ignore", windowsHide: true });
       if (!result.error && result.status === 0) {
         return;
       }
       if (signal !== "SIGKILL") {
-        const forceResult = runTaskkill("taskkill", [...args, "/F"], {
+        const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
           stdio: "ignore",
           windowsHide: true,
         });

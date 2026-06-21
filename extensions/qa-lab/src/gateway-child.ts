@@ -50,6 +50,7 @@ import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
@@ -398,11 +399,12 @@ function signalQaGatewayWindowsProcessTree(
   signal: NodeJS.Signals,
   runTaskkill: QaGatewayTaskkillRunner = spawnSync,
 ) {
+  const taskkillPath = resolveQaWindowsSystem32ExePath("taskkill.exe");
   const args = ["/PID", String(pid), "/T"];
   if (signal === "SIGKILL") {
     args.push("/F");
   }
-  const result = runTaskkill("taskkill", args, {
+  const result = runTaskkill(taskkillPath, args, {
     stdio: "ignore",
     windowsHide: true,
   });
@@ -410,7 +412,7 @@ function signalQaGatewayWindowsProcessTree(
     return true;
   }
   if (signal !== "SIGKILL") {
-    const forceResult = runTaskkill("taskkill", [...args, "/F"], {
+    const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
       stdio: "ignore",
       windowsHide: true,
     });

@@ -21,6 +21,7 @@ import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
+import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
   execution: Extract<
@@ -196,11 +197,12 @@ function killQaScenarioWindowsProcessTree(
   if (pid === undefined) {
     return false;
   }
+  const taskkillPath = resolveQaWindowsSystem32ExePath("taskkill.exe");
   const args = ["/pid", String(pid), "/T"];
   if (signal === "SIGKILL") {
     args.push("/F");
   }
-  const result = runTaskkill("taskkill", args, {
+  const result = runTaskkill(taskkillPath, args, {
     stdio: "ignore",
     windowsHide: true,
   });
@@ -208,7 +210,7 @@ function killQaScenarioWindowsProcessTree(
     return true;
   }
   if (signal !== "SIGKILL") {
-    const forceResult = runTaskkill("taskkill", [...args, "/F"], {
+    const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
       stdio: "ignore",
       windowsHide: true,
     });
