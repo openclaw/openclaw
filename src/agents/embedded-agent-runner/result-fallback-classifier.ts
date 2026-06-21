@@ -1,3 +1,4 @@
+import { isGenericExternalRunFailureText } from "../../auto-reply/reply/agent-runner-failure-copy.js";
 /**
  * Classifies embedded-agent run results for model fallback decisions.
  */
@@ -122,6 +123,16 @@ function classifyBusinessDenialErrorPayloadReason(
   }
 }
 
+/** True when all non-reasoning, non-error text payloads match the generic external run failure text. */
+function haveAllTextPayloadsGenericFailureText(result: EmbeddedAgentRunResult): boolean {
+  const textPayloads = (result.payloads ?? []).filter(
+    (p): p is { text: string } => !p.isReasoning && !p.isError && typeof p.text === "string",
+  );
+  return (
+    textPayloads.length > 0 && textPayloads.every((p) => isGenericExternalRunFailureText(p.text))
+  );
+}
+
 /** Returns a fallback classification when an embedded run failed without user-visible output. */
 export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   provider: string;
@@ -136,13 +147,25 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
-    params.hasBlockReplyPipelineOutput === true ||
-    hasVisibleAgentPayload(params.result, {
-      includeErrorPayloads: false,
-      includeReasoningPayloads: false,
-    })
+    params.hasBlockReplyPipelineOutput === true
   ) {
     return null;
+  }
+
+  // Pre-check: when all non-reasoning, non-error text payloads are the generic
+  // external run failure text, bypass hasVisibleAgentPayload. Some subprocess
+  // runners (e.g. claude-cli) deliver their error text as a regular text
+  // payload (isError: false), which hasVisibleAgentPayload would consider
+  // visible and incorrectly block fallback to the next provider.
+  if (!haveAllTextPayloadsGenericFailureText(params.result)) {
+    if (
+      hasVisibleAgentPayload(params.result, {
+        includeErrorPayloads: false,
+        includeReasoningPayloads: false,
+      })
+    ) {
+      return null;
+    }
   }
   const incompleteTurn = params.result.meta.error?.kind === "incomplete_turn";
   if (incompleteTurn && params.result.meta.error?.fallbackSafe !== true) {
@@ -206,7 +229,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
     return null;
   }
-  if (payloads.length === 0) {
+  // Treat payloads that consist solely of the generic external run failure text
+  // as empty for fallback classification. The text was already used to bypass
+  // hasVisibleAgentPayload above; this ensures the payload-analysis section
+  // reaches the empty_result branch rather than returning null.
+  if (haveAllTextPayloadsGenericFailureText(params.result) || payloads.length === 0) {
     return {
       message: `${params.provider}/${params.model} ended without a visible assistant reply`,
       reason: "format",
