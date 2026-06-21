@@ -1055,10 +1055,6 @@ describe("startTelegramWebhook", () => {
     });
 
     abort.abort();
-    // Webhook should persist across restarts so transient channel lifecycle
-    // events (config reload, health-check restart) do not clear the Telegram
-    // webhook and cause message loss. The next startup calls setWebhook,
-    // which replaces the old webhook URL on Telegram's side.
     expect(deleteWebhookSpy).toHaveBeenCalledTimes(0);
   });
 });
