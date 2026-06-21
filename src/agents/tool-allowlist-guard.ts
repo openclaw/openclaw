@@ -37,7 +37,15 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   callableToolNames: string[];
   toolsEnabled: boolean;
   disableTools?: boolean;
+  modelRun?: boolean;
 }): Error | null {
+  // Raw model runs (`infer model run`, active-memory summary probes, and other
+  // modelRun/promptMode:"none" shapes) intentionally run without plugin tools, so
+  // an explicit allowlist that resolves to nothing must not fail the run before the
+  // model is even reached. Fail-closed still applies to real agent turns below.
+  if (params.modelRun === true) {
+    return null;
+  }
   const sources =
     params.disableTools === true
       ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
