@@ -6727,3 +6727,63 @@ details[open] > .ov-expandable-toggle::after {
     gap: 4px;
   }
 }
+
+/* ===========================================
+   Agent Voice / TTS Settings
+   =========================================== */
+
+.toggle-switch {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+  width: 36px;
+  height: 20px;
+}
+
+.toggle-switch input[type="checkbox"] {
+  appearance: none;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--border);
+  position: relative;
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.toggle-switch input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.toggle-switch input[type="checkbox"]:checked {
+  background: var(--accent);
+}
+
+.toggle-switch input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
+}
+
+.toggle-switch input[type="checkbox"]:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.toggle-switch input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

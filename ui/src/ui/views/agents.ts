@@ -110,6 +110,11 @@ export type AgentsProps = {
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
+  onTtsProviderChange: (agentId: string, provider: string | null) => void;
+  onTtsApiKeyChange: (agentId: string, apiKey: string) => void;
+  onTtsVoiceIdChange: (agentId: string, voiceId: string) => void;
+  onTtsModelChange: (agentId: string, model: string) => void;
+  onTtsToggle: (agentId: string, enabled: boolean) => void;
   onChannelsRefresh: () => void;
   onCronRefresh: () => void;
   onCronRunNow: (jobId: string) => void;
@@ -244,6 +249,11 @@ export function renderAgents(props: AgentsProps) {
                       onModelChange: props.onModelChange,
                       onModelFallbacksChange: props.onModelFallbacksChange,
                       onSelectPanel: props.onSelectPanel,
+                      onTtsProviderChange: props.onTtsProviderChange,
+                      onTtsApiKeyChange: props.onTtsApiKeyChange,
+                      onTtsVoiceIdChange: props.onTtsVoiceIdChange,
+                      onTtsModelChange: props.onTtsModelChange,
+                      onTtsToggle: props.onTtsToggle,
                     }),
                   )
                 : nothing}

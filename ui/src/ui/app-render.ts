@@ -3479,6 +3479,91 @@ export function renderApp(state: AppViewState) {
                   }
                   updateConfigFormValue(state, basePathResult, { primary, fallbacks: normalized });
                 },
+                onTtsToggle: (agentId, enabled) => {
+                  const index = ensureAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  updateConfigFormValue(
+                    state,
+                    ["agents", "list", index, "tts", "enabled"],
+                    enabled,
+                  );
+                },
+                onTtsProviderChange: (agentId, provider) => {
+                  const index = ensureAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  if (provider) {
+                    updateConfigFormValue(
+                      state,
+                      ["agents", "list", index, "tts", "provider"],
+                      provider,
+                    );
+                  } else {
+                    removeConfigFormValue(state, ["agents", "list", index, "tts", "provider"]);
+                  }
+                },
+                onTtsApiKeyChange: (agentId, apiKey) => {
+                  const index = ensureAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  const trimmed = apiKey.trim();
+                  if (trimmed) {
+                    updateConfigFormValue(
+                      state,
+                      ["agents", "list", index, "tts", "providers", "elevenlabs", "apiKey"],
+                      trimmed,
+                    );
+                  } else {
+                    removeConfigFormValue(state, [
+                      "agents",
+                      "list",
+                      index,
+                      "tts",
+                      "providers",
+                      "elevenlabs",
+                      "apiKey",
+                    ]);
+                  }
+                },
+                onTtsVoiceIdChange: (agentId, voiceId) => {
+                  const index = ensureAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  const trimmed = voiceId.trim();
+                  if (trimmed) {
+                    updateConfigFormValue(
+                      state,
+                      ["agents", "list", index, "tts", "providers", "elevenlabs", "speakerVoiceId"],
+                      trimmed,
+                    );
+                  } else {
+                    removeConfigFormValue(state, [
+                      "agents",
+                      "list",
+                      index,
+                      "tts",
+                      "providers",
+                      "elevenlabs",
+                      "speakerVoiceId",
+                    ]);
+                  }
+                },
+                onTtsModelChange: (agentId, model) => {
+                  const index = ensureAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  updateConfigFormValue(
+                    state,
+                    ["agents", "list", index, "tts", "providers", "elevenlabs", "model"],
+                    model,
+                  );
+                },
                 onSetDefault: (agentId) => {
                   stageDefaultAgentConfigEntry(state, agentId);
                 },
