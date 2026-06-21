@@ -121,7 +121,7 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
-  it("defaults progress assistant preview off unless explicitly enabled", () => {
+  it("enables progress assistant preview only for progress-mode drafts", () => {
     expect(resolveChannelProgressDraftAssistantPreview({ streaming: { mode: "progress" } })).toBe(
       false,
     );
@@ -130,6 +130,21 @@ describe("channel-streaming", () => {
         streaming: { mode: "progress", progress: { assistantPreview: true } },
       }),
     ).toBe(true);
+    expect(
+      resolveChannelProgressDraftAssistantPreview({
+        streaming: { mode: "partial", progress: { assistantPreview: true } },
+      }),
+    ).toBe(false);
+    expect(
+      resolveChannelProgressDraftAssistantPreview({
+        streaming: { mode: "block", progress: { assistantPreview: true } },
+      }),
+    ).toBe(false);
+    expect(
+      resolveChannelProgressDraftAssistantPreview({
+        streaming: { mode: "off", progress: { assistantPreview: true } },
+      }),
+    ).toBe(false);
   });
 
   it("falls back to legacy flat fields when the canonical object is absent", () => {

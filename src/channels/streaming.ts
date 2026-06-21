@@ -816,6 +816,9 @@ export function resolveChannelProgressDraftAssistantPreview(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = false,
 ): boolean {
+  if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
+    return false;
+  }
   const config = getChannelStreamingConfigObject(entry);
   const progress = asObjectRecord(config?.progress);
   return asBoolean(progress?.assistantPreview) ?? defaultValue;
