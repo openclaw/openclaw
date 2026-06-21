@@ -422,7 +422,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const toolEvents: Array<Record<string, unknown>> = [];
     const stop = onAgentEvent((event) => {
       if (event.stream === "tool") {
-        toolEvents.push(event.data as Record<string, unknown>);
+        toolEvents.push(event.data);
       }
     });
     const chunks = [
