@@ -87,6 +87,47 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
+  it("does not retry generic external runner failure text mixed with non-text visible content", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [
+          {
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+            mediaUrl: "https://example.com/failure-screenshot.png",
+            channelData: { delivered: true },
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry generic external runner failure text mixed with interactive content", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [
+          {
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+            interactive: { type: "button", label: "Retry" },
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("does not retry generic external runner failure text after committed delivery", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "claude-cli",

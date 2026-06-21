@@ -76,6 +76,19 @@ function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boole
   );
 }
 
+function hasNonTextVisiblePayloadContent(
+  payload: NonNullable<EmbeddedAgentRunResult["payloads"]>[number],
+): boolean {
+  const { text: _text, ...payloadWithoutText } = payload;
+  return hasVisibleAgentPayload(
+    { payloads: [payloadWithoutText] },
+    {
+      includeErrorPayloads: false,
+      includeReasoningPayloads: false,
+    },
+  );
+}
+
 function classifyGenericExternalRunFailurePayload(params: {
   provider: string;
   model: string;
@@ -91,7 +104,8 @@ function classifyGenericExternalRunFailurePayload(params: {
     payload?.isError === true ||
     payload?.isReasoning === true ||
     typeof text !== "string" ||
-    !isGenericExternalRunFailureText(text)
+    !isGenericExternalRunFailureText(text) ||
+    hasNonTextVisiblePayloadContent(payload)
   ) {
     return null;
   }
