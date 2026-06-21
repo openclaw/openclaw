@@ -8,6 +8,7 @@ import {
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
+import { toPublicProfileDriver } from "./profile-driver-display.js";
 import { listChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -235,9 +236,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
         cdpUrl: profile.cdpUrl ? (redactCdpUrl(profile.cdpUrl) ?? null) : null,
         color: profile.color,
-        // Surface the configured driver name ("extension-bridge"); the resolved
-        // profile carries the internal "extension" value it maps to 1:1.
-        driver: profile.driver === "extension" ? "extension-bridge" : profile.driver,
+        driver: toPublicProfileDriver(profile.driver),
         running,
         tabCount,
         isDefault: name === current.resolved.defaultProfile,
