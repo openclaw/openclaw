@@ -62,7 +62,7 @@ function insertKeywordFixtureWithPathInFtsText(
   },
 ): void {
   db.prepare(
-    "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     params.id,
     params.path,
@@ -76,7 +76,7 @@ function insertKeywordFixtureWithPathInFtsText(
     Date.now(),
   );
   db.prepare(
-    "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
   ).run(
     `${params.path}\n${params.text}`,
     params.id,
@@ -1111,9 +1111,9 @@ describe("searchKeyword filename token ranking (issue #94102)", () => {
     const db = new DatabaseSync(":memory:");
     const schema = ensureMemoryIndexSchema({
       db,
-      embeddingCacheTable: "embedding_cache",
+      embeddingCacheTable: "memory_embedding_cache",
       cacheEnabled: false,
-      ftsTable: "chunks_fts",
+      ftsTable: "memory_index_chunks_fts",
       ftsEnabled: true,
     });
     if (!schema.ftsAvailable) {
@@ -1143,7 +1143,7 @@ describe("searchKeyword filename token ranking (issue #94102)", () => {
 
       const results = await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         query: "2026-06-17-1649",
         limit: 3,
         snippetMaxChars: 200,
