@@ -671,6 +671,9 @@ export const OpenClawSchema = z
                     z.literal("existing-session"),
                     z.literal("extension-bridge"),
                   ])
+                  .describe(
+                    "Profile driver. 'openclaw' (default): a managed Chromium the gateway launches. 'clawd': a clawd-managed browser. 'existing-session': attach to an already-running Chrome over CDP / Chrome MCP. 'extension-bridge': drive the user's own Chrome via the bundled OpenClaw extension over a node-local CDP bridge (My Browser).",
+                  )
                   .optional(),
                 headless: z.boolean().optional(),
                 executablePath: z.string().optional(),

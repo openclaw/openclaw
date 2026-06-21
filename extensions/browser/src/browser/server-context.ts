@@ -235,7 +235,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
         cdpUrl: profile.cdpUrl ? (redactCdpUrl(profile.cdpUrl) ?? null) : null,
         color: profile.color,
-        driver: profile.driver,
+        // Surface the configured driver name ("extension-bridge"); the resolved
+        // profile carries the internal "extension" value it maps to 1:1.
+        driver: profile.driver === "extension" ? "extension-bridge" : profile.driver,
         running,
         tabCount,
         isDefault: name === current.resolved.defaultProfile,
