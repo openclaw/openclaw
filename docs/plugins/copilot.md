@@ -33,15 +33,12 @@ For the broader model/provider/runtime split, start with
 - A GitHub Copilot subscription that can drive the Copilot CLI (or a
   `gitHubToken` env / auth-profile entry for headless / cron runs).
 - A writable `copilotHome` directory. The harness defaults to
-  `~/.openclaw/agents/<agentId>/copilot` for full per-agent isolation. The
-  platform default (`%APPDATA%\copilot` on Windows, `$XDG_CONFIG_HOME/copilot`
-  or `~/.config/copilot` elsewhere) is used as the doctor probe fallback when
-  no explicit home is set.
+  `<agentDir>/copilot` when OpenClaw provides an agent directory, otherwise
+  `~/.openclaw/agents/<agentId>/copilot` for full per-agent isolation.
 
 `openclaw doctor` runs the plugin
-[doctor contract](#doctor-and-probes) for the extension; failures there are
-the canonical way to confirm the environment is ready before opting an agent
-in.
+[doctor contract](#doctor) for declarative session-state ownership and future
+compatibility migrations. It does not run Copilot CLI environment probes.
 
 ## Plugin install
 
@@ -153,10 +150,6 @@ the same directory), or `~/.openclaw/agents/<agentId>/copilot` otherwise.
 Override with `copilotHome: <path>` on the attempt input when you need a
 custom location (for example, a shared mount for migration).
 
-`probeCopilotAuthShape` (see [Doctor and probes](#doctor-and-probes)) is the
-pure shape check that validates which of the modes above will be used.
-It does not perform a live SDK handshake.
-
 ## Configuration surface
 
 The harness reads its config from per-attempt input
@@ -239,7 +232,7 @@ asserted in
 [`extensions/copilot/harness.test.ts`](https://github.com/openclaw/openclaw/blob/main/extensions/copilot/harness.test.ts)
 under `describe("runSideQuestion")`.
 
-## Doctor and probes
+## Doctor
 
 `extensions/copilot/doctor-contract-api.ts` is auto-loaded by
 `src/plugins/doctor-contract-registry.ts`. It contributes:
@@ -250,18 +243,6 @@ under `describe("runSideQuestion")`.
 - One `sessionRouteStateOwners` entry claiming provider `github-copilot`;
   runtime `copilot`; CLI session key `copilot`; auth profile
   prefix `github-copilot:`.
-
-`extensions/copilot/src/doctor-probes.ts` exports three imperative probes
-that hosts (including `openclaw doctor`) can call to verify the environment:
-
-| Probe                      | What it checks                                                                    | Reasons it can fail                                                              |
-| -------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `probeCopilotCliVersion`   | `copilot --version` exits 0 with a non-empty version string                       | `non-zero-exit`, `empty-version`, `spawn-failed`, `spawn-error`, `probe-timeout` |
-| `probeCopilotHomeWritable` | `mkdir -p copilotHome` + write + rm a marker file                                 | `copilothome-not-writable` (with the underlying fs error in `details.rawError`)  |
-| `probeCopilotAuthShape`    | At least one of `useLoggedInUser`, `gitHubToken`, or `profileId`+`profileVersion` | `no-auth-source`                                                                 |
-
-Each probe accepts a DI seam (`spawnFn`, `fsApi`) so tests do not spawn the
-real Copilot CLI or touch the host fs.
 
 ## Limitations
 

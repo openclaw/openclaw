@@ -1,6 +1,7 @@
 /**
  * Claude CLI argument helpers for OpenClaw-managed bundle MCP config.
  */
+import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Find an existing Claude `--mcp-config` argument value. */
@@ -42,4 +43,46 @@ export function injectClaudeMcpConfigArgs(
   }
   next.push("--strict-mcp-config", "--mcp-config", mcpConfigPath);
   return next;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Writes the active per-attempt capture token into OpenClaw's generated Claude MCP config. */
+export async function writeClaudeMcpCaptureConfig(params: {
+  mcpConfigPath: string;
+  captureKey: string;
+}): Promise<void> {
+  const raw = JSON.parse(await fs.readFile(params.mcpConfigPath, "utf-8")) as unknown;
+  if (!isRecord(raw)) {
+    throw new Error("Claude MCP capture requires an object config");
+  }
+  const mcpServers = isRecord(raw.mcpServers) ? raw.mcpServers : {};
+  const openclaw = isRecord(mcpServers.openclaw) ? mcpServers.openclaw : undefined;
+  if (!openclaw) {
+    throw new Error("Claude MCP capture requires an openclaw server config");
+  }
+  const headers = isRecord(openclaw.headers) ? openclaw.headers : {};
+  await fs.writeFile(
+    params.mcpConfigPath,
+    `${JSON.stringify(
+      {
+        ...raw,
+        mcpServers: {
+          ...mcpServers,
+          openclaw: {
+            ...openclaw,
+            headers: {
+              ...headers,
+              "x-openclaw-cli-capture-key": params.captureKey,
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
 }

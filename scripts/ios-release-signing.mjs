@@ -37,10 +37,10 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--mode") {
-      mode = argv[i + 1] ?? "";
+      mode = readOptionValue(argv, i, arg);
       i += 1;
     } else if (arg === "--manifest") {
-      manifestPath = path.resolve(argv[i + 1] ?? "");
+      manifestPath = path.resolve(readOptionValue(argv, i, arg));
       i += 1;
     } else if (arg === "-h" || arg === "--help") {
       usage();
@@ -55,6 +55,14 @@ function parseArgs(argv) {
   }
 
   return { mode, manifestPath };
+}
+
+function readOptionValue(argv, index, option) {
+  const value = argv[index + 1] ?? "";
+  if (!value || value.startsWith("--")) {
+    throw new Error(`Missing value for ${option}.`);
+  }
+  return value;
 }
 
 function readManifest(manifestPath) {

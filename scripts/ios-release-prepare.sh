@@ -86,16 +86,29 @@ validate_push_relay_base_url() {
   fi
 }
 
+require_option_value() {
+  local option="$1"
+  local value="${2-}"
+
+  if [[ -z "${value}" || "${value}" == --* ]]; then
+    echo "Missing value for ${option}." >&2
+    usage >&2
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --)
       shift
       ;;
     --build-number)
+      require_option_value "$1" "${2-}"
       BUILD_NUMBER="${2:-}"
       shift 2
       ;;
     --team-id)
+      require_option_value "$1" "${2-}"
       TEAM_ID="${2:-}"
       shift 2
       ;;

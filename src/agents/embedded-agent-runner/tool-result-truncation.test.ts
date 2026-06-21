@@ -437,6 +437,34 @@ describe("truncateOversizedToolResultsInMessages", () => {
       medium.length * 3,
     );
   });
+
+  it("keeps prompt projections byte-stable as history grows", () => {
+    const prefix = [
+      makeToolResult("p".repeat(15_000), "prefix_1"),
+      makeToolResult("q".repeat(15_000), "prefix_2"),
+    ];
+    const suffix = [
+      makeToolResult("x".repeat(15_000), "current_1"),
+      makeToolResult("y".repeat(15_000), "current_2"),
+    ];
+    const messages = [...prefix, ...suffix];
+
+    const first = truncateOversizedToolResultsInMessages(messages, 128_000, 12_000, null);
+    const second = truncateOversizedToolResultsInMessages(
+      [...messages, makeToolResult("z".repeat(15_000), "current_3")],
+      128_000,
+      12_000,
+      null,
+    );
+
+    expect(first.truncatedCount).toBe(4);
+    expect(second.truncatedCount).toBe(5);
+    expect(second.messages.slice(0, messages.length)).toEqual(first.messages);
+    expect(second.messages.every((message) => getToolResultTextLength(message) <= 12_000)).toBe(
+      true,
+    );
+    expect(messages).toEqual([...prefix, ...suffix]);
+  });
 });
 
 describe("truncateOversizedToolResultsInSession", () => {

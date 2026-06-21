@@ -131,6 +131,12 @@ describe("plugin gateway gauntlet helpers", () => {
     });
   });
 
+  it("rejects valued flags followed by another option", () => {
+    for (const flag of ["--repo-root", "--output-dir", "--plugin", "--qa-scenario"]) {
+      expect(() => parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+    }
+  });
+
   it("discovers bundled plugin manifests into lifecycle matrix rows", async () => {
     await writeManifest(
       "alpha",
@@ -878,10 +884,10 @@ const promise = runMeasuredCommandLive({
   label: "timeout-parent-termination",
   phase: "probe",
   timeoutKillGraceMs: 1_000,
-  timeoutMs: 100,
+  timeoutMs: 1_000,
   timeMode: "none",
 });
-for (let attempt = 0; attempt < 100 && !fs.existsSync(${JSON.stringify(
+for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(
           leaderExitedPath,
         )}); attempt += 1) {
   await delay(25);

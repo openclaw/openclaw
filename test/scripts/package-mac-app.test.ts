@@ -205,6 +205,68 @@ describe("package-mac-app plist stamping", () => {
     ]);
   });
 
+  it("prefers repo Corepack pnpm over a global pnpm shim", () => {
+    const helperBlock = getPackageManagerHelperBlock();
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
+    const outerRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-outer-"));
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
+    const logPath = path.join(tempRoot, "pnpm.log");
+    tempDirs.push(tempRoot, outerRoot, toolsDir);
+
+    writeFileSync(
+      path.join(tempRoot, "package.json"),
+      '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
+    );
+    writeFileSync(
+      path.join(outerRoot, "package.json"),
+      '{\n  "packageManager": "pnpm@11.8.0+sha512.test"\n}\n',
+    );
+    writeFileSync(
+      path.join(toolsDir, "pnpm"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'printf "global|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+        'if [[ "${1:-}" == "--version" ]]; then echo "11.8.0"; fi',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFileSync(
+      path.join(toolsDir, "corepack"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'printf "corepack|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+        '  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else echo "11.8.0"; fi',
+        "fi",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(path.join(toolsDir, "pnpm"), 0o755);
+    chmodSync(path.join(toolsDir, "corepack"), 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(tempRoot)}
+      OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
+      export OPENCLAW_TEST_LOG
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      cd ${JSON.stringify(outerRoot)}
+      ${helperBlock}
+      run_pnpm --version
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("11.2.2\n");
+    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
+      `corepack|${tempRoot}|pnpm --version`,
+      `corepack|${tempRoot}|pnpm --version`,
+    ]);
+  });
+
   it("fails with an actionable error when neither pnpm nor corepack pnpm is available", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
@@ -315,6 +377,8 @@ describe("package-mac-app plist stamping", () => {
     expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-dist.test.ts");
     expect(macosCi).toContain("test/scripts/create-dmg.test.ts");
+    expect(macosCi).toContain("test/scripts/codesign-mac-app.test.ts");
+    expect(macosCi).toContain("test/scripts/notarize-mac-artifact.test.ts");
   });
 
   it("fails closed when required Swift resources are missing", () => {

@@ -13,7 +13,11 @@ import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
-import { findClaudeMcpConfigPath, injectClaudeMcpConfigArgs } from "./bundle-mcp-claude.js";
+import {
+  findClaudeMcpConfigPath,
+  injectClaudeMcpConfigArgs,
+  writeClaudeMcpCaptureConfig,
+} from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
 
@@ -78,6 +82,28 @@ function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMc
   };
 }
 
+const OPENCLAW_MCP_ENV_TEMPLATE_PATTERN = /\$\{(OPENCLAW_MCP_[A-Z0-9_]+)\}/g;
+
+function resolveOpenClawMcpEnvTemplates(value: unknown, env?: Record<string, string>): unknown {
+  if (!env) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.replace(OPENCLAW_MCP_ENV_TEMPLATE_PATTERN, (match, name: string) => {
+      return Object.hasOwn(env, name) ? env[name] : match;
+    });
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => resolveOpenClawMcpEnvTemplates(entry, env));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, resolveOpenClawMcpEnvTemplates(entry, env)]),
+  );
+}
+
 async function prepareModeSpecificBundleMcpConfig(params: {
   mode: CliBundleMcpMode;
   backend: CliBackendConfig;
@@ -122,7 +148,11 @@ async function prepareModeSpecificBundleMcpConfig(params: {
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
   const mcpConfigPath = path.join(tempDir, "mcp.json");
-  await fs.writeFile(mcpConfigPath, serializedConfig, "utf-8");
+  const runtimeConfig = resolveOpenClawMcpEnvTemplates(
+    params.mergedConfig,
+    params.env,
+  ) as BundleMcpConfig;
+  await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
   return {
     backend: {
       ...params.backend,
@@ -201,6 +231,7 @@ export async function prepareCliBundleMcpConfig(params: {
 /** Prepares a per-attempt capture token without changing resume compatibility hashes. */
 export async function prepareCliBundleMcpCaptureAttempt(params: {
   mode?: CliBundleMcpMode;
+  backend?: CliBackendConfig;
   env?: Record<string, string>;
   captureKey?: string;
 }): Promise<{ env?: Record<string, string>; cleanup?: () => Promise<void> }> {
@@ -212,6 +243,17 @@ export async function prepareCliBundleMcpCaptureAttempt(params: {
       inheritedEnv: params.env,
       captureKey: params.captureKey,
     });
+  }
+  if (resolveBundleMcpMode(params.mode) === "claude-config-file") {
+    const mcpConfigPath =
+      findClaudeMcpConfigPath(params.backend?.args) ??
+      findClaudeMcpConfigPath(params.backend?.resumeArgs);
+    if (mcpConfigPath) {
+      await writeClaudeMcpCaptureConfig({
+        mcpConfigPath,
+        captureKey: params.captureKey,
+      });
+    }
   }
   return {
     env: {

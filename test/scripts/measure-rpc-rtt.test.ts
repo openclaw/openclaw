@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   assertRpcSmokeResponse,
   cleanupTempRoot,
@@ -15,6 +16,31 @@ import {
   summarizeRttSamples,
   waitForGatewayReady,
 } from "../../scripts/measure-rpc-rtt.mjs";
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
+
+function restoreEnvValue(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
+
+function withDefaultWindowsSystemRoot(run: () => void): void {
+  const originalSystemRoot = process.env.SystemRoot;
+  const originalWindir = process.env.WINDIR;
+  try {
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
+    run();
+  } finally {
+    restoreEnvValue("SystemRoot", originalSystemRoot);
+    restoreEnvValue("WINDIR", originalWindir);
+  }
+}
 
 class FakeWebSocket extends EventEmitter {
   static OPEN = 1;
@@ -324,7 +350,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(signalGatewayProcess(child, "SIGTERM", kill, { runTaskkill })).toBe(true);
 
     if (process.platform === "win32") {
-      expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "12345", "/T"], {
+      expect(runTaskkill).toHaveBeenCalledWith(expectedTaskkillPath(), ["/PID", "12345", "/T"], {
         stdio: "ignore",
       });
       expect(child.kill).not.toHaveBeenCalled();
@@ -335,36 +361,90 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
   });
 
   it("signals Windows gateway process trees with taskkill", () => {
-    const child = Object.assign(new EventEmitter(), {
-      exitCode: null,
-      kill: vi.fn(),
-      pid: 12345,
-      signalCode: null,
-    });
-    const kill = vi.fn(() => true);
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+    withDefaultWindowsSystemRoot(() => {
+      const child = Object.assign(new EventEmitter(), {
+        exitCode: null,
+        kill: vi.fn(),
+        pid: 12345,
+        signalCode: null,
+      });
+      const kill = vi.fn(() => true);
+      const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    expect(
-      signalGatewayProcess(child, "SIGTERM", kill, {
-        platform: "win32",
-        runTaskkill,
-      }),
-    ).toBe(true);
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
+      expect(
+        signalGatewayProcess(child, "SIGTERM", kill, {
+          platform: "win32",
+          runTaskkill,
+        }),
+      ).toBe(true);
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        1,
+        expectedTaskkillPath(),
+        ["/PID", "12345", "/T"],
+        {
+          stdio: "ignore",
+        },
+      );
 
-    expect(
-      signalGatewayProcess(child, "SIGKILL", kill, {
-        platform: "win32",
-        runTaskkill,
-      }),
-    ).toBe(true);
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
+      expect(
+        signalGatewayProcess(child, "SIGKILL", kill, {
+          platform: "win32",
+          runTaskkill,
+        }),
+      ).toBe(true);
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        2,
+        expectedTaskkillPath(),
+        ["/PID", "12345", "/T", "/F"],
+        {
+          stdio: "ignore",
+        },
+      );
+      expect(kill).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
     });
-    expect(kill).not.toHaveBeenCalled();
-    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
+    withDefaultWindowsSystemRoot(() => {
+      const child = Object.assign(new EventEmitter(), {
+        exitCode: null,
+        kill: vi.fn(),
+        pid: 12345,
+        signalCode: null,
+      });
+      const kill = vi.fn(() => true);
+      const runTaskkill = vi
+        .fn()
+        .mockReturnValueOnce({ error: undefined, status: 1 })
+        .mockReturnValueOnce({ error: undefined, status: 0 });
+
+      expect(
+        signalGatewayProcess(child, "SIGTERM", kill, {
+          platform: "win32",
+          runTaskkill,
+        }),
+      ).toBe(true);
+
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        1,
+        expectedTaskkillPath(),
+        ["/PID", "12345", "/T"],
+        {
+          stdio: "ignore",
+        },
+      );
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        2,
+        expectedTaskkillPath(),
+        ["/PID", "12345", "/T", "/F"],
+        {
+          stdio: "ignore",
+        },
+      );
+      expect(kill).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+    });
   });
 
   it("treats missing gateway process groups as already exited", () => {
@@ -412,12 +492,22 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     await stopGateway(child, { killGraceMs: 1, killProcess: kill, runTaskkill });
 
     if (process.platform === "win32") {
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12346", "/T"], {
-        stdio: "ignore",
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12346", "/T", "/F"], {
-        stdio: "ignore",
-      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        1,
+        expectedTaskkillPath(),
+        ["/PID", "12346", "/T"],
+        {
+          stdio: "ignore",
+        },
+      );
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        2,
+        expectedTaskkillPath(),
+        ["/PID", "12346", "/T", "/F"],
+        {
+          stdio: "ignore",
+        },
+      );
       expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12346, 0);
@@ -459,12 +549,22 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     });
 
     if (process.platform === "win32") {
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12350", "/T"], {
-        stdio: "ignore",
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12350", "/T", "/F"], {
-        stdio: "ignore",
-      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        1,
+        expectedTaskkillPath(),
+        ["/PID", "12350", "/T"],
+        {
+          stdio: "ignore",
+        },
+      );
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        2,
+        expectedTaskkillPath(),
+        ["/PID", "12350", "/T", "/F"],
+        {
+          stdio: "ignore",
+        },
+      );
       expect(child.kill).not.toHaveBeenCalled();
     } else {
       expect(kill).toHaveBeenCalledWith(-12350, "SIGKILL");
@@ -519,7 +619,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       processLike.emit("SIGTERM");
 
       if (process.platform === "win32") {
-        expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "12348", "/T"], {
+        expect(runTaskkill).toHaveBeenCalledWith(expectedTaskkillPath(), ["/PID", "12348", "/T"], {
           stdio: "ignore",
         });
         expect(child.kill).not.toHaveBeenCalled();
@@ -565,7 +665,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     processLike.emit("exit");
 
     if (process.platform === "win32") {
-      expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "12349", "/T"], {
+      expect(runTaskkill).toHaveBeenCalledWith(expectedTaskkillPath(), ["/PID", "12349", "/T"], {
         stdio: "ignore",
       });
       expect(child.kill).not.toHaveBeenCalled();

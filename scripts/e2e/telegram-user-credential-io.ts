@@ -1,6 +1,7 @@
 // Telegram User Credential Io script supports OpenClaw repository automation.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -244,13 +245,44 @@ async function finishTimedOutChildProcessTree(
   }
 }
 
-function signalChildProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals) {
-  if (process.platform !== "win32" && child.pid) {
+type ChildProcessTreeTarget = Pick<ReturnType<typeof spawn>, "kill" | "pid">;
+
+export function signalChildProcessTree(
+  child: ChildProcessTreeTarget,
+  signal: NodeJS.Signals,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  }: {
+    platform?: NodeJS.Platform;
+    runTaskkill?: typeof spawnSync;
+    useProcessGroup?: boolean;
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {
       // The process group can disappear between timeout and cleanup.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
     }
   }
   child.kill(signal);

@@ -21,9 +21,3 @@ export type Locale =
   | "vi"
   | "nl"
   | "fa";
-
-export interface I18nConfig {
-  locale: Locale;
-  fallbackLocale: Locale;
-  translations: Record<Locale, TranslationMap>;
-}
