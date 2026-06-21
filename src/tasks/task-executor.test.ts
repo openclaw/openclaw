@@ -42,6 +42,7 @@ import {
   setTaskRegistryControlRuntimeForTests,
 } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { getActiveTaskRouteLease } from "./task-route-lease.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -818,6 +819,91 @@ describe("task-executor", () => {
       expect(attackerTask?.status).toBe("failed");
       expect(attackerTask?.error).toBe("attacker controlled error");
       expect(getTaskById(victim.taskId)?.status).toBe("running");
+    });
+  });
+
+  it("scopes the auto-acquired task-route lease to each task's runtime/session scope (PR #95481 P1 review)", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const acpTask = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:victim:main",
+        scopeKind: "session",
+        childSessionKey: "agent:victim:acp:child",
+        runId: "run-shared-executor-lease",
+        task: "ACP task with its own requester origin",
+        requesterOrigin: { channel: "telegram", to: "victim", accountId: "default" },
+        deliveryStatus: "pending",
+      });
+      const cliTask = createRunningTaskRun({
+        runtime: "cli",
+        ownerKey: "agent:attacker:main",
+        scopeKind: "session",
+        childSessionKey: "agent:attacker:main",
+        runId: "run-shared-executor-lease",
+        task: "CLI task sharing the same raw runId",
+        requesterOrigin: { channel: "discord", to: "attacker", accountId: "default" },
+        deliveryStatus: "pending",
+      });
+
+      // Each task's auto-acquired lease must be keyed by its own scope,
+      // not the default scope, so the two do not overwrite each other.
+      const acpLease = getActiveTaskRouteLease("run-shared-executor-lease", {
+        scope: {
+          runtime: "acp",
+          scopeKind: "session",
+          ownerKey: "agent:victim:main",
+          childSessionKey: "agent:victim:acp:child",
+        },
+      });
+      const cliLease = getActiveTaskRouteLease("run-shared-executor-lease", {
+        scope: {
+          runtime: "cli",
+          scopeKind: "session",
+          ownerKey: "agent:attacker:main",
+          childSessionKey: "agent:attacker:main",
+        },
+      });
+      expect(acpLease).toBeDefined();
+      expect(cliLease).toBeDefined();
+      expect(acpLease?.requesterOrigin?.channel).toBe("telegram");
+      expect(cliLease?.requesterOrigin?.channel).toBe("discord");
+
+      // The default-scope lookup must not see either of the scoped rows,
+      // proving both auto-acquires used the task's real scope.
+      expect(getActiveTaskRouteLease("run-shared-executor-lease")).toBeUndefined();
+
+      // Settling the ACP task's delivery status must retire only the
+      // ACP-scoped lease, leaving the CLI-scoped lease intact.
+      setDetachedTaskDeliveryStatusByRunId({
+        runId: "run-shared-executor-lease",
+        runtime: "acp",
+        sessionKey: "agent:victim:acp:child",
+        deliveryStatus: "delivered",
+      });
+
+      expect(
+        getActiveTaskRouteLease("run-shared-executor-lease", {
+          scope: {
+            runtime: "acp",
+            scopeKind: "session",
+            ownerKey: "agent:victim:main",
+            childSessionKey: "agent:victim:acp:child",
+          },
+        }),
+      ).toBeUndefined();
+      expect(
+        getActiveTaskRouteLease("run-shared-executor-lease", {
+          scope: {
+            runtime: "cli",
+            scopeKind: "session",
+            ownerKey: "agent:attacker:main",
+            childSessionKey: "agent:attacker:main",
+          },
+        }),
+      ).toBeDefined();
+
+      expect(acpTask.runId).toBe("run-shared-executor-lease");
+      expect(cliTask.runId).toBe("run-shared-executor-lease");
     });
   });
 });

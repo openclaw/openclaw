@@ -19,7 +19,7 @@ The completion-time resolver already has higher-precedence sources:
 2. The active main session bucket (most useful, but can be retargeted)
 3. The task's stored `delivery` config (can be partial or stale)
 
-When all three lose the outbound target, the resolver falls back to the route lease keyed by `run_id`. The lease is keyed by `run_id` rather than `task_id` because a single task may produce multiple runs over time, and each run owns its own delivery origin.
+When all three lose the outbound target, the resolver falls back to the route lease. The lease is keyed by the `(run_id, runtime, scope_kind, owner_key, child_session_key)` tuple — the same scope facts the task registry uses to disambiguate shared-runId task records. The lease is keyed by that 5-tuple rather than `task_id` because a single task may produce multiple runs over time, and each run owns its own delivery origin within its scope.
 
 ## Lifecycle
 

@@ -1138,13 +1138,31 @@ describe("task-registry store runtime", () => {
           notifyPolicy: "done_only",
         });
         expect(task).not.toBeNull();
-        // Auto-acquire wrote a lease row keyed by runId. This proves the
-        // pre-delete precondition.
-        expect(getActiveTaskRouteLease("run-cascade-cron")).toBeDefined();
+        // Auto-acquire wrote a lease row keyed by (runId, runtime, scopeKind,
+        // ownerKey, childSessionKey). This proves the pre-delete precondition.
+        expect(
+          getActiveTaskRouteLease("run-cascade-cron", {
+            scope: {
+              runtime: "cron",
+              scopeKind: "session",
+              ownerKey: "agent:main:main",
+              childSessionKey: "",
+            },
+          }),
+        ).toBeDefined();
 
         // The composite store delete also drops the lease row atomically.
         expect(deleteTaskRecordById(task!.taskId)).toBe(true);
-        expect(getActiveTaskRouteLease("run-cascade-cron")).toBeUndefined();
+        expect(
+          getActiveTaskRouteLease("run-cascade-cron", {
+            scope: {
+              runtime: "cron",
+              scopeKind: "session",
+              ownerKey: "agent:main:main",
+              childSessionKey: "",
+            },
+          }),
+        ).toBeUndefined();
       },
     );
   });

@@ -135,6 +135,12 @@ export function createRunningTaskRun(params: RunningTaskRunCreateParams): TaskRe
       runId: task.runId,
       taskId: task.taskId,
       requesterOrigin: params.requesterOrigin,
+      scope: {
+        runtime: task.runtime,
+        scopeKind: task.scopeKind,
+        ownerKey: task.ownerKey,
+        childSessionKey: task.childSessionKey,
+      },
     });
   }
   return ensureSingleTaskFlow({
@@ -232,10 +238,24 @@ export function setDetachedTaskDeliveryStatusByRunId(params: {
   const updated = setTaskRunDeliveryStatusByRunId(params);
   // Settle the task-route lease on terminal delivery so it can be GC'd
   // instead of waiting for TTL expiry. Idempotent — re-runs on already-
-  // settled leases are no-ops.
+  // settled leases are no-ops. Settle every task row that matched the
+  // runId scope, because the lease key now mirrors the task-registry
+  // scope tuple and each task row owns its own lease.
   const retirement = mapDeliveryStatusToLeaseRetirement(params.deliveryStatus);
   if (retirement) {
-    settleTaskRouteLease(params.runId, retirement);
+    for (const task of updated) {
+      if (!task.runId) {
+        continue;
+      }
+      settleTaskRouteLease(task.runId, retirement, {
+        scope: {
+          runtime: task.runtime,
+          scopeKind: task.scopeKind,
+          ownerKey: task.ownerKey,
+          childSessionKey: task.childSessionKey,
+        },
+      });
+    }
   }
   return updated;
 }

@@ -292,8 +292,7 @@ function deleteTaskRowsWithDeliveryState(db: DatabaseSync, taskId: string): void
   // task. Delete those leases atomically with task_runs and
   // task_delivery_state so settled/expired/orphaned rows do not
   // accumulate in the shared state DB. Lease module owns the lease
-  // SQL; we own the transaction. See PR #95352 ClawSweeper review
-  // (P2 retention, confidence 0.9).
+  // SQL; we own the transaction.
   deleteTaskRouteLeasesByTaskIdInDb(db, taskId);
 }
 
