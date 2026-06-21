@@ -171,10 +171,8 @@ describe("OpenClaw release publish policy workflow", () => {
     expect(dispatch.run?.slice(writerIndex)).not.toMatch(/jq[^\n]*releasePublishRunId/);
 
     const upload = step("publish", "Upload postpublish evidence");
-    expect(upload.if).toBe("${{ success() }}");
-    expect(upload.with?.path).toBe(
-      "${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-evidence.json",
-    );
+    expect(upload.if).toBe("${{ always() && inputs.publish_openclaw_npm }}");
+    expect(upload.with?.path).toBe("${{ runner.temp }}/openclaw-release-postpublish-evidence");
     expect(upload.with?.["if-no-files-found"]).toBe("error");
   });
 });
