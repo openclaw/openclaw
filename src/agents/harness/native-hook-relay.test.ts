@@ -462,7 +462,7 @@ describe("native hook relay registry", () => {
     expect(JSON.parse(duplicateApproval.stdout)).toEqual({
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
-        decision: { updatedInput: expect.any(Object) },
+        decision: { behavior: "allow" },
       },
     });
 
@@ -483,7 +483,7 @@ describe("native hook relay registry", () => {
     expect(JSON.parse(primaryApproval.stdout)).toEqual({
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
-        decision: { updatedInput: expect.any(Object) },
+        decision: { behavior: "allow" },
       },
     });
 
@@ -2473,7 +2473,7 @@ describe("native hook relay registry", () => {
     expect(JSON.parse(response.stdout)).toEqual({
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
-        decision: { updatedInput: expect.any(Object) },
+        decision: { behavior: "allow" },
       },
     });
     const request = getMockCallArg(approvalRequester, 0, 0, "approval request");
@@ -2633,7 +2633,7 @@ describe("native hook relay registry", () => {
     expect(JSON.parse(allow.stdout)).toEqual({
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
-        decision: { updatedInput: expect.any(Object) },
+        decision: { behavior: "allow" },
       },
     });
     expect(JSON.parse(deny.stdout)).toEqual({
@@ -2703,13 +2703,13 @@ describe("native hook relay registry", () => {
       {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
-          decision: { updatedInput: expect.any(Object) },
+          decision: { behavior: "allow" },
         },
       },
       {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
-          decision: { updatedInput: expect.any(Object) },
+          decision: { behavior: "allow" },
         },
       },
     ]);
@@ -2883,13 +2883,13 @@ describe("native hook relay registry", () => {
       {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
-          decision: { updatedInput: expect.any(Object) },
+          decision: { behavior: "allow" },
         },
       },
       {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
-          decision: { updatedInput: expect.any(Object) },
+          decision: { behavior: "allow" },
         },
       },
     ]);
@@ -3015,7 +3015,7 @@ describe("native hook relay registry", () => {
     expect(JSON.parse(firstResponse.stdout)).toEqual({
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
-        decision: { updatedInput: expect.any(Object) },
+        decision: { behavior: "allow" },
       },
     });
   });
