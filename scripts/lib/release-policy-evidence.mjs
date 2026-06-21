@@ -164,6 +164,12 @@ export function writeCanonicalJsonExclusive(path, value) {
     throw error;
   }
   unlinkSync(temporaryPath);
+  const directoryDescriptor = openSync(dirname(outputPath), "r");
+  try {
+    fsyncSync(directoryDescriptor);
+  } finally {
+    closeSync(directoryDescriptor);
+  }
 }
 
 export function releasePolicySha256(policy) {
@@ -239,9 +245,6 @@ export function validateReleasePolicy(value, path = "releasePolicy") {
         : policy.releaseClass;
     if (policy.releaseSelector !== expectedSelector) {
       fail(`${path}.releaseSelector`, `does not match release class ${policy.releaseClass}`);
-    }
-    if (stableClass && policy.publishEligible !== false) {
-      fail(`${path}.publishEligible`, "strict stable is policy-only in this milestone");
     }
     if (
       !stableClass &&
