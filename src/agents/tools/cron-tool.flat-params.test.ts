@@ -206,7 +206,23 @@ describe("cron tool trailing-space key trimming", () => {
     expect(result.schedule).toEqual({ kind: "cron", expr: "30 10 * * *" });
   });
 
-  it("rejects __proto__ key even after trimming", () => {
+  it("trims leading spaces from recognized cron job keys", () => {
+    const result = canonicalizeCronToolObject({
+      job: {
+        " schedule": { kind: "at", at: "2026-12-25T00:00:00Z" },
+        " sessionTarget": "main",
+        " payload": { kind: "agentTurn", message: "hi" },
+      },
+    });
+    expect(result).toHaveProperty("schedule");
+    expect(result).toHaveProperty("sessionTarget");
+    expect(result).toHaveProperty("payload");
+    expect(Object.keys(result)).not.toContain(" schedule");
+    expect(Object.keys(result)).not.toContain(" sessionTarget");
+    expect(Object.keys(result)).not.toContain(" payload");
+  });
+
+  it("keeps unknown padded keys unchanged for strict validation to reject", () => {
     const result = canonicalizeCronToolObject({
       job: {
         name: "Test",
@@ -214,9 +230,27 @@ describe("cron tool trailing-space key trimming", () => {
         schedule: { kind: "cron", expr: "0 * * * *" },
       },
     });
+    // Only recognized cron keys are trimmed. Unknown keys stay as-is so
+    // strict gateway validation can surface them.
     expect(result).toHaveProperty("schedule");
-    expect(Object.keys(result)).not.toContain("__proto__");
-    expect(Object.getPrototypeOf(result)).toBeNull();
+    // Result is a normal object — no prototype pollution risk.
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+  });
+
+  it("preserves a padded duplicate when canonical key already exists", () => {
+    const result = canonicalizeCronToolObject({
+      job: {
+        name: "dup-test",
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        "enabled ": true,
+        enabled: false,
+        payload: { kind: "agentTurn", message: "dup test" },
+      },
+    });
+    // The canonical key already exists — the padded duplicate is preserved
+    // so strict validation can reject the conflict instead of silently merging.
+    expect(result.enabled).toBe(false);
+    expect(result["enabled "]).toBe(true);
   });
 
   it("does not strip trailing spaces from values, only keys", () => {
@@ -226,6 +260,19 @@ describe("cron tool trailing-space key trimming", () => {
         schedule: { kind: "cron", expr: "30 10 * * *" },
       },
     });
+    // Key is trimmed ("name " → "name"), value is preserved as-is.
     expect(result.name).toBe("Test Name ");
+  });
+
+  it("passes through clean keys unchanged", () => {
+    const input: Record<string, unknown> = {
+      name: "Holiday Check-in",
+      schedule: { kind: "cron", expr: "30 10,20 * * *", tz: "Europe/Madrid" },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+      enabled: true,
+    };
+    const result = canonicalizeCronToolObject(input);
+    expect(result).toEqual(input);
   });
 });

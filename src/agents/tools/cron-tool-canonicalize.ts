@@ -243,26 +243,31 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   }
 }
 
-function normalizeCronToolKeys(value: Record<string, unknown>): Record<string, unknown> {
-  // Some small/local tool-call parsers can produce JSON with trailing spaces in
-  // property names (e.g. "schedule " instead of "schedule"). Normalize keys by
-  // trimming whitespace so downstream matching against CRON_RECOVERABLE_OBJECT_KEYS
-  // and schema validation sees the expected names.
-  const next = Object.create(null) as Record<string, unknown>;
-  for (const [key, val] of Object.entries(value)) {
+/**
+ * Trim leading/trailing whitespace from recognized cron job/patch keys in-place.
+ *
+ * Some small/local tool-call parsers (observed with qwen35b via llamacpp) emit
+ * valid JSON where cron keys carry whitespace-padded names (e.g. `"schedule "`
+ * instead of `"schedule"`).  Trim those keys early so downstream repair and
+ * canonicalization helpers see the expected canonical names.  The gateway uses
+ * strict `additionalProperties: false` schemas, so unpadded keys would be
+ * rejected before persistence.
+ *
+ * Only known cron recoverable keys are trimmed; unrecognized keys pass through
+ * unchanged so strict validation can surface them.  When the canonical key
+ * already exists the padded key is preserved as a genuine duplicate for
+ * validation to reject instead of silently merging or overwriting.
+ */
+function repairWhitespacePaddedCronToolKeys(value: Record<string, unknown>): void {
+  for (const key of Object.keys(value)) {
     const trimmed = key.trim();
-    if (trimmed.length === 0) continue;
-    // Only accept keys that are recognized cron fields or look like
-    // standard identifiers (alphanumeric + underscore/dash) to keep the
-    // accumulator narrow and prototype-safe.
-    if (
-      trimmed !== "__proto__" &&
-      (CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed) || /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(trimmed))
-    ) {
-      next[trimmed] = val;
-    }
+    if (trimmed === key || trimmed.length === 0) continue;
+    if (!CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) continue;
+    // Preserve genuine duplicates — let strict validation reject them.
+    if (value[trimmed] !== undefined) continue;
+    value[trimmed] = value[key];
+    delete value[key];
   }
-  return next;
 }
 
 /** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
@@ -270,7 +275,8 @@ export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
-  const next = normalizeCronToolKeys({ ...unwrapped });
+  const next = { ...unwrapped };
+  repairWhitespacePaddedCronToolKeys(next);
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);
