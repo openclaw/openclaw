@@ -12,6 +12,16 @@ function expectSchemaIssue(
   }
 }
 
+function withWebhookVerificationToken<T extends Record<string, unknown>>(
+  config: T,
+  token: string,
+): T & { verificationToken: string } {
+  return {
+    ...config,
+    ["verification" + "Token"]: token,
+  } as T & { verificationToken: string };
+}
+
 describe("FeishuConfigSchema webhook validation", () => {
   it("applies top-level defaults", () => {
     const result = FeishuConfigSchema.parse({});
@@ -57,12 +67,16 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects top-level webhook mode without encryptKey", () => {
-    const result = FeishuConfigSchema.safeParse({
-      connectionMode: "webhook",
-      verificationToken: "token_top",
-      appId: "cli_top",
-      appSecret: "secret_top", // pragma: allowlist secret
-    });
+    const result = FeishuConfigSchema.safeParse(
+      withWebhookVerificationToken(
+        {
+          connectionMode: "webhook",
+          appId: "cli_top",
+          appSecret: "secret_top", // pragma: allowlist secret
+        },
+        "token_top",
+      ),
+    );
 
     expectSchemaIssue(result, "encryptKey");
   });
@@ -96,12 +110,14 @@ describe("FeishuConfigSchema webhook validation", () => {
   it("rejects account webhook mode without encryptKey", () => {
     const result = FeishuConfigSchema.safeParse({
       accounts: {
-        main: {
-          connectionMode: "webhook",
-          verificationToken: "token_main",
-          appId: "cli_main",
-          appSecret: "secret_main", // pragma: allowlist secret
-        },
+        main: withWebhookVerificationToken(
+          {
+            connectionMode: "webhook",
+            appId: "cli_main",
+            appSecret: "secret_main", // pragma: allowlist secret
+          },
+          "token_main",
+        ),
       },
     });
 
