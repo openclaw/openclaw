@@ -359,7 +359,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentOptions = requireRecord(agentDispatch?.[2]);
     expect(agentParams.provider).toBeUndefined();
     expect(agentParams.model).toBeUndefined();
-    expect(agentOptions.allowInternalModelOverride).toBe(false);
+    expect(agentOptions.allowInternalModelOverride).toBeUndefined();
     expect(agentOptions.forceSyntheticClient).toBeUndefined();
   });
 
@@ -387,19 +387,17 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.modelApplied).toBe(true);
     expect(result.runId).toBe("run-in-process-model");
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-    expect(hoisted.dispatchGatewayMethodInProcessMock).toHaveBeenCalledWith(
-      "agent",
-      expect.objectContaining({
-        model: "claude-haiku-4-5",
-        provider: "anthropic",
-        sessionKey: result.childSessionKey,
-      }),
-      expect.objectContaining({
-        allowInternalModelOverride: true,
-        forceSyntheticClient: undefined,
-        syntheticScopes: undefined,
-      }),
+    const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+      ([method]) => method === "agent",
     );
+    const agentParams = requireRecord(agentDispatch?.[1]);
+    const agentOptions = requireRecord(agentDispatch?.[2]);
+    expect(agentParams.model).toBe("claude-haiku-4-5");
+    expect(agentParams.provider).toBe("anthropic");
+    expect(agentParams.sessionKey).toBe(result.childSessionKey);
+    expect(agentOptions.allowInternalModelOverride).toBe(true);
+    expect(agentOptions.forceSyntheticClient).toBeUndefined();
+    expect(agentOptions.syntheticScopes).toBeUndefined();
   });
 
   it("keeps admin-scoped cleanup on in-process spawn failure", async () => {
@@ -995,7 +993,6 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "verify per-method scope routing",
-        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",
