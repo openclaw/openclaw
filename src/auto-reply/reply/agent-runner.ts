@@ -3115,9 +3115,7 @@ export async function runReplyAgent(replyParams: {
               },
               requests: workRequests,
               config: resolveLiveContinuationRuntimeConfig(cfg),
-              // Same-session own-turn continue_work has no spawning lineage; leave
-              // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
-              // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
+              parentRunId: runId,
               log: (message) => defaultRuntime.log(message),
             });
             if (batchResult.scheduledCount > 0) {

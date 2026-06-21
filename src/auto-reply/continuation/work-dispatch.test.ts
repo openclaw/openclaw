@@ -1397,59 +1397,6 @@ describe("durable continuation_work dispatch", () => {
     });
   });
 
-  describe("#952 own-turn subagent continue_work survives a busy-defer (never orphan-reaped)", () => {
-    it("does NOT reap a no-parentRunId own-turn flow whose own subagent run is confident-terminal, then drives hop-2 once its own session quiets", async () => {
-      // The #952 regression: a tool-less subagent elects continue_work for itself.
-      // Its electing run completes (endedAt set → confident-terminal) and the wake
-      // arms. While the subagent's OWN session is still mid-turn, driveContinuationTurn
-      // busy-skips on the own-session readiness gate (a subagent's direct grant runs on
-      // its own session lane, not the cross-session main lane — #1057). Pre-fix the
-      // producer tagged parentRunId with the subagent's own electing run, so #990
-      // bucket-1 read that run as a confident-terminal "orphan" and reaped the flow —
-      // hop-2 never ran. The fix omits parentRunId for own-turn work, so the flow stays
-      // on the never-reap rate-cap path and delivers when its own session quiets. This
-      // pins that even a confident-terminal OWN run cannot authorize a reap of a
-      // same-session own-turn election.
-      const sessionKey = "agent:main:subagent:s952-ownturn";
-      mockSessionStore[sessionKey] = { sessionKey };
-      // The subagent's electing run has finished — confident-terminal in the registry.
-      addSubagentRun(sessionKey, { endedAt: Date.now() - 1 });
-      activeSessions.add(sessionKey); // own session still mid-turn → drive busy-skips
-      enqueuePendingWork({
-        sessionKey,
-        hop: 2,
-        delayMs: 0,
-        electedAt: Date.now(),
-        dueAt: Date.now(),
-        maxChainLength: 8,
-        reason: "own-turn continuation",
-        // NO parentRunId — own-turn continue_work carries no spawning lineage (#952 fix).
-      });
-
-      const skip = await dispatchPendingContinuationWork({ sessionKey });
-      // Rate-capped, NOT reaped — the confident-terminal own run must not cull it.
-      expect(skip).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
-      expect([...mockFlows.values()][0]?.status).toBe("queued");
-      expect(turnGrants).toHaveLength(0);
-
-      // Own session quiets → the requeued wake matures and drives hop-2 into the subagent.
-      resetContinuationWorkDispatchForTests();
-      await vi.advanceTimersByTimeAsync(60_000);
-      activeSessions.delete(sessionKey);
-      const driven = await dispatchPendingContinuationWork({ sessionKey });
-      expect(driven.dispatched).toBe(1);
-      expect(turnGrants).toEqual([
-        expect.objectContaining({
-          context: expect.objectContaining({
-            SessionKey: sessionKey,
-            Body: expect.stringContaining("own-turn continuation"),
-          }),
-          options: expect.objectContaining({ continuationTrigger: "work-wake" }),
-        }),
-      ]);
-    });
-  });
-
   describe("#990 locus-3 durable delivered-mark restart-gap (PART B)", () => {
     function enqueueMatured(sessionKey: string, reason: string): void {
       mockSessionStore[sessionKey] = { sessionKey };

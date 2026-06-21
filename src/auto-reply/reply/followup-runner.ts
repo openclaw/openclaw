@@ -1498,9 +1498,7 @@ export function createFollowupRunner(params: {
             ...(request.traceparent ? { traceparent: request.traceparent } : {}),
           })),
           config: continuationConfig,
-          // Same-session own-turn continue_work has no spawning lineage; leave
-          // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
-          // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
+          parentRunId: runId,
           log: (message) => defaultRuntime.log(message),
         });
         // #986 cap-notice symmetry: surface cap-dropped elections on the
