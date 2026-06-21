@@ -1622,6 +1622,29 @@ describe("handleSendChat", () => {
     );
   });
 
+  it("preserves user-authored whitespace (code blocks / ASCII) in chat.send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    // Leading spaces and a trailing newline that `.trim()` would strip; the
+    // send payload must keep them so code blocks and ASCII diagrams survive.
+    const rawMessage = "```\n    indented one\n        indented two\n```\n";
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: `   ${rawMessage}`,
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: `   ${rawMessage}` }),
+    );
+  });
+
   it("records pending send paint timing before a delayed chat.send ACK", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       queueMicrotask(() => callback(0));
