@@ -571,6 +571,118 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: External follow-up");
   });
 
+  it("renders the real assistant reply once, skipping the OpenClaw delivery-mirror duplicate", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "What is the capital of France?" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "The capital of France is Paris.",
+          provider: "openai",
+          model: "gpt-5.5",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "The capital of France is Paris.",
+          provider: "openclaw",
+          model: "delivery-mirror",
+        },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).not.toBeNull();
+    const occurrences =
+      (memoryContent ?? "").split("assistant: The capital of France is Paris.").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("preserves standalone OpenClaw delivery-mirror assistant replies", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Send the summary" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Summary sent.",
+          provider: "openclaw",
+          model: "delivery-mirror",
+        },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).toContain("assistant: Summary sent.");
+  });
+
+  it("skips duplicate gateway-injected assistant rows", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Ping" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Pong",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Pong",
+          provider: "openclaw",
+          model: "gateway-injected",
+        },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).toContain("assistant: Pong");
+    expect(memoryContent).not.toContain("assistant: Pong\nassistant: Pong");
+  });
+
+  it("preserves non-duplicate gateway-injected assistant rows", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "First answer.",
+          provider: "openclaw",
+          model: "acp-runtime",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Second answer.",
+          provider: "openclaw",
+          model: "gateway-injected",
+        },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).toContain("assistant: First answer.");
+    expect(memoryContent).toContain("assistant: Second answer.");
+  });
+
   it("filters out command messages starting with /", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "/help" },
