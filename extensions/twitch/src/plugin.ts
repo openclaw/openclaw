@@ -186,20 +186,29 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
           // Keep startAccount pending until abort fires; otherwise the channel
           // supervisor reads the settled task as `channel exited without an
           // error` and triggers a restart loop. See #60071.
-          await runStoppablePassiveMonitor({
-            abortSignal: ctx.abortSignal,
-            start: async () => {
-              // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-              const { monitorTwitchProvider } = await import("./monitor.js");
-              return monitorTwitchProvider({
-                account,
-                accountId,
-                config: ctx.cfg,
-                runtime: ctx.runtime,
-                abortSignal: ctx.abortSignal,
-              });
-            },
-          });
+          try {
+            await runStoppablePassiveMonitor({
+              abortSignal: ctx.abortSignal,
+              start: async () => {
+                // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+                const { monitorTwitchProvider } = await import("./monitor.js");
+                return monitorTwitchProvider({
+                  account,
+                  accountId,
+                  config: ctx.cfg,
+                  runtime: ctx.runtime,
+                  abortSignal: ctx.abortSignal,
+                });
+              },
+            });
+          } catch (error) {
+            ctx.setStatus?.({
+              accountId,
+              running: false,
+              lastStopAt: Date.now(),
+            });
+            throw error;
+          }
         },
         stopAccount: async (ctx): Promise<void> => {
           const account = ctx.account;

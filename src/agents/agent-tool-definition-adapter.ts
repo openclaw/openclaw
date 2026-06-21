@@ -308,7 +308,7 @@ function finalizeToolParamsBeforeExecute(params: {
   return finalize ? finalize(params.executeParams, params.preparedParams) : params.executeParams;
 }
 
-export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 /** Find client-hosted tool names that collide with runtime or sibling tools. */
 export function findClientToolNameConflicts(params: {

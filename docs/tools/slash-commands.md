@@ -173,6 +173,7 @@ plugins.
     | --- | --- |
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
+    | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |

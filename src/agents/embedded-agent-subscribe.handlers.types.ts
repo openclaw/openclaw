@@ -51,7 +51,7 @@ export type ToolCallSummary = {
 };
 
 /** User-visible assistant stream payload emitted to subscribers. */
-export type AssistantStreamData = {
+type AssistantStreamData = {
   text: string;
   delta: string;
   replace?: true;
@@ -60,7 +60,7 @@ export type AssistantStreamData = {
 };
 
 /** Deferred assistant stream event plus whether it should emit partial replies. */
-export type AssistantStreamDelivery = {
+type AssistantStreamDelivery = {
   data: AssistantStreamData;
   emitPartialReply: boolean;
 };

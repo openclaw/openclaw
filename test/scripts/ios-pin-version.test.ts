@@ -17,6 +17,18 @@ describe("parseArgs", () => {
       "Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>",
     );
   });
+
+  it("rejects flags where option values are required", () => {
+    for (const { args, message } of [
+      { args: ["--version", "--no-sync"], message: "Missing value for --version." },
+      {
+        args: ["--version", "2026.4.7", "--root", "--no-sync"],
+        message: "Missing value for --root.",
+      },
+    ]) {
+      expect(() => parseArgs(args)).toThrow(message);
+    }
+  });
 });
 
 describe("pinIosVersion", () => {

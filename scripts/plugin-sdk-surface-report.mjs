@@ -64,6 +64,7 @@ function readEntrypointBudgetEnv(name, fallback) {
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
+  health: 1,
   lmstudio: 1,
   "provider-setup": 1,
   "self-hosted-provider-setup": 14,
@@ -87,7 +88,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 570,
+  "infra-runtime": 584,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -124,6 +125,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-policy": 8,
   "channel-route": 5,
   "session-store-runtime": 1,
+  "session-transcript-runtime": 1,
   "group-access": 13,
   "media-generation-runtime-shared": 3,
   "music-generation-core": 20,
@@ -160,12 +162,12 @@ let budgets;
 let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 319),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10277),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5163),
+    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 321),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10337),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5187),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3230,
+      3245,
     ),
     publicWildcardReexports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",

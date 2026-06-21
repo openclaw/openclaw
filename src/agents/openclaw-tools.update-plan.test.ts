@@ -4,17 +4,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import {
-  isUpdatePlanToolEnabledForOpenClawTools,
-  shouldIncludeUpdatePlanToolForOpenClawTools,
-} from "./openclaw-tools.registration.js";
+import { shouldIncludeUpdatePlanToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 
-type UpdatePlanGatingParams = Parameters<typeof isUpdatePlanToolEnabledForOpenClawTools>[0];
+type UpdatePlanGatingParams = Parameters<typeof shouldIncludeUpdatePlanToolForOpenClawTools>[0];
 type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
 
 function expectUpdatePlanEnabled(params: UpdatePlanGatingParams, expected: boolean): void {
-  expect(isUpdatePlanToolEnabledForOpenClawTools(params)).toBe(expected);
+  expect(shouldIncludeUpdatePlanToolForOpenClawTools(params)).toBe(expected);
 }
 
 function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {

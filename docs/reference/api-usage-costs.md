@@ -31,9 +31,9 @@ OpenClaw features that can generate provider usage or paid API calls.
 - `/usage tokens` shows tokens only; subscription-style OAuth/token and CLI flows
   still show tokens only unless that runtime supplies compatible usage metadata
   and an explicit local price is configured.
-- Gemini CLI note: when the CLI returns JSON output, OpenClaw reads usage from
-  `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
-  from `stats.input_tokens - stats.cached` when needed.
+- Gemini CLI note: the default `stream-json` output and legacy JSON overrides
+  both read usage from `stats`, normalize `stats.cached` into `cacheRead`, and
+  derive input tokens from `stats.input_tokens - stats.cached` when needed.
 
 Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is
 allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as
@@ -154,7 +154,8 @@ See [Web tools](/tools/web).
 
 ### 5) Web fetch tool (Firecrawl)
 
-`web_fetch` can call **Firecrawl** when an API key is present:
+`web_fetch` can call **Firecrawl** with keyless starter access. Add an API key
+for higher limits:
 
 - `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webFetch.apiKey`
 

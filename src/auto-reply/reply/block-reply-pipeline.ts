@@ -23,7 +23,7 @@ export type BlockReplyPipeline = {
 };
 
 /** Optional buffering strategy used before payloads enter block delivery. */
-export type BlockReplyBuffer = {
+type BlockReplyBuffer = {
   shouldBuffer: (payload: ReplyPayload) => boolean;
   onEnqueue?: (payload: ReplyPayload) => void;
   finalize?: (payload: ReplyPayload) => ReplyPayload;

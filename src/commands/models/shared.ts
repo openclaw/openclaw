@@ -5,7 +5,6 @@ import {
   buildModelAliasIndex,
   legacyModelKey,
   modelKey,
-  parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -145,20 +144,6 @@ export function resolveModelKeysFromEntries(params: {
     )
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
     .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
-}
-
-/** Builds the configured model allowlist from agents.defaults.models keys. */
-export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
-  const allowed = new Set<string>();
-  const models = cfg.agents?.defaults?.models ?? {};
-  for (const raw of Object.keys(models)) {
-    const parsed = parseModelRef(raw, DEFAULT_PROVIDER);
-    if (!parsed) {
-      continue;
-    }
-    allowed.add(modelKey(parsed.provider, parsed.model));
-  }
-  return allowed;
 }
 
 /** Validates an optional agent id against configured agents. */

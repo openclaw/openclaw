@@ -52,4 +52,12 @@ describe("scripts/embedded-run-abort-leak", () => {
     );
     expect(readdirSync(looseThresholdProbe.snapDir)).toEqual([]);
   });
+
+  it("rejects missing snapshot directories before writing heap snapshots", () => {
+    const result = runHarness(["--snap-dir", "--quiet", "--iters", "1", "--batches", "1"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: --snap-dir requires a value");
+  });
 });

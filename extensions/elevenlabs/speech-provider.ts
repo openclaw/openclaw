@@ -90,8 +90,6 @@ function parseNumberValue(value: string): number | undefined {
   return parseStrictFiniteNumber(value);
 }
 
-export const isValidVoiceId = isValidElevenLabsVoiceId;
-
 function normalizeVoiceSetting(value: unknown, min: number, max: number): number | undefined {
   const number = asFiniteNumber(value);
   return number !== undefined && number >= min && number <= max ? number : undefined;

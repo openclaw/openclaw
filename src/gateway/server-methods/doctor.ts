@@ -2,6 +2,7 @@
 // cron state, and REM harness previews for operator diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -25,7 +26,7 @@ import {
   repairDreamingArtifacts,
   writeBackfillDiaryEntries,
 } from "./doctor.memory-core-runtime.js";
-import { asRecord, normalizeTrimmedString } from "./record-shared.js";
+import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
@@ -932,7 +933,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const agentId = resolveDefaultAgentId(cfg);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const req = asRecord(params);
+    const req = asOptionalRecord(params);
     const grounded = Boolean(req?.grounded);
     const includePromoted = Boolean(req?.includePromoted);
     const requestedLimit =

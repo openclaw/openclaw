@@ -34,7 +34,7 @@ const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
 const recoveriesInFlight = new Set<string>();
 
 /** Request parameters accepted by the stuck-session recovery runtime. */
-export type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
+type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
 
 function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryParams): number {
   const configured = params.staleActiveProgressAbortMs;

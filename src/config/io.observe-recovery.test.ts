@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
@@ -16,6 +15,8 @@ import {
   type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
+
+const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";

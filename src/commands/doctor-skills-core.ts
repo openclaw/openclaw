@@ -17,6 +17,26 @@ export function collectUnavailableAgentSkills(report: SkillStatusReport): SkillS
   );
 }
 
+export function formatMissingSkillSummary(skill: SkillStatusEntry): string {
+  const missing: string[] = [];
+  if (skill.missing.bins.length > 0) {
+    missing.push(`bins: ${skill.missing.bins.join(", ")}`);
+  }
+  if (skill.missing.anyBins.length > 0) {
+    missing.push(`any bins: ${skill.missing.anyBins.join(", ")}`);
+  }
+  if (skill.missing.env.length > 0) {
+    missing.push(`env: ${skill.missing.env.join(", ")}`);
+  }
+  if (skill.missing.config.length > 0) {
+    missing.push(`config: ${skill.missing.config.join(", ")}`);
+  }
+  if (skill.missing.os.length > 0) {
+    missing.push(`os: ${skill.missing.os.join(", ")}`);
+  }
+  return missing.join("; ") || "unknown requirement";
+}
+
 /** Disables unavailable skills in config while preserving existing skill entries. */
 export function disableUnavailableSkillsInConfig(
   config: OpenClawConfig,

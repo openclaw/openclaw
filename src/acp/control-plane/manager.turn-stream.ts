@@ -10,12 +10,12 @@ import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
 /** Mutable gate used to suppress late events after timeout/cancel races. */
-export type AcpTurnEventGate = {
+type AcpTurnEventGate = {
   open: boolean;
 };
 
 /** Summary of whether a turn stream emitted user-visible output or terminal events. */
-export type AcpTurnStreamOutcome = {
+type AcpTurnStreamOutcome = {
   sawOutput: boolean;
   sawTerminalEvent: boolean;
 };

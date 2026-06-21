@@ -669,10 +669,16 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
  */
 export function recomputeNextRunsForMaintenance(
   state: CronServiceState,
-  opts?: { recomputeExpired?: boolean; nowMs?: number; repairFutureCronNextRunAtMs?: boolean },
+  opts?: {
+    recomputeExpired?: boolean;
+    nowMs?: number;
+    repairFutureCronNextRunAtMs?: boolean;
+    skipFutureRepairJobIds?: ReadonlySet<string>;
+  },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
+  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
@@ -683,6 +689,7 @@ export function recomputeNextRunsForMaintenance(
         }
       } else if (
         repairFutureCronNextRunAtMs &&
+        !skipFutureRepairJobIds?.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {

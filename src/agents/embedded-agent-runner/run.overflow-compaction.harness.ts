@@ -113,7 +113,6 @@ export const mockedContextEngine = {
   })),
 };
 
-export const mockedContextEngineCompact = mockedContextEngine.compact;
 export const mockedCompactDirect = mockedContextEngine.compact;
 export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
 export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
@@ -333,8 +332,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();
   mockedBuildAgentRuntimePlan.mockReturnValue({});
-  mockedContextEngineCompact.mockReset();
-  mockedContextEngineCompact.mockResolvedValue({
+  mockedCompactDirect.mockReset();
+  mockedCompactDirect.mockResolvedValue({
     ok: false,
     compacted: false,
     reason: "nothing to compact",
@@ -701,7 +700,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../context-window-guard.js", () => ({
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
-    CONTEXT_WINDOW_WARN_BELOW_TOKENS: 5000,
     evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
     formatContextWindowBlockMessage: mockedFormatContextWindowBlockMessage,
     formatContextWindowWarningMessage: mockedFormatContextWindowWarningMessage,

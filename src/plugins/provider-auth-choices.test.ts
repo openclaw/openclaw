@@ -8,6 +8,9 @@ const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
   resolvePluginMetadataSnapshot: vi.fn(),
 }));
+const officialCatalogMocks = vi.hoisted(() => ({
+  listOfficialExternalProviderCatalogEntries: vi.fn(),
+}));
 
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex:
@@ -35,6 +38,11 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: pluginRegistryMocks.resolvePluginMetadataSnapshot,
 }));
+vi.mock("./official-external-plugin-catalog.js", () => ({
+  getOfficialExternalPluginCatalogManifest: (entry: { openclaw?: unknown }) => entry.openclaw,
+  listOfficialExternalProviderCatalogEntries:
+    officialCatalogMocks.listOfficialExternalProviderCatalogEntries,
+}));
 
 vi.resetModules();
 
@@ -44,6 +52,7 @@ const {
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveManifestProviderOnboardAuthFlags,
+  resolveProviderOnboardAuthFlags,
 } = await import("./provider-auth-choices.js");
 const { resetProviderAuthAliasMapCacheForTest, resolveProviderIdForAuth } =
   await import("../agents/provider-auth-aliases.js");
@@ -119,6 +128,8 @@ describe("provider auth choice manifest helpers", () => {
       (params?: { pluginMetadataSnapshot?: unknown }) =>
         params?.pluginMetadataSnapshot ?? pluginRegistryMocks.loadPluginMetadataSnapshot(params),
     );
+    officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReset();
+    officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
     resetProviderAuthAliasMapCacheForTest();
   });
 
@@ -156,6 +167,70 @@ describe("provider auth choice manifest helpers", () => {
       ],
       resolvedProviderIds: { "openai-api-key": "openai" },
     });
+  });
+
+  it("keeps installed manifest flags ahead of official cold-install flags", () => {
+    setSingleManifestProviderAuthChoices("cerebras", [
+      createProviderAuthChoice({
+        provider: "cerebras",
+        method: "api-key",
+        choiceId: "cerebras-api-key",
+        choiceLabel: "Cerebras API key",
+        optionKey: "cerebrasApiKey",
+        cliFlag: "--cerebras-api-key",
+        cliOption: "--cerebras-api-key <key>",
+        cliDescription: "Installed Cerebras key",
+      }),
+    ]);
+    officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        openclaw: {
+          plugin: { id: "cerebras" },
+          providers: [
+            {
+              id: "cerebras",
+              authChoices: [
+                {
+                  method: "api-key",
+                  choiceId: "cerebras-api-key",
+                  choiceLabel: "Cerebras API key",
+                  optionKey: "cerebrasApiKey",
+                  cliFlag: "--cerebras-api-key",
+                  cliOption: "--cerebras-api-key <key>",
+                  cliDescription: "Catalog Cerebras key",
+                },
+                {
+                  method: "api-key",
+                  choiceId: "groq-api-key",
+                  choiceLabel: "Groq API key",
+                  optionKey: "groqApiKey",
+                  cliFlag: "--groq-api-key",
+                  cliOption: "--groq-api-key <key>",
+                  cliDescription: "Groq API key",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(resolveProviderOnboardAuthFlags()).toEqual([
+      {
+        optionKey: "cerebrasApiKey",
+        authChoice: "cerebras-api-key",
+        cliFlag: "--cerebras-api-key",
+        cliOption: "--cerebras-api-key <key>",
+        description: "Installed Cerebras key",
+      },
+      {
+        optionKey: "groqApiKey",
+        authChoice: "groq-api-key",
+        cliFlag: "--groq-api-key",
+        cliOption: "--groq-api-key <key>",
+        description: "Groq API key",
+      },
+    ]);
   });
 
   it.each([

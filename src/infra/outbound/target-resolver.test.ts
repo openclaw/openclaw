@@ -142,12 +142,18 @@ describe("resolveMessagingTarget (directory fallback)", () => {
         { kind: "group", id: "replacement-id", name: "support" } satisfies ChannelDirectoryEntry,
       ]);
     const firstPlugin = {
-      ...createChannelTestPluginBase({ id: "richchat" }),
+      ...createChannelTestPluginBase({
+        id: "richchat",
+        capabilities: { chatTypes: ["group"] },
+      }),
       directory: { listGroups: firstListGroups },
       messaging: { targetResolver: {} },
     } satisfies ChannelPlugin;
     const replacementPlugin = {
-      ...createChannelTestPluginBase({ id: "richchat" }),
+      ...createChannelTestPluginBase({
+        id: "richchat",
+        capabilities: { chatTypes: ["group"] },
+      }),
       directory: { listGroups: replacementListGroups },
       messaging: { targetResolver: {} },
     } satisfies ChannelPlugin;
@@ -214,6 +220,37 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe(
       "dthcxgoxhifn3pwh65cut3ud3w",
     );
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
+
+  it("defaults bare id-like targets to user for direct-only channel plugins", async () => {
+    const directOnlyPlugin = {
+      ...createChannelTestPluginBase({
+        id: "openclaw-weixin",
+        capabilities: { chatTypes: ["direct"] },
+      }),
+      messaging: {
+        targetResolver: {
+          looksLikeId: (raw: string) => raw.endsWith("@im.wechat"),
+        },
+      },
+    } satisfies ChannelPlugin;
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "openclaw-weixin",
+      input: "wxid_abc123@im.wechat",
+      plugin: directOnlyPlugin,
+    });
+
+    expect(result.target).toEqual({
+      to: "wxid_abc123@im.wechat",
+      kind: "user",
+      display: "wxid_abc123@im.wechat",
+      source: "normalized",
+      resolutionSource: "normalized",
+    });
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });

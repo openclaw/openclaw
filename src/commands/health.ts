@@ -60,12 +60,7 @@ import type {
 } from "./health.types.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
-export type {
-  AgentHealthSummary,
-  ChannelAccountHealthSummary,
-  ChannelHealthSummary,
-  HealthSummary,
-} from "./health.types.js";
+export type { HealthSummary } from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 

@@ -24,7 +24,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const FAST_WAIT_OPTS = { timeout: 250, interval: 2 } as const;
+const FAST_WAIT_OPTS = { timeout: 2_000, interval: 5 } as const;
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;

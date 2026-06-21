@@ -17,7 +17,7 @@ import { wrapExternalContent, wrapWebContent } from "../../security/external-con
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
-import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
+import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";

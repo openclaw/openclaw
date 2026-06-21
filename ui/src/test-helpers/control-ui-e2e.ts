@@ -52,15 +52,6 @@ export type ControlUiMockGatewayScenario = {
   sessionKey?: string;
 };
 
-export type ControlUiMockGatewayMethodResponseCase = {
-  match?: Record<string, unknown>;
-  response: unknown;
-};
-
-export type ControlUiMockGatewayMethodResponseCases = {
-  cases: ControlUiMockGatewayMethodResponseCase[];
-};
-
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
 
 export type ControlUiE2eServer = {

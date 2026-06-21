@@ -567,6 +567,67 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
+  it("installs an unconfigured remote plugin before waiting for app inventory", async () => {
+    const appCache = new CodexAppInventoryCache();
+    let installed = false;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "plugin/list") {
+        return pluginList([
+          pluginSummary("google-calendar", { installed, enabled: installed }),
+        ]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+      }
+      if (method === "plugin/install") {
+        installed = true;
+        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+      }
+      if (method === "skills/list") {
+        return { data: [] } satisfies v2.SkillsListResponse;
+      }
+      if (method === "hooks/list") {
+        return { data: [] } satisfies v2.HooksListResponse;
+      }
+      if (method === "config/mcpServer/reload") {
+        return {};
+      }
+      if (method === "app/list") {
+        return {
+          data: [appInfo("google-calendar-app", true, installed)],
+          nextCursor: null,
+        } satisfies v2.AppsListResponse;
+      }
+      throw new Error(`unexpected request ${method}: ${JSON.stringify(params)}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      request,
+    });
+
+    expect(config.configPatch?.apps).toMatchObject({
+      "google-calendar-app": {
+        enabled: true,
+      },
+    });
+    const methods = request.mock.calls.map(([method]) => method);
+    expect(methods.indexOf("plugin/install")).toBeGreaterThan(-1);
+    expect(methods.indexOf("app/list")).toBeGreaterThan(methods.indexOf("plugin/install"));
+  });
+
   it("surfaces critical post-install refresh failures and keeps plugin apps disabled", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -695,7 +756,6 @@ describe("Codex plugin thread config", () => {
       pluginConfig: { codexPlugins: { enabled: true } },
       appCacheKey: "runtime-b",
     });
-
     expect(second).toBe(first);
     expect(third).not.toBe(second);
   });

@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import {
-  buildAssistantStreamData,
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
@@ -12,8 +11,6 @@ import {
   handleMessageUpdate,
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
-  recordPendingAssistantReplyDirectives,
-  resolveSilentReplyFallbackText,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
@@ -199,50 +196,6 @@ function createMessageToolEnvelope(message: string, args: Record<string, unknown
   });
 }
 
-describe("resolveSilentReplyFallbackText", () => {
-  it("replaces NO_REPLY with latest messaging tool text when available", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: ["first", "final delivered text"],
-      }),
-    ).toBe("final delivered text");
-  });
-
-  it("keeps original text when response is not NO_REPLY", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "normal assistant reply",
-        messagingToolSentTexts: ["final delivered text"],
-      }),
-    ).toBe("normal assistant reply");
-  });
-
-  it("keeps NO_REPLY when there is no messaging tool text to mirror", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: [],
-      }),
-    ).toBe("NO_REPLY");
-  });
-
-  it("tolerates malformed text payloads without throwing", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: undefined,
-        messagingToolSentTexts: ["final delivered text"],
-      }),
-    ).toBe("");
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: [42 as unknown as string],
-      }),
-    ).toBe("42");
-  });
-});
-
 describe("hasAssistantVisibleReply", () => {
   it("treats audio-only payloads as visible", () => {
     expect(hasAssistantVisibleReply({ audioAsVoice: true })).toBe(true);
@@ -255,38 +208,16 @@ describe("hasAssistantVisibleReply", () => {
   });
 });
 
-describe("buildAssistantStreamData", () => {
-  it("normalizes media payloads for assistant stream events", () => {
-    expect(
-      buildAssistantStreamData({
-        text: "hello",
-        delta: "he",
-        replace: true,
-        mediaUrl: "https://example.com/a.png",
-        phase: "final_answer",
-      }),
-    ).toEqual({
-      text: "hello",
-      delta: "he",
-      replace: true,
-      mediaUrls: ["https://example.com/a.png"],
-      phase: "final_answer",
-    });
-  });
-});
-
 describe("pending assistant reply directives", () => {
   it("merges directive metadata into the next non-reasoning block reply", () => {
-    const state = { pendingAssistantReplyDirectives: undefined };
-
-    recordPendingAssistantReplyDirectives(state, {
-      text: "",
-      mediaUrls: ["/tmp/reply.ogg"],
-      replyToCurrent: true,
-      replyToTag: true,
-      audioAsVoice: true,
-      isSilent: false,
-    });
+    const state = {
+      pendingAssistantReplyDirectives: {
+        mediaUrls: ["/tmp/reply.ogg"],
+        replyToCurrent: true,
+        replyToTag: true,
+        audioAsVoice: true,
+      },
+    };
 
     expect(
       consumePendingAssistantReplyDirectivesIntoReply(state, {

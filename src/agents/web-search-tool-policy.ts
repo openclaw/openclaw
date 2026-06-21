@@ -33,7 +33,7 @@ export type WebSearchToolPolicyParams = {
   senderE164?: string | null;
 };
 
-export type WebSearchToolPolicyResolution = {
+type WebSearchToolPolicyResolution = {
   allowed: boolean;
   persistentAllowed: boolean;
 };

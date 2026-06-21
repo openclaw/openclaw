@@ -2,6 +2,7 @@
 // This file owns the cross-command contracts reused by normal, JSON, and status-all scans.
 
 import { existsSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   normalizeOptionalLowercaseString,
@@ -16,7 +17,13 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connectio
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
-import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_META_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  type MemoryProviderStatus,
+} from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
@@ -27,6 +34,7 @@ export { pickGatewaySelfPresence } from "./gateway-presence.js";
 const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
+const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
 function loadGatewayProbeModule() {
   return gatewayProbeModuleLoader.load();
@@ -38,6 +46,70 @@ function loadProbeGatewayModule() {
 
 function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
+}
+
+function hasBuiltInMemoryState(databasePath: string): boolean {
+  if (!existsSync(databasePath)) {
+    return false;
+  }
+  const { DatabaseSync } = requireNodeSqlite();
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(databasePath, { readOnly: true });
+    const builtInMemoryTableSets = [
+      {
+        meta: MEMORY_INDEX_META_TABLE,
+        sources: MEMORY_INDEX_SOURCES_TABLE,
+        chunks: MEMORY_INDEX_CHUNKS_TABLE,
+      },
+      {
+        meta: "meta",
+        sources: "files",
+        chunks: "chunks",
+      },
+    ] as const;
+    const builtInMemoryTables = builtInMemoryTableSets.flatMap(({ meta, sources, chunks }) => [
+      meta,
+      sources,
+      chunks,
+    ]);
+    const tableNames = new Set(
+      (
+        db
+          .prepare(
+            `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${builtInMemoryTables.map(() => "?").join(", ")})`,
+          )
+          .all(...builtInMemoryTables) as Array<{ name?: unknown }>
+      )
+        .map((row) => row.name)
+        .filter((name): name is string => typeof name === "string"),
+    );
+    for (const tables of builtInMemoryTableSets) {
+      if (
+        tableNames.has(tables.meta) &&
+        db
+          .prepare(`SELECT 1 AS ok FROM ${tables.meta} WHERE key = ? LIMIT 1`)
+          .get(MEMORY_INDEX_META_KEY)
+      ) {
+        return true;
+      }
+      for (const tableName of [tables.sources, tables.chunks]) {
+        if (
+          tableNames.has(tableName) &&
+          db.prepare(`SELECT 1 AS ok FROM ${tableName} LIMIT 1`).get()
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    try {
+      db?.close();
+    } catch {}
+  }
 }
 
 export type MemoryStatusSnapshot = MemoryProviderStatus & {
@@ -311,9 +383,12 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: { defaultId?: string | null };
   memoryPlugin: MemoryPluginStatus;
-  resolveMemoryConfig: (cfg: OpenClawConfig, agentId: string) => { store: { path: string } } | null;
+  resolveMemoryConfig: (
+    cfg: OpenClawConfig,
+    agentId: string,
+  ) => { store: { databasePath: string } } | null;
   getMemorySearchManager: StatusMemorySearchManagerResolver;
-  requireDefaultStore?: (agentId: string) => string | null;
+  requireDefaultDatabasePath?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
   if (!memoryPlugin.enabled || !memoryPlugin.slot) {
@@ -326,12 +401,9 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
   }
 
-  const defaultStorePath = params.requireDefaultStore?.(agentId);
-  if (
-    defaultStorePath &&
-    !hasExplicitMemorySearchConfig(cfg, agentId) &&
-    !existsSync(defaultStorePath)
-  ) {
+  const hasExplicitConfig = hasExplicitMemorySearchConfig(cfg, agentId);
+  const defaultDatabasePath = params.requireDefaultDatabasePath?.(agentId);
+  if (defaultDatabasePath && !hasExplicitConfig && !hasBuiltInMemoryState(defaultDatabasePath)) {
     // Avoid instantiating built-in memory for users who never created the default store.
     return null;
   }
@@ -340,7 +412,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return null;
   }
   const shouldInspectStore =
-    hasExplicitMemorySearchConfig(cfg, agentId) || existsSync(resolvedMemory.store.path);
+    hasExplicitConfig || hasBuiltInMemoryState(resolvedMemory.store.databasePath);
   if (!shouldInspectStore) {
     return null;
   }
