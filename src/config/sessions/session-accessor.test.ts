@@ -14,7 +14,6 @@ import {
   cleanupSessionLifecycleArtifacts,
   createSessionEntryWithTranscript,
   listSessionEntries,
-  loadExactSessionEntry,
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry,
@@ -207,7 +206,7 @@ describe("session accessor file-backed seam", () => {
     );
   });
 
-  it("keeps exact persisted-key lookup separate from canonical entry reads", async () => {
+  it("resolves canonical entry reads without requiring exact key casing", async () => {
     fs.writeFileSync(
       storePath,
       JSON.stringify({
@@ -225,15 +224,12 @@ describe("session accessor file-backed seam", () => {
       storePath,
     };
 
-    expect(loadSessionEntry(mixedCaseScope)?.sessionId).toBe("session-1");
-    expect(loadExactSessionEntry(mixedCaseScope)).toBeUndefined();
-    expect(loadExactSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual({
-      sessionKey: "agent:main:main",
-      entry: expect.objectContaining({
+    expect(loadSessionEntry(mixedCaseScope)).toEqual(
+      expect.objectContaining({
         sessionId: "session-1",
         model: "gpt-5.5",
       }),
-    });
+    );
   });
 
   it("updates existing entries without creating missing sessions", async () => {

@@ -36,6 +36,26 @@ describe("bench-cli-startup", () => {
     expect(result.stderr).not.toContain("\n    at ");
   });
 
+  it("rejects short flag values before running benchmarks", () => {
+    expect(() => testing.validateCliArgs(["--output", "-h"])).toThrow("--output requires a value");
+    expect(() => testing.validateCliArgs(["--case", "-h"])).toThrow("--case requires a value");
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--output", "-h"],
+      {
+        cwd: join(__dirname, "../.."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--output requires a value");
+    expect(result.stderr).not.toContain("Node.js");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
   it.runIf(process.platform !== "win32")(
     "cleans timed-out benchmark process groups when the leader exits first",
     () => {
@@ -43,7 +63,7 @@ describe("bench-cli-startup", () => {
       const tmpDir = tempDirs.make("openclaw-cli-startup-timeout-group-");
       const entryPath = join(tmpDir, "entry.mjs");
       const childPidPath = join(tmpDir, "child.pid");
-      let childPid = 0;
+      let childPid: number | undefined;
       try {
         writeFileSync(
           entryPath,
@@ -93,7 +113,7 @@ describe("bench-cli-startup", () => {
         expect(result.stderr).toContain("version sample 1: timed out");
         expect(isProcessAlive(childPid)).toBe(false);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
         tempDirs.cleanup();

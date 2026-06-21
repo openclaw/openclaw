@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COMMAND_TIMEOUT_MS,
   createOpenClawGatewaySpawnSpec,
+  parseArgs,
   readLogTail,
   readTelegramUserProofLogTailBytes,
   recordProbeVideo,
@@ -141,6 +142,18 @@ describe("telegram user Crabbox proof log polling", () => {
     const highMockPort = runProofCli(["--mock-port", "65536", "--dry-run"]);
     expect(highMockPort.status).toBe(1);
     expect(highMockPort.stderr).toContain("--mock-port must be a TCP port from 1 to 65535.");
+  });
+
+  it("rejects short flags as proof option values before dry-run planning", () => {
+    const result = runProofCli(["--output-dir", "-h", "--dry-run"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Usage:");
+    expect(result.stdout).toBe("");
+  });
+
+  it("keeps hyphen-prefixed free-text proof values", () => {
+    expect(parseArgs(["--text", "-ping"]).text).toBe("-ping");
   });
 
   it("reads only the requested log tail", () => {

@@ -98,7 +98,9 @@ describe("package-openclaw-for-docker", () => {
     for (const flag of ["--output-dir", "--output-name", "--source-dir"]) {
       expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "--skip-build"])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([`${flag}=`])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([`${flag}=-h`])).toThrow(`${flag} requires a value`);
     }
   });
 

@@ -185,6 +185,7 @@ describe("run-additional-boundary-checks", () => {
       shardSpec: "4/4",
     });
     expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
+    expect(() => parseCliArgs(["--shard", "-h"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--wat"], {})).toThrow("Unknown argument: --wat");
   });
 
@@ -274,7 +275,7 @@ describe("run-additional-boundary-checks", () => {
     async () => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-timeout-"));
       const childPidPath = path.join(tempDir, "child.pid");
-      let childPid = 0;
+      let childPid: number | undefined;
       try {
         const childScript = [
           "process.on('SIGTERM', () => {});",
@@ -310,7 +311,7 @@ describe("run-additional-boundary-checks", () => {
         expect(result.timedOut).toBe(true);
         await waitForDead(childPid, 2000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
         fs.rmSync(tempDir, { force: true, recursive: true });
@@ -324,7 +325,7 @@ describe("run-additional-boundary-checks", () => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-signal-"));
       const readyPath = path.join(tempDir, "ready");
       const childPidPath = path.join(tempDir, "child.pid");
-      let childPid = 0;
+      let childPid: number | undefined;
       let runner: ReturnType<typeof spawn> | undefined;
       try {
         const childScript = [
@@ -387,7 +388,7 @@ await runChecks(
         });
         await waitForNotRunning(childPid, 2000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
         if (runner?.pid && isProcessAlive(runner.pid)) {

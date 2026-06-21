@@ -235,6 +235,11 @@ function trimToValue(value: string | undefined) {
 }
 
 const positiveIntegerPattern = /^[1-9]\d*$/u;
+const SHORT_OPTION_TOKENS = new Set(["-h"]);
+
+function isMissingOptionValue(value: string | undefined) {
+  return !value || SHORT_OPTION_TOKENS.has(value) || value.startsWith("--");
+}
 
 function parsePositiveInteger(value: string, label: string) {
   const trimmed = value.trim();
@@ -256,7 +261,7 @@ function parseTcpPort(value: string, label: string) {
   return parsed;
 }
 
-function parseArgs(argvInput: string[]): Options {
+export function parseArgs(argvInput: string[]): Options {
   let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
   const commands = new Set([
@@ -312,7 +317,7 @@ function parseArgs(argvInput: string[]): Options {
     const arg = argv[index];
     const readValue = () => {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (isMissingOptionValue(value)) {
         usage();
       }
       index += 1;
