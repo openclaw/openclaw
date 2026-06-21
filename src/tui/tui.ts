@@ -250,7 +250,7 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   let lastBackspaceAt = -1;
 
   return (data: string): string => {
-    if (data !== "\x08" && !matchesKey(data, Key.backspace)) {
+    if (data !== "\x08" && data !== "\x7f" && !matchesKey(data, Key.backspace)) {
       return data;
     }
     const ts = now();
