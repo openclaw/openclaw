@@ -28,7 +28,7 @@ export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes"
 /** Health-check implementation that owns its own detect/repair orchestration. */
 export interface RunnableHealthCheck extends Pick<
   HealthCheck,
-  "id" | "kind" | "description" | "source"
+  "id" | "kind" | "description" | "source" | "defaultEnabled"
 > {
   run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
 }

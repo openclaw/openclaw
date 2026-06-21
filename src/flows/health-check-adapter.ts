@@ -14,6 +14,7 @@ export function defineSplitHealthCheck(check: HealthCheck): RegisteredHealthChec
     kind: check.kind,
     description: check.description,
     source: check.source,
+    defaultEnabled: check.defaultEnabled,
     sourceContract: "split",
     detect: (ctx, scope) => check.detect(ctx, scope),
     repair:
@@ -73,6 +74,7 @@ export function normalizeHealthCheck(check: HealthCheckInput): RegisteredHealthC
       kind: check.kind,
       description: check.description,
       source: check.source,
+      defaultEnabled: check.defaultEnabled,
       sourceContract: "run",
       async detect(ctx, scope) {
         const result = await check.run({ ...ctx, repair: false }, scope);
