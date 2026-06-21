@@ -3022,6 +3022,57 @@ describe("exec approval handlers", () => {
     expect(manager.getSnapshot("approval-reviewer-runtime")?.decision).toBe("allow-once");
   });
 
+  it("does not allow reviewer devices without approval scope to resolve runtime approvals", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const reviewerClient = createExecApprovalClient({
+      connId: "conn-ios-reviewer",
+      clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+      deviceId: "device-ios-reviewer",
+      scopes: ["operator.read"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime-no-scope",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime-no-scope",
+      respond: resolveRespond,
+      context,
+      client: reviewerClient,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+    expect(manager.getSnapshot("approval-reviewer-runtime-no-scope")?.decision).toBeUndefined();
+
+    expect(manager.resolve("approval-reviewer-runtime-no-scope", "deny")).toBe(true);
+    await requestPromise;
+  });
+
   it("returns not found for stale exec.approval.get ids", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
 

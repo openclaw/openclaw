@@ -339,6 +339,8 @@ export function createExecApprovalHandlers(
       const record = manager.create(request, timeoutMs, explicitId);
       bindApprovalRequesterMetadata({ record, client });
       if (client?.internal?.approvalRuntime === true) {
+        // Reviewer ids widen approval visibility, so only the server-trusted
+        // approval runtime may bind them onto a pending exec approval.
         bindApprovalReviewerDeviceIds({
           record,
           deviceIds: p.approvalReviewerDeviceIds,
