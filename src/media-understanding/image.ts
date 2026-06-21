@@ -237,6 +237,14 @@ async function prepareResolvedImageRuntime(
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
+  // Providers configured for aws-sdk auth (e.g. amazon-bedrock) resolve
+  // credentials through the AWS SDK chain at call time rather than a static
+  // key, so an empty resolved key is expected, not an error. Mirror the chat
+  // path's allowMissingApiKeyModes allowance: pass the empty key through and
+  // skip setRuntimeApiKey so we never persist an empty-string secret.
+  if (!apiKeyInfo.apiKey?.trim() && apiKeyInfo.mode === "aws-sdk") {
+    return { apiKey: "", model };
+  }
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
   // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
   // a short-lived Copilot API token so the integrator scope (vscode-chat)
@@ -423,8 +431,12 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
     agentDir: params.agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
+  // aws-sdk providers resolve credentials via the SDK chain at call time, so an
+  // empty resolved key is expected; pass it through rather than throwing.
+  const apiKey =
+    !auth.apiKey?.trim() && auth.mode === "aws-sdk" ? "" : requireApiKey(auth, authProvider);
   return {
-    apiKey: requireApiKey(auth, authProvider),
+    apiKey,
     modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
   };
 }

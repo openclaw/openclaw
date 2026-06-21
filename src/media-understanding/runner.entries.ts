@@ -529,8 +529,9 @@ async function resolveProviderExecutionAuth(params: {
     };
   };
   const { isProviderAuthError, requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
+  let resolvedAuth: Awaited<ReturnType<ResolveApiKeyForProvider>> | undefined;
   try {
-    const auth = await resolveApiKeyForProvider({
+    resolvedAuth = await resolveApiKeyForProvider({
       provider: params.providerId,
       cfg: params.cfg,
       profileId: params.entry.profile,
@@ -539,14 +540,14 @@ async function resolveProviderExecutionAuth(params: {
       workspaceDir: params.workspaceDir,
       modelApi,
     });
-    const apiKey = requireApiKey(auth, params.providerId);
+    const apiKey = requireApiKey(resolvedAuth, params.providerId);
     return {
       kind: "api-key",
       apiKeys: collectProviderApiKeysForExecution({
         provider: params.providerId,
         primaryApiKey: apiKey,
       }),
-      source: auth.source,
+      source: resolvedAuth.source,
       providerConfig,
     };
   } catch (err) {
@@ -559,6 +560,16 @@ async function resolveProviderExecutionAuth(params: {
     const mediaAuth = resolveMediaProviderAuth();
     if (mediaAuth) {
       return mediaAuth;
+    }
+    // Providers configured for aws-sdk auth (e.g. Bedrock) authenticate through
+    // the AWS credential chain rather than a literal API key, so a missing key
+    // is expected, not an error. Execute keyless and let the SDK resolve creds.
+    if (resolvedAuth?.mode === "aws-sdk") {
+      return {
+        kind: "none",
+        source: resolvedAuth.source,
+        providerConfig,
+      };
     }
     throw err;
   }
