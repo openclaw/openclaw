@@ -17,6 +17,11 @@ import {
   type QaEvidenceTiming,
 } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
+import { isTruthyOptIn } from "../../mantis-options.runtime.js";
+import {
+  parseQaProgressBooleanEnv as parseTelegramQaProgressBooleanEnv,
+  sanitizeQaProgressValue as sanitizeTelegramQaProgressValue,
+} from "../../progress-format.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
   defaultQaModelForMode,
@@ -34,6 +39,7 @@ import {
   redactQaLiveLaneIssues,
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
+import { assertLiveScenarioReply as assertTelegramScenarioReply } from "../shared/live-scenario-reply.js";
 import type { LiveTransportCheckResult } from "../shared/live-transport-result.js";
 import {
   normalizeLiveTransportRttOptions,
@@ -565,31 +571,12 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof TELEGRAM_QA_ENV_KE
   return value;
 }
 
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
 function readConfigRecord(root: Record<string, unknown>, key: string): Record<string, unknown> {
   const value = root[key];
   if (!isRecord(value)) {
     throw new Error(`Telegram QA config missing object at ${key}`);
   }
   return value;
-}
-
-function parseTelegramQaProgressBooleanEnv(value: string | undefined): boolean | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  return undefined;
 }
 
 function shouldLogTelegramQaLiveProgress(env: NodeJS.ProcessEnv = process.env) {
@@ -682,20 +669,6 @@ function writeTelegramQaProgress(enabled: boolean, message: string) {
     return;
   }
   process.stderr.write(`${TELEGRAM_QA_PROGRESS_PREFIX} ${message}\n`);
-}
-
-function sanitizeTelegramQaProgressValue(value: string): string {
-  let normalized = "";
-  for (const char of value) {
-    const code = char.codePointAt(0);
-    if (code === undefined) {
-      continue;
-    }
-    const isControl = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-    normalized += isControl ? " " : char;
-  }
-  normalized = normalized.replace(/\s+/gu, " ").trim();
-  return normalized.length > 0 ? normalized : "<empty>";
 }
 
 function formatTelegramQaProgressDetails(details: string): string {
@@ -963,6 +936,7 @@ async function callTelegramApi<T>(
     timeoutMs: requestTimeoutMs,
     policy: { hostnameAllowlist: ["api.telegram.org"] },
     auditContext: "qa-lab-telegram-live",
+    capture: false,
   });
   try {
     const payload = (await response.json()) as TelegramApiEnvelope<T>;
@@ -1468,22 +1442,6 @@ function matchesTelegramScenarioReply(params: {
     params.message.messageId > params.sentMessageId &&
     params.message.text.includes(params.matchText),
   );
-}
-
-function assertTelegramScenarioReply(params: {
-  expectedTextIncludes?: string[];
-  message: TelegramObservedMessage;
-}) {
-  if (!params.message.text.trim()) {
-    throw new Error(`reply message ${params.message.messageId} was empty`);
-  }
-  for (const expected of params.expectedTextIncludes ?? []) {
-    if (!params.message.text.includes(expected)) {
-      throw new Error(
-        `reply message ${params.message.messageId} missing expected text: ${expected}`,
-      );
-    }
-  }
 }
 
 function assertTelegramCanaryPresenceReply(message: TelegramObservedMessage) {

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   privateTestApi,
   resetWindowsInstallRootsForTests,
+  getWindowsCmdExePath,
   getWindowsInstallRoots,
   getWindowsProgramFilesRoots,
   normalizeWindowsInstallRoot,
@@ -168,6 +169,14 @@ describe("getWindowsProgramFilesRoots", () => {
         "ProgramFiles(x86)": "E:\\Programs (x86)",
       }),
     ).toEqual(["D:\\Programs", "E:\\Programs (x86)"]);
+  });
+});
+
+describe("getWindowsCmdExePath", () => {
+  it("resolves cmd.exe from the trusted Windows system root", () => {
+    expect(getWindowsCmdExePath({ SystemRoot: "D:\\Windows" })).toBe(
+      "D:\\Windows\\System32\\cmd.exe",
+    );
   });
 });
 

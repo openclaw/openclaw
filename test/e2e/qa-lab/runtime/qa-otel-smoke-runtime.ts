@@ -3,7 +3,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { stripLeadingPackageManagerSeparator } from "../../../../scripts/lib/arg-utils.mjs";
+import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 
 type CollectorMode = "local" | "docker";
 type OtelLogsExporter = "otlp" | "stdout" | "both";
@@ -158,6 +159,26 @@ const MAX_STDOUT_DIAGNOSTIC_LINE_BYTES = readPositiveIntegerEnv(
   "OPENCLAW_QA_OTEL_MAX_STDOUT_DIAGNOSTIC_LINE_BYTES",
   512 * 1024,
 );
+const GATEWAY_STDOUT_ARTIFACT_READ_CHUNK_BYTES = 64 * 1024;
+const QA_OTEL_ENV_TO_CLEAR = [
+  "OTEL_SDK_DISABLED",
+  "OTEL_TRACES_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+  "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+  "OTEL_RESOURCE_ATTRIBUTES",
+] as const;
 
 function readPositiveIntegerEnv(
   name: string,
@@ -1075,12 +1096,36 @@ async function appendGatewayStdoutArtifactLogs(params: {
     "gateway.stdout.log",
   );
   try {
-    params.capture.append(await readFile(gatewayStdoutPath, "utf8"));
+    await appendUtf8FileToStdoutDiagnosticCapture(
+      gatewayStdoutPath,
+      params.capture,
+      GATEWAY_STDOUT_ARTIFACT_READ_CHUNK_BYTES,
+    );
     params.capture.flush();
   } catch (error) {
     if (!isErrnoCode(error, "ENOENT")) {
       throw error;
     }
+  }
+}
+
+async function appendUtf8FileToStdoutDiagnosticCapture(
+  filePath: string,
+  capture: ReturnType<typeof createStdoutDiagnosticLogCapture>,
+  chunkBytes = GATEWAY_STDOUT_ARTIFACT_READ_CHUNK_BYTES,
+): Promise<void> {
+  const file = await open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(Math.max(1, chunkBytes));
+    for (;;) {
+      const { bytesRead } = await file.read(buffer, 0, buffer.length);
+      if (bytesRead === 0) {
+        break;
+      }
+      capture.append(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    await file.close();
   }
 }
 
@@ -1294,9 +1339,13 @@ function terminateChildTree(
 ): void {
   if (platform === "win32") {
     if (typeof child.pid === "number") {
-      const result = runTaskkill("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-      });
+      const result = runTaskkill(
+        resolveWindowsTaskkillPath(),
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          stdio: "ignore",
+        },
+      );
       if (result.status === 0) {
         return;
       }
@@ -1401,9 +1450,9 @@ function relayParentSignalsToChild(child: ChildProcess): () => void {
 
 function buildQaEnv(port: number): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  delete env.OTEL_SDK_DISABLED;
-  delete env.OTEL_TRACES_EXPORTER;
-  delete env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  for (const key of QA_OTEL_ENV_TO_CLEAR) {
+    delete env[key];
+  }
   env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `http://127.0.0.1:${port}/v1/traces`;
   env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = `http://127.0.0.1:${port}/v1/metrics`;
   env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `http://127.0.0.1:${port}/v1/logs`;
@@ -1882,14 +1931,18 @@ async function main() {
 }
 
 export const testing = {
+  appendGatewayStdoutArtifactLogs,
   appendCapturedBodyText,
   assertSmoke,
+  buildQaEnv,
   createBoundedTextAccumulator,
+  createStdoutDiagnosticLogCapture,
   decodeRequestBody,
   parseArgs,
   parseStdoutDiagnosticLogLine,
   readPositiveIntegerEnv,
   readRequestBody,
+  appendUtf8FileToStdoutDiagnosticCapture,
   startLocalOtlpReceiver,
   startDockerOtelCollector,
   terminateChildTree,

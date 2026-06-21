@@ -126,6 +126,11 @@ The manifest-backed catalog currently includes:
 GLM models are available as `zai/<model>` (example: `zai/glm-5`).
 </Tip>
 
+<Tip>
+GLM-5.2 supports `off`, `low`, `high`, and `max` thinking levels. OpenClaw maps
+`low` and `high` to Z.AI high reasoning effort, and `max` to max effort.
+</Tip>
+
 <Note>
 Coding Plan setup defaults to `zai/glm-5.2`; general API setup keeps
 `zai/glm-5.1`. Endpoint auto-detection falls back to `glm-5.1` or `glm-4.7`

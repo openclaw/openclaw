@@ -114,11 +114,6 @@ function unlinkRegularFileSync(filePath: string): boolean {
   }
 }
 
-/** Remove the restart handoff file when it is a regular single-link file. */
-export function clearGatewayRestartHandoffSync(env: NodeJS.ProcessEnv = process.env): void {
-  unlinkRegularFileSync(resolveGatewayRestartHandoffPath(env));
-}
-
 function normalizePid(pid: number | undefined): number | null {
   return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
@@ -369,51 +364,6 @@ export function readGatewayRestartHandoffSync(
   }
   const payload = parseGatewayRestartHandoff(raw);
   if (!payload || now < payload.createdAt || now > payload.expiresAt) {
-    return null;
-  }
-  return payload;
-}
-
-/** Consume a handoff only when it belongs to the just-exited process. */
-export function consumeGatewayRestartHandoffForExitedProcessSync(opts: {
-  env?: NodeJS.ProcessEnv;
-  exitedPid?: number;
-  processInstanceId?: string;
-  now?: number;
-}): GatewayRestartHandoff | null {
-  const env = opts.env ?? process.env;
-  const handoffPath = resolveGatewayRestartHandoffPath(env);
-  let raw: string | null = null;
-  try {
-    const stat = fs.lstatSync(handoffPath);
-    // Consume uses the same regular-file guard as reads, then clears the file
-    // even if parsing fails so stale handoffs do not repeat.
-    if (!stat.isFile() || stat.nlink > 1 || stat.size > GATEWAY_RESTART_HANDOFF_MAX_BYTES) {
-      return null;
-    }
-    raw = fs.readFileSync(handoffPath, "utf8");
-  } catch {
-    return null;
-  } finally {
-    clearGatewayRestartHandoffSync(env);
-  }
-
-  const payload = raw ? parseGatewayRestartHandoff(raw) : null;
-  const exitedPid = normalizePid(opts.exitedPid);
-  if (!payload || exitedPid === null || payload.pid !== exitedPid) {
-    return null;
-  }
-
-  const expectedProcessInstanceId = normalizeText(
-    opts.processInstanceId,
-    MAX_PROCESS_INSTANCE_ID_LENGTH,
-  );
-  if (expectedProcessInstanceId && payload.processInstanceId !== expectedProcessInstanceId) {
-    return null;
-  }
-
-  const now = opts.now ?? Date.now();
-  if (now < payload.createdAt || now > payload.expiresAt) {
     return null;
   }
   return payload;

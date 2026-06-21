@@ -223,7 +223,7 @@ function parseArgs(argv: string[]): ScriptOptions {
 
     if (arg === "--limit") {
       const next = argv[index + 1];
-      if (!next || Number.isNaN(Number(next))) {
+      if (!next || next.startsWith("--") || !/^\d+$/u.test(next)) {
         throw new Error("Missing/invalid --limit value");
       }
       const parsed = Number(next);
@@ -237,13 +237,15 @@ function parseArgs(argv: string[]): ScriptOptions {
 
     if (arg === "--model") {
       const next = argv[index + 1];
-      if (!next) {
+      if (!next || next.startsWith("--")) {
         throw new Error("Missing --model value");
       }
       model = next;
       index++;
       continue;
     }
+
+    throw new Error(`Unknown argument: ${arg}`);
   }
 
   return { limit, dryRun, model };
@@ -1053,6 +1055,7 @@ async function main() {
 export const testing = {
   classifyItem,
   normalizeClassification,
+  parseArgs,
   readBoundedOpenAIJson,
   readBoundedResponseText,
   resolveOpenAITimeoutMs,

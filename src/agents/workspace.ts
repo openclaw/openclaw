@@ -523,17 +523,13 @@ export async function hasRecentWorkspaceAttestation(
   }
 }
 
-export async function isWorkspaceAttestationMarker(attestationPath: string): Promise<boolean> {
-  return (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker";
-}
-
 export async function shouldRemoveWorkspaceAttestation(
   attestationPath: string,
   opts?: { trustUnknown?: boolean },
 ): Promise<boolean> {
   try {
     return (
-      (await isWorkspaceAttestationMarker(attestationPath)) ||
+      (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker" ||
       (await hasRecentWorkspaceAttestation(attestationPath, opts))
     );
   } catch {

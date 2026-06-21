@@ -24,7 +24,6 @@ import {
   win32 as pathWin32,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { verify as verifySigstoreBundle } from "sigstore";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
@@ -99,6 +98,41 @@ export type PublishedInstallScenario = {
   installSpecs: string[];
   expectedVersion: string;
 };
+
+export type OpenClawNpmPostpublishVerifyArgs =
+  | {
+      help: false;
+      version: string;
+    }
+  | {
+      help: true;
+      version: "";
+    };
+
+export function openClawNpmPostpublishVerifyUsage(): string {
+  return "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>";
+}
+
+export function parseOpenClawNpmPostpublishVerifyArgs(
+  argv: readonly string[],
+): OpenClawNpmPostpublishVerifyArgs {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const version = args[0]?.trim() ?? "";
+  if (version === "--help" || version === "-h") {
+    return { help: true, version: "" };
+  }
+  if (!version) {
+    throw new Error(openClawNpmPostpublishVerifyUsage());
+  }
+  if (version.startsWith("-")) {
+    throw new Error(`Unknown openclaw npm postpublish verifier option: ${version}`);
+  }
+  const extraArg = args[1]?.trim();
+  if (extraArg) {
+    throw new Error(`Unexpected openclaw npm postpublish verifier argument: ${extraArg}`);
+  }
+  return { help: false, version };
+}
 
 export function buildPublishedInstallScenarios(version: string): PublishedInstallScenario[] {
   const parsed = parseReleaseVersion(version);
@@ -278,7 +312,8 @@ async function verifySigstoreNpmProvenanceBundle(
   bundle: unknown,
   policy: NpmProvenanceVerificationPolicy,
 ): Promise<void> {
-  await verifySigstoreBundle(bundle as Parameters<typeof verifySigstoreBundle>[0], policy);
+  const sigstore = require("sigstore") as { verify: VerifyNpmProvenanceBundle };
+  await sigstore.verify(bundle, policy);
 }
 
 export async function verifyNpmProvenanceAttestation(params: {
@@ -1147,14 +1182,14 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
   }
 }
 
-async function main(): Promise<void> {
-  const version = process.argv[2]?.trim();
-  if (!version) {
-    throw new Error(
-      "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>",
-    );
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseOpenClawNpmPostpublishVerifyArgs(argv);
+  if (args.help) {
+    console.log(openClawNpmPostpublishVerifyUsage());
+    return;
   }
 
+  const { version } = args;
   const scenarios = buildPublishedInstallScenarios(version);
   await verifyPublishedRegistryProvenance(version);
   for (const scenario of scenarios) {

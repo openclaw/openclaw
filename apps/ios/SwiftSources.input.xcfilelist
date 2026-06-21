@@ -109,10 +109,10 @@ Sources/Voice/VoiceWakePreferences.swift
 ShareExtension/ShareViewController.swift
 ActivityWidget/OpenClawActivityWidgetBundle.swift
 ActivityWidget/OpenClawLiveActivity.swift
-WatchExtension/Sources/OpenClawWatchApp.swift
-WatchExtension/Sources/WatchConnectivityReceiver.swift
-WatchExtension/Sources/WatchInboxStore.swift
-WatchExtension/Sources/WatchInboxView.swift
+WatchApp/Sources/OpenClawWatchApp.swift
+WatchApp/Sources/WatchConnectivityReceiver.swift
+WatchApp/Sources/WatchInboxStore.swift
+WatchApp/Sources/WatchInboxView.swift
 ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift
 ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift
 ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownPreprocessor.swift

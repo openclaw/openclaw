@@ -1,6 +1,7 @@
 // Gateway model-pricing refresh and normalization.
 // Fetches, normalizes, and schedules cached pricing for model usage estimates.
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
@@ -289,13 +290,12 @@ async function readPricingJsonObject(
   if (contentLength !== null && contentLength > MAX_PRICING_CATALOG_BYTES) {
     throw new Error(`${source} pricing response too large: ${contentLength} bytes`);
   }
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > MAX_PRICING_CATALOG_BYTES) {
-    throw new Error(`${source} pricing response too large: ${buffer.byteLength} bytes`);
-  }
+  const buffer = await readResponseWithLimit(response, MAX_PRICING_CATALOG_BYTES, {
+    onOverflow: ({ size }) => new Error(`${source} pricing response too large: ${size} bytes`),
+  });
   let payload: unknown;
   try {
-    payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
+    payload = JSON.parse(buffer.toString("utf8")) as unknown;
   } catch {
     throw new Error(`${source} pricing response is malformed JSON`);
   }

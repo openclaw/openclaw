@@ -28,7 +28,6 @@ const {
   buildEmbeddedRunContexts,
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
-  resolveEnforceFinalTag,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
 
@@ -233,9 +232,21 @@ describe("agent-runner-utils", () => {
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {
-    const run = makeRun();
+    const run = makeRun({ enforceFinalTag: false });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "minimax",
+      primaryProvider: "minimax",
+    });
 
-    expect(resolveEnforceFinalTag(run, "minimax", "MiniMax-M2.7")).toBe(false);
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "minimax",
+      model: "MiniMax-M2.7",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(resolved.enforceFinalTag).toBe(false);
     expect(hoisted.isReasoningTagProviderMock).toHaveBeenCalledWith("minimax", {
       config: run.config,
       workspaceDir: run.workspaceDir,

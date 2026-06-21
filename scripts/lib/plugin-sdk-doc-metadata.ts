@@ -114,6 +114,9 @@ export const pluginSdkDocMetadata = {
   "runtime-store": {
     category: "runtime",
   },
+  "session-transcript-runtime": {
+    category: "runtime",
+  },
   "sqlite-runtime": {
     category: "runtime",
   },

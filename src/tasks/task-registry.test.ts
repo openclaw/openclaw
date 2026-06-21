@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
-import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
+import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
   registerAgentRunContext,
@@ -67,7 +67,7 @@ import {
   runTaskRegistryMaintenance,
   setTaskRegistryMaintenanceRuntimeForTests,
   startTaskRegistryMaintenance,
-  stopTaskRegistryMaintenanceForTests,
+  stopTaskRegistryMaintenance,
   sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
@@ -475,7 +475,7 @@ describe("task-registry", () => {
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
-    resetCronActiveJobsForTests();
+    resetCronActiveJobs();
     resetActiveCronTaskRunsForTests();
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
@@ -2924,7 +2924,7 @@ describe("task-registry", () => {
       });
 
       startTaskRegistryMaintenance();
-      stopTaskRegistryMaintenanceForTests();
+      stopTaskRegistryMaintenance();
 
       await vi.advanceTimersByTimeAsync(5_000);
       await flushAsyncWork();
