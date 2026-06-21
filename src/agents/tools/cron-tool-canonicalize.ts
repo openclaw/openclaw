@@ -85,6 +85,30 @@ function moveDefinedField(params: {
   return true;
 }
 
+function recoverCronToolKey(key: string): string | undefined {
+  if (CRON_RECOVERABLE_OBJECT_KEYS.has(key)) {
+    return key;
+  }
+  const trimmed = key.trim();
+  return trimmed !== key && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed) ? trimmed : undefined;
+}
+
+function repairWhitespacePaddedCronToolKeys(value: Record<string, unknown>): void {
+  // Some local tool-call parsers preserve schema-shaped JSON but pad property
+  // names. Recover only known cron fields so strict validation still rejects
+  // genuinely unknown keys after canonicalization.
+  for (const key of Object.keys(value)) {
+    const recoveredKey = recoverCronToolKey(key);
+    if (recoveredKey === undefined || recoveredKey === key) {
+      continue;
+    }
+    if (value[recoveredKey] === undefined) {
+      value[recoveredKey] = value[key];
+    }
+    delete value[key];
+  }
+}
+
 function repairConcatenatedCronToolKeys(value: Record<string, unknown>): void {
   // Some small/local tool-call parsers can return valid JSON with adjacent cron
   // key names merged. Recover only the observed schema-specific pairs before
@@ -249,6 +273,7 @@ export function canonicalizeCronToolObject(
 ): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
   const next = { ...unwrapped };
+  repairWhitespacePaddedCronToolKeys(next);
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);
@@ -278,8 +303,11 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   const value: Record<string, unknown> = {};
   let found = false;
   for (const key of Object.keys(params)) {
-    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
-      value[key] = params[key];
+    const recoveredKey = recoverCronToolKey(key);
+    if (recoveredKey !== undefined && params[key] !== undefined) {
+      if (key === recoveredKey || value[recoveredKey] === undefined) {
+        value[recoveredKey] = params[key];
+      }
       found = true;
     }
   }

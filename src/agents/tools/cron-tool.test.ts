@@ -1075,6 +1075,64 @@ describe("cron tool", () => {
     });
   });
 
+  it.each([
+    {
+      callId: "call-whitespace-padded-add",
+      input: {
+        action: "add",
+        job: {
+          name: "Holiday Check-in",
+          description: "Casual check-in while on holiday, 2x per day",
+          "schedule ": { expr: "30 10,20 * * *", kind: "cron", tz: "Europe/Madrid" },
+          "sessionTarget ": "isolated",
+          "payload ": {
+            kind: "agentTurn",
+            message: "Holiday check-in: how's everything going?",
+          },
+          "enabled ": true,
+        },
+      },
+      label: "job",
+    },
+    {
+      callId: "call-flat-whitespace-padded-add",
+      input: {
+        action: "add",
+        name: "Holiday Check-in",
+        description: "Casual check-in while on holiday, 2x per day",
+        "schedule ": { expr: "30 10,20 * * *", kind: "cron", tz: "Europe/Madrid" },
+        "sessionTarget ": "isolated",
+        "payload ": {
+          kind: "agentTurn",
+          message: "Holiday check-in: how's everything going?",
+        },
+        "enabled ": true,
+      },
+      label: "flat",
+    },
+  ])(
+    "recovers whitespace-padded cron add $label keys from local tool-call parsers",
+    async ({ callId, input }) => {
+      const tool = createTestCronTool();
+      await tool.execute(callId, input);
+
+      const params = expectSingleGatewayCallMethod("cron.add");
+      expect(params).toEqual({
+        delivery: { mode: "announce" },
+        description: "Casual check-in while on holiday, 2x per day",
+        enabled: true,
+        name: "Holiday Check-in",
+        payload: {
+          kind: "agentTurn",
+          message: "Holiday check-in: how's everything going?",
+        },
+        schedule: { expr: "30 10,20 * * *", kind: "cron", tz: "Europe/Madrid" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+      });
+    },
+  );
+
   it("recovers flat concatenated cron add keys from local tool-call parsers", async () => {
     const tool = createTestCronTool();
     await tool.execute("call-flat-concatenated-add", {
