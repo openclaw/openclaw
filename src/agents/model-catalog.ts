@@ -632,7 +632,9 @@ export async function loadModelCatalog(params?: {
               workspaceDir: preparedSource.workspaceDir ?? workspaceDir,
             })
           : undefined;
-        if (preparedCatalogKey && preparedCatalogKey !== catalogKey) {
+        if (!preparedCatalogKey) {
+          catalogKey = undefined;
+        } else if (preparedCatalogKey !== catalogKey) {
           catalogKey = preparedCatalogKey;
           if (params?.useCache !== false) {
             const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as

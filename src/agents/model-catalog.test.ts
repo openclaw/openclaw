@@ -541,6 +541,33 @@ describe("loadModelCatalog", () => {
     expect(buildAgentModelCatalogCacheKeyMock).not.toHaveBeenCalled();
   });
 
+  it("does not write runtime discovery results under a stale key when prepare becomes uncacheable", async () => {
+    buildModelsJsonSourceFingerprintMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      cacheable: true,
+      fingerprint: "pre-refresh-source",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    prepareOpenClawModelsJsonSourceMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      cacheable: false,
+      workspaceDir: "/tmp/openclaw-workspace",
+      wrote: true,
+    });
+    readCachedAgentModelCatalogMock.mockReturnValue(undefined);
+    mockAgentDiscoveryModels([{ id: "runtime-fast", name: "Runtime Fast", provider: "openai" }]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toEqual([{ id: "runtime-fast", name: "Runtime Fast", provider: "openai" }]);
+    expect(readCachedAgentModelCatalogMock).toHaveBeenCalledOnce();
+    expect(readCachedAgentModelCatalogMock).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key:pre-refresh-source",
+    });
+    expect(writeCachedAgentModelCatalogMock).not.toHaveBeenCalled();
+  });
+
   it("preserves runtime model params in the internal catalog", async () => {
     mockAgentDiscoveryModels([
       {
