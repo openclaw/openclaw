@@ -932,6 +932,11 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         pendingRestartReason = reason;
       }
       pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
+      // A later coalesced request with an explicit deferralTimeoutMs overrides the
+      // earlier pending timeout so the operator's latest intent is honored.
+      if (opts?.deferralTimeoutMs !== undefined) {
+        pendingRestartDeferralTimeoutMs = opts.deferralTimeoutMs;
+      }
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
       );
