@@ -288,13 +288,16 @@ export async function replyWithDiscordModelPickerProviders(params: {
   threadBindings: ThreadBindingManager;
   preferFollowUp: boolean;
   safeInteractionCall: SafeDiscordInteractionCall;
+  route?: ResolvedAgentRoute;
 }) {
-  const route = await resolveDiscordModelPickerRoute({
-    interaction: params.interaction,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    threadBindings: params.threadBindings,
-  });
+  const route =
+    params.route ??
+    (await resolveDiscordModelPickerRoute({
+      interaction: params.interaction,
+      cfg: params.cfg,
+      accountId: params.accountId,
+      threadBindings: params.threadBindings,
+    }));
   const data = await loadDiscordModelPickerData(params.cfg, route.agentId);
   const currentModel = resolveDiscordModelPickerCurrentModel({
     cfg: params.cfg,

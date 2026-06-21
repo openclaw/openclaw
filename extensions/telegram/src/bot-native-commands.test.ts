@@ -418,7 +418,7 @@ describe("registerTelegramNativeCommands", () => {
 
   it("falls back to model browse controls when configured model callbacks exceed Telegram limits", async () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
-    const longModel = "nousresearch/hermes-3-llama-3.1-405b:extended";
+    const longModel = "hermes-3-llama-3.1-405b-extended-build-v1";
     const params = createNativeCommandTestParams(
       {
         models: {
@@ -456,6 +456,9 @@ describe("registerTelegramNativeCommands", () => {
     expect(buildTelegramModelsMenuButtons({ providers: [{ id: "openrouter", count: 2 }] })).toEqual(
       [[{ text: "openrouter (2)", callback_data: "mdl_list_openrouter_1" }]],
     );
+    expect(parseTelegramNativeCommandCallbackData("tgcmd:/model openrouter/short-model")).toBe(
+      "/model openrouter/short-model",
+    );
     const modelListChannelData = buildTelegramModelsListChannelData({
       provider: "openrouter",
       models: ["short-model", longModel],
@@ -463,8 +466,13 @@ describe("registerTelegramNativeCommands", () => {
       totalPages: 1,
       modelNames: new Map([[`openrouter/${longModel}`, "Hermes 405B Extended"]]),
     });
-    expect(modelListChannelData?.telegram?.buttons).toContainEqual([
-      { text: "Hermes 405B Extended", callback_data: `mdl_sel/${longModel}` },
+    const modelListButtons = (
+      modelListChannelData?.telegram as
+        | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+        | undefined
+    )?.buttons;
+    expect(modelListButtons).toContainEqual([
+      { text: "Hermes 405B Extended", callback_data: `mdl_sel_openrouter/${longModel}` },
     ]);
     expect(dispatch?.mock.calls).toHaveLength(0);
   });

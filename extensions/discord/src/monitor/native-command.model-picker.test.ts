@@ -475,10 +475,58 @@ describe("Discord model picker interactions", () => {
       .mockResolvedValue(pickerData);
     const command = createNativeModelCommand(cfg);
     const interaction = createInteraction({ userId: "owner" });
+    const routeSpy = vi.fn<
+      typeof nativeCommandRouteModule.resolveDiscordNativeInteractionRouteState
+    >(
+      async () =>
+        ({
+          route: {
+            agentId: "main",
+            channel: "discord",
+            accountId: "default",
+            sessionKey: "agent:main:main",
+            mainSessionKey: "agent:main:main",
+            lastRoutePolicy: "session",
+            matchedBy: "default",
+          },
+          effectiveRoute: {
+            agentId: "codex",
+            channel: "discord",
+            accountId: "default",
+            sessionKey: "agent:codex:acp:binding:discord:default:dm",
+            mainSessionKey: "agent:codex:main",
+            lastRoutePolicy: "session",
+            matchedBy: "binding.channel",
+          },
+          boundSessionKey: "agent:codex:acp:binding:discord:default:dm",
+          configuredRoute: null,
+          configuredBinding: {
+            record: {
+              conversation: {
+                conversationId: "owner",
+              },
+            },
+            statefulTarget: {
+              agentId: "codex",
+            },
+          },
+          bindingReadiness: { ok: true },
+        }) as never,
+    );
+    const previousRouteState =
+      discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(routeSpy);
 
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction);
+    try {
+      await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction);
+    } finally {
+      discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(previousRouteState);
+    }
 
-    expect(loadSpy).toHaveBeenCalledWith(cfg, "main");
+    expect(firstMockArg(routeSpy, "resolve route state")).toMatchObject({
+      enforceConfiguredBindingReadiness: true,
+    });
+    expect(routeSpy).toHaveBeenCalledTimes(1);
+    expect(loadSpy).toHaveBeenCalledWith(cfg, "codex");
     expect(interaction.followUp).toHaveBeenCalledTimes(1);
     const payload = JSON.stringify(firstMockArg(interaction.followUp, "interaction.followUp"));
     expect(payload).toContain("gpt-5.5");

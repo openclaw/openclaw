@@ -334,8 +334,10 @@ async function dispatchDiscordCommandInteraction(params: {
       threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
       enforceConfiguredBindingReadiness: !shouldBypassConfiguredAcpEnsure(commandName),
     }));
-  const rejectUnavailableConfiguredBinding = async (): Promise<boolean> => {
-    const routeState = await getNativeRouteState();
+  const rejectUnavailableConfiguredBinding = async (
+    resolvedRouteState?: Awaited<ReturnType<typeof getNativeRouteState>>,
+  ): Promise<boolean> => {
+    const routeState = resolvedRouteState ?? (await getNativeRouteState());
     if (!routeState.bindingReadiness || routeState.bindingReadiness.ok) {
       return false;
     }
@@ -493,7 +495,8 @@ async function dispatchDiscordCommandInteraction(params: {
     commandArgs,
   });
   if (pickerCommandContext) {
-    if (await rejectUnavailableConfiguredBinding()) {
+    const routeState = await getNativeRouteState();
+    if (await rejectUnavailableConfiguredBinding(routeState)) {
       return { accepted: false };
     }
     await replyWithDiscordModelPickerProviders({
@@ -505,6 +508,7 @@ async function dispatchDiscordCommandInteraction(params: {
       threadBindings,
       preferFollowUp,
       safeInteractionCall: safeDiscordInteractionCall,
+      route: routeState.effectiveRoute,
     });
     return { accepted: true };
   }
