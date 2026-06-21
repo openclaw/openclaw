@@ -921,6 +921,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           // them inside `job`. When `params.job` is missing or empty, reconstruct
           // a synthetic job object from any recognised top-level job fields.
           // See: https://github.com/openclaw/openclaw/issues/11310
+          let recoveredFlatJob = false;
           if (isMissingOrEmptyObject(params.job)) {
             const synthetic = recoverCronObjectFromFlatParams(params);
             // Only use the synthetic job if at least one meaningful field is present
@@ -928,13 +929,16 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             // LLM intended to create a job).
             if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
               params.job = synthetic.value;
+              recoveredFlatJob = true;
             }
           }
 
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
-          const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
+          const canonicalJob = recoveredFlatJob
+            ? (params.job as Record<string, unknown>)
+            : canonicalizeCronToolObject(params.job as Record<string, unknown>);
           assertNoCronCommandPayload(canonicalJob);
           assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
           const job =
@@ -1051,9 +1055,9 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
-          const canonicalPatch = canonicalizeCronToolObject(
-            params.patch as Record<string, unknown>,
-          );
+          const canonicalPatch = recoveredFlatPatch
+            ? (params.patch as Record<string, unknown>)
+            : canonicalizeCronToolObject(params.patch as Record<string, unknown>);
           assertNoCronCommandPayload(canonicalPatch);
           assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
           const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;

@@ -1137,6 +1137,7 @@ describe("cron tool", () => {
 
   it.each([
     {
+      additionalProperty: "enabled ",
       callId: "call-duplicate-padded-add",
       input: {
         action: "add",
@@ -1153,8 +1154,13 @@ describe("cron tool", () => {
         },
       },
       label: "job",
+      verify: (params: Record<string, unknown>) => {
+        expect(params.enabled).toBe(false);
+        expect(params["enabled "]).toBe(true);
+      },
     },
     {
+      additionalProperty: "enabled ",
       callId: "call-flat-duplicate-padded-add",
       input: {
         action: "add",
@@ -1169,22 +1175,60 @@ describe("cron tool", () => {
         "enabled ": true,
       },
       label: "flat",
+      verify: (params: Record<string, unknown>) => {
+        expect(params.enabled).toBe(false);
+        expect(params["enabled "]).toBe(true);
+      },
+    },
+    {
+      additionalProperty: "cron ",
+      callId: "call-flat-duplicate-padded-cron-add",
+      input: {
+        action: "add",
+        name: "Holiday Check-in",
+        cron: "30 10,20 * * *",
+        "cron ": "*/5 * * * *",
+        sessionTarget: "isolated",
+        message: "Holiday check-in: how's everything going?",
+      },
+      label: "flat schedule shorthand",
+      verify: (params: Record<string, unknown>) => {
+        expect(params.schedule).toMatchObject({ expr: "30 10,20 * * *", kind: "cron" });
+        expect(params["cron "]).toBe("*/5 * * * *");
+      },
+    },
+    {
+      additionalProperty: "allowUnsafeExternalContent ",
+      callId: "call-flat-duplicate-padded-payload-add",
+      input: {
+        action: "add",
+        name: "Holiday Check-in",
+        schedule: { expr: "30 10,20 * * *", kind: "cron", tz: "Europe/Madrid" },
+        sessionTarget: "isolated",
+        message: "Holiday check-in: how's everything going?",
+        allowUnsafeExternalContent: false,
+        "allowUnsafeExternalContent ": true,
+      },
+      label: "flat payload shorthand",
+      verify: (params: Record<string, unknown>) => {
+        expect(params.payload).toMatchObject({ allowUnsafeExternalContent: false });
+        expect(params["allowUnsafeExternalContent "]).toBe(true);
+      },
     },
   ])(
     "preserves duplicate whitespace-padded cron add $label keys for strict validation",
-    async ({ callId, input }) => {
+    async ({ additionalProperty, callId, input, verify }) => {
       const tool = createTestCronTool();
       await tool.execute(callId, input);
 
       const params = expectSingleGatewayCallMethod("cron.add") as Record<string, unknown>;
-      expect(params.enabled).toBe(false);
-      expect(params["enabled "]).toBe(true);
+      verify(params);
       expect(Value.Check(CronAddParamsSchema, params)).toBe(false);
       expect(Array.from(Value.Errors(CronAddParamsSchema, params))).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             keyword: "additionalProperties",
-            params: { additionalProperties: ["enabled "] },
+            params: { additionalProperties: [additionalProperty] },
           }),
         ]),
       );
