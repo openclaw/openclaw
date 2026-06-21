@@ -843,14 +843,21 @@ describe("feishuOutbound.sendPayload native cards", () => {
       payload: {
         text: "Review this",
         interactive: {
-          blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "/approve req_1" }] }],
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Approve", action: { type: "command", command: "/approve req_1" } },
+              ],
+            },
+          ],
         },
       },
     });
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(commentThreadParams()?.content).toBe(
-      "Review this\n\n- Approve\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+      "Review this\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
     );
     expectFeishuResult(result, "reply_msg");
   });
