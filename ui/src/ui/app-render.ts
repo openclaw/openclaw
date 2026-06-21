@@ -3484,10 +3484,12 @@ export function renderApp(state: AppViewState) {
                   if (index < 0) {
                     return;
                   }
+                  // Write `auto` mode (runtime contract) instead of the
+                  // deprecated `enabled` boolean. "always" = on, "off" = off.
                   updateConfigFormValue(
                     state,
-                    ["agents", "list", index, "tts", "enabled"],
-                    enabled,
+                    ["agents", "list", index, "tts", "auto"],
+                    enabled ? "always" : "off",
                   );
                 },
                 onTtsProviderChange: (agentId, provider) => {

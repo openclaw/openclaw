@@ -487,6 +487,112 @@ describe("renderAgents", () => {
     expect(secretRefInput).toBeTruthy();
   });
 
+  it("deep-merges inherited provider config from messages.tts with agent override", async () => {
+    // P1 fix: when messages.tts has ElevenLabs API key/model and the agent
+    // override only sets speakerVoiceId, the UI must show the inherited
+    // API key and model — not blank fields from a shallow merge.
+    const container = document.createElement("div");
+    const configForm = {
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          providers: {
+            elevenlabs: {
+              apiKey: "global-key",
+              modelId: "eleven_turbo_v2_5",
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "beta",
+            tts: {
+              auto: "always",
+              providers: {
+                elevenlabs: {
+                  speakerVoiceId: "agent-voice-id",
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: { form: configForm, loading: false, saving: false, dirty: false },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // Inherited API key should be visible in the password field
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeTruthy();
+    expect(passwordInput?.value).toBe("global-key");
+
+    // Inherited model should be selected
+    const allSelects = container.querySelectorAll<HTMLSelectElement>("select");
+    const ttsModelSelect = Array.from(allSelects).find((sel) =>
+      Array.from(sel.options).some((opt) => opt.value === "eleven_turbo_v2_5"),
+    );
+    expect(ttsModelSelect).toBeTruthy();
+    expect(ttsModelSelect?.value).toBe("eleven_turbo_v2_5");
+
+    // Agent-specific voice ID should be present
+    const textInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="text"]'),
+    );
+    const voiceIdInput = textInputs.find((input) => input.value === "agent-voice-id");
+    expect(voiceIdInput).toBeTruthy();
+  });
+
+  it("reflects auto mode in the enable toggle (auto: always → on)", async () => {
+    // P1 fix: configs using `auto: "always"` must show the toggle as ON,
+    // not OFF (which happened when reading only the deprecated `enabled` boolean).
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "beta",
+            tts: {
+              auto: "always",
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: { apiKey: "test-key" },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: { form: configForm, loading: false, saving: false, dirty: false },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // The toggle checkbox should be checked (auto: always → enabled)
+    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(true);
+  });
+
   it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("zh-CN");

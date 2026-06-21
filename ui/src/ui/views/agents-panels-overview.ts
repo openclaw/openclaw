@@ -21,6 +21,9 @@ import type { AgentsPanel } from "./agents.types.ts";
 
 /** Per-agent TTS config resolved from the config form. */
 export type AgentTtsConfig = {
+  /** Effective TTS auto mode: "always" | "off" | "session" | null (unset). */
+  auto: string | null;
+  /** True when auto mode resolves to TTS on (always or session). */
   enabled: boolean | null;
   provider: string | null;
   apiKey: string | null;
@@ -38,12 +41,41 @@ function isSecretRefObject(value: unknown): value is { source: string; id: strin
   return typeof candidate.source === "string" && typeof candidate.id === "string";
 }
 
+/** Keys that must not be deep-merged (prototype pollution guards). */
+const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+/** Recursively merge defined values from override into base, mirroring the
+ * runtime `deepMergeDefined` contract from `src/tts/tts-config.ts`.
+ *
+ * Objects are merged key-by-key; primitives and arrays are replaced.
+ * `undefined` values in the override are skipped.
+ */
+function deepMergeDefined(base: unknown, override: unknown): unknown {
+  if (!base || typeof base !== "object" || Array.isArray(base)) {
+    return override === undefined ? base : override;
+  }
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    return override === undefined ? base : override;
+  }
+  const result: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(override as Record<string, unknown>)) {
+    if (BLOCKED_MERGE_KEYS.has(key) || value === undefined) continue;
+    result[key] = key in result ? deepMergeDefined(result[key], value) : value;
+  }
+  return result;
+}
+
 /** Resolve TTS config for a specific agent from the config form.
  *
  * Runtime TTS resolution starts from `messages.tts` as the base layer and
  * deep-merges per-agent overrides on top (see `resolveEffectiveTtsConfig` in
- * `src/tts/tts-config.ts`). This resolver mirrors that contract so the UI
- * reflects the effective runtime state rather than only the agent-scoped block.
+ * `src/tts/tts-config.ts`). This resolver mirrors that contract — including
+ * recursive deep-merge of nested `providers` objects — so the UI reflects the
+ * effective runtime state rather than only the agent-scoped block.
+ *
+ * Auto mode (`auto: "always" | "off" | "session"`) takes precedence over the
+ * deprecated `enabled` boolean, matching runtime precedence in
+ * `shouldAttemptTtsPayload`.
  */
 function resolveAgentTts(
   configForm: Record<string, unknown> | null,
@@ -56,14 +88,14 @@ function resolveAgentTts(
   const entryTts = config.entry?.tts as Record<string, unknown> | undefined;
   const defaultsTts = config.defaults?.tts as Record<string, unknown> | undefined;
 
-  // Layer: base (messages.tts) → defaults → entry (agent-specific)
-  const mergedTts: Record<string, unknown> = { ...(baseTts ?? {}) };
+  // Deep-merge layers: base (messages.tts) → defaults → entry (agent-specific)
+  let mergedTts: Record<string, unknown> = deepMergeDefined(baseTts ?? {}, {}) as Record<
+    string,
+    unknown
+  >;
   for (const layer of [defaultsTts, entryTts]) {
     if (!layer) continue;
-    for (const [key, value] of Object.entries(layer)) {
-      if (value === undefined) continue;
-      mergedTts[key] = value;
-    }
+    mergedTts = deepMergeDefined(mergedTts, layer) as Record<string, unknown>;
   }
 
   const provider = (mergedTts.provider as string) ?? null;
@@ -71,8 +103,15 @@ function resolveAgentTts(
     (mergedTts.providers as Record<string, Record<string, unknown>> | undefined) ?? {};
   const elevenlabs = providers.elevenlabs ?? {};
   const rawApiKey = elevenlabs.apiKey;
+
+  // Auto mode takes precedence over deprecated `enabled` boolean (runtime contract).
+  const auto = (mergedTts.auto as string) ?? null;
+  const enabledBool = (mergedTts.enabled as boolean) ?? null;
+  const effectiveEnabled = auto ? auto !== "off" : enabledBool;
+
   return {
-    enabled: (mergedTts.enabled as boolean) ?? null,
+    auto,
+    enabled: effectiveEnabled,
     provider,
     apiKey: typeof rawApiKey === "string" ? rawApiKey : null,
     apiKeyIsSecretRef: isSecretRefObject(rawApiKey),
