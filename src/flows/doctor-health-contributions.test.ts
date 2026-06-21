@@ -5,6 +5,8 @@ import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import {
   createDoctorHealthContribution,
+  createDoctorRepairPreviewReport,
+  finalizeDoctorRepairPreviewReport,
   resolveDoctorContributionHealthChecks,
   resolveDoctorHealthContributions,
   shouldSkipLegacyUpdateDoctorConfigWrite,
@@ -1093,6 +1095,7 @@ describe("doctor health contributions", () => {
       {
         checks: contribution.healthChecks,
         dryRun: false,
+        diff: false,
       },
     );
     expect(ctx.cfg).toEqual({ updated: true });
@@ -1179,8 +1182,85 @@ describe("doctor health contributions", () => {
       {
         checks: contribution.healthChecks,
         dryRun: true,
+        diff: false,
       },
     );
+  });
+
+  it("records structured repair dry-run output in the preview report", async () => {
+    const contribution = requireDoctorContribution("doctor:structured-health-repairs");
+    const previewReport = createDoctorRepairPreviewReport({ diff: true });
+    mocks.runDoctorHealthRepairs.mockResolvedValue({
+      config: { updated: true },
+      findings: [
+        {
+          checkId: "plugin/example/unrelated",
+          severity: "warning",
+          message: "plugin check can be repaired",
+        },
+      ],
+      remainingFindings: [],
+      changes: ["would update plugin config"],
+      warnings: ["preview warning"],
+      diffs: [
+        {
+          kind: "config",
+          path: "plugins.entries.example.enabled",
+          before: "false",
+          after: "true",
+        },
+      ],
+      effects: [
+        {
+          kind: "config",
+          action: "update",
+          target: "plugins.entries.example.enabled",
+          dryRunSafe: true,
+        },
+      ],
+      checksRun: 1,
+      checksRepaired: 1,
+      checksValidated: 0,
+    });
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true, diff: true },
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+      previewReport,
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.any(Object), {
+      checks: [{ id: "plugin/example/unrelated", kind: "plugin" }],
+      dryRun: true,
+      diff: true,
+    });
+    expect(ctx.cfg).toEqual({});
+    expect(finalizeDoctorRepairPreviewReport(previewReport)).toMatchObject({
+      ok: false,
+      checksRun: 1,
+      checksRepaired: 1,
+      changes: ["would update plugin config"],
+      warnings: ["preview warning"],
+      diffs: [
+        expect.objectContaining({
+          path: "plugins.entries.example.enabled",
+        }),
+      ],
+      effects: [
+        expect.objectContaining({
+          action: "update",
+          target: "plugins.entries.example.enabled",
+        }),
+      ],
+    });
   });
 
   it("requires explicit health check ids for multi-check contributions", () => {
@@ -1269,6 +1349,8 @@ describe("doctor health contributions", () => {
 
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.any(Object), {
       checks: [{ id: "plugin/example/unrelated", kind: "plugin" }],
+      dryRun: false,
+      diff: false,
     });
   });
 

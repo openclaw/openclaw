@@ -10,9 +10,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { DoctorRepairRunResult } from "./doctor-repair-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type {
+  HealthCheck,
+  HealthFinding,
+  HealthRepairDiff,
+  HealthRepairEffect,
+} from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorFlowMode = "local" | "remote";
@@ -44,6 +50,29 @@ export type DoctorHealthFlowContext = {
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
+  previewReport?: DoctorRepairPreviewReport;
+};
+
+export type DoctorRepairPreviewSkippedItem = {
+  readonly id: string;
+  readonly reason: string;
+};
+
+export type DoctorRepairPreviewReport = {
+  readonly mode: "doctor-repair-preview";
+  readonly dryRun: true;
+  readonly diff: boolean;
+  ok: boolean;
+  checksRun: number;
+  checksRepaired: number;
+  checksValidated: number;
+  findings: HealthFinding[];
+  remainingFindings: HealthFinding[];
+  changes: string[];
+  warnings: string[];
+  effects: HealthRepairEffect[];
+  diffs: HealthRepairDiff[];
+  skipped: DoctorRepairPreviewSkippedItem[];
 };
 
 type DoctorHealthContribution = FlowContribution & {
@@ -81,6 +110,103 @@ const loadModelSelectionModule = async () => await import("../agents/model-selec
 const loadNoteModule = async () => await import("../../packages/terminal-core/src/note.js");
 const loadOnboardHelpersModule = async () => await import("../commands/onboard-helpers.js");
 const loadSecretTypesModule = async () => await import("../config/types.secrets.js");
+
+export function createDoctorRepairPreviewReport(params: {
+  diff?: boolean;
+}): DoctorRepairPreviewReport {
+  return {
+    mode: "doctor-repair-preview",
+    dryRun: true,
+    diff: params.diff === true,
+    ok: true,
+    checksRun: 0,
+    checksRepaired: 0,
+    checksValidated: 0,
+    findings: [],
+    remainingFindings: [],
+    changes: [],
+    warnings: [],
+    effects: [],
+    diffs: [],
+    skipped: [],
+  };
+}
+
+export function finalizeDoctorRepairPreviewReport(
+  report: DoctorRepairPreviewReport,
+): DoctorRepairPreviewReport {
+  report.ok =
+    report.warnings.length === 0 &&
+    report.skipped.length === 0 &&
+    report.findings.every((finding) => finding.severity === "info") &&
+    report.remainingFindings.length === 0;
+  return report;
+}
+
+export function recordDoctorPreviewSkippedContribution(
+  report: DoctorRepairPreviewReport,
+  item: DoctorRepairPreviewSkippedItem,
+): void {
+  report.skipped.push(item);
+}
+
+function appendDoctorRepairPreviewResult(
+  report: DoctorRepairPreviewReport | undefined,
+  result: DoctorRepairRunResult,
+): void {
+  if (!report) {
+    return;
+  }
+  report.checksRun += result.checksRun;
+  report.checksRepaired += result.checksRepaired;
+  report.checksValidated += result.checksValidated;
+  report.findings.push(...result.findings);
+  report.remainingFindings.push(...result.remainingFindings);
+  report.changes.push(...result.changes);
+  report.warnings.push(...result.warnings);
+  report.effects.push(...result.effects);
+  if (report.diff) {
+    report.diffs.push(...result.diffs);
+  }
+}
+
+function renderDoctorRepairPreviewResult(
+  ctx: DoctorHealthFlowContext,
+  result: DoctorRepairRunResult,
+): void {
+  if (ctx.options.json === true) {
+    return;
+  }
+  const lines = [
+    ...result.findings.map(formatDoctorRepairFinding),
+    ...result.changes.map((change) => `change: ${change}`),
+    ...result.effects.map(formatDoctorRepairEffect),
+    ...(ctx.options.diff === true ? result.diffs.map(formatDoctorRepairDiff) : []),
+    ...result.warnings.map((warning) => `warning: ${warning}`),
+  ];
+  if (lines.length > 0) {
+    ctx.runtime.log(lines.join("\n"));
+  }
+}
+
+function formatDoctorRepairFinding(finding: HealthFinding): string {
+  const where = finding.path !== undefined ? ` ${finding.path}` : "";
+  const line = finding.line !== undefined ? `:${finding.line}` : "";
+  return `finding: [${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}`;
+}
+
+function formatDoctorRepairEffect(effect: HealthRepairEffect): string {
+  const target = effect.target !== undefined ? ` ${effect.target}` : "";
+  const suffix = effect.dryRunSafe === true ? " (dry-run safe)" : "";
+  return `effect: ${effect.kind} ${effect.action}${target}${suffix}`;
+}
+
+function formatDoctorRepairDiff(diff: HealthRepairDiff): string {
+  if (diff.unifiedDiff !== undefined) {
+    return `diff: ${diff.path}\n${diff.unifiedDiff}`;
+  }
+  return `diff: ${diff.path}`;
+}
 
 function isUpdateDoctorRun(env: NodeJS.ProcessEnv | Record<string, string | undefined>): boolean {
   const value = env.OPENCLAW_UPDATE_IN_PROGRESS;
@@ -217,15 +343,24 @@ async function runStructuredDoctorHealthContribution(params: {
       cfg: params.ctx.cfg,
       cwd: workspaceDir,
       configPath: params.ctx.configPath,
-      dryRun: !params.ctx.prompter.shouldRepair,
+      dryRun: params.ctx.options.dryRun === true || !params.ctx.prompter.shouldRepair,
+      diff: params.ctx.options.diff === true,
       allowExecSecretRefs: params.ctx.options.allowExec === true,
     },
     {
       checks: params.checks,
-      dryRun: !params.ctx.prompter.shouldRepair,
+      dryRun: params.ctx.options.dryRun === true || !params.ctx.prompter.shouldRepair,
+      diff: params.ctx.options.diff === true,
     },
   );
-  params.ctx.cfg = result.config;
+  appendDoctorRepairPreviewResult(params.ctx.previewReport, result);
+  if (params.ctx.options.dryRun !== true) {
+    params.ctx.cfg = result.config;
+  }
+  if (params.ctx.options.dryRun === true) {
+    renderDoctorRepairPreviewResult(params.ctx, result);
+    return;
+  }
   renderStructuredHealthFindings(params.ctx, result.findings);
   for (const warning of result.warnings) {
     params.ctx.runtime.error(warning);
@@ -436,7 +571,8 @@ async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void
 }
 
 async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (!ctx.prompter.shouldRepair) {
+  const dryRun = ctx.options.dryRun === true;
+  if (!ctx.prompter.shouldRepair && !dryRun) {
     return;
   }
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
@@ -455,14 +591,21 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
+      dryRun,
+      diff: ctx.options.diff === true,
     },
-    { checks },
+    { checks, dryRun, diff: ctx.options.diff === true },
   );
-  ctx.cfg = result.config;
-  if (result.changes.length > 0) {
+  appendDoctorRepairPreviewResult(ctx.previewReport, result);
+  if (!dryRun) {
+    ctx.cfg = result.config;
+  }
+  if (dryRun) {
+    renderDoctorRepairPreviewResult(ctx, result);
+  } else if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
-  if (result.warnings.length > 0) {
+  if (!dryRun && result.warnings.length > 0) {
     note(result.warnings.join("\n"), "Doctor warnings");
   }
 }
@@ -476,7 +619,8 @@ async function runCoreContributionHealthRepair(
   ctx: DoctorHealthFlowContext,
   checkIds: readonly string[],
 ): Promise<void> {
-  if (!ctx.prompter.shouldRepair || checkIds.length === 0) {
+  const dryRun = ctx.options.dryRun === true;
+  if ((!ctx.prompter.shouldRepair && !dryRun) || checkIds.length === 0) {
     return;
   }
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
@@ -498,14 +642,21 @@ async function runCoreContributionHealthRepair(
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
+      dryRun,
+      diff: ctx.options.diff === true,
     },
-    { checks },
+    { checks, dryRun, diff: ctx.options.diff === true },
   );
-  ctx.cfg = result.config;
-  if (result.changes.length > 0) {
+  appendDoctorRepairPreviewResult(ctx.previewReport, result);
+  if (!dryRun) {
+    ctx.cfg = result.config;
+  }
+  if (dryRun) {
+    renderDoctorRepairPreviewResult(ctx, result);
+  } else if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
-  if (result.warnings.length > 0) {
+  if (!dryRun && result.warnings.length > 0) {
     note(result.warnings.join("\n"), "Doctor warnings");
   }
 }
