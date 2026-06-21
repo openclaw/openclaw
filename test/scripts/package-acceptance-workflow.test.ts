@@ -1291,9 +1291,7 @@ describe("package artifact reuse", () => {
       "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
     );
     expect(workflow).toContain("telegram_mode: mock-openai");
-    expect(workflow).toContain(
-      "telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-status-command,telegram-other-bot-command-gating,telegram-context-command,telegram-mentioned-message-reply,telegram-long-final-reuses-preview,telegram-mention-gating",
-    );
+    expect(workflow).not.toContain("telegram_scenarios:");
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
     expect(workflow).toContain(
@@ -1434,10 +1432,6 @@ describe("package artifact reuse", () => {
 
   it("runs full release children from the trusted workflow ref", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
-    const preparePackageJob = workflowJob(
-      FULL_RELEASE_VALIDATION_WORKFLOW,
-      "prepare_release_package",
-    );
     const npmTelegramJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "npm_telegram");
     const performanceJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
     const dispatchStep = workflowStep(npmTelegramJob, "Dispatch and monitor npm Telegram E2E");
@@ -1446,39 +1440,20 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
     );
-    expect(preparePackageJob.name).toBe("Prepare release package artifact");
-    expect(preparePackageJob.needs).toEqual(["resolve_target", "docker_runtime_assets_preflight"]);
-    expect(preparePackageJob.if).toContain("inputs.rerun_group == 'all'");
-    expect(preparePackageJob.if).toContain("inputs.release_profile == 'full'");
-    expect(preparePackageJob.if).toContain(
-      "needs.docker_runtime_assets_preflight.result == 'success'",
-    );
-    expectTextToIncludeAll(
-      workflowStep(preparePackageJob, "Resolve release package artifact").run,
-      [
-        "scripts/resolve-openclaw-package-candidate.mjs",
-        "--source ref",
-        '--package-ref "$PACKAGE_REF"',
-        "release-package-under-test",
-      ],
-    );
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
-    expect(npmTelegramJob.needs).toEqual(["resolve_target", "prepare_release_package"]);
+    expect(npmTelegramJob.needs).toEqual(["resolve_target"]);
     expect(npmTelegramJob["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 360 || 60 }}",
     );
     expect(performanceJob["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 360 || 120 }}",
     );
-    expect(npmTelegramJob.if).toContain(
-      "inputs.rerun_group == 'all' && inputs.release_profile == 'full'",
-    );
+    expect(npmTelegramJob.if).toContain("inputs.rerun_group == 'npm-telegram'");
+    expect(npmTelegramJob.if).not.toContain("inputs.rerun_group == 'all'");
     expect(dispatchStep.env).toEqual({
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
       GH_TOKEN: "${{ github.token }}",
-      PACKAGE_ARTIFACT_NAME: "${{ needs.prepare_release_package.outputs.artifact_name }}",
       PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}",
-      PREPARE_PACKAGE_RESULT: "${{ needs.prepare_release_package.result }}",
       PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
       SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
@@ -1488,13 +1463,10 @@ describe("package artifact reuse", () => {
       "sed -nE 's#.*actions/runs/([0-9]+).*#\\1#p'",
       "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
       '-f harness_ref="$TARGET_SHA"',
-      'args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}"',
-      'if [[ -z "${PACKAGE_SPEC// }" ]]; then',
-      '-f package_artifact_name="$PACKAGE_ARTIFACT_NAME"',
-      '-f package_artifact_run_id="${GITHUB_RUN_ID}"',
-      '-f package_label="full-release-${TARGET_SHA:0:12}"',
+      'args=(-f package_spec="$PACKAGE_SPEC"',
       'args+=(-f scenario="$SCENARIO")',
     ]);
+    expect(dispatchStep.run).not.toContain("package_artifact");
     expectTextToIncludeAll(workflow, [
       "child_rerun_group=all",
       '-f rerun_group="$child_rerun_group"',
@@ -1527,18 +1499,18 @@ describe("package artifact reuse", () => {
 
     expectTextToIncludeAll(workflow, [
       "Published-package Telegram E2E:",
-      "Package Telegram E2E: parent \\`release-package-under-test\\` artifact",
-      "Package Telegram E2E: skipped unless \\`release_profile=full\\`, \\`release_package_spec\\`, or \\`npm_telegram_package_spec\\` is provided",
+      "Package Telegram E2E: OpenClaw Release Checks Package Acceptance",
+      "Package Telegram E2E: focused rerun requires \\`release_package_spec\\` or \\`npm_telegram_package_spec\\`",
     ]);
     expect(releaseDocs).toContain(
       "Focused `npm-telegram` reruns require `release_package_spec` or",
     );
     expectTextToIncludeAll(fullReleaseDocs, [
-      "pre-publish candidate",
       "cross_os_suite_filter",
       "QA release-check failures block normal release validation",
-      "silently skip that",
-      "Telegram package lane",
+      "input capture fails instead of silently skipping the lane",
+      "does not duplicate that",
+      "canonical Package Acceptance Telegram E2E",
       "| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |",
     ]);
   });
@@ -2248,7 +2220,7 @@ describe("package artifact reuse", () => {
     expect(fullRelease.jobs?.release_checks?.["timeout-minutes"]).toBe(
       "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
     );
-    expect(fullRelease.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
+    expect(fullRelease.jobs?.prepare_release_package).toBeUndefined();
     expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
     expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
     expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(20);
