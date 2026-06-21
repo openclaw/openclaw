@@ -103,11 +103,14 @@ function classifyHarnessResult(params: {
   }
 }
 
-/** Maps provider error payloads to fallback-safe business reasons. */
-function classifyBusinessDenialErrorPayloadReason(
+/** Maps provider error payloads to fallback-safe reasons. */
+function classifyProviderErrorPayloadReason(
   errorText: string,
   provider: string,
-): Extract<FailoverReason, "auth" | "auth_permanent" | "billing"> | null {
+): Extract<
+  FailoverReason,
+  "auth" | "auth_permanent" | "billing" | "server_error" | "timeout"
+> | null {
   if (!errorText.trim()) {
     return null;
   }
@@ -116,6 +119,8 @@ function classifyBusinessDenialErrorPayloadReason(
     case "auth":
     case "auth_permanent":
     case "billing":
+    case "server_error":
+    case "timeout":
       return failoverReason;
     default:
       return null;
@@ -189,7 +194,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     .filter((payload) => payload?.isError === true)
     .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
     .join("\n");
-  const failoverReason = classifyBusinessDenialErrorPayloadReason(errorText, params.provider);
+  const failoverReason = classifyProviderErrorPayloadReason(errorText, params.provider);
   if (failoverReason) {
     return {
       message: `${params.provider}/${params.model} ended with a provider error: ${errorText}`,
