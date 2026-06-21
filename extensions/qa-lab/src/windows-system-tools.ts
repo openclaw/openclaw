@@ -60,3 +60,15 @@ export function resolveQaWindowsSystem32ExePath(
   }
   return path.win32.join(resolveQaWindowsSystemRoot(env), "System32", executableName);
 }
+
+export function resolveQaWindowsPowerShellExePath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return path.win32.join(
+    resolveQaWindowsSystemRoot(env),
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+}

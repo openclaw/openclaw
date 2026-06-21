@@ -9,7 +9,11 @@ import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
-import { getWindowsCmdExePath, getWindowsInstallRoots } from "../infra/windows-install-roots.js";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+} from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -743,7 +747,7 @@ async function terminateGatewayProcessTree(pid: number, graceMs: number): Promis
     killProcessTree(pid, { graceMs });
     return;
   }
-  const taskkillPath = path.join(getWindowsInstallRoots().systemRoot, "System32", "taskkill.exe");
+  const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
   spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
     stdio: "ignore",
     timeout: 5_000,
@@ -796,7 +800,7 @@ function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | null {
   }
 
   const processSnapshot = spawnSync(
-    "powershell",
+    getWindowsPowerShellExePath(),
     [
       "-NoProfile",
       "-Command",

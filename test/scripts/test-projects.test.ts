@@ -1559,6 +1559,14 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/local-heavy-check-runtime.test.ts"],
       ],
       ["scripts/lib/managed-child-process.mjs", ["test/scripts/managed-child-process.test.ts"]],
+      [
+        "scripts/lib/windows-taskkill.mjs",
+        ["test/scripts/managed-child-process.test.ts", "test/scripts/run-with-env.test.ts"],
+      ],
+      [
+        "scripts/lib/windows-taskkill.d.mts",
+        ["test/scripts/managed-child-process.test.ts", "test/scripts/run-with-env.test.ts"],
+      ],
       ["scripts/lib/source-file-scan-cache.mjs", ["test/scripts/source-file-scan-cache.test.ts"]],
       ["scripts/lib/dev-tooling-safety.ts", ["test/scripts/dev-tooling-safety.test.ts"]],
       [

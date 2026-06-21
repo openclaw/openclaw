@@ -183,4 +183,90 @@ describe("scripts/kova-ci-summary", () => {
       "invalid Kova report: missing sampled CPU metric in performance groups",
     );
   });
+
+  it("rejects malformed resource metric counts instead of treating them as sampled", () => {
+    const { result } = runSummary({
+      performance: {
+        repeat: 1,
+        groups: [
+          {
+            metrics: {
+              cpuPercentMax: {
+                count: "Infinity",
+                max: 12,
+                median: 12,
+                p95: 12,
+                title: "CPU max",
+                unit: "%",
+              },
+              resourcePeakGatewayRssMb: {
+                count: true,
+                max: 256,
+                median: 256,
+                p95: 256,
+                title: "Gateway RSS",
+                unit: "MB",
+              },
+            },
+            scenario: "gateway",
+            state: "clean",
+          },
+        ],
+      },
+      records: [{ scenario: "gateway", state: "clean", status: "pass" }],
+      summary: { statuses: { pass: 1 } },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "invalid Kova report: missing sampled RSS metric in performance groups",
+    );
+  });
+
+  it("omits key metric rows with invalid sample counts", () => {
+    const { output, result } = runSummary({
+      performance: {
+        repeat: 1,
+        groups: [
+          {
+            metrics: {
+              cpuPercentMax: {
+                count: 1,
+                max: 12,
+                median: 12,
+                p95: 12,
+                title: "CPU max",
+                unit: "%",
+              },
+              resourcePeakGatewayRssMb: {
+                count: 1,
+                max: 256,
+                median: 256,
+                p95: 256,
+                title: "Gateway RSS",
+                unit: "MB",
+              },
+              timeToHealthReadyMs: {
+                count: "0",
+                max: 30,
+                median: 20,
+                p95: 30,
+                title: "Health ready",
+                unit: "ms",
+              },
+            },
+            scenario: "gateway",
+            state: "clean",
+          },
+        ],
+      },
+      records: [{ scenario: "gateway", state: "clean", status: "pass" }],
+      summary: { statuses: { pass: 1 } },
+    });
+
+    expect(result.status).toBe(0);
+    expect(output).not.toContain("Health ready");
+    expect(output).toContain("| gateway | clean | Gateway RSS | 256 MB | 256 MB | 256 MB |");
+    expect(output).toContain("| gateway | clean | CPU max | 12 % | 12 % | 12 % |");
+  });
 });

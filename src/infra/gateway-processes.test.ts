@@ -140,6 +140,26 @@ describe("gateway-processes", () => {
     expect(parseCmdScriptCommandLineMock).toHaveBeenCalledWith("node.exe gateway run");
   });
 
+  it("decodes UTF-16 WMIC output when reading windows process args", () => {
+    setPlatform("win32");
+    spawnSyncMock
+      .mockReturnValueOnce({
+        error: new Error("powershell missing"),
+        status: null,
+        stdout: "",
+      })
+      .mockReturnValueOnce({
+        error: null,
+        status: 0,
+        stdout: Buffer.from("\uFEFFCommandLine=node.exe gateway run\r\n", "utf16le"),
+      });
+    parseCmdScriptCommandLineMock.mockReturnValue(["node.exe", "gateway", "run"]);
+
+    expect(readGatewayProcessArgsSync(77)).toEqual(["node.exe", "gateway", "run"]);
+    expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
+    expect(parseCmdScriptCommandLineMock).toHaveBeenCalledWith("node.exe gateway run");
+  });
+
   it("signals only verified gateway processes", () => {
     setPlatform("linux");
     readFileSyncMock.mockReturnValue("node\0gateway\0");

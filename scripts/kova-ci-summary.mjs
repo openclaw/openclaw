@@ -86,7 +86,7 @@ function renderSummary(reportLocal, options) {
     for (const group of groups) {
       for (const metricId of keyMetricIds) {
         const metric = group.metrics?.[metricId];
-        if (!metric || metric.count === 0) {
+        if (!hasPositiveSampleCount(metric)) {
           continue;
         }
         lines.push(
@@ -198,8 +198,12 @@ function hasExplicitResourceCollectionSkip(reportLocal) {
 function hasSampledMetric(group, metricIds) {
   return metricIds.some((metricId) => {
     const metric = group?.metrics?.[metricId];
-    return metric && Number(metric.count) > 0;
+    return hasPositiveSampleCount(metric);
   });
+}
+
+function hasPositiveSampleCount(metric) {
+  return Number.isSafeInteger(metric?.count) && metric.count > 0;
 }
 
 function collectViolations(records) {
