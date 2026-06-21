@@ -1,6 +1,10 @@
 // Defines process supervisor marker labels for gateway diagnostics.
 import { spawnSync } from "node:child_process";
-import { GATEWAY_LAUNCH_AGENT_LABEL, GATEWAY_WINDOWS_TASK_NAME, resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
+  GATEWAY_WINDOWS_TASK_NAME,
+  resolveGatewayLaunchAgentLabel,
+} from "../daemon/constants.js";
 
 const SUPERVISOR_HINTS = {
   launchd: ["OPENCLAW_LAUNCHD_LABEL"],
@@ -100,9 +104,11 @@ export function detectRespawnSupervisor(
     if (marker && serviceKind === "gateway") {
       return "schtasks";
     }
-    // If service markers are present but don't match, respect the explicit
-    // signal (e.g. marker=worker means "not a gateway").
-    if (marker || serviceKind) {
+    // If both service markers are explicitly set and don't match gateway,
+    // respect the explicit signal (e.g. marker=worker means "not a gateway").
+    // If only one is set (incomplete signal), we can't be certain — fall
+    // through to the schtasks probe below.
+    if (marker && serviceKind && serviceKind !== "gateway") {
       return null;
     }
     // Fallback: probe schtasks directly when no env vars are set at all (e.g.

@@ -183,4 +183,66 @@ describe("win32 schtasks probe fallback", () => {
     ).toBeNull();
     expect(mockSpawnSync).not.toHaveBeenCalled();
   });
+
+  it("returns null when probe status is null (process killed by signal)", () => {
+    mockSpawnSync.mockReturnValue({
+      status: null,
+      pid: 0,
+      output: ["", "", ""],
+      stdout: "",
+      stderr: "",
+      signal: "SIGTERM",
+    });
+    expect(detectRespawnSupervisor({}, "win32")).toBeNull();
+  });
+
+  it("returns null when probe throws on timeout", () => {
+    mockSpawnSync.mockImplementation(() => {
+      throw new Error("ETIMEDOUT");
+    });
+    expect(detectRespawnSupervisor({}, "win32")).toBeNull();
+  });
+
+  it("probes when env has unrelated keys but no known markers", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      pid: 0,
+      output: ["", "", ""],
+      stdout: "",
+      stderr: "",
+      signal: null,
+    });
+    expect(detectRespawnSupervisor({ PATH: "/usr/bin", HOME: "/home/user" }, "win32")).toBe(
+      "schtasks",
+    );
+    expect(mockSpawnSync).toHaveBeenCalled();
+  });
+
+  it("probes when marker is whitespace-only after trim", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      pid: 0,
+      output: ["", "", ""],
+      stdout: "",
+      stderr: "",
+      signal: null,
+    });
+    expect(detectRespawnSupervisor({ OPENCLAW_SERVICE_MARKER: "   " }, "win32")).toBe("schtasks");
+    expect(mockSpawnSync).toHaveBeenCalled();
+  });
+
+  it("probes when marker is set but service kind is missing (incomplete signal)", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      pid: 0,
+      output: ["", "", ""],
+      stdout: "",
+      stderr: "",
+      signal: null,
+    });
+    expect(detectRespawnSupervisor({ OPENCLAW_SERVICE_MARKER: "openclaw" }, "win32")).toBe(
+      "schtasks",
+    );
+    expect(mockSpawnSync).toHaveBeenCalled();
+  });
 });
