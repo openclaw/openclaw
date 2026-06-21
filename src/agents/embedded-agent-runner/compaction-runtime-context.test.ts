@@ -204,8 +204,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
 
     const serialized = JSON.stringify(result.activeProcessSessions);
     expect(serialized).not.toContain(fakeSecretOutput);
-    expect(serialized).toContain("OPENAI_API_KEY=sk-pro");
-    expect(serialized).toContain("7890");
+    expect(serialized).toContain("OPENAI_API_KEY=***");
+    expect(serialized).toContain('"command":"node worker.js --token ***"');
   });
 
   it("omits active process session references when no safe scope is available", () => {

@@ -3331,8 +3331,8 @@ describe("buildAfterTurnRuntimeContext", () => {
 
       const serialized = JSON.stringify(legacy.activeProcessSessions);
       expect(serialized).not.toContain(fakeSecretOutput);
-      expect(serialized).toContain("OPENAI_API_KEY=sk-pro");
-      expect(serialized).toContain("7890");
+      expect(serialized).toContain("OPENAI_API_KEY=***");
+      expect(serialized).toContain('"command":"node worker.js --token ***"');
     } finally {
       resetProcessRegistryForTests();
     }
