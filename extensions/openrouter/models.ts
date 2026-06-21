@@ -30,10 +30,10 @@ export function normalizeOpenRouterModelId(modelId: unknown): string | undefined
 // namespace when the unprefixed remainder ("deepseek-v4-flash") contains no "/",
 // and the original prefixed form would be returned — causing downstream code
 // that re-adds the "openrouter/" prefix to produce "openrouter/openrouter/…".
-const SHORT_MODEL_ALIASES: Record<string, string> = {
-  "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
-  "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
-};
+const SHORT_MODEL_ALIASES = new Map<string, string>([
+  ["deepseek-v4-flash", "deepseek/deepseek-v4-flash"],
+  ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
+]);
 
 export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
@@ -49,7 +49,7 @@ export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefi
   }
   // Expand known short aliases (e.g. "deepseek-v4-flash" → "deepseek/deepseek-v4-flash")
   // so downstream code receives a proper namespaced upstream model ID.
-  const expanded = SHORT_MODEL_ALIASES[unprefixed];
+  const expanded = SHORT_MODEL_ALIASES.get(unprefixed);
   if (expanded) {
     return expanded;
   }
