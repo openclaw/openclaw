@@ -384,6 +384,13 @@ actor PortGuardian {
             }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
+            // Recognize a launchd-managed gateway running under Node.js
+            // (e.g. /opt/homebrew/opt/node/bin/node .../openclaw/dist/index.js gateway --port 18789).
+            if full.contains("openclaw") && full.contains("dist/index.js")
+                && full.contains("gateway")
+            {
+                return true
+            }
             return false
         case .unconfigured:
             return false
