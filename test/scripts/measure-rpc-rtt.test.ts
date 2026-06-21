@@ -178,8 +178,10 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods"])).toThrow(
       "--methods requires a value.",
     );
-    for (const flag of ["--output-dir", "--repo-root", "--iterations", "--methods"]) {
-      expect(() => parseArgs([flag, "--methods", "health"])).toThrow(`${flag} requires a value.`);
+    for (const value of ["--methods", "-h"]) {
+      for (const flag of ["--output-dir", "--repo-root", "--iterations", "--methods"]) {
+        expect(() => parseArgs([flag, value, "health"])).toThrow(`${flag} requires a value.`);
+      }
     }
   });
 
