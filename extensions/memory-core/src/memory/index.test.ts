@@ -1926,6 +1926,53 @@ describe("memory index", () => {
     ).toBe("local");
   });
 
+  it("does not activate fallback when caller cancellation aborts search embeddings", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-search-aborted-fallback.sqlite"),
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    await manager.sync({ reason: "test" });
+    const callsBeforeSearch = providerCalls.length;
+    const controller = new AbortController();
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: () => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      }
+    ).provider = {
+      id: "mock",
+      model: "mock-embed",
+      embedQuery: async () => {
+        controller.abort(new Error("memory_search timed out after 15s"));
+        throw createLocalWorkerExitError();
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+
+    await expect(manager.search("alpha", { signal: controller.signal })).rejects.toThrow(
+      "memory_search timed out after 15s",
+    );
+
+    expect(providerCalls.slice(callsBeforeSearch)).toStrictEqual([]);
+    expect(
+      (
+        manager as unknown as {
+          provider: { id: string } | null;
+        }
+      ).provider?.id,
+    ).toBe("mock");
+    expect(manager.status().fallback).toBeUndefined();
+  });
+
   it("rebuilds with fallback provider during explicit identity repair", async () => {
     const oldCfg = createCfg({
       model: "old-embed",
