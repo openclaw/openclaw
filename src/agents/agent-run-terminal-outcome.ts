@@ -74,7 +74,7 @@ function asNonEmptyString(value: unknown): string | undefined {
 }
 
 /** True when a timeout phase should be treated as a hard agent-run timeout. */
-function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPhase {
+export function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPhase {
   const phase = normalizeAgentRunTimeoutPhase(value);
   return phase !== undefined && HARD_TIMEOUT_PHASES.has(phase);
 }
