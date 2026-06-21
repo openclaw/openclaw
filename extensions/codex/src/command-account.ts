@@ -14,7 +14,6 @@ import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
-import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
 import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
@@ -57,9 +56,13 @@ export async function readCodexAccountAuthOverview(params: {
   safeCodexControlRequest: SafeCodexControlRequest;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
+  scope: Pick<
+    CodexControlRequestOptions,
+    "agentDir" | "authProfileId" | "sessionId" | "sessionKey"
+  >;
 }): Promise<CodexAccountAuthOverview | undefined> {
   const config = params.ctx.config;
-  const agentDir = resolveDefaultAgentDir(config);
+  const agentDir = params.scope.agentDir ?? resolveDefaultAgentDir(config);
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
     config,
@@ -317,6 +320,10 @@ async function readSubscriptionUsage(params: {
   config: AuthProfileOrderConfig;
   subscriptionProfileId: string;
   now: number;
+  scope: Pick<
+    CodexControlRequestOptions,
+    "agentDir" | "authProfileId" | "sessionId" | "sessionKey"
+  >;
 }): Promise<CodexAccountUsageSummary | undefined> {
   const limits = await params.safeCodexControlRequest(
     params.pluginConfig,
@@ -324,6 +331,7 @@ async function readSubscriptionUsage(params: {
     undefined,
     {
       config: params.config,
+      ...params.scope,
       authProfileId: params.subscriptionProfileId,
       isolated: true,
     },
@@ -331,7 +339,6 @@ async function readSubscriptionUsage(params: {
   if (!limits.ok) {
     return undefined;
   }
-  rememberCodexRateLimits(limits.value);
   return summarizeCodexAccountUsage(limits.value, params.now);
 }
 

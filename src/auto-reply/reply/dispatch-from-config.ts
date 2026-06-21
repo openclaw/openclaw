@@ -412,13 +412,9 @@ const resolveSessionStoreLookup = (
 };
 
 const resolveBoundAcpDispatchSessionKey = (params: {
-  ctx: FinalizedMsgContext;
-  cfg: OpenClawConfig;
+  bindingContext: ReturnType<typeof resolveConversationBindingContextFromMessage>;
 }): string | undefined => {
-  const bindingContext = resolveConversationBindingContextFromMessage({
-    cfg: params.cfg,
-    ctx: params.ctx,
-  });
+  const { bindingContext } = params;
   if (!bindingContext) {
     return undefined;
   }
@@ -1201,7 +1197,8 @@ export async function dispatchReplyFromConfig(
     inboundDedupeReplayUnsafe = true;
   };
 
-  const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
+  const bindingContext = resolveConversationBindingContextFromMessage({ cfg, ctx });
+  const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ bindingContext });
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
   // initialSessionStoreEntry is command-target-aware, so native command turns
@@ -1550,12 +1547,27 @@ export async function dispatchReplyFromConfig(
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
-  const inboundClaimContext = toPluginInboundClaimContext(hookContext);
-  const inboundClaimEvent = toPluginInboundClaimEvent(hookContext, {
-    commandAuthorized:
-      typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-    wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
-  });
+  const execOverrides =
+    sessionStoreEntry.entry?.execSecurity || sessionStoreEntry.entry?.execAsk
+      ? {
+          security: sessionStoreEntry.entry.execSecurity,
+          ask: sessionStoreEntry.entry.execAsk,
+        }
+      : undefined;
+  const inboundClaimContext = toPluginInboundClaimContext(
+    hookContext,
+    bindingContext,
+    execOverrides,
+  );
+  const inboundClaimEvent = toPluginInboundClaimEvent(
+    hookContext,
+    {
+      commandAuthorized:
+        typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+      wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+    },
+    inboundClaimContext,
+  );
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
@@ -1754,20 +1766,14 @@ export async function dispatchReplyFromConfig(
     return await deliverBindingPayload(payload, mode);
   };
 
-  const pluginOwnedBindingRecord =
-    inboundClaimContext.conversationId && inboundClaimContext.channelId
-      ? resolveConversationBindingRecord({
-          channel: inboundClaimContext.channelId,
-          accountId:
-            inboundClaimContext.accountId ??
-            ((
-              cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-            )?.[inboundClaimContext.channelId]?.defaultAccount as string | undefined) ??
-            "default",
-          conversationId: inboundClaimContext.conversationId,
-          parentConversationId: inboundClaimContext.parentConversationId,
-        })
-      : null;
+  const pluginOwnedBindingRecord = bindingContext
+    ? resolveConversationBindingRecord({
+        channel: bindingContext.channel,
+        accountId: bindingContext.accountId,
+        conversationId: bindingContext.conversationId,
+        parentConversationId: bindingContext.parentConversationId,
+      })
+    : null;
   const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
     ? toPluginConversationBinding(pluginOwnedBindingRecord)
     : null;
@@ -1926,10 +1932,12 @@ export async function dispatchReplyFromConfig(
   const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
   const unauthorizedTextSlashSourceReplyCtx =
     (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
+  const ambientGroupRoomEvent =
+    ctx.InboundEventKind === "room_event" && (chatType === "group" || chatType === "channel");
   const shouldDeliverPluginBindingReply =
     !suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
-    (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
+    (!ambientGroupRoomEvent && !unauthorizedTextSlashSourceReplyCtx);
 
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
@@ -2028,18 +2036,22 @@ export async function dispatchReplyFromConfig(
 
       switch (targetedClaimOutcome.status) {
         case "handled": {
+          let queuedPluginBindingReply = false;
           if (targetedClaimOutcome.result.reply && shouldDeliverPluginBindingReply) {
             // A bound plugin's reply is the explicit output for this claimed turn,
             // not an automatic agent final; message-tool-only suppression must not
             // turn normal user-request bindings into silent channel responses.
             // Ambient room events keep the same privacy guard as final replies.
-            await deliverBindingPayload(targetedClaimOutcome.result.reply, "terminal");
+            queuedPluginBindingReply = await deliverBindingPayload(
+              targetedClaimOutcome.result.reply,
+              "terminal",
+            );
           }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           commitInboundDedupeIfClaimed();
           return attachSourceReplyDeliveryMode({
-            queuedFinal: false,
+            queuedFinal: queuedPluginBindingReply,
             counts: dispatcher.getQueuedCounts(),
           });
         }

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
+import type { CodexAppServerClientLeaseFactory } from "./shared-client.js";
 
 const appServer = {
   start: {},
@@ -13,12 +13,16 @@ function createClientFactory(webSearch: boolean | boolean[]) {
   const values = Array.isArray(webSearch) ? [...webSearch] : [webSearch];
   const request = vi.fn(async () => ({ webSearch: values.shift() ?? false }));
   const client = { request } as unknown as CodexAppServerClient;
-  const clientFactory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;
-  return { clientFactory, request };
+  const release = vi.fn();
+  const clientFactory = vi.fn(async () => ({
+    client,
+    release,
+  })) as CodexAppServerClientLeaseFactory;
+  return { clientFactory, release, request };
 }
 
 function resolveSupport(
-  clientFactory: CodexAppServerClientFactory,
+  clientFactory: CodexAppServerClientLeaseFactory,
   modelProviderOverride?: string,
 ) {
   return resolveCodexProviderWebSearchSupport({
@@ -50,7 +54,7 @@ describe("resolveCodexProviderWebSearchSupport", () => {
   it("reports unknown support when app-server startup fails", async () => {
     const clientFactory = vi.fn(async () => {
       throw new Error("old app-server");
-    }) as unknown as CodexAppServerClientFactory;
+    }) as CodexAppServerClientLeaseFactory;
 
     await expect(resolveSupport(clientFactory)).resolves.toBe("unknown");
   });
@@ -60,10 +64,15 @@ describe("resolveCodexProviderWebSearchSupport", () => {
       throw new Error("transient rpc failure");
     });
     const client = { request } as unknown as CodexAppServerClient;
-    const clientFactory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;
+    const release = vi.fn();
+    const clientFactory = vi.fn(async () => ({
+      client,
+      release,
+    })) as CodexAppServerClientLeaseFactory;
 
     await expect(resolveSupport(clientFactory)).resolves.toBe("unknown");
     expect(request).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("keeps managed search when the configured provider reports no hosted support", async () => {

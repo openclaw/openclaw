@@ -18,16 +18,11 @@ import {
   CODEX_PROVIDER_ID,
   FALLBACK_CODEX_MODELS,
 } from "./provider-catalog.js";
-import {
-  type CodexAppServerStartOptions,
-  readCodexPluginConfig,
-  resolveCodexAppServerRuntimeOptions,
-} from "./src/app-server/config.js";
+import type { CodexAppServerStartOptions } from "./src/app-server/config.js";
 import type {
   CodexAppServerModel,
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
-import { buildCodexAppServerUsageSnapshot } from "./src/app-server/rate-limits.js";
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 2500;
 const LIVE_DISCOVERY_ENV = "OPENCLAW_CODEX_DISCOVERY_LIVE";
@@ -39,7 +34,6 @@ const codexCatalogLog = createSubsystemLogger("codex/catalog");
 type CodexModelLister = (options: {
   timeoutMs: number;
   limit?: number;
-  cursor?: string;
   startOptions?: CodexAppServerStartOptions;
   sharedClient?: boolean;
 }) => Promise<CodexAppServerModelListResult>;
@@ -123,6 +117,11 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       }
       const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);
       const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);
+      const [{ resolveCodexAppServerRuntimeOptions }, { buildCodexAppServerUsageSnapshot }] =
+        await Promise.all([
+          import("./src/app-server/config.js"),
+          import("./src/app-server/rate-limits.js"),
+        ]);
       const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
       const rateLimits = await (options.readRateLimits ?? requestCodexAppServerRateLimitsLazy)({
         timeoutMs: ctx.timeoutMs,
@@ -156,13 +155,15 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
 export async function buildCodexProviderCatalog(
   options: BuildCatalogOptions = {},
 ): Promise<{ provider: ModelProviderConfig }> {
+  const { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } =
+    await import("./src/app-server/config.js");
   const config = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const timeoutMs = normalizeTimeoutMs(config.discovery?.timeoutMs);
   let discovered: CodexAppServerModel[] = [];
   if (config.discovery?.enabled !== false && !shouldSkipLiveDiscovery(options.env)) {
     discovered = await listModelsBestEffort({
-      listModels: options.listModels ?? listCodexAppServerModelsLazy,
+      listModels: options.listModels ?? listAllCodexAppServerModelsLazy,
       timeoutMs,
       startOptions: appServer.start,
       onDiscoveryFailure: options.onDiscoveryFailure,
@@ -200,22 +201,14 @@ async function listModelsBestEffort(params: {
   onDiscoveryFailure?: (error: unknown) => void;
 }): Promise<CodexAppServerModel[]> {
   try {
-    const models: CodexAppServerModel[] = [];
-    let cursor: string | undefined;
-    do {
-      // App-server model listing is paginated; collect every visible model so
-      // aliases and picker rows match the current Codex account.
-      const result = await params.listModels({
-        timeoutMs: params.timeoutMs,
-        limit: MODEL_DISCOVERY_PAGE_LIMIT,
-        cursor,
-        startOptions: params.startOptions,
-        sharedClient: false,
-      });
-      models.push(...result.models.filter((model) => !model.hidden));
-      cursor = result.nextCursor;
-    } while (cursor);
-    return models;
+    // The all-pages helper keeps one app-server client alive across pagination.
+    const result = await params.listModels({
+      timeoutMs: params.timeoutMs,
+      limit: MODEL_DISCOVERY_PAGE_LIMIT,
+      startOptions: params.startOptions,
+      sharedClient: false,
+    });
+    return result.models.filter((model) => !model.hidden);
   } catch (error) {
     params.onDiscoveryFailure?.(error);
     codexCatalogLog.debug("codex model discovery failed; using fallback catalog", {
@@ -225,15 +218,14 @@ async function listModelsBestEffort(params: {
   }
 }
 
-async function listCodexAppServerModelsLazy(options: {
+async function listAllCodexAppServerModelsLazy(options: {
   timeoutMs: number;
   limit?: number;
-  cursor?: string;
   startOptions?: CodexAppServerStartOptions;
   sharedClient?: boolean;
 }): Promise<CodexAppServerModelListResult> {
-  const { listCodexAppServerModels } = await import("./src/app-server/models.js");
-  return listCodexAppServerModels(options);
+  const { listAllCodexAppServerModels } = await import("./src/app-server/models.js");
+  return listAllCodexAppServerModels(options);
 }
 
 async function requestCodexAppServerRateLimitsLazy(options: {

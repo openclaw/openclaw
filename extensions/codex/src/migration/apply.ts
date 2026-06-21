@@ -42,11 +42,7 @@ import {
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
-import {
-  clearSharedCodexAppServerClientIfCurrentAndWait,
-  getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
-} from "../app-server/shared-client.js";
+import { leaseSharedCodexAppServerClient } from "../app-server/shared-client.js";
 import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import {
@@ -89,28 +85,22 @@ export function prepareTargetCodexAppServer(
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
   const targets = resolveCodexMigrationTargets(ctx);
-  let warmedClient: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>> | undefined;
-  const ready = getLeasedSharedCodexAppServerClient({
+  let warmedLease: Awaited<ReturnType<typeof leaseSharedCodexAppServerClient>> | undefined;
+  const ready = leaseSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: 60_000,
     agentDir: targets.agentDir,
     config: ctx.config,
   }).then(
-    (client) => {
-      warmedClient = client;
+    (lease) => {
+      warmedLease = lease;
     },
     () => undefined,
   );
   return {
     async dispose() {
       await ready;
-      if (warmedClient) {
-        releaseLeasedSharedCodexAppServerClient(warmedClient);
-      }
-      await clearSharedCodexAppServerClientIfCurrentAndWait(warmedClient, {
-        exitTimeoutMs: 2_000,
-        forceKillDelayMs: 250,
-      });
+      await warmedLease?.abandon();
     },
   };
 }

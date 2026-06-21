@@ -84,6 +84,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
+import { resolveTelegramCommandConversation } from "./channel.conversation.js";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
@@ -1476,6 +1477,18 @@ export const registerTelegramNativeCommands = ({
           sessionKey: targetSessionKey,
           threadId: threadSpec.id,
         });
+        const baseConversationId = String(chatId);
+        const commandConversation = resolveTelegramCommandConversation({
+          threadId: threadSpec.id,
+          originatingTo: from,
+          commandTo: to,
+        }) ??
+          // The provider returns null for top-level groups so the shared command
+          // resolver can fall back. Native commands must preserve that fallback.
+          {
+            conversationId: baseConversationId,
+            parentConversationId: baseConversationId,
+          };
 
         const result = normalizeTelegramNativeReplyPayload(
           await nativeCommandRuntime.executePluginCommand({
@@ -1493,6 +1506,12 @@ export const registerTelegramNativeCommands = ({
               sessionFileContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
             commandBody,
             config: runtimeCfg,
+            bindingConversation: {
+              channel: "telegram",
+              accountId,
+              ...commandConversation,
+              ...(threadSpec.id != null ? { threadId: threadSpec.id } : {}),
+            },
             from,
             to,
             accountId,

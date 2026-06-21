@@ -285,8 +285,7 @@ function matchesCurrentTurn(
   if (!requestParams) {
     return false;
   }
-  const requestThreadId =
-    readString(requestParams, "threadId") ?? readString(requestParams, "conversationId");
+  const requestThreadId = readString(requestParams, "threadId");
   const requestTurnId = readString(requestParams, "turnId");
   return requestThreadId === threadId && requestTurnId === turnId;
 }

@@ -29,7 +29,7 @@ export type CodexAttemptTurnWatchController = ReturnType<
  * notifications and tool handoffs progress.
  */
 export function createCodexAttemptTurnWatchController(params: {
-  threadId: string;
+  getThreadId: () => string;
   signal: AbortSignal;
   getTurnId: () => string | undefined;
   isCompleted: () => boolean;
@@ -79,6 +79,7 @@ export function createCodexAttemptTurnWatchController(params: {
   const turnTerminalIdleTimeoutMs = resolveTimerTimeoutMs(params.turnTerminalIdleTimeoutMs, 1);
   const interruptTimeoutMs = resolveTimerTimeoutMs(params.interruptTimeoutMs, 1);
   const resolveWatchTimeoutMs = (timeoutMs: number) => resolveTimerTimeoutMs(timeoutMs, 1);
+  const currentThreadId = () => params.getThreadId();
 
   const clearCompletionIdleTimer = () => {
     if (completionIdleTimer) {
@@ -227,7 +228,7 @@ export function createCodexAttemptTurnWatchController(params: {
     clearTerminalIdleTimer();
     const turnId = params.getTurnId();
     params.onRecordEvent("turn.assistant_completion_idle_release", {
-      threadId: params.threadId,
+      threadId: currentThreadId(),
       turnId,
       idleMs,
       timeoutMs: turnAssistantCompletionIdleTimeoutMs,
@@ -236,7 +237,7 @@ export function createCodexAttemptTurnWatchController(params: {
     embeddedAgentLog.warn(
       "codex app-server turn released after completed assistant item without terminal event",
       {
-        threadId: params.threadId,
+        threadId: currentThreadId(),
         turnId,
         idleMs,
         timeoutMs: turnAssistantCompletionIdleTimeoutMs,
@@ -245,7 +246,7 @@ export function createCodexAttemptTurnWatchController(params: {
     );
     if (turnId) {
       params.onInterruptTurn({
-        threadId: params.threadId,
+        threadId: currentThreadId(),
         turnId,
         timeoutMs: interruptTimeoutMs,
       });
@@ -278,7 +279,7 @@ export function createCodexAttemptTurnWatchController(params: {
     params.onTimeout(timeout);
     params.onMarkTimedOut();
     params.onRecordEvent("turn.progress_idle_timeout", {
-      threadId: params.threadId,
+      threadId: currentThreadId(),
       turnId: params.getTurnId(),
       idleMs,
       timeoutMs: timeout.timeoutMs,
@@ -286,7 +287,7 @@ export function createCodexAttemptTurnWatchController(params: {
       ...timeout.details,
     });
     embeddedAgentLog.warn("codex app-server turn idle timed out waiting for progress", {
-      threadId: params.threadId,
+      threadId: currentThreadId(),
       turnId: params.getTurnId(),
       idleMs,
       timeoutMs: timeout.timeoutMs,
@@ -331,7 +332,7 @@ export function createCodexAttemptTurnWatchController(params: {
     params.onTimeout(timeout);
     params.onMarkTimedOut();
     params.onRecordEvent("turn.completion_idle_timeout", {
-      threadId: params.threadId,
+      threadId: currentThreadId(),
       turnId: params.getTurnId(),
       idleMs,
       timeoutMs,
@@ -339,7 +340,7 @@ export function createCodexAttemptTurnWatchController(params: {
       ...timeout.details,
     });
     embeddedAgentLog.warn("codex app-server turn idle timed out waiting for completion", {
-      threadId: params.threadId,
+      threadId: currentThreadId(),
       turnId: params.getTurnId(),
       idleMs,
       timeoutMs,
@@ -374,7 +375,7 @@ export function createCodexAttemptTurnWatchController(params: {
     params.onTimeout(timeout);
     params.onMarkTimedOut();
     params.onRecordEvent("turn.terminal_idle_timeout", {
-      threadId: params.threadId,
+      threadId: currentThreadId(),
       turnId: params.getTurnId(),
       idleMs,
       timeoutMs: timeout.timeoutMs,
@@ -382,7 +383,7 @@ export function createCodexAttemptTurnWatchController(params: {
       ...timeout.details,
     });
     embeddedAgentLog.warn("codex app-server turn idle timed out waiting for terminal event", {
-      threadId: params.threadId,
+      threadId: currentThreadId(),
       turnId: params.getTurnId(),
       idleMs,
       timeoutMs: timeout.timeoutMs,
@@ -457,9 +458,11 @@ export function createCodexAttemptTurnWatchController(params: {
         details?: Record<string, unknown>;
         attemptProgress?: boolean;
         attemptTimeoutMs?: number;
+        receivedAtMs?: number;
       },
     ) => {
-      completionLastActivityAt = Date.now();
+      const now = Date.now();
+      completionLastActivityAt = Math.min(now, options?.receivedAtMs ?? now);
       completionLastActivityReason = `notification:${method}`;
       if (options?.details !== undefined) {
         completionLastActivityDetails = options.details;

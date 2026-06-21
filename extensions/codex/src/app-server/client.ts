@@ -12,6 +12,7 @@ import {
   type CodexInitializeParams,
   type CodexInitializeResponse,
   isRpcResponse,
+  readCodexThreadCreationResponseId,
   type CodexServerNotification,
   type JsonValue,
   type RpcMessage,
@@ -34,6 +35,8 @@ const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
+const CODEX_APP_SERVER_ABANDONED_THREAD_CREATION_MAX = 128;
+const CODEX_APP_SERVER_LATE_THREAD_CLEANUP_TIMEOUT_MS = 5_000;
 const UNPAIRED_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
@@ -120,7 +123,10 @@ export class CodexAppServerClient {
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
-  private activeSharedLeaseCountProvider: (() => number | undefined) | undefined;
+  private readonly threadSubscriptionOwners = new Map<string, number>();
+  // Codex may finish a locally abandoned create request. Remember its RPC id
+  // until response/close so the unknown thread subscription can be released.
+  private readonly abandonedThreadCreationRequestIds = new Set<number | string>();
   private nextId = 1;
   private initialized = false;
   private closed = false;
@@ -241,11 +247,27 @@ export class CodexAppServerClient {
     if (options.signal?.aborted) {
       return Promise.reject(new Error(`${method} aborted`));
     }
+    const requestedThreadId = readRequestThreadId(params);
+    if (
+      method === "thread/unsubscribe" &&
+      requestedThreadId &&
+      this.releaseThreadSubscriptionOwner(requestedThreadId)
+    ) {
+      // Codex subscriptions are connection-wide sets. A logical owner can
+      // release without silencing another turn on the same physical client.
+      return Promise.resolve({ status: "unsubscribed" } as unknown as T);
+    }
+    if (method === "thread/resume" && requestedThreadId) {
+      // Every resume attempt owns one release, even if the response times out
+      // or aborts: Codex may have subscribed before OpenClaw saw the outcome.
+      this.retainThreadSubscriptionOwner(requestedThreadId);
+    }
     const id = this.nextId++;
     const message: RpcRequest = { id, method, params: params as JsonValue | undefined };
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let cleanupAbort: (() => void) | undefined;
+      let requestWritten = false;
       const cleanup = () => {
         if (timeout) {
           clearTimeout(timeout);
@@ -254,23 +276,37 @@ export class CodexAppServerClient {
         cleanupAbort?.();
         cleanupAbort = undefined;
       };
-      const rejectPending = (error: Error) => {
+      const rejectPending = (error: Error, rememberLateThreadCreation = false) => {
         if (!this.pending.has(id)) {
           return;
         }
         this.pending.delete(id);
+        if (rememberLateThreadCreation && isThreadCreationRequest(method)) {
+          if (
+            this.abandonedThreadCreationRequestIds.size >=
+            CODEX_APP_SERVER_ABANDONED_THREAD_CREATION_MAX
+          ) {
+            // Lost create responses can hide server subscriptions. Once the
+            // bounded cleanup ledger fills, closing is the only safe release.
+            this.closeWithError(
+              new Error("codex app-server abandoned thread creation limit exceeded"),
+            );
+          } else {
+            this.abandonedThreadCreationRequestIds.add(id);
+          }
+        }
         cleanup();
         reject(error);
       };
       if (options.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
         timeout = setTimeout(
-          () => rejectPending(new Error(`${method} timed out`)),
+          () => rejectPending(new Error(`${method} timed out`), true),
           Math.max(100, options.timeoutMs),
         );
         timeout.unref?.();
       }
       if (options.signal) {
-        const abortListener = () => rejectPending(new Error(`${method} aborted`));
+        const abortListener = () => rejectPending(new Error(`${method} aborted`), requestWritten);
         options.signal.addEventListener("abort", abortListener, { once: true });
         cleanupAbort = () => options.signal?.removeEventListener("abort", abortListener);
       }
@@ -278,6 +314,12 @@ export class CodexAppServerClient {
         method,
         resolve: (value) => {
           cleanup();
+          if (method === "thread/start" || method === "thread/fork") {
+            const threadId = readCodexThreadCreationResponseId(value);
+            if (threadId) {
+              this.retainThreadSubscriptionOwner(threadId);
+            }
+          }
           resolve(value as T);
         },
         reject: (error) => {
@@ -291,6 +333,7 @@ export class CodexAppServerClient {
         return;
       }
       try {
+        requestWritten = true;
         this.writeMessage(message, (error) => rejectPending(error));
       } catch (error) {
         rejectPending(error instanceof Error ? error : new Error(String(error)));
@@ -313,18 +356,6 @@ export class CodexAppServerClient {
   addNotificationHandler(handler: CodexServerNotificationHandler): () => void {
     this.notificationHandlers.add(handler);
     return () => this.notificationHandlers.delete(handler);
-  }
-
-  /** Installs a lease-count provider used to route unscoped notifications. */
-  setActiveSharedLeaseCountProviderForUnscopedNotifications(
-    provider: (() => number | undefined) | undefined,
-  ): void {
-    this.activeSharedLeaseCountProvider = provider;
-  }
-
-  /** Reads the active shared-client lease count when available. */
-  getActiveSharedLeaseCountForUnscopedNotifications(): number | undefined {
-    return this.activeSharedLeaseCountProvider?.();
   }
 
   /** Registers a close handler and returns its disposer. */
@@ -445,6 +476,15 @@ export class CodexAppServerClient {
   }
 
   private handleResponse(response: RpcResponse): void {
+    if (this.abandonedThreadCreationRequestIds.delete(response.id)) {
+      if (!response.error) {
+        const threadId = readCodexThreadCreationResponseId(response.result);
+        if (threadId) {
+          this.unsubscribeLateThreadCreation(threadId);
+        }
+      }
+      return;
+    }
     const pending = this.pending.get(response.id);
     if (!pending) {
       return;
@@ -522,7 +562,14 @@ export class CodexAppServerClient {
 
   private handleNotification(notification: CodexServerNotification): void {
     for (const handler of this.notificationHandlers) {
-      Promise.resolve(handler(notification)).catch((error: unknown) => {
+      let result: Promise<void> | void;
+      try {
+        result = handler(notification);
+      } catch (error) {
+        embeddedAgentLog.warn("codex app-server notification handler failed", { error });
+        continue;
+      }
+      Promise.resolve(result).catch((error: unknown) => {
         embeddedAgentLog.warn("codex app-server notification handler failed", { error });
       });
     }
@@ -540,9 +587,52 @@ export class CodexAppServerClient {
     }
     this.closed = true;
     this.closeError = error;
+    this.threadSubscriptionOwners.clear();
+    this.abandonedThreadCreationRequestIds.clear();
     this.lines.close();
     this.rejectPendingRequests(error);
     return true;
+  }
+
+  private unsubscribeLateThreadCreation(threadId: string): void {
+    // This late response never registered a local owner. Track the wire
+    // release anyway; an unconfirmed cleanup makes this client unsafe to pool.
+    void this.request(
+      "thread/unsubscribe",
+      { threadId },
+      { timeoutMs: CODEX_APP_SERVER_LATE_THREAD_CLEANUP_TIMEOUT_MS },
+    ).catch((error: unknown) => {
+      embeddedAgentLog.debug("codex app-server late thread unsubscribe failed", {
+        threadId,
+        error,
+      });
+      this.closeWithError(
+        new Error(`Codex late thread subscription could not be released: ${threadId}`, {
+          cause: error,
+        }),
+      );
+    });
+  }
+
+  private retainThreadSubscriptionOwner(threadId: string): void {
+    this.threadSubscriptionOwners.set(
+      threadId,
+      (this.threadSubscriptionOwners.get(threadId) ?? 0) + 1,
+    );
+  }
+
+  /** Returns true when another local owner still needs the wire subscription. */
+  private releaseThreadSubscriptionOwner(threadId: string): boolean {
+    const owners = this.threadSubscriptionOwners.get(threadId);
+    if (owners === undefined) {
+      return false;
+    }
+    if (owners > 1) {
+      this.threadSubscriptionOwners.set(threadId, owners - 1);
+      return true;
+    }
+    this.threadSubscriptionOwners.delete(threadId);
+    return false;
   }
 
   private rejectPendingRequests(error: Error): void {
@@ -555,6 +645,17 @@ export class CodexAppServerClient {
       handler(this);
     }
   }
+}
+
+function readRequestThreadId(value: unknown): string | undefined {
+  if (!isJsonObject(value) || typeof value.threadId !== "string") {
+    return undefined;
+  }
+  return value.threadId.trim() || undefined;
+}
+
+function isThreadCreationRequest(method: string): boolean {
+  return method === "thread/start" || method === "thread/fork";
 }
 
 function defaultServerRequestResponse(
@@ -571,6 +672,9 @@ function defaultServerRequestResponse(
       success: false,
     };
   }
+  if (request.method === "execCommandApproval" || request.method === "applyPatchApproval") {
+    return { decision: "denied" };
+  }
   if (
     request.method === "item/commandExecution/requestApproval" ||
     request.method === "item/fileChange/requestApproval"
@@ -584,6 +688,12 @@ function defaultServerRequestResponse(
     return {
       decision: "decline",
       reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
+    };
+  }
+  if (request.method.includes("requestApproval")) {
+    return {
+      decision: "decline",
+      reason: "OpenClaw codex app-server bridge does not grant unknown native approvals.",
     };
   }
   if (request.method === "item/tool/requestUserInput") {

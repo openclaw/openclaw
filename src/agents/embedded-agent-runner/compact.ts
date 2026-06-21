@@ -565,7 +565,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const runtimePolicyAgentId =
     params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
       ? undefined
-      : params.agentId;
+      : earlyAgentIds.sessionAgentId;
   const policyCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
@@ -709,6 +709,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
+    ...(runtimePolicyAgentId ? { agentId: runtimePolicyAgentId } : {}),
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });
@@ -1599,6 +1600,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
             tokensAfter,
             compactedCount,
             sessionFile: activeSessionFile,
+            ...(activeSessionId !== params.sessionId
+              ? { previousSessionId: params.sessionId }
+              : {}),
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,

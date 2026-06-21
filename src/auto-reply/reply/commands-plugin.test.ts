@@ -6,10 +6,16 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const matchPluginCommandMock = vi.hoisted(() => vi.fn());
 const executePluginCommandMock = vi.hoisted(() => vi.fn());
+const resolvePluginCommandConversationBindingContextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../plugins/commands.js", () => ({
   matchPluginCommand: matchPluginCommandMock,
   executePluginCommand: executePluginCommandMock,
+}));
+
+vi.mock("./conversation-binding-input.js", () => ({
+  resolvePluginCommandConversationBindingContext:
+    resolvePluginCommandConversationBindingContextMock,
 }));
 
 function buildPluginParams(
@@ -45,6 +51,11 @@ function buildPluginParams(
 describe("handlePluginCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolvePluginCommandConversationBindingContextMock.mockReturnValue({
+      channel: "whatsapp",
+      accountId: "default",
+      conversationId: "test-user",
+    });
   });
 
   it("dispatches registered plugin commands with gateway scopes and session metadata", async () => {
@@ -72,6 +83,7 @@ describe("handlePluginCommand", () => {
           sessionKey?: string;
           sessionId?: string;
           commandBody?: string;
+          bindingConversation?: unknown;
         },
       ]
     >;
@@ -79,6 +91,11 @@ describe("handlePluginCommand", () => {
     expect(commandParams.sessionKey).toBe("agent:main:whatsapp:direct:test-user");
     expect(commandParams.sessionId).toBe("session-plugin-command");
     expect(commandParams.commandBody).toBe("/card");
+    expect(commandParams.bindingConversation).toEqual({
+      channel: "whatsapp",
+      accountId: "default",
+      conversationId: "test-user",
+    });
   });
 
   it("prefers the target session entry from sessionStore for plugin command metadata", async () => {

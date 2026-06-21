@@ -78,6 +78,8 @@ const mocks = vi.hoisted(() => ({
   ),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
+  detectLegacyStateMigrations: vi.fn(),
+  runLegacyStateMigrations: vi.fn(),
 }));
 
 const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
@@ -277,6 +279,11 @@ vi.mock("../cli/command-format.js", () => ({
   formatCliCommand: mocks.formatCliCommand,
 }));
 
+vi.mock("../commands/doctor-state-migrations.js", () => ({
+  detectLegacyStateMigrations: mocks.detectLegacyStateMigrations,
+  runLegacyStateMigrations: mocks.runLegacyStateMigrations,
+}));
+
 function requireDoctorContribution(id: string) {
   const contribution = resolveDoctorHealthContributions().find((entry) => entry.id === id);
   if (!contribution) {
@@ -415,6 +422,8 @@ describe("doctor health contributions", () => {
     mocks.gatherDaemonStatus.mockReset();
     mocks.gatherDaemonStatus.mockResolvedValue({});
     mocks.noteWorkspaceStatus.mockReset();
+    mocks.detectLegacyStateMigrations.mockReset();
+    mocks.runLegacyStateMigrations.mockReset();
   });
 
   afterEach(() => {
@@ -430,6 +439,35 @@ describe("doctor health contributions", () => {
       ids.indexOf("doctor:plugin-registry"),
     );
     expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("passes the active config and environment through legacy state migration", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    const cfg = { session: { store: "~/custom/{agentId}/sessions.json" } };
+    const env = { HOME: "/tmp/doctor-home", OPENCLAW_STATE_DIR: "/tmp/doctor-state" };
+    const detected = { preview: ["- legacy plugin state"] };
+    mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
+    mocks.runLegacyStateMigrations.mockResolvedValue({ changes: [], warnings: [] });
+
+    await contribution.run({
+      cfg,
+      configResult: { cfg },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      cfgForPersistence: cfg,
+      configPath: "/tmp/fake-openclaw.json",
+      env,
+    } as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({ cfg, env });
+    expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
+      detected,
+      config: cfg,
+      env,
+      recoverCorruptTargetStore: false,
+    });
   });
 
   it("skips read-scope gateway probes when gateway health only proved reachability", async () => {

@@ -13,14 +13,18 @@ import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
-import { targetCodexMarketplaceDiscoveryTimeoutMs } from "./apply.js";
+import { prepareTargetCodexAppServer, targetCodexMarketplaceDiscoveryTimeoutMs } from "./apply.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 
 const appServerRequest = vi.hoisted(() => vi.fn());
+const sharedClientMocks = vi.hoisted(() => ({
+  leaseSharedCodexAppServerClient: vi.fn(),
+}));
 
 vi.mock("../app-server/request.js", () => ({
   requestCodexAppServerJson: appServerRequest,
 }));
+vi.mock("../app-server/shared-client.js", () => sharedClientMocks);
 
 const tempRoots = new Set<string>();
 
@@ -184,6 +188,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
   appServerRequest.mockReset();
+  sharedClientMocks.leaseSharedCodexAppServerClient.mockReset();
   defaultCodexAppInventoryCache.clear();
   for (const root of tempRoots) {
     await fs.rm(root, { recursive: true, force: true });
@@ -192,6 +197,29 @@ afterEach(async () => {
 });
 
 describe("buildCodexMigrationProvider", () => {
+  it("retires a healthy target warmup lease", async () => {
+    const root = await makeTempRoot();
+    const release = vi.fn();
+    const abandon = vi.fn(async () => undefined);
+    sharedClientMocks.leaseSharedCodexAppServerClient.mockResolvedValue({
+      client: {},
+      release,
+      abandon,
+    });
+
+    const preparation = prepareTargetCodexAppServer(
+      makeContext({
+        source: path.join(root, "source"),
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "workspace"),
+      }),
+    );
+    await preparation.dispose();
+
+    expect(abandon).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
+  });
+
   it("parses target marketplace discovery timeout env strictly", () => {
     expect(
       targetCodexMarketplaceDiscoveryTimeoutMs({

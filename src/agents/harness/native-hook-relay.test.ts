@@ -2441,7 +2441,33 @@ describe("native hook relay registry", () => {
     });
   });
 
-  it("routes Codex MCP PermissionRequest payloads through OpenClaw approval policy", async () => {
+  it("defers guarded Codex PermissionRequest payloads to the active reviewer", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const approvalRequester = vi.fn(async () => "allow" as const);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        permission_mode: "default",
+        tool_name: "Bash",
+        tool_use_id: "native-call-guarded",
+        tool_input: { command: "git push" },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(approvalRequester).not.toHaveBeenCalled();
+  });
+
+  it("routes bypass-mode Codex MCP PermissionRequest payloads through OpenClaw approval policy", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       agentId: "agent-1",
@@ -2458,6 +2484,7 @@ describe("native hook relay registry", () => {
       event: "permission_request",
       rawPayload: {
         hook_event_name: "PermissionRequest",
+        permission_mode: "bypassPermissions",
         cwd: "/repo",
         model: "gpt-5.4",
         tool_name: "mcp__github__create_issue",
@@ -2613,6 +2640,7 @@ describe("native hook relay registry", () => {
       event: "permission_request",
       rawPayload: {
         hook_event_name: "PermissionRequest",
+        permission_mode: "bypassPermissions",
         cwd: "/repo",
         model: "gpt-5.4",
         tool_name: "Bash",
@@ -2625,6 +2653,7 @@ describe("native hook relay registry", () => {
       event: "permission_request",
       rawPayload: {
         hook_event_name: "PermissionRequest",
+        permission_mode: "bypassPermissions",
         tool_name: "Bash",
         tool_input: { command: "curl https://example.com" },
       },

@@ -1,5 +1,7 @@
 // Codex tests cover config plugin behavior.
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -200,7 +202,7 @@ describe("Codex app-server config", () => {
               },
               unix_sockets: {
                 "/tmp/mock-proxy.sock": "allow",
-                "/tmp/blocked.sock": "none",
+                "/tmp/blocked.sock": "deny",
               },
               proxy_url: "http://127.0.0.1:3128",
               socks_url: "socks5h://127.0.0.1:8081",
@@ -558,7 +560,6 @@ describe("Codex app-server config", () => {
     const switchedLocalModel = resolveCodexModelBackedReviewerPolicyContext({
       model: "lmstudio/local-model",
       bindingModel: "gpt-5.5",
-      nativeAuthProfile: true,
     });
     expect(switchedLocalModel).toEqual({
       modelProvider: "lmstudio",
@@ -743,6 +744,39 @@ describe("Codex app-server config", () => {
       sandbox: "workspace-write",
       approvalsReviewer: "user",
     });
+  });
+
+  it("reloads Codex config.toml policy when Codex can reload it", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-config-"));
+    const codexHome = path.join(agentDir, "codex-home");
+    const configPath = path.join(codexHome, "config.toml");
+    await fs.mkdir(codexHome);
+    try {
+      await fs.writeFile(configPath, 'openai_base_url = "http://localhost:8080/v1"\n');
+      const context = { modelProvider: "openai", model: "gpt-5.5", agentDir };
+      expect(canUseCodexModelBackedApprovalsReviewerForModel(context)).toBe(false);
+
+      await fs.writeFile(configPath, 'openai_base_url = "https://api.openai.com/v1"\n');
+      expect(canUseCodexModelBackedApprovalsReviewerForModel(context)).toBe(true);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("observes a Codex config.toml created after the first policy check", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-config-"));
+    const codexHome = path.join(agentDir, "codex-home");
+    const configPath = path.join(codexHome, "config.toml");
+    await fs.mkdir(codexHome);
+    try {
+      const context = { modelProvider: "openai", model: "gpt-5.5", agentDir };
+      expect(canUseCodexModelBackedApprovalsReviewerForModel(context)).toBe(true);
+
+      await fs.writeFile(configPath, 'openai_base_url = "http://localhost:8080/v1"\n');
+      expect(canUseCodexModelBackedApprovalsReviewerForModel(context)).toBe(false);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("forces prompting when explicit no-prompt config cannot use model-backed review", () => {
@@ -942,8 +976,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: {},
       modelProvider: "openai",
       requirementsPath: "/custom/codex/requirements.toml",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });
@@ -963,8 +997,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: { ProgramData: "D:\\ManagedData" },
       modelProvider: "openai",
       platform: "win32",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });

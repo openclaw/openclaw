@@ -39,13 +39,12 @@ export function extractCodexNativeSubagentCompletions(
   if (!item) {
     return [];
   }
-  const text = readTrustedInterAgentCommunicationContent(item);
-  if (!text) {
+  const communication = readTrustedInterAgentCommunication(item);
+  if (!communication) {
     return [];
   }
-  const author = readTrustedInterAgentCommunicationAuthor(item);
-  return extractCodexNativeSubagentCompletionsFromText(text).filter(
-    (completion) => completion.agentPath === author,
+  return extractCodexNativeSubagentCompletionsFromText(communication.content).filter(
+    (completion) => completion.agentPath === communication.author,
   );
 }
 
@@ -190,17 +189,21 @@ function completedWithoutFinalAssistantMessage(): {
   };
 }
 
-function readTrustedInterAgentCommunicationContent(item: JsonObject): string | undefined {
-  const communication = readTrustedInterAgentCommunication(item);
-  return typeof communication?.content === "string" ? communication.content : undefined;
-}
+type TrustedInterAgentCommunication = {
+  author: string;
+  recipient: string;
+  content: string;
+};
 
-function readTrustedInterAgentCommunicationAuthor(item: JsonObject): string | undefined {
-  const communication = readTrustedInterAgentCommunication(item);
-  return typeof communication?.author === "string" ? communication.author : undefined;
-}
-
-function readTrustedInterAgentCommunication(item: JsonObject): JsonObject | undefined {
+function readTrustedInterAgentCommunication(
+  item: JsonObject,
+): TrustedInterAgentCommunication | undefined {
+  if (readString(item, "type") === "agent_message") {
+    const author = readString(item, "author")?.trim();
+    const recipient = readString(item, "recipient")?.trim();
+    const content = extractSingleTextPart(item, "input_text");
+    return author && recipient && content ? { author, recipient, content } : undefined;
+  }
   if (
     readString(item, "type") !== "message" ||
     readString(item, "role") !== "assistant" ||
@@ -208,7 +211,7 @@ function readTrustedInterAgentCommunication(item: JsonObject): JsonObject | unde
   ) {
     return undefined;
   }
-  const text = extractSingleTextPart(item);
+  const text = extractSingleTextPart(item, "output_text", "text");
   if (!text) {
     return undefined;
   }
@@ -221,18 +224,20 @@ function readTrustedInterAgentCommunication(item: JsonObject): JsonObject | unde
   if (!isJsonObject(parsed)) {
     return undefined;
   }
+  const author = typeof parsed.author === "string" ? parsed.author.trim() : "";
+  const recipient = typeof parsed.recipient === "string" ? parsed.recipient.trim() : "";
   if (
-    typeof parsed.author !== "string" ||
-    typeof parsed.recipient !== "string" ||
+    !author ||
+    !recipient ||
     typeof parsed.content !== "string" ||
     parsed.trigger_turn !== false
   ) {
     return undefined;
   }
-  return parsed;
+  return { author, recipient, content: parsed.content };
 }
 
-function extractSingleTextPart(item: JsonObject): string | undefined {
+function extractSingleTextPart(item: JsonObject, ...acceptedTypes: string[]): string | undefined {
   const content = item.content;
   if (!Array.isArray(content) || content.length !== 1) {
     return undefined;
@@ -242,7 +247,7 @@ function extractSingleTextPart(item: JsonObject): string | undefined {
     return undefined;
   }
   const type = readString(entry, "type");
-  if (type !== "output_text" && type !== "text") {
+  if (!type || !acceptedTypes.includes(type)) {
     return undefined;
   }
   return readString(entry, "text")?.trim();

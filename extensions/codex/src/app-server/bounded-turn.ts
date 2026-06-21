@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { readModelListResult } from "./models.js";
@@ -27,6 +26,10 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import type {
+  CodexAppServerClientLease,
+  CodexAppServerClientLeaseFactory,
+} from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 
 const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
@@ -46,7 +49,7 @@ const CODEX_PRIVATE_BOUNDED_THREAD_CONFIG: JsonObject = {
 
 export type CodexBoundedTurnOptions = {
   pluginConfig?: unknown;
-  clientFactory?: CodexAppServerClientFactory;
+  clientFactory?: CodexAppServerClientLeaseFactory;
 };
 
 export type CodexBoundedTurnResult = {
@@ -118,11 +121,17 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   const startOptions = workspace.codexHome
     ? buildPrivateCodexAppServerStartOptions(appServer.start, workspace.codexHome)
     : appServer.start;
-  const ownsClient = !params.options.clientFactory;
+  let lease: CodexAppServerClientLease | undefined;
   const client = params.options.clientFactory
-    ? await params.options.clientFactory(startOptions, params.profile, agentDir, params.config, {
+    ? ((lease = await params.options.clientFactory({
+        startOptions,
         timeoutMs,
-      })
+        authProfileId: params.profile,
+        agentDir,
+        authProfileStore: params.authProfileStore,
+        config: params.config,
+      })),
+      lease.client)
     : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
         createIsolatedCodexAppServerClient({
           startOptions,
@@ -208,7 +217,9 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
-    if (ownsClient) {
+    if (lease) {
+      lease.release();
+    } else {
       client.close();
     }
   }

@@ -65,6 +65,7 @@ export type AgentHarnessCompactParams =
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessResetParams = {
+  agentId?: string;
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;

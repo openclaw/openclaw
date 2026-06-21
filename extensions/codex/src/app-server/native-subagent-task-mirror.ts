@@ -56,8 +56,8 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   markAuthoritativeCompletionExpected(childThreadId: string): void {
-    // Local transcripts and V2 agent paths can supply the real result later.
-    // Remote V1 lacks both and must keep collab-completed as its fallback.
+    // The monitor recovers the authoritative result through app-server history.
+    // Keep collab completion as progress so it cannot finalize stale text first.
     this.expectedAuthoritativeRunIds.add(codexNativeSubagentRunId(childThreadId));
   }
 

@@ -198,6 +198,22 @@ describe("sandbox/tool-policy", () => {
     ).toBe(true);
   });
 
+  it("uses explicit agent authority for global session keys", () => {
+    const cfg: OpenClawConfig = {
+      session: { scope: "global" },
+      agents: {
+        list: [
+          { id: "main", default: true, sandbox: { mode: "all" } },
+          { id: "work", sandbox: { mode: "off" } },
+        ],
+      },
+    };
+
+    expect(
+      resolveSandboxRuntimeStatus({ cfg, agentId: "work", sessionKey: "global" }),
+    ).toMatchObject({ agentId: "work", mode: "off", sandboxed: false });
+  });
+
   it("keeps explicit sandbox deny precedence over allow and alsoAllow", () => {
     const cfg: OpenClawConfig = {
       agents: {

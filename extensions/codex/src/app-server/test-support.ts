@@ -7,6 +7,47 @@ import { PassThrough, Writable } from "node:stream";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
+import type {
+  CodexAppServerClientLeaseFactory,
+  CodexAppServerClientOptions,
+} from "./shared-client.js";
+
+/** Naked-client injection contract confined to tests. */
+export type CodexTestAppServerClientFactory = (
+  startOptions?: CodexAppServerClientOptions["startOptions"],
+  authProfileId?: string,
+  agentDir?: string,
+  config?: CodexAppServerClientOptions["config"],
+  options?: CodexAppServerClientOptions,
+) => Promise<CodexAppServerClient>;
+
+/** Wraps a test client in the ownership contract required by production code. */
+export function adaptCodexTestClientFactory(
+  factory: CodexTestAppServerClientFactory,
+): CodexAppServerClientLeaseFactory {
+  return async (options) => ({
+    client: await factory(
+      options?.startOptions,
+      options?.authProfileId ?? undefined,
+      options?.agentDir,
+      options?.config,
+      options,
+    ),
+    release: () => undefined,
+    abandon: async () => undefined,
+  });
+}
+
+/** Completes lightweight request-only test doubles with the notification contract. */
+export function ensureCodexTestClientNotificationSurface(
+  client: CodexAppServerClient,
+): CodexAppServerClient {
+  const surface = client as unknown as {
+    addNotificationHandler?: CodexAppServerClient["addNotificationHandler"];
+  };
+  surface.addNotificationHandler ??= () => () => undefined;
+  return client;
+}
 
 /** Builds a representative Codex-capable model fixture for app-server tests. */
 export function createCodexTestModel(provider = "openai", input = ["text"]): Model {

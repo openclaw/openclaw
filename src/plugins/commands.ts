@@ -7,7 +7,6 @@
 
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
-import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
@@ -35,7 +34,6 @@ import {
   getCurrentPluginConversationBinding,
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
-import { getActivePluginChannelRegistry } from "./runtime.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -136,42 +134,10 @@ function sanitizeArgs(args: string | undefined): string | undefined {
   return sanitized;
 }
 
-function resolveBindingConversationFromCommand(params: {
-  config?: OpenClawConfig;
-  channel: string;
-  senderId?: string;
-  from?: string;
-  to?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  threadParentId?: string;
-}): {
-  channel: string;
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  threadId?: string | number;
-} | null {
-  const channelPlugin = getActivePluginChannelRegistry()?.channels.find(
-    (entry) => entry.plugin.id === params.channel,
-  )?.plugin;
-  if (!channelPlugin?.bindings?.resolveCommandConversation) {
-    return null;
-  }
-  return resolveConversationBindingContext({
-    cfg: params.config ?? ({} as OpenClawConfig),
-    channel: params.channel,
-    accountId: params.accountId,
-    threadId: params.messageThreadId,
-    threadParentId: params.threadParentId,
-    senderId: params.senderId,
-    originatingTo: params.from,
-    commandTo: params.to,
-    fallbackTo: params.to ?? params.from,
-  });
-}
-
 type PluginCommandRuntimeLlm = NonNullable<PluginCommandContext["runtimeContext"]>["llm"];
+type PluginBindingConversation = Parameters<
+  typeof requestPluginConversationBinding
+>[0]["conversation"];
 type PluginCommandLlmCompleteParams = Parameters<
   NonNullable<PluginCommandRuntimeLlm>["complete"]
 >[0];
@@ -242,6 +208,8 @@ export async function executePluginCommand(params: {
   authProfileId?: string;
   commandBody: string;
   config: OpenClawConfig;
+  /** Canonical conversation identity prepared from the complete inbound context. */
+  bindingConversation?: PluginBindingConversation | null;
   from?: PluginCommandContext["from"];
   to?: PluginCommandContext["to"];
   accountId?: PluginCommandContext["accountId"];
@@ -296,16 +264,7 @@ export async function executePluginCommand(params: {
 
   // Sanitize args before passing to handler
   const sanitizedArgs = sanitizeArgs(args);
-  const bindingConversation = resolveBindingConversationFromCommand({
-    config,
-    channel,
-    senderId,
-    from: params.from,
-    to: params.to,
-    accountId: params.accountId,
-    messageThreadId: params.messageThreadId,
-    threadParentId: params.threadParentId,
-  });
+  const bindingConversation = params.bindingConversation;
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
   const senderIsOwnerForCommand =
     canExposeSenderIsOwner(command) ||
@@ -344,6 +303,7 @@ export async function executePluginCommand(params: {
     isAuthorizedSender,
     ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
     gatewayClientScopes: params.gatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,
@@ -451,8 +411,3 @@ export function listPluginCommands(): Array<{
 function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): string[] {
   return listPluginInvocationKeys(command);
 }
-
-export const testing = {
-  resolveBindingConversationFromCommand,
-};
-export { testing as __testing };

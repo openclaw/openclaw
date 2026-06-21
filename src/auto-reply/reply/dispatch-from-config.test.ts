@@ -277,16 +277,28 @@ const conversationBindingMocks = vi.hoisted(() => {
         return null;
       }
       const threadId = resolveThreadId(params.ctx);
+      const discordSender =
+        channel === "discord" && /^discord:\d+$/u.test(normalizeText(params.ctx.From))
+          ? `user:${normalizeText(params.ctx.From).slice("discord:".length)}`
+          : undefined;
       const baseConversationId =
-        resolveTarget(channel, params.ctx.OriginatingTo) ?? resolveTarget(channel, params.ctx.To);
+        discordSender ??
+        resolveTarget(channel, params.ctx.OriginatingTo) ??
+        resolveTarget(channel, params.ctx.To);
       const conversationId = threadId ?? baseConversationId;
       if (!conversationId) {
         return null;
       }
+      const explicitParent = resolveTarget(channel, params.ctx.ThreadParentId);
+      const normalizedExplicitParent =
+        channel === "discord" && explicitParent && !explicitParent.includes(":")
+          ? `channel:${explicitParent}`
+          : explicitParent;
       const parentConversationId =
-        threadId && baseConversationId && baseConversationId !== threadId
+        normalizedExplicitParent ??
+        (threadId && baseConversationId && baseConversationId !== threadId
           ? baseConversationId
-          : resolveTarget(channel, params.ctx.ThreadParentId);
+          : undefined);
       return {
         channel,
         accountId: resolveAccountId(params.ctx, params.cfg, channel),
@@ -6146,6 +6158,12 @@ describe("dispatchReplyFromConfig", () => {
 
   it("routes plugin-owned bindings to the owning plugin before generic inbound claim broadcast", async () => {
     setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "session-main",
+      updatedAt: 0,
+      execSecurity: "full",
+      execAsk: "off",
+    };
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
         hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
@@ -6155,39 +6173,46 @@ describe("dispatchReplyFromConfig", () => {
       status: "handled",
       result: { handled: true },
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "binding-1",
-      targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        data: {
-          kind: "codex-app-server-session",
-          version: 1,
-          sessionFile: "/tmp/session.jsonl",
-          workspaceDir: "/workspace/openclaw",
-        },
-      },
-    } satisfies SessionBindingRecord);
+    sessionBindingMocks.resolveByConversation.mockImplementation((conversation) =>
+      conversation.channel === "slack" &&
+      conversation.accountId === "default" &&
+      conversation.conversationId === "user:U123"
+        ? ({
+            bindingId: "binding-1",
+            targetSessionKey: "plugin-binding:codex:abc123",
+            targetKind: "session",
+            conversation: {
+              channel: "slack",
+              accountId: "default",
+              conversationId: "user:U123",
+            },
+            status: "active",
+            boundAt: 1710000000000,
+            metadata: {
+              pluginBindingOwner: "plugin",
+              pluginId: "openclaw-codex-app-server",
+              pluginRoot: "/plugins/openclaw-codex-app-server",
+              data: {
+                kind: "codex-app-server-session",
+                version: 2,
+                bindingId: "codex-binding-1",
+                workspaceDir: "/workspace/openclaw",
+              },
+            },
+          } satisfies SessionBindingRecord)
+        : null,
+    );
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
+      Provider: "internal",
+      Surface: "internal",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U123",
+      From: undefined,
+      To: undefined,
       AccountId: "default",
-      SenderId: "user-9",
+      SenderId: "gateway-client",
       SenderUsername: "ada",
       CommandAuthorized: true,
       WasMentioned: false,
@@ -6195,13 +6220,18 @@ describe("dispatchReplyFromConfig", () => {
       RawBody: "who are you",
       Body: "who are you",
       MessageSid: "msg-claim-plugin-1",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
+      SessionKey: "main",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
+      channel: "slack",
+      accountId: "default",
+      conversationId: "user:U123",
+    });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
     const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
       .calls[0] as unknown as
@@ -6212,20 +6242,22 @@ describe("dispatchReplyFromConfig", () => {
             accountId?: unknown;
             channelId?: unknown;
             conversationId?: unknown;
+            execOverrides?: unknown;
             pluginBinding?: { data?: Record<string, unknown> };
           },
         ]
       | undefined;
     expect(inboundClaimCall?.[0]).toBe("openclaw-codex-app-server");
-    expect(inboundClaimCall?.[1]?.channel).toBe("discord");
+    expect(inboundClaimCall?.[1]?.channel).toBe("slack");
     expect(inboundClaimCall?.[1]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[1]?.conversationId).toBe("channel:1481858418548412579");
+    expect(inboundClaimCall?.[1]?.conversationId).toBe("user:U123");
     expect(inboundClaimCall?.[1]?.content).toBe("who are you");
-    expect(inboundClaimCall?.[2]?.channelId).toBe("discord");
+    expect(inboundClaimCall?.[2]?.channelId).toBe("slack");
     expect(inboundClaimCall?.[2]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[2]?.conversationId).toBe("channel:1481858418548412579");
+    expect(inboundClaimCall?.[2]?.conversationId).toBe("user:U123");
+    expect(inboundClaimCall?.[2]?.execOverrides).toEqual({ security: "full", ask: "off" });
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.kind).toBe("codex-app-server-session");
-    expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(inboundClaimCall?.[2]?.pluginBinding?.data?.bindingId).toBe("codex-binding-1");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });
@@ -6690,7 +6722,7 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Codex native reply" });
     expect(replyResolver).not.toHaveBeenCalled();
   });
@@ -6706,23 +6738,29 @@ describe("dispatchReplyFromConfig", () => {
       status: "handled",
       result: { handled: true },
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "binding-dm-1",
-      targetSessionKey: "plugin-binding:codex:dm123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      },
-    } satisfies SessionBindingRecord);
+    sessionBindingMocks.resolveByConversation.mockImplementation((conversation) =>
+      conversation.channel === "discord" &&
+      conversation.accountId === "default" &&
+      conversation.conversationId === "user:1177378744822943744"
+        ? ({
+            bindingId: "binding-dm-1",
+            targetSessionKey: "plugin-binding:codex:dm123",
+            targetKind: "session",
+            conversation: {
+              channel: "discord",
+              accountId: "default",
+              conversationId: "user:1177378744822943744",
+            },
+            status: "active",
+            boundAt: 1710000000000,
+            metadata: {
+              pluginBindingOwner: "plugin",
+              pluginId: "openclaw-codex-app-server",
+              pluginRoot: "/plugins/openclaw-codex-app-server",
+            },
+          } satisfies SessionBindingRecord)
+        : null,
+    );
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -6760,11 +6798,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[0]).toBe("openclaw-codex-app-server");
     expect(inboundClaimCall?.[1]?.channel).toBe("discord");
     expect(inboundClaimCall?.[1]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[1]?.conversationId).toBe("1480574946919846079");
+    expect(inboundClaimCall?.[1]?.conversationId).toBe("user:1177378744822943744");
     expect(inboundClaimCall?.[1]?.content).toBe("who are you");
     expect(inboundClaimCall?.[2]?.channelId).toBe("discord");
     expect(inboundClaimCall?.[2]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[2]?.conversationId).toBe("1480574946919846079");
+    expect(inboundClaimCall?.[2]?.conversationId).toBe("user:1177378744822943744");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });
@@ -8413,6 +8451,31 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expectPluginReplyDelivered: true,
     },
     {
+      name: "delivers direct room_event plugin reply",
+      bindingId: "binding-message-tool-direct-room-event",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      ctx: {
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "user:U123",
+        To: "user:U123",
+        AccountId: "default",
+        ChatType: "direct",
+        InboundEventKind: "room_event",
+        Body: "observed message",
+        SessionKey: "agent:main:slack:direct:U123",
+      },
+      cfg: emptyConfig,
+      expectedClaim: { channel: "slack" },
+      pluginReply: { text: "Codex direct room event reply" },
+      expectPluginReplyDelivered: true,
+    },
+    {
       name: "suppresses ambient room_event plugin reply",
       bindingId: "binding-message-tool-room-event",
       conversation: {
@@ -8492,7 +8555,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       });
 
       expect(result).toEqual({
-        queuedFinal: false,
+        queuedFinal: params.expectPluginReplyDelivered === true,
         counts: { tool: 0, block: 0, final: 0 },
         sourceReplyDeliveryMode: "message_tool_only",
       });

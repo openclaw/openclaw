@@ -534,11 +534,12 @@ describe("Discord native plugin command dispatch", () => {
     });
   });
 
-  it("passes the active auth profile to Discord plugin commands", async () => {
+  it("passes the active session metadata to Discord plugin commands", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
     runtimeModuleMocks.getSessionEntry.mockReturnValue({
       sessionId: "discord-session",
+      sessionFile: "/tmp/discord-session.jsonl",
       authProfileOverride: "openai:owner@example.com",
       updatedAt: Date.now(),
     });
@@ -566,6 +567,8 @@ describe("Discord native plugin command dispatch", () => {
       mock: executeSpy,
       commandName: "pair",
       expected: {
+        sessionId: "discord-session",
+        sessionFile: "/tmp/discord-session.jsonl",
         authProfileId: "openai:owner@example.com",
       },
     });
@@ -938,7 +941,13 @@ describe("Discord native plugin command dispatch", () => {
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
-    expect(executeSpy).toHaveBeenCalledTimes(1);
+    expectSingleCallFirstArg(executeSpy, {
+      bindingConversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:owner",
+      },
+    });
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectFollowUpFields(interaction, { content: "direct plugin output" });
     expect(interaction.reply).not.toHaveBeenCalled();
@@ -1085,6 +1094,13 @@ describe("Discord native plugin command dispatch", () => {
       sessionKey: "agent:main:discord:channel:thread-123",
       messageThreadId: "thread-123",
       threadParentId: "parent-456",
+      bindingConversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "thread-123",
+        parentConversationId: "channel:parent-456",
+        threadId: "thread-123",
+      },
     });
   });
 

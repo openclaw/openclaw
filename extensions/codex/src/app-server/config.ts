@@ -192,6 +192,11 @@ export type CodexAppServerRuntimeOptions = {
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
+export type CodexAppServerRuntimeResolution = {
+  appServer: CodexAppServerRuntimeOptions;
+  modelBackedReviewerAvailable: boolean;
+};
+
 export type CodexModelBackedReviewerContext = {
   modelProvider?: string;
   model?: string;
@@ -332,7 +337,9 @@ const codexAppServerNetworkProxySchema = z
     baseProfile: z.enum(["read-only", "workspace"]).optional(),
     mode: z.enum(["limited", "full"]).optional(),
     domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
-    unixSockets: z.record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema).optional(),
+    unixSockets: z
+      .record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema)
+      .optional(),
     proxyUrl: z.string().trim().min(1).optional(),
     socksUrl: z.string().trim().min(1).optional(),
     enableSocks5: z.boolean().optional(),
@@ -501,25 +508,34 @@ function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolic
   };
 }
 
+type CodexAppServerRuntimeParams = {
+  pluginConfig?: unknown;
+  execMode?: OpenClawExecMode;
+  execPolicy?: OpenClawExecPolicyForCodexAppServer;
+  modelProvider?: string;
+  model?: string;
+  config?: ProviderAuthAliasConfig;
+  env?: NodeJS.ProcessEnv;
+  agentDir?: string;
+  codexConfigToml?: string | null;
+  requirementsToml?: string | null;
+  requirementsPath?: string;
+  readRequirementsFile?: (path: string) => string | undefined;
+  platform?: NodeJS.Platform;
+  hostName?: string;
+  openClawSandboxActive?: boolean;
+};
+
 export function resolveCodexAppServerRuntimeOptions(
-  params: {
-    pluginConfig?: unknown;
-    execMode?: OpenClawExecMode;
-    execPolicy?: OpenClawExecPolicyForCodexAppServer;
-    modelProvider?: string;
-    model?: string;
-    config?: ProviderAuthAliasConfig;
-    env?: NodeJS.ProcessEnv;
-    agentDir?: string;
-    codexConfigToml?: string | null;
-    requirementsToml?: string | null;
-    requirementsPath?: string;
-    readRequirementsFile?: (path: string) => string | undefined;
-    platform?: NodeJS.Platform;
-    hostName?: string;
-    openClawSandboxActive?: boolean;
-  } = {},
+  params: CodexAppServerRuntimeParams = {},
 ): CodexAppServerRuntimeOptions {
+  return resolveCodexAppServerRuntime(params).appServer;
+}
+
+/** Resolves runtime options and the model-policy fact computed with them. */
+export function resolveCodexAppServerRuntime(
+  params: CodexAppServerRuntimeParams = {},
+): CodexAppServerRuntimeResolution {
   const env = params.env ?? process.env;
   const config = readCodexPluginConfig(params.pluginConfig).appServer ?? {};
   const transport = resolveTransport(config.transport);
@@ -659,43 +675,46 @@ export function resolveCodexAppServerRuntimeOptions(
         : "implicit";
 
   return {
-    start: {
-      transport,
-      command,
-      commandSource,
-      args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
-      ...(url ? { url } : {}),
-      ...(authToken ? { authToken } : {}),
-      headers,
-      ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
+    modelBackedReviewerAvailable: canUseModelBackedReviewer,
+    appServer: {
+      start: {
+        transport,
+        command,
+        commandSource,
+        args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
+        ...(url ? { url } : {}),
+        ...(authToken ? { authToken } : {}),
+        headers,
+        ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
+      },
+      connectionClass,
+      remoteAppsSubstrate,
+      ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
+      codeModeOnly: config.codeModeOnly === true,
+      requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
+      turnCompletionIdleTimeoutMs: normalizePositiveNumber(
+        config.turnCompletionIdleTimeoutMs,
+        60_000,
+      ),
+      ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
+        ? {
+            postToolRawAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
+              config.postToolRawAssistantCompletionIdleTimeoutMs,
+              60_000,
+            ),
+          }
+        : {}),
+      approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
+      approvalPolicySource,
+      sandbox: resolvedSandbox,
+      approvalsReviewer:
+        forcedPolicy?.approvalsReviewer ??
+        explicitApprovalsReviewer ??
+        defaultPolicy?.approvalsReviewer ??
+        (policyMode === "guardian" ? "auto_review" : "user"),
+      ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
+      ...(serviceTier ? { serviceTier } : {}),
     },
-    connectionClass,
-    remoteAppsSubstrate,
-    ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
-    codeModeOnly: config.codeModeOnly === true,
-    requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
-    turnCompletionIdleTimeoutMs: normalizePositiveNumber(
-      config.turnCompletionIdleTimeoutMs,
-      60_000,
-    ),
-    ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
-      ? {
-          postToolRawAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
-            config.postToolRawAssistantCompletionIdleTimeoutMs,
-            60_000,
-          ),
-        }
-      : {}),
-    approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
-    approvalPolicySource,
-    sandbox: resolvedSandbox,
-    approvalsReviewer:
-      forcedPolicy?.approvalsReviewer ??
-      explicitApprovalsReviewer ??
-      defaultPolicy?.approvalsReviewer ??
-      (policyMode === "guardian" ? "auto_review" : "user"),
-    ...(serviceTier ? { serviceTier } : {}),
-    ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
   };
 }
 
@@ -767,7 +786,6 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
   model?: string;
   bindingModelProvider?: string;
   bindingModel?: string;
-  nativeAuthProfile?: boolean;
 }): CodexModelBackedReviewerContext {
   const provider = params.provider?.trim();
   if (provider && provider.toLowerCase() !== "codex") {
@@ -799,7 +817,7 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
     };
   }
   return {
-    modelProvider: params.nativeAuthProfile === true ? "openai" : undefined,
+    modelProvider: undefined,
     model: params.model ?? params.bindingModel,
   };
 }
@@ -866,6 +884,7 @@ export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
   params: {
     authProfileId?: string;
+    authAccountCacheKey?: string;
     agentDir?: string;
     fallbackApiKeyCacheKey?: string;
   } = {},
@@ -885,6 +904,7 @@ export function codexAppServerStartOptionsKey(
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
+    authAccountCacheKey: params.authAccountCacheKey ?? null,
     agentDir: params.agentDir ?? null,
     fallbackApiKeyCacheKey: params.fallbackApiKeyCacheKey ?? null,
   });
@@ -924,7 +944,7 @@ function resolveCodexAppServerNetworkProxy(
     enabled: true,
     mode: config.mode,
     domains: normalizeNetworkProxyPermissionMap(config.domains),
-    unix_sockets: normalizeNetworkProxyPermissionMap(config.unixSockets),
+    unix_sockets: normalizeNetworkProxyUnixSocketPermissionMap(config.unixSockets),
     proxy_url: readNonEmptyString(config.proxyUrl),
     socks_url: readNonEmptyString(config.socksUrl),
     enable_socks5: config.enableSocks5,
@@ -977,6 +997,20 @@ function resolveNetworkProxyPermissionProfileName(
 
 export function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
   return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
+}
+
+function normalizeNetworkProxyUnixSocketPermissionMap(
+  value: Record<string, CodexAppServerNetworkProxyUnixSocketPermission> | undefined,
+): Record<string, "allow" | "deny"> | undefined {
+  const normalized = normalizeNetworkProxyPermissionMap(value);
+  return normalized
+    ? Object.fromEntries(
+        Object.entries(normalized).map(([socketPath, permission]) => [
+          socketPath,
+          permission === "none" ? "deny" : permission,
+        ]),
+      )
+    : undefined;
 }
 
 function normalizeNetworkProxyPermissionMap<TPermission extends string>(

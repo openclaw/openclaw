@@ -9,19 +9,23 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import { CodexAppServerRpcError } from "./app-server/client.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import type { JsonValue } from "./app-server/protocol.js";
+import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
-  readRecentCodexRateLimits,
-  resetCodexRateLimitCacheForTests,
-} from "./app-server/rate-limit-cache.js";
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./app-server/session-binding.test-helpers.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
 import {
   resetCodexDiagnosticsFeedbackStateForTests,
   type CodexCommandDeps,
+  type CodexCommandDepsOverride,
 } from "./command-handlers.js";
 import type {
   CodexPluginsConfigBlock,
@@ -45,6 +49,7 @@ function createContext(
     args,
     commandBody: `/codex ${args}`,
     config: {},
+    sessionId: "session-1",
     sessionFile,
     requestConversationBinding: async () => ({ status: "error", message: "unused" }),
     detachConversationBinding: async () => ({ removed: false }),
@@ -77,9 +82,11 @@ function createNodeExecContext(
   } as Partial<PluginCommandContext>);
 }
 
-function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCommandDeps> {
+function createDeps(overrides: Partial<CodexCommandDeps> = {}): CodexCommandDepsOverride {
   return {
+    bindingStore: testCodexAppServerBindingStore,
     codexControlRequest: vi.fn(),
+    requestCodexNativeTurnForBinding: vi.fn(),
     listCodexAppServerModels: vi.fn(),
     readCodexStatusProbes: vi.fn(),
     requestOptions: vi.fn(
@@ -102,6 +109,45 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
     safeCodexControlRequest: vi.fn(),
     ...overrides,
   };
+}
+
+function createThreadResumeResponse(params: {
+  threadId: string;
+  cwd?: string;
+  model?: string;
+  modelProvider?: string;
+}) {
+  const cwd = params.cwd ?? "/repo";
+  const modelProvider = params.modelProvider ?? "openai";
+  return {
+    thread: {
+      id: params.threadId,
+      sessionId: params.threadId,
+      cliVersion: "0.139.0",
+      createdAt: 1,
+      updatedAt: 1,
+      cwd,
+      ephemeral: false,
+      modelProvider,
+      preview: "",
+      source: "appServer",
+      status: { type: "idle" },
+      turns: [],
+    },
+    model: params.model ?? "gpt-5.4",
+    modelProvider,
+    cwd,
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+  };
+}
+
+async function writeTestBinding(
+  identity: Parameters<typeof testCodexAppServerBindingStore.mutate>[0],
+  binding: CodexAppServerThreadBinding,
+): Promise<void> {
+  await testCodexAppServerBindingStore.mutate(identity, { kind: "set", binding });
 }
 
 function inMemoryCodexPluginsIO(
@@ -242,13 +288,13 @@ function expectedDiagnosticsTargetBlock(params: {
 
 describe("codex command", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-command-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
   });
 
   afterEach(async () => {
     resetCodexDiagnosticsFeedbackStateForTests();
-    resetCodexRateLimitCacheForTests();
     resetSharedCodexAppServerClientForTests();
     clearRuntimeAuthProfileStoreSnapshots();
     vi.unstubAllEnvs();
@@ -256,7 +302,12 @@ describe("codex command", () => {
   });
 
   it("escapes unknown subcommands before chat display", async () => {
-    const result = await handleCodexCommand(createContext("<@U123> [trusted](https://evil) @here"));
+    const result = await handleCodexCommand(
+      createContext("<@U123> [trusted](https://evil) @here"),
+      {
+        deps: createDeps(),
+      },
+    );
 
     expect(result.text).toContain("Unknown Codex command: &lt;\uff20U123&gt;");
     expect(result.text).not.toContain("<@U123>");
@@ -264,6 +315,7 @@ describe("codex command", () => {
 
   it("keeps command loader failures on the Codex command surface", async () => {
     const result = await handleCodexCommand(createContext("account"), {
+      deps: createDeps(),
       loadSubcommandHandler: async () => {
         throw new Error("<@U123> loader failed");
       },
@@ -273,8 +325,29 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
   });
 
+  it("resolves one current plugin-config snapshot per command", async () => {
+    const pluginConfig = { appServer: { mode: "guardian" } };
+    const resolvePluginConfig = vi.fn(() => pluginConfig);
+    const handler = vi.fn(
+      async (_ctx: PluginCommandContext, options: { pluginConfig?: unknown }) => ({
+        text: options.pluginConfig === pluginConfig ? "current" : "stale",
+      }),
+    );
+
+    const result = await handleCodexCommand(createContext("status"), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+      resolvePluginConfig,
+      deps: createDeps(),
+      loadSubcommandHandler: async () => handler,
+    });
+
+    expect(result).toEqual({ text: "current" });
+    expect(resolvePluginConfig).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("renders the top-level Codex menu as portable native slash commands", async () => {
-    const result = await handleCodexCommand(createContext(""));
+    const result = await handleCodexCommand(createContext(""), { deps: createDeps() });
 
     expectResultTextContains(result, "/codex plugins menu");
     expect(buttonCommands(result)).toEqual([
@@ -340,16 +413,17 @@ describe("codex command", () => {
 
   it("attaches the current session to an existing Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const requests: Array<{ method: string; params: unknown }> = [];
+    const requests: Array<{ method: string; params: unknown; options: unknown }> = [];
     const deps = createDeps({
       codexControlRequest: vi.fn(
-        async (_pluginConfig: unknown, method: string, requestParamsValue: unknown) => {
-          requests.push({ method, params: requestParamsValue });
-          return {
-            thread: { id: "thread-123", cwd: "/repo" },
-            model: "gpt-5.4",
-            modelProvider: "openai",
-          };
+        async (
+          _pluginConfig: unknown,
+          method: string,
+          requestParamsValue: unknown,
+          options: unknown,
+        ) => {
+          requests.push({ method, params: requestParamsValue, options });
+          return createThreadResumeResponse({ threadId: "thread-123" });
         },
       ),
     });
@@ -363,28 +437,224 @@ describe("codex command", () => {
     expect(requests).toEqual([
       {
         method: "thread/resume",
-        params: { threadId: "thread-123", persistExtendedHistory: true },
+        params: { threadId: "thread-123", excludeTurns: true, persistExtendedHistory: true },
+        options: expect.objectContaining({
+          agentDir: path.join(tempDir, "agents", "main", "agent"),
+          sessionId: "session-1",
+        }),
       },
     ]);
-    await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
-      '"threadId": "thread-123"',
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-123" });
+  });
+
+  it("serializes manual resume with other session binding owners", async () => {
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
+    const order: string[] = [];
+    let resolveResume!: (value: ReturnType<typeof createThreadResumeResponse>) => void;
+    const resumeResponse = new Promise<ReturnType<typeof createThreadResumeResponse>>((resolve) => {
+      resolveResume = resolve;
+    });
+    const codexControlRequest = vi.fn(async () => {
+      order.push("resume-start");
+      const response = await resumeResponse;
+      order.push("resume-done");
+      return response;
+    });
+
+    const command = handleCodexCommand(createContext("resume thread-123"), {
+      deps: createDeps({ codexControlRequest }),
+    });
+    await vi.waitFor(() => expect(codexControlRequest).toHaveBeenCalledTimes(1));
+    const competingOwner = testCodexAppServerBindingStore.withLease(identity, async () => {
+      order.push("competing-owner");
+      await writeTestBinding(identity, { threadId: "thread-later", cwd: "/later" });
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(order).toEqual(["resume-start"]);
+
+    resolveResume(createThreadResumeResponse({ threadId: "thread-123" }));
+    await expect(command).resolves.toEqual({
+      text: "Attached this OpenClaw session to Codex thread thread-123.",
+    });
+    await competingOwner;
+    expect(order).toEqual(["resume-start", "resume-done", "competing-owner"]);
+  });
+
+  it("reclaims an unloaded plugin's stale generation before attaching a thread", async () => {
+    const sessionKey = "agent:main:test:chat-1";
+    const storePath = path.join(tempDir, "sessions.json");
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-old",
+        sessionKey,
+      },
+      { threadId: "thread-old", cwd: "/old" },
     );
+    await saveSessionStore(storePath, {
+      [sessionKey]: { sessionId: "session-new", updatedAt: Date.now() },
+    });
+    const codexControlRequest = vi.fn(async () =>
+      createThreadResumeResponse({ threadId: "thread-new" }),
+    );
+
+    const result = await handleCodexCommand(
+      createContext("resume thread-new", undefined, {
+        sessionId: "session-new",
+        sessionKey,
+        config: { session: { store: storePath } },
+      }),
+      { deps: createDeps({ codexControlRequest }) },
+    );
+
+    expect(result.text).toBe("Attached this OpenClaw session to Codex thread thread-new.");
+    expect(codexControlRequest).toHaveBeenCalledTimes(1);
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-new",
+        sessionKey,
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-new" });
+  });
+
+  it("does not report a resumed thread as attached after a generation conflict", async () => {
+    const mutate = vi.fn(async () => false);
+    const codexControlRequest = vi.fn(async () =>
+      createThreadResumeResponse({ threadId: "thread-123", model: "gpt-5.5" }),
+    );
+
+    const result = await handleCodexCommand(createContext("resume thread-123"), {
+      deps: createDeps({
+        bindingStore: { ...testCodexAppServerBindingStore, mutate },
+        codexControlRequest,
+      }),
+    });
+
+    expect(result.text).toContain(
+      "Codex thread binding changed while attaching the resumed thread",
+    );
+    expect(result.text).not.toContain("Attached this OpenClaw session");
+  });
+
+  it("normalizes resumed bindings against the requesting agent auth store", async () => {
+    const agentDir = path.join(tempDir, "agents", "worker", "agent");
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            "openai:work": {
+              type: "oauth",
+              provider: "openai",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+          order: { openai: ["openai:work"] },
+        },
+      },
+    ]);
+    const codexControlRequest = vi.fn(async () =>
+      createThreadResumeResponse({ threadId: "thread-123" }),
+    );
+
+    await handleCodexCommand(
+      createContext("resume thread-123", undefined, {
+        sessionKey: "agent:worker:session-1",
+      }),
+      { deps: createDeps({ codexControlRequest }) },
+    );
+
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.resumeThread,
+      expect.any(Object),
+      expect.objectContaining({ agentDir, authProfileId: "openai:work" }),
+    );
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "session",
+        agentId: "worker",
+        sessionId: "session-1",
+        sessionKey: "agent:worker:session-1",
+      }),
+    ).resolves.toEqual({
+      threadId: "thread-123",
+      cwd: "/repo",
+      authProfileId: "openai:work",
+      model: "gpt-5.4",
+    });
+  });
+
+  it("uses the host agent for global session keys", async () => {
+    const codexControlRequest = vi.fn(async () =>
+      createThreadResumeResponse({ threadId: "thread-work", model: "gpt-5.5" }),
+    );
+
+    await handleCodexCommand(
+      createContext("resume thread-work", undefined, {
+        agentId: "work",
+        sessionKey: "global",
+        config: {
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          session: { scope: "global" },
+        },
+      }),
+      { deps: createDeps({ codexControlRequest }) },
+    );
+
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "session",
+        agentId: "work",
+        sessionId: "session-1",
+        sessionKey: "global",
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-work" });
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "global",
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects malformed resume commands before attaching a Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const codexControlRequest = vi.fn();
-    const writeCodexAppServerBinding = vi.fn();
+    const writeBinding = vi.fn();
 
     await expect(
       handleCodexCommand(createContext("resume thread-123 extra", sessionFile), {
-        deps: createDeps({ codexControlRequest, writeCodexAppServerBinding }),
+        deps: createDeps({
+          codexControlRequest,
+          bindingStore: { ...testCodexAppServerBindingStore, mutate: writeBinding },
+        }),
       }),
     ).resolves.toEqual({
       text: "Usage: /codex resume <thread-id>",
     });
     expect(codexControlRequest).not.toHaveBeenCalled();
-    expect(writeCodexAppServerBinding).not.toHaveBeenCalled();
+    expect(writeBinding).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -401,7 +671,6 @@ describe("codex command", () => {
   ])("blocks /codex %s in sandboxed sessions before native Codex execution", async (args) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const codexControlRequest = vi.fn();
-    const startCodexConversationThread = vi.fn();
     const steerCodexConversationTurn = vi.fn();
     const setCodexConversationModel = vi.fn();
     const setCodexConversationFastMode = vi.fn();
@@ -411,7 +680,6 @@ describe("codex command", () => {
     const result = await handleCodexCommand(createSandboxedContext(args, sessionFile), {
       deps: createDeps({
         codexControlRequest,
-        startCodexConversationThread,
         steerCodexConversationTurn,
         setCodexConversationModel,
         setCodexConversationFastMode,
@@ -426,7 +694,6 @@ describe("codex command", () => {
         " is unavailable because OpenClaw sandboxing is active for this session.",
     );
     expect(codexControlRequest).not.toHaveBeenCalled();
-    expect(startCodexConversationThread).not.toHaveBeenCalled();
     expect(steerCodexConversationTurn).not.toHaveBeenCalled();
     expect(setCodexConversationModel).not.toHaveBeenCalled();
     expect(setCodexConversationFastMode).not.toHaveBeenCalled();
@@ -446,7 +713,6 @@ describe("codex command", () => {
   ])("blocks /codex %s when exec host=node is active", async (args) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const codexControlRequest = vi.fn();
-    const startCodexConversationThread = vi.fn();
     const steerCodexConversationTurn = vi.fn();
     const setCodexConversationModel = vi.fn();
     const setCodexConversationFastMode = vi.fn();
@@ -456,7 +722,6 @@ describe("codex command", () => {
     const result = await handleCodexCommand(createNodeExecContext(args, sessionFile), {
       deps: createDeps({
         codexControlRequest,
-        startCodexConversationThread,
         steerCodexConversationTurn,
         setCodexConversationModel,
         setCodexConversationFastMode,
@@ -471,7 +736,6 @@ describe("codex command", () => {
         " is unavailable because OpenClaw exec host=node is active for this session.",
     );
     expect(codexControlRequest).not.toHaveBeenCalled();
-    expect(startCodexConversationThread).not.toHaveBeenCalled();
     expect(steerCodexConversationTurn).not.toHaveBeenCalled();
     expect(setCodexConversationModel).not.toHaveBeenCalled();
     expect(setCodexConversationFastMode).not.toHaveBeenCalled();
@@ -480,37 +744,28 @@ describe("codex command", () => {
   });
 
   it("blocks config-level exec host=node without a session key", async () => {
-    const startCodexConversationThread = vi.fn();
-
     const result = await handleCodexCommand(
       createContext("bind", path.join(tempDir, "session.jsonl"), {
         config: { tools: { exec: { host: "node", node: "worker-1" } } },
       }),
-      {
-        deps: createDeps({
-          startCodexConversationThread,
-        }),
-      },
+      { deps: createDeps() },
     );
 
     expect(result.text).toContain(
       "Codex-native /codex bind is unavailable because OpenClaw exec host=node is active for this session.",
     );
-    expect(startCodexConversationThread).not.toHaveBeenCalled();
   });
 
   it("still returns pre-native usage for malformed sandboxed native Codex commands", async () => {
-    const startCodexConversationThread = vi.fn();
     const setCodexConversationModel = vi.fn();
 
     await expect(
       handleCodexCommand(createSandboxedContext("bind --help"), {
-        deps: createDeps({ startCodexConversationThread }),
+        deps: createDeps(),
       }),
     ).resolves.toEqual({
       text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     });
-    expect(startCodexConversationThread).not.toHaveBeenCalled();
 
     await expect(
       handleCodexCommand(createSandboxedContext("model gpt-5.5 --help"), {
@@ -565,17 +820,21 @@ describe("codex command", () => {
 
   it("allows local Codex binding status forms in sandboxed sessions", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "sandboxed-session",
+      },
+      {
         threadId: "thread-status",
         cwd: tempDir,
         model: "gpt-5.5",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         serviceTier: "priority",
-      }),
+      },
     );
 
     await expect(
@@ -716,6 +975,7 @@ describe("codex command", () => {
         version: 1,
         nodeId: "node-123",
         sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        agentId: "main",
         cwd: "/repo",
       },
     });
@@ -749,12 +1009,10 @@ describe("codex command", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const unsafe = "thread-123 <@U123> [trusted](https://evil)";
     const deps = createDeps({
-      codexControlRequest: vi.fn(async () => ({
-        thread: { id: unsafe, cwd: "/repo" },
-      })),
+      codexControlRequest: vi.fn(async () => createThreadResumeResponse({ threadId: unsafe })),
     });
 
-    const result = await handleCodexCommand(createContext("resume thread-123", sessionFile), {
+    const result = await handleCodexCommand(createContext(`resume "${unsafe}"`, sessionFile), {
       deps,
     });
 
@@ -786,7 +1044,15 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Codex models:\n- gpt-5.4",
     });
-    expect(deps.requestOptions).toHaveBeenCalledWith(undefined, 100, config);
+    expect(deps.requestOptions).toHaveBeenCalledWith(
+      undefined,
+      100,
+      config,
+      expect.objectContaining({
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        sessionId: "session-1",
+      }),
+    );
     const modelsRequest = mockArg(listCodexAppServerModels, 0, 0) as { config?: unknown };
     expect(modelsRequest?.config).toBe(config);
   });
@@ -880,7 +1146,14 @@ describe("codex command", () => {
         "Skills: offline",
       ].join("\n"),
     });
-    expect(deps.readCodexStatusProbes).toHaveBeenCalledWith(undefined, config);
+    expect(deps.readCodexStatusProbes).toHaveBeenCalledWith(
+      undefined,
+      config,
+      expect.objectContaining({
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        sessionId: "session-1",
+      }),
+    );
   });
 
   it("escapes Codex status probe errors before chat display", async () => {
@@ -1213,16 +1486,15 @@ describe("codex command", () => {
 
     expect(result.text).toContain("Account: codex@example.com");
     expect(result.text).toContain("Codex is available.");
-    const cachedLimits = requireRecord(
-      readRecentCodexRateLimits(),
-      "expected cached Codex rate limits",
+    expect(safeCodexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.account,
+      { refreshToken: false },
+      expect.objectContaining({
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        sessionId: "session-1",
+      }),
     );
-    expect(requireRecord(cachedLimits.rateLimits, "expected rate limits object").limitId).toBe(
-      "codex",
-    );
-    expect(safeCodexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.account, {
-      refreshToken: false,
-    });
   });
 
   it("escapes Codex account probe errors before chat display", async () => {
@@ -1600,6 +1872,9 @@ describe("codex command", () => {
       undefined,
       {
         config,
+        agentId: "main",
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        sessionId: "session-1",
         authProfileId: "openai:personal-email@gmail.com",
         isolated: true,
       },
@@ -1912,13 +2187,29 @@ describe("codex command", () => {
 
   it("starts compaction for the attached Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
-    );
-    const codexControlRequest = vi.fn(async () => ({}));
+    const identity = {
+      kind: "session",
+      agentId: "main",
+      sessionId: "session-1",
+    } as const;
+    await writeTestBinding(identity, {
+      threadId: "thread-123",
+      cwd: "/repo",
+      nativeContextUsage: { currentTokens: 220_000 },
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+        },
+      },
+    });
+    const requestCodexNativeTurnForBinding = vi.fn(async () => undefined);
     const deps = createDeps({
-      codexControlRequest,
+      requestCodexNativeTurnForBinding,
     });
 
     await expect(
@@ -1926,47 +2217,88 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Started Codex compaction for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(
-      undefined,
-      CODEX_CONTROL_METHODS.compact,
+    expect(requestCodexNativeTurnForBinding).toHaveBeenCalledWith(
       {
-        threadId: "thread-123",
-      },
-      {
+        bindingIdentity: identity,
+        bindingStore: testCodexAppServerBindingStore,
+        expectedBinding: expect.objectContaining({ threadId: "thread-123" }),
+        pluginConfig: undefined,
         agentDir: path.join(tempDir, "agents", "main", "agent"),
         authProfileId: undefined,
         config: {},
       },
+      "compact",
     );
+  });
+
+  it("restores binding facts when direct compaction is rejected", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const identity = {
+      kind: "session",
+      agentId: "main",
+      sessionId: "session-1",
+    } as const;
+    const expectedBinding: CodexAppServerThreadBinding = {
+      threadId: "thread-123",
+      cwd: "/repo",
+      nativeContextUsage: { currentTokens: 220_000 },
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+        },
+      },
+    };
+    await writeTestBinding(identity, expectedBinding);
+    const requestCodexNativeTurnForBinding = vi.fn(async () => {
+      throw new CodexAppServerRpcError(
+        { code: -32_000, message: "compaction rejected" },
+        "thread/compact/start",
+      );
+    });
+
+    await expect(
+      handleCodexCommand(createContext("compact", sessionFile), {
+        deps: createDeps({ requestCodexNativeTurnForBinding }),
+      }),
+    ).resolves.toEqual({ text: "Codex command failed: compaction rejected" });
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(expectedBinding);
   });
 
   it("starts review with the generated app-server target shape", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-123", cwd: "/repo" },
     );
-    const codexControlRequest = vi.fn(async () => ({}));
+    const requestCodexNativeTurnForBinding = vi.fn(async () => undefined);
 
     await expect(
       handleCodexCommand(createContext("review", sessionFile), {
-        deps: createDeps({ codexControlRequest }),
+        deps: createDeps({ requestCodexNativeTurnForBinding }),
       }),
     ).resolves.toEqual({
       text: "Started Codex review for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(
-      undefined,
-      CODEX_CONTROL_METHODS.review,
+    expect(requestCodexNativeTurnForBinding).toHaveBeenCalledWith(
       {
-        threadId: "thread-123",
-        target: { type: "uncommittedChanges" },
-      },
-      {
+        bindingIdentity: {
+          kind: "session",
+          agentId: "main",
+          sessionId: "session-1",
+        },
+        bindingStore: testCodexAppServerBindingStore,
+        expectedBinding: expect.objectContaining({ threadId: "thread-123" }),
+        pluginConfig: undefined,
         agentDir: path.join(tempDir, "agents", "main", "agent"),
         authProfileId: undefined,
         config: {},
       },
+      "review",
     );
   });
 
@@ -1993,14 +2325,12 @@ describe("codex command", () => {
 
   it("escapes started thread-action ids before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123 <@U123>", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-123 <@U123>", cwd: "/repo" },
     );
-    const codexControlRequest = vi.fn(async () => ({}));
-
     const result = await handleCodexCommand(createContext("compact", sessionFile), {
-      deps: createDeps({ codexControlRequest }),
+      deps: createDeps(),
     });
 
     expect(result.text).toContain("thread-123 &lt;\uff20U123&gt;");
@@ -2136,9 +2466,14 @@ describe("codex command", () => {
 
   it("asks before sending diagnostics feedback for the attached Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      },
+      { threadId: "thread-123", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
@@ -2231,14 +2566,46 @@ describe("codex command", () => {
           channel: "test",
         },
       },
+      {
+        config: {},
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      },
     );
+  });
+
+  it("rejects diagnostics confirmation when the thread auth scope changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+    await writeTestBinding(identity, {
+      threadId: "thread-auth-change",
+      cwd: "/repo",
+      authProfileId: "openai:first",
+    });
+    const safeCodexControlRequest = vi.fn();
+    const deps = createDeps({ safeCodexControlRequest });
+    const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+    const token = readDiagnosticsConfirmationToken(request);
+    await testCodexAppServerBindingStore.mutate(identity, {
+      kind: "patch",
+      threadId: "thread-auth-change",
+      patch: { authProfileId: "openai:second" },
+    });
+
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.",
+    });
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
   });
 
   it("rejects malformed diagnostics confirmation commands without consuming the token", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-confirm-args", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-confirm-args", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
@@ -2283,9 +2650,14 @@ describe("codex command", () => {
 
   it("previews exec-approved diagnostics upload without exposing Codex ids", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-preview", cwd: "/repo" }),
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-preview",
+        sessionKey: "agent:main:telegram:preview",
+      },
+      { threadId: "thread-preview", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
@@ -2321,9 +2693,14 @@ describe("codex command", () => {
 
   it("sends diagnostics feedback immediately after exec approval", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-approved", cwd: "/repo" }),
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-approved",
+        sessionKey: "agent:main:telegram:approved",
+      },
+      { threadId: "thread-approved", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
@@ -2367,19 +2744,33 @@ describe("codex command", () => {
           channel: "test",
         },
       },
+      {
+        config: {},
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        sessionId: "session-approved",
+        sessionKey: "agent:main:telegram:approved",
+      },
     );
   });
 
   it("uploads all Codex diagnostics sessions and reports their channel/thread breakdown", async () => {
-    const firstSessionFile = path.join(tempDir, "session-one.jsonl");
-    const secondSessionFile = path.join(tempDir, "session-two.jsonl");
-    await fs.writeFile(
-      `${firstSessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-111", cwd: "/repo" }),
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "first",
+        sessionId: "session-one",
+        sessionKey: "agent:first:whatsapp:one",
+      },
+      { threadId: "thread-111", cwd: "/repo", authProfileId: "openai:first" },
     );
-    await fs.writeFile(
-      `${secondSessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-222", cwd: "/repo" }),
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "second",
+        sessionId: "session-two",
+        sessionKey: "agent:second:discord:two",
+      },
+      { threadId: "thread-222", cwd: "/repo", authProfileId: "openai:second" },
     );
     const safeCodexControlRequest = vi.fn(async (configForTest, _method, requestParamsLocal) => ({
       ok: true as const,
@@ -2395,24 +2786,23 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
     const diagnosticsSessions = [
       {
-        sessionKey: "agent:main:whatsapp:one",
+        sessionKey: "agent:first:whatsapp:one",
         sessionId: "session-one",
-        sessionFile: firstSessionFile,
         channel: "whatsapp",
       },
       {
-        sessionKey: "agent:main:discord:two",
+        sessionKey: "agent:second:discord:two",
         sessionId: "session-two",
-        sessionFile: secondSessionFile,
         channel: "discord",
       },
     ];
 
     const request = await handleCodexCommand(
-      createContext("diagnostics multi-session repro", firstSessionFile, {
+      createContext("diagnostics multi-session repro", undefined, {
         senderId: "user-1",
         channel: "whatsapp",
-        sessionKey: "agent:main:whatsapp:one",
+        agentId: "first",
+        sessionKey: "agent:first:whatsapp:one",
         sessionId: "session-one",
         diagnosticsSessions,
       }),
@@ -2420,20 +2810,21 @@ describe("codex command", () => {
     );
     const token = readDiagnosticsConfirmationToken(request);
     expect(request.text).toContain("Codex runtime threads detected.");
-    expect(request.text).toContain("OpenClaw session key: `agent:main:whatsapp:one`");
+    expect(request.text).toContain("OpenClaw session key: `agent:first:whatsapp:one`");
     expect(request.text).toContain("OpenClaw session id: `session-one`");
     expect(request.text).toContain("Codex thread id: `thread-111`");
-    expect(request.text).toContain("OpenClaw session key: `agent:main:discord:two`");
+    expect(request.text).toContain("OpenClaw session key: `agent:second:discord:two`");
     expect(request.text).toContain("OpenClaw session id: `session-two`");
     expect(request.text).toContain("Codex thread id: `thread-222`");
     expect(safeCodexControlRequest).not.toHaveBeenCalled();
 
     await expect(
       handleCodexCommand(
-        createContext(`diagnostics confirm ${token}`, firstSessionFile, {
+        createContext(`diagnostics confirm ${token}`, undefined, {
           senderId: "user-1",
           channel: "whatsapp",
-          sessionKey: "agent:main:whatsapp:one",
+          agentId: "first",
+          sessionKey: "agent:first:whatsapp:one",
           sessionId: "session-one",
           diagnosticsSessions,
         }),
@@ -2445,7 +2836,7 @@ describe("codex command", () => {
         ...expectedDiagnosticsTargetBlock({
           index: 1,
           channel: "whatsapp",
-          sessionKey: "agent:main:whatsapp:one",
+          sessionKey: "agent:first:whatsapp:one",
           sessionId: "session-one",
           threadId: "thread-111",
         }),
@@ -2453,7 +2844,7 @@ describe("codex command", () => {
         ...expectedDiagnosticsTargetBlock({
           index: 2,
           channel: "discord",
-          sessionKey: "agent:main:discord:two",
+          sessionKey: "agent:second:discord:two",
           sessionId: "session-two",
           threadId: "thread-222",
         }),
@@ -2466,18 +2857,63 @@ describe("codex command", () => {
     const firstFeedbackParams = requestParams(safeCodexControlRequest);
     expect(firstFeedbackParams.threadId).toBe("thread-111");
     expect(firstFeedbackParams.includeLogs).toBe(true);
+    expect(mockArg(safeCodexControlRequest, 0, 3)).toEqual({
+      config: {},
+      agentDir: path.join(tempDir, "agents", "first", "agent"),
+      authProfileId: "openai:first",
+      sessionId: "session-one",
+      sessionKey: "agent:first:whatsapp:one",
+    });
     expect(mockArg(safeCodexControlRequest, 1, 0)).toBeUndefined();
     expect(mockArg(safeCodexControlRequest, 1, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
     const secondFeedbackParams = requestParams(safeCodexControlRequest, 1);
     expect(secondFeedbackParams.threadId).toBe("thread-222");
     expect(secondFeedbackParams.includeLogs).toBe(true);
+    expect(mockArg(safeCodexControlRequest, 1, 3)).toEqual({
+      config: {},
+      agentDir: path.join(tempDir, "agents", "second", "agent"),
+      authProfileId: "openai:second",
+      sessionId: "session-two",
+      sessionKey: "agent:second:discord:two",
+    });
+  });
+
+  it("uses the host agent for diagnostics inventory sessions with unscoped keys", async () => {
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "first",
+        sessionId: "session-global",
+        sessionKey: "global",
+      },
+      { threadId: "thread-global", cwd: "/repo" },
+    );
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics global repro", undefined, {
+        agentId: "first",
+        sessionId: undefined,
+        diagnosticsSessions: [
+          {
+            sessionKey: "global",
+            sessionId: "session-global",
+            channel: "telegram",
+          },
+        ],
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(request.text).toContain("Codex runtime thread detected.");
+    expect(request.text).toContain("OpenClaw session key: `global`");
+    expect(request.text).toContain("Codex thread id: `thread-global`");
   });
 
   it("requires an owner for Codex diagnostics feedback uploads", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-owner", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-owner", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
@@ -2499,9 +2935,9 @@ describe("codex command", () => {
 
   it("refuses diagnostics confirmations without a stable sender identity", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-sender-required", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-sender-required", cwd: "/repo" },
     );
 
     await expect(
@@ -2518,9 +2954,9 @@ describe("codex command", () => {
 
   it("keeps diagnostics confirmation scoped to the requesting sender", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-sender", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-sender", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
@@ -2556,17 +2992,15 @@ describe("codex command", () => {
       firstConfirmBindingReadStarted = resolve;
     });
     let bindingReadCount = 0;
-    const readCodexAppServerBinding = vi.fn(async (bindingSessionFile: string) => {
+    const readBinding = vi.fn(async () => {
       bindingReadCount += 1;
       if (bindingReadCount === 2) {
         firstConfirmBindingReadStarted();
         await firstConfirmBindingRead;
       }
       return {
-        schemaVersion: 2 as const,
         threadId: "thread-race",
         cwd: "/repo",
-        sessionFile: bindingSessionFile,
         createdAt: "2026-04-28T00:00:00.000Z",
         updatedAt: "2026-04-28T00:00:00.000Z",
       };
@@ -2575,7 +3009,10 @@ describe("codex command", () => {
       ok: true as const,
       value: { threadId: "thread-race" },
     }));
-    const deps = createDeps({ readCodexAppServerBinding, safeCodexControlRequest });
+    const deps = createDeps({
+      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      safeCodexControlRequest,
+    });
 
     const request = await handleCodexCommand(
       createContext("diagnostics", sessionFile, { senderId: "user-1" }),
@@ -2605,9 +3042,14 @@ describe("codex command", () => {
 
   it("keeps diagnostics confirmation scoped to account and channel identity", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-account", cwd: "/repo" }),
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "session-key-1",
+      },
+      { threadId: "thread-account", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
@@ -2646,10 +3088,13 @@ describe("codex command", () => {
 
   it("allows private-routed diagnostics confirmations from the owner DM", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-private", cwd: "/repo" }),
-    );
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "group-session",
+    };
+    await writeTestBinding(identity, { threadId: "thread-private", cwd: "/repo" });
     const safeCodexControlRequest = vi.fn(
       async (_pluginConfig: unknown, _method: string, _requestParams: unknown) => ({
         ok: true as const,
@@ -2685,6 +3130,7 @@ describe("codex command", () => {
         ...expectedDiagnosticsTargetBlock({
           channel: "test",
           sessionKey: "group-session",
+          sessionId: "session-1",
           threadId: "thread-private",
         }),
         "Included Codex logs and spawned Codex subthreads when available.",
@@ -2696,13 +3142,29 @@ describe("codex command", () => {
     expect(feedbackParams.classification).toBe("bug");
     expect(feedbackParams.threadId).toBe("thread-private");
     expect(feedbackParams.includeLogs).toBe(true);
+
+    await writeTestBinding(identity, { threadId: "thread-private-next", cwd: "/repo" });
+    const repeated = await handleCodexCommand(
+      createContext("diagnostics", sessionFile, {
+        accountId: "account-1",
+        channelId: "group-channel",
+        messageThreadId: "group-topic",
+        sessionKey: "group-session",
+        diagnosticsPrivateRouted: true,
+      }),
+      { deps },
+    );
+    expect(repeated.text).toContain(
+      "Codex diagnostics were already sent for this account or channel recently",
+    );
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
   });
 
   it("keeps diagnostics confirmation eviction scoped to account identity", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-confirm-scope", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-confirm-scope", cwd: "/repo" },
     );
 
     const firstRequest = await handleCodexCommand(
@@ -2738,6 +3200,7 @@ describe("codex command", () => {
         "Codex sessions:",
         ...expectedDiagnosticsTargetBlock({
           channel: "test",
+          sessionId: "session-1",
           threadId: "thread-confirm-scope",
         }),
       ].join("\n"),
@@ -2746,9 +3209,9 @@ describe("codex command", () => {
 
   it("bounds diagnostics notes before upload", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-789", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-789", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(
       async (_pluginConfig: unknown, _method: string, _requestParams: unknown) => ({
@@ -2773,9 +3236,9 @@ describe("codex command", () => {
 
   it("escapes diagnostics notes before showing approval text", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-note", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-note", cwd: "/repo" },
     );
 
     const request = await handleCodexCommand(
@@ -2792,9 +3255,9 @@ describe("codex command", () => {
 
   it("throttles repeated diagnostics uploads for the same thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-cooldown", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-cooldown", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
@@ -2813,6 +3276,7 @@ describe("codex command", () => {
         "Codex diagnostics sent to OpenAI servers:",
         ...expectedDiagnosticsTargetBlock({
           channel: "test",
+          sessionId: "session-1",
           threadId: "thread-cooldown",
         }),
         "Included Codex logs and spawned Codex subthreads when available.",
@@ -2834,9 +3298,9 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
     const sessionFile = path.join(tempDir, "global-cooldown-session.jsonl");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-global-1", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-global-1", cwd: "/repo" },
     );
     const request = await handleCodexCommand(createContext("diagnostics first", sessionFile), {
       deps,
@@ -2849,15 +3313,16 @@ describe("codex command", () => {
         "Codex diagnostics sent to OpenAI servers:",
         ...expectedDiagnosticsTargetBlock({
           channel: "test",
+          sessionId: "session-1",
           threadId: "thread-global-1",
         }),
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-global-2", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-global-2", cwd: "/repo" },
     );
     await expect(
       handleCodexCommand(createContext("diagnostics second", sessionFile), { deps }),
@@ -2876,9 +3341,9 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
     const sessionFile = path.join(tempDir, "scoped-cooldown-session.jsonl");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-scope-1", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-scope-1", cwd: "/repo" },
     );
     const firstRequest = await handleCodexCommand(
       createContext("diagnostics first", sessionFile, {
@@ -2897,9 +3362,9 @@ describe("codex command", () => {
     );
     expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-scope-2", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-scope-2", cwd: "/repo" },
     );
     const secondRequest = await handleCodexCommand(
       createContext("diagnostics second", sessionFile, {
@@ -2929,9 +3394,9 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
     const sessionFile = path.join(tempDir, "delimiter-cooldown-session.jsonl");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-delimiter-1", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-delimiter-1", cwd: "/repo" },
     );
     const firstScope = {
       accountId: "a",
@@ -2949,9 +3414,9 @@ describe("codex command", () => {
     );
     expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-delimiter-2", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-delimiter-2", cwd: "/repo" },
     );
     const secondScope = {
       accountId: "a|channelId:b",
@@ -2980,9 +3445,9 @@ describe("codex command", () => {
     const sessionFile = path.join(tempDir, "long-scope-cooldown-session.jsonl");
     const sharedPrefix = "account-".repeat(40);
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-long-scope-1", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-long-scope-1", cwd: "/repo" },
     );
     const firstScope = {
       accountId: `${sharedPrefix}first`,
@@ -2999,9 +3464,9 @@ describe("codex command", () => {
     );
     expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-long-scope-2", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-long-scope-2", cwd: "/repo" },
     );
     const secondScope = {
       accountId: `${sharedPrefix}second`,
@@ -3023,9 +3488,9 @@ describe("codex command", () => {
 
   it("sanitizes diagnostics upload errors before showing them", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "<@U123>", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "<@U123>", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: false as const,
@@ -3042,7 +3507,7 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Could not send Codex diagnostics:",
-        "- channel test, Codex thread &lt;\uff20U123&gt;: bad??? &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
+        "- channel test, OpenClaw session session-1, Codex thread &lt;\uff20U123&gt;: bad??? &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
         "Inspect locally:",
         "- run codex resume and paste the thread id shown above",
       ].join("\n"),
@@ -3051,9 +3516,9 @@ describe("codex command", () => {
 
   it("does not throttle diagnostics retries after upload failures", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-retry", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-retry", cwd: "/repo" },
     );
     const safeCodexControlRequest = vi
       .fn()
@@ -3072,7 +3537,7 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Could not send Codex diagnostics:",
-        "- channel test, Codex thread thread-retry: temporary outage",
+        "- channel test, OpenClaw session session-1, Codex thread thread-retry: temporary outage",
         "Inspect locally:",
         "- `codex resume thread-retry`",
       ].join("\n"),
@@ -3091,6 +3556,7 @@ describe("codex command", () => {
         "Codex diagnostics sent to OpenAI servers:",
         ...expectedDiagnosticsTargetBlock({
           channel: "test",
+          sessionId: "session-1",
           threadId: "thread-retry",
         }),
         "Included Codex logs and spawned Codex subthreads when available.",
@@ -3101,13 +3567,12 @@ describe("codex command", () => {
 
   it("omits inline diagnostics resume commands for unsafe thread ids", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      {
         threadId: "thread-123'`\n\u009b\u202e; echo bad",
         cwd: "/repo",
-      }),
+      },
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
@@ -3124,6 +3589,7 @@ describe("codex command", () => {
         "Codex diagnostics sent to OpenAI servers:",
         "Session 1",
         "Channel: test",
+        "OpenClaw session id: `session-1`",
         "Codex thread id: thread-123'\uff40???; echo bad",
         "Inspect locally: run codex resume and paste the thread id shown above",
         "Included Codex logs and spawned Codex subthreads when available.",
@@ -3159,10 +3625,15 @@ describe("codex command", () => {
         "  Resume: /codex resume thread-123",
       ].join("\n"),
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.listThreads, {
-      limit: 10,
-      searchTerm: "fix",
-    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.listThreads,
+      { limit: 10, searchTerm: "fix" },
+      expect.objectContaining({
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        sessionId: "session-1",
+      }),
+    );
   });
 
   it("escapes Codex thread fields and avoids unsafe resume commands", async () => {
@@ -3224,6 +3695,79 @@ describe("codex command", () => {
     expect(`${mcp.text}\n${skills.text}`).not.toContain("<@U123>");
     expect(`${mcp.text}\n${skills.text}`).not.toContain("[mcp](https://evil)");
     expect(`${mcp.text}\n${skills.text}`).not.toContain("@here");
+  });
+
+  it("scopes Codex read commands to the bound agent and auth profile", async () => {
+    const agentDir = path.join(tempDir, "agents", "worker", "agent");
+    const getCurrentConversationBinding = async () => ({
+      bindingId: "binding-1",
+      pluginId: "codex",
+      pluginRoot: "/plugin",
+      channel: "test",
+      accountId: "default",
+      conversationId: "conversation",
+      boundAt: 1,
+      data: {
+        kind: "codex-app-server-session" as const,
+        version: 2 as const,
+        bindingId: "binding-data-1",
+        workspaceDir: "/repo",
+        agentDir,
+        start: { id: "generation-1", authProfileId: "openai:work" },
+      },
+    });
+    const codexControlRequest = vi.fn(async (_pluginConfig: unknown, _method: string) => ({
+      data: [],
+    }));
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: {},
+    }));
+    const deps = createDeps({ codexControlRequest, safeCodexControlRequest });
+    const context = (args: string) =>
+      createContext(args, undefined, {
+        sessionKey: "agent:worker:session-1",
+        getCurrentConversationBinding,
+      });
+
+    await handleCodexCommand(context("mcp"), { deps });
+    await handleCodexCommand(context("skills"), { deps });
+    await handleCodexCommand(context("account"), { deps });
+
+    const expectedScope = expect.objectContaining({
+      agentDir,
+      authProfileId: "openai:work",
+      sessionKey: "agent:worker:session-1",
+      sessionId: "session-1",
+    });
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      CODEX_CONTROL_METHODS.listMcpServers,
+      { limit: 100 },
+      expectedScope,
+    );
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      CODEX_CONTROL_METHODS.listSkills,
+      {},
+      expectedScope,
+    );
+    expect(safeCodexControlRequest).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      CODEX_CONTROL_METHODS.account,
+      { refreshToken: false },
+      expectedScope,
+    );
+    expect(safeCodexControlRequest).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      CODEX_CONTROL_METHODS.rateLimits,
+      undefined,
+      expectedScope,
+    );
   });
 
   it("formats every Codex skill as a code-styled bullet and tolerates malformed entries", async () => {
@@ -3313,9 +3857,9 @@ describe("codex command", () => {
 
   it("returns sanitized command failures instead of leaking app-server errors", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-123", cwd: "/repo" },
     );
     const failure = () => {
       throw new Error("app-server failed <@U123> [trusted](https://evil) @here");
@@ -3335,9 +3879,8 @@ describe("codex command", () => {
       ["mcp", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["skills", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["resume thread-123", createDeps({ codexControlRequest: vi.fn(failure) })],
-      ["compact", createDeps({ codexControlRequest: vi.fn(failure) })],
-      ["review", createDeps({ codexControlRequest: vi.fn(failure) })],
-      ["bind", createDeps({ startCodexConversationThread: vi.fn(failure) })],
+      ["compact", createDeps({ requestCodexNativeTurnForBinding: vi.fn(failure) })],
+      ["review", createDeps({ requestCodexNativeTurnForBinding: vi.fn(failure) })],
       ["stop", createDeps({ stopCodexConversationTurn: vi.fn(failure) })],
       ["steer keep going", createDeps({ steerCodexConversationTurn: vi.fn(failure) })],
       ["model gpt-5.4", createDeps({ setCodexConversationModel: vi.fn(failure) })],
@@ -3346,24 +3889,17 @@ describe("codex command", () => {
     }
   });
 
-  it("binds the current conversation to a Codex app-server thread", async () => {
+  it("records an approved Codex bind intent without starting a thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      {
         threadId: "thread-123",
         cwd: "/repo",
         authProfileId: "openai:work",
         modelProvider: "openai",
-      }),
+      },
     );
-    const startCodexConversationThread = vi.fn(async () => ({
-      kind: "codex-app-server-session" as const,
-      version: 1 as const,
-      sessionFile,
-      workspaceDir: "/repo",
-    }));
     const requestConversationBinding = vi.fn(async (_request?: { summary?: string }) => ({
       status: "bound" as const,
       binding: {
@@ -3388,47 +3924,194 @@ describe("codex command", () => {
         ),
         {
           deps: createDeps({
-            startCodexConversationThread,
             resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
           }),
         },
       ),
     ).resolves.toEqual({
-      text: "Bound this conversation to Codex thread thread-123 in /repo.",
-    });
-    expect(startCodexConversationThread).toHaveBeenCalledWith({
-      pluginConfig: undefined,
-      config: {},
-      sessionFile,
-      workspaceDir: "/repo",
-      agentDir: path.join(tempDir, "agents", "main", "agent"),
-      sessionKey: undefined,
-      agentId: "main",
-      threadId: "thread-123",
-      model: "gpt-5.4",
-      modelProvider: "openai",
-      authProfileId: "openai:work",
+      text: "Bound this conversation to thread-123 in /repo. The next message will initialize it.",
     });
     expect(requestConversationBinding).toHaveBeenCalledWith({
       summary: "Codex app-server thread thread-123 in /repo",
       detachHint: "/codex detach",
       data: {
         kind: "codex-app-server-session",
-        version: 1,
-        sessionFile,
+        version: 2,
+        bindingId: expect.any(String),
         workspaceDir: "/repo",
+        agentId: "main",
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        source: {
+          agentId: "main",
+          sessionId: "session-1",
+          threadId: "thread-123",
+        },
+        start: {
+          id: expect.any(String),
+          threadId: "thread-123",
+          model: "gpt-5.4",
+          modelProvider: "openai",
+          authProfileId: "openai:work",
+        },
       },
     });
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-123" });
+  });
+
+  it("does not transfer a replacement session thread while recording bind intent", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+    await writeTestBinding(identity, { threadId: "thread-old", cwd: "/repo" });
+    let requestedData: Record<string, unknown> | undefined;
+    const requestConversationBinding = vi.fn(
+      async (request?: { data?: Record<string, unknown> }) => {
+        requestedData = request?.data;
+        await writeTestBinding(identity, { threadId: "thread-new", cwd: "/repo" });
+        return {
+          status: "bound" as const,
+          binding: {
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: "/plugin",
+            channel: "test",
+            accountId: "default",
+            conversationId: "conversation",
+            boundAt: 1,
+          },
+        };
+      },
+    );
+
+    await handleCodexCommand(
+      createContext("bind thread-target --cwd /repo", sessionFile, {
+        requestConversationBinding,
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(requestedData).toMatchObject({
+      source: {
+        agentId: "main",
+        sessionId: "session-1",
+        threadId: "thread-old",
+      },
+    });
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: "thread-new",
+    });
+  });
+
+  it("reuses the existing owner for a lazy Codex rebind", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      { threadId: "thread-old", cwd: "/old-repo", authProfileId: "openai:work" },
+    );
+    const requestConversationBinding = vi.fn(async () => ({
+      status: "bound" as const,
+      binding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: "/plugin",
+        channel: "test",
+        accountId: "default",
+        conversationId: "conversation",
+        boundAt: Date.now(),
+      },
+    }));
+    const getCurrentConversationBinding = vi.fn(async () => ({
+      bindingId: "binding-1",
+      pluginId: "codex",
+      pluginRoot: "/plugin",
+      channel: "test",
+      accountId: "default",
+      conversationId: "conversation",
+      boundAt: Date.now(),
+      data: {
+        kind: "codex-app-server-session",
+        version: 2,
+        bindingId: "binding-data-1",
+        workspaceDir: "/old-repo",
+      },
+    }));
+
+    await handleCodexCommand(
+      createContext("bind thread-456 --cwd /repo", sessionFile, {
+        getCurrentConversationBinding,
+        requestConversationBinding,
+      }),
+      { deps: createDeps({ resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default") }) },
+    );
+
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "conversation",
+        bindingId: "binding-data-1",
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-old" });
+    expect(requestConversationBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          bindingId: "binding-data-1",
+          start: expect.objectContaining({
+            id: expect.any(String),
+            threadId: "thread-456",
+            authProfileId: "openai:work",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("preserves the current Codex conversation owner when refresh fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      { threadId: "thread-old", cwd: "/old-repo" },
+    );
+    const getCurrentConversationBinding = vi.fn(async () => ({
+      bindingId: "binding-1",
+      pluginId: "codex",
+      pluginRoot: "/plugin",
+      channel: "test",
+      accountId: "default",
+      conversationId: "conversation",
+      boundAt: Date.now(),
+      data: {
+        kind: "codex-app-server-session",
+        version: 2,
+        bindingId: "binding-data-1",
+        workspaceDir: "/old-repo",
+      },
+    }));
+
+    const result = await handleCodexCommand(
+      createContext("bind thread-456 --cwd /repo", sessionFile, {
+        getCurrentConversationBinding,
+        requestConversationBinding: async () => {
+          throw new Error("binding refresh failed");
+        },
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(result.text).toContain("binding refresh failed");
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "conversation",
+        bindingId: "binding-data-1",
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-old" });
   });
 
   it("binds quoted workspace paths that contain spaces", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const startCodexConversationThread = vi.fn(async () => ({
-      kind: "codex-app-server-session" as const,
-      version: 1 as const,
-      sessionFile,
-      workspaceDir: "/repo with space",
-    }));
     const requestConversationBinding = vi.fn(async (_request?: { summary?: string }) => ({
       status: "bound" as const,
       binding: {
@@ -3449,38 +4132,24 @@ describe("codex command", () => {
         }),
         {
           deps: createDeps({
-            startCodexConversationThread,
             resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
           }),
         },
       ),
     ).resolves.toEqual({
-      text: "Bound this conversation to Codex thread thread-123 in /repo with space.",
+      text: "Bound this conversation to thread-123 in /repo with space. The next message will initialize it.",
     });
-    expect(startCodexConversationThread).toHaveBeenCalledWith({
-      pluginConfig: undefined,
-      config: {},
-      sessionFile,
-      workspaceDir: "/repo with space",
-      agentDir: path.join(tempDir, "agents", "main", "agent"),
-      sessionKey: undefined,
-      agentId: "main",
-      threadId: "thread-123",
-      model: undefined,
-      modelProvider: undefined,
-    });
+    expect(requestConversationBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ workspaceDir: "/repo with space" }),
+      }),
+    );
   });
 
   it("escapes bound Codex thread ids and workspace paths before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const unsafeThread = "thread-123 <@U123>";
     const unsafeWorkspace = "/repo [trusted](https://evil)";
-    const startCodexConversationThread = vi.fn(async () => ({
-      kind: "codex-app-server-session" as const,
-      version: 1 as const,
-      sessionFile,
-      workspaceDir: unsafeWorkspace,
-    }));
     const requestConversationBinding = vi.fn(async (_request?: { summary?: string }) => ({
       status: "bound" as const,
       binding: {
@@ -3500,7 +4169,6 @@ describe("codex command", () => {
       }),
       {
         deps: createDeps({
-          startCodexConversationThread,
           resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
         }),
       },
@@ -3518,7 +4186,6 @@ describe("codex command", () => {
 
   it("rejects bind options with missing, blank, or repeated values before starting Codex", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const startCodexConversationThread = vi.fn();
     const requestConversationBinding = vi.fn();
 
     await expect(
@@ -3528,7 +4195,6 @@ describe("codex command", () => {
         }),
         {
           deps: createDeps({
-            startCodexConversationThread,
             resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
           }),
         },
@@ -3543,7 +4209,6 @@ describe("codex command", () => {
         }),
         {
           deps: createDeps({
-            startCodexConversationThread,
             resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
           }),
         },
@@ -3558,7 +4223,6 @@ describe("codex command", () => {
         }),
         {
           deps: createDeps({
-            startCodexConversationThread,
             resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
           }),
         },
@@ -3566,56 +4230,66 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     });
-    expect(startCodexConversationThread).not.toHaveBeenCalled();
     expect(requestConversationBinding).not.toHaveBeenCalled();
   });
 
   it("rejects malformed bind arguments before requiring a session file", async () => {
-    const startCodexConversationThread = vi.fn();
-
     await expect(
       handleCodexCommand(createContext("bind thread-123 --cwd", undefined), {
         deps: createDeps({
-          startCodexConversationThread,
           resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
         }),
       }),
     ).resolves.toEqual({
       text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     });
-    expect(startCodexConversationThread).not.toHaveBeenCalled();
   });
 
   it("returns the binding approval reply when conversation bind needs approval", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-before-approval", cwd: "/repo" },
+    );
     const reply = { text: "Approve this?" };
+    const requestConversationBinding = vi.fn(async () => ({
+      status: "pending" as const,
+      approvalId: "approval-1",
+      reply,
+    }));
     await expect(
       handleCodexCommand(
         createContext("bind", sessionFile, {
-          requestConversationBinding: async () => ({
-            status: "pending",
-            approvalId: "approval-1",
-            reply,
-          }),
+          requestConversationBinding,
         }),
         {
           deps: createDeps({
-            startCodexConversationThread: vi.fn(async () => ({
-              kind: "codex-app-server-session" as const,
-              version: 1 as const,
-              sessionFile,
-              workspaceDir: "/default",
-            })),
             resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
           }),
         },
       ),
     ).resolves.toEqual(reply);
+    const request = mockArg(requestConversationBinding, 0, 0) as {
+      data?: { bindingId?: string };
+    };
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "conversation",
+        bindingId: request.data?.bindingId ?? "missing",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-before-approval" });
   });
 
-  it("clears the Codex app-server thread binding when conversation bind fails", async () => {
+  it("does not start Codex when conversation binding is rejected", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const clearCodexAppServerBinding = vi.fn(async () => {});
+    const clearBinding = vi.fn(async () => true);
 
     await expect(
       handleCodexCommand(
@@ -3627,13 +4301,7 @@ describe("codex command", () => {
         }),
         {
           deps: createDeps({
-            clearCodexAppServerBinding,
-            startCodexConversationThread: vi.fn(async () => ({
-              kind: "codex-app-server-session" as const,
-              version: 1 as const,
-              sessionFile,
-              workspaceDir: "/default",
-            })),
+            bindingStore: { ...testCodexAppServerBindingStore, mutate: clearBinding },
             resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
           }),
         },
@@ -3641,12 +4309,12 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "binding unsupported &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09",
     });
-    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile);
+    expect(clearBinding).not.toHaveBeenCalled();
   });
 
   it("detaches the current conversation and clears the Codex app-server thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const clearCodexAppServerBinding = vi.fn(async () => {});
+    const clearBinding = vi.fn(async () => true);
     const detachConversationBinding = vi.fn(async () => ({ removed: true }));
 
     await expect(
@@ -3663,24 +4331,31 @@ describe("codex command", () => {
             boundAt: 1,
             data: {
               kind: "codex-app-server-session",
-              version: 1,
-              sessionFile,
+              version: 2,
+              bindingId: "binding-data-1",
               workspaceDir: "/repo",
             },
           }),
         }),
-        { deps: createDeps({ clearCodexAppServerBinding }) },
+        {
+          deps: createDeps({
+            bindingStore: { ...testCodexAppServerBindingStore, mutate: clearBinding },
+          }),
+        },
       ),
     ).resolves.toEqual({
       text: "Detached this conversation from Codex.",
     });
     expect(detachConversationBinding).toHaveBeenCalled();
-    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile);
+    expect(clearBinding).toHaveBeenCalledWith(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      { kind: "clear" },
+    );
   });
 
   it("rejects malformed detach commands before clearing bindings", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const clearCodexAppServerBinding = vi.fn();
+    const clearBinding = vi.fn();
     const detachConversationBinding = vi.fn();
 
     await expect(
@@ -3688,13 +4363,17 @@ describe("codex command", () => {
         createContext("detach now", sessionFile, {
           detachConversationBinding,
         }),
-        { deps: createDeps({ clearCodexAppServerBinding }) },
+        {
+          deps: createDeps({
+            bindingStore: { ...testCodexAppServerBindingStore, mutate: clearBinding },
+          }),
+        },
       ),
     ).resolves.toEqual({
       text: "Usage: /codex detach",
     });
     expect(detachConversationBinding).not.toHaveBeenCalled();
-    expect(clearCodexAppServerBinding).not.toHaveBeenCalled();
+    expect(clearBinding).not.toHaveBeenCalled();
   });
 
   it("stops the active bound Codex turn", async () => {
@@ -3710,10 +4389,7 @@ describe("codex command", () => {
       }),
     ).resolves.toEqual({ text: "Codex stop requested." });
     expect(stopCodexConversationTurn).toHaveBeenCalledWith({
-      sessionFile,
-      pluginConfig: undefined,
-      agentDir: path.join(tempDir, "agents", "main", "agent"),
-      config: {},
+      identity: { kind: "session", agentId: "main", sessionId: "session-1" },
     });
   });
 
@@ -3730,10 +4406,12 @@ describe("codex command", () => {
       }),
     ).resolves.toEqual({ text: "Codex stop requested." });
     expect(stopCodexConversationTurn).toHaveBeenCalledWith({
-      sessionFile,
-      pluginConfig: undefined,
-      agentDir: path.join(tempDir, "agents", "main", "agent"),
-      config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      identity: {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "sandboxed-session",
+      },
     });
   });
 
@@ -3762,11 +4440,8 @@ describe("codex command", () => {
       }),
     ).resolves.toEqual({ text: "Sent steer message to Codex." });
     expect(steerCodexConversationTurn).toHaveBeenCalledWith({
-      sessionFile,
-      pluginConfig: undefined,
+      identity: { kind: "session", agentId: "main", sessionId: "session-1" },
       message: "focus tests first",
-      agentDir: path.join(tempDir, "agents", "main", "agent"),
-      config: {},
     });
   });
 
@@ -3794,38 +4469,34 @@ describe("codex command", () => {
     ).resolves.toEqual({ text: "Codex permissions set to full access." });
 
     expect(setCodexConversationModel).toHaveBeenCalledWith({
-      sessionFile,
+      identity: { kind: "session", agentId: "main", sessionId: "session-1" },
+      bindingStore: testCodexAppServerBindingStore,
       pluginConfig: undefined,
       model: "gpt-5.4",
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       config: {},
     });
     expect(setCodexConversationFastMode).toHaveBeenCalledWith({
-      sessionFile,
-      pluginConfig: undefined,
+      identity: { kind: "session", agentId: "main", sessionId: "session-1" },
+      bindingStore: testCodexAppServerBindingStore,
       enabled: true,
-      agentDir: path.join(tempDir, "agents", "main", "agent"),
-      config: {},
     });
     expect(setCodexConversationPermissions).toHaveBeenCalledWith({
-      sessionFile,
-      pluginConfig: undefined,
+      identity: { kind: "session", agentId: "main", sessionId: "session-1" },
+      bindingStore: testCodexAppServerBindingStore,
       mode: "yolo",
-      agentDir: path.join(tempDir, "agents", "main", "agent"),
-      config: {},
     });
   });
 
   it("escapes current bound model status before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      {
         threadId: "thread-model",
         cwd: "/repo",
         model: "model_<@U123>_[trusted](https://evil)",
-      }),
+      },
     );
 
     const result = await handleCodexCommand(createContext("model", sessionFile), {
@@ -3897,7 +4568,6 @@ describe("codex command", () => {
   });
 
   it("uses current plugin binding data for follow-up control commands", async () => {
-    const hostSessionFile = path.join(tempDir, "host-session.jsonl");
     const pluginSessionFile = path.join(tempDir, "plugin-session.jsonl");
     const setCodexConversationFastMode = vi.fn(async () => "Codex fast mode enabled.");
 
@@ -3914,8 +4584,8 @@ describe("codex command", () => {
             boundAt: 1,
             data: {
               kind: "codex-app-server-session",
-              version: 1,
-              sessionFile: hostSessionFile,
+              version: 2,
+              bindingId: "binding-data-1",
               workspaceDir: tempDir,
             },
           }),
@@ -3929,27 +4599,24 @@ describe("codex command", () => {
     ).resolves.toEqual({ text: "Codex fast mode enabled." });
 
     expect(setCodexConversationFastMode).toHaveBeenCalledWith({
-      sessionFile: hostSessionFile,
-      pluginConfig: undefined,
+      identity: { kind: "conversation", bindingId: "binding-data-1" },
+      bindingStore: testCodexAppServerBindingStore,
       enabled: true,
-      agentDir: path.join(tempDir, "agents", "main", "agent"),
-      config: {},
     });
   });
 
   it("describes active binding preferences", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      {
         threadId: "thread-123",
         cwd: "/repo",
         model: "gpt-5.4",
         serviceTier: "fast",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
-      }),
+      },
     );
 
     await expect(
@@ -3965,8 +4632,8 @@ describe("codex command", () => {
             boundAt: 1,
             data: {
               kind: "codex-app-server-session",
-              version: 1,
-              sessionFile,
+              version: 2,
+              bindingId: "binding-data-1",
               workspaceDir: "/repo",
             },
           }),
@@ -3974,9 +4641,11 @@ describe("codex command", () => {
         {
           deps: createDeps({
             readCodexConversationActiveTurn: vi.fn(() => ({
-              sessionFile,
+              identity: { kind: "conversation" as const, bindingId: "binding-data-1" },
               threadId: "thread-123",
               turnId: "turn-1",
+              interrupt: vi.fn(),
+              steer: vi.fn(),
             })),
           }),
         },
@@ -3990,21 +4659,20 @@ describe("codex command", () => {
         "- Fast: on",
         "- Permissions: full access",
         "- Active run: turn-1",
-        `- Session: ${sessionFile.replaceAll("_", "\uff3f")}`,
+        "- Binding: binding-data-1",
       ].join("\n"),
     });
   });
 
   it("escapes active binding fields before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      {
         threadId: "thread-123 <@U123>",
         cwd: "/repo",
         model: "gpt [trusted](https://evil)",
-      }),
+      },
     );
 
     const result = await handleCodexCommand(
@@ -4019,8 +4687,8 @@ describe("codex command", () => {
           boundAt: 1,
           data: {
             kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
+            version: 2,
+            bindingId: "binding-data-1",
             workspaceDir: "/repo <@U123>",
           },
         }),

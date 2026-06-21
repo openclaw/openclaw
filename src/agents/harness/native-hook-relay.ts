@@ -189,6 +189,7 @@ type NativeHookRelayProviderAdapter = {
     decision: NativeHookRelayPermissionDecision,
     message?: string,
   ) => NativeHookRelayProcessResponse;
+  shouldDeferPermissionRequest: (invocation: NativeHookRelayInvocation) => boolean;
 };
 
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
@@ -403,6 +404,9 @@ const nativeHookRelayProviderAdapters: Record<
       stderr: "",
       exitCode: 0,
     }),
+    // Codex runs PermissionRequest before its guarded reviewer. The payload carries
+    // the active turn policy, so guarded turns defer instead of double-prompting.
+    shouldDeferPermissionRequest: (invocation) => invocation.permissionMode === "default",
   },
 };
 
@@ -1462,6 +1466,9 @@ async function runNativeHookRelayPermissionRequest(params: {
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
+  if (params.adapter.shouldDeferPermissionRequest(params.invocation)) {
+    return params.adapter.renderNoopResponse(params.invocation.event);
+  }
   const request: NativeHookRelayPermissionApprovalRequest = {
     provider: params.registration.provider,
     ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),

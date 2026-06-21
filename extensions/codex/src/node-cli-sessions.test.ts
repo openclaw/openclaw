@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_SESSIONS_LIST_COMMAND,
   createCodexCliSessionNodeHostCommands,
+} from "./node-cli-session-registration.js";
+import {
   listCodexCliSessionsOnNode,
   resolveCodexCliResumeSpawnInvocation,
 } from "./node-cli-sessions.js";

@@ -30,15 +30,18 @@ function resolveBindingChannel(ctx: BindingMsgContext, commandChannel?: string |
   return normalizeLowercaseStringOrEmpty(normalizeConversationText(raw));
 }
 
+function resolveBindingChannelPlugin(ctx: BindingMsgContext, commandChannel?: string | null) {
+  const channel = resolveBindingChannel(ctx, commandChannel);
+  return getActivePluginChannelRegistry()?.channels.find((entry) => entry.plugin.id === channel)
+    ?.plugin;
+}
+
 function resolveBindingAccountId(params: {
   ctx: BindingMsgContext;
   cfg: OpenClawConfig;
   commandChannel?: string | null;
 }): string {
-  const channel = resolveBindingChannel(params.ctx, params.commandChannel);
-  const plugin = getActivePluginChannelRegistry()?.channels.find(
-    (entry) => entry.plugin.id === channel,
-  )?.plugin;
+  const plugin = resolveBindingChannelPlugin(params.ctx, params.commandChannel);
   const accountId = normalizeConversationText(params.ctx.AccountId);
   return (
     accountId ||
@@ -52,23 +55,20 @@ function resolveBindingThreadId(threadId: string | number | null | undefined): s
   return normalized || undefined;
 }
 
-export function resolveConversationBindingContextFromMessage(params: {
+function resolveConversationBindingContextFromChannelContext(params: {
   cfg: OpenClawConfig;
   ctx: BindingMsgContext;
   senderId?: string | null;
   sessionKey?: string | null;
   parentSessionKey?: string | null;
+  commandChannel?: string | null;
   commandTo?: string | null;
 }): ReturnType<typeof resolveConversationBindingContext> {
-  const channel = resolveBindingChannel(params.ctx);
+  const channel = resolveBindingChannel(params.ctx, params.commandChannel);
   return resolveConversationBindingContext({
     cfg: params.cfg,
     channel,
-    accountId: resolveBindingAccountId({
-      ctx: params.ctx,
-      cfg: params.cfg,
-      commandChannel: channel,
-    }),
+    accountId: normalizeConversationText(params.ctx.AccountId) || undefined,
     chatType: params.ctx.ChatType,
     threadId: resolveBindingThreadId(params.ctx.MessageThreadId),
     threadParentId: params.ctx.ThreadParentId,
@@ -83,17 +83,39 @@ export function resolveConversationBindingContextFromMessage(params: {
   });
 }
 
+export function resolveConversationBindingContextFromMessage(params: {
+  cfg: OpenClawConfig;
+  ctx: BindingMsgContext;
+}): ReturnType<typeof resolveConversationBindingContext> {
+  return resolveConversationBindingContextFromChannelContext(params);
+}
+
 export function resolveConversationBindingContextFromAcpCommand(
   params: HandleCommandsParams,
 ): ReturnType<typeof resolveConversationBindingContext> {
-  return resolveConversationBindingContextFromMessage({
+  return resolveConversationBindingContextFromChannelContext({
     cfg: params.cfg,
     ctx: params.ctx,
     senderId: params.command.senderId,
     sessionKey: params.sessionKey,
     parentSessionKey: params.ctx.ParentSessionKey,
+    commandChannel: params.command.channel,
     commandTo: params.command.to,
   });
+}
+
+/** Resolves plugin command binding APIs only for channels that can identify the current conversation. */
+export function resolvePluginCommandConversationBindingContext(
+  params: HandleCommandsParams,
+): ReturnType<typeof resolveConversationBindingContext> {
+  const plugin = resolveBindingChannelPlugin(params.ctx, params.command.channel);
+  const supportsCurrentConversationBinding =
+    plugin?.conversationBindings?.supportsCurrentConversationBinding === true ||
+    plugin?.bindings?.resolveCommandConversation !== undefined;
+  if (!supportsCurrentConversationBinding) {
+    return null;
+  }
+  return resolveConversationBindingContextFromAcpCommand(params);
 }
 
 export function resolveConversationBindingChannelFromMessage(

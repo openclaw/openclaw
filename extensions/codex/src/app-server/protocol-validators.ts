@@ -8,7 +8,6 @@ import errorNotificationSchema from "./protocol-generated/json/v2/ErrorNotificat
 import modelListResponseSchema from "./protocol-generated/json/v2/ModelListResponse.json" with { type: "json" };
 import threadResumeResponseSchema from "./protocol-generated/json/v2/ThreadResumeResponse.json" with { type: "json" };
 import threadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
-import turnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
 import turnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
 import type {
   CodexDynamicToolCallParams,
@@ -18,7 +17,6 @@ import type {
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurn,
-  CodexTurnCompletedNotification,
   CodexTurnStartResponse,
 } from "./protocol.js";
 
@@ -221,9 +219,6 @@ const validateThreadResumeResponse = compileCodexSchema<CodexThreadResumeRespons
 );
 const validateThreadStartResponse =
   compileCodexSchema<CodexThreadStartResponse>(threadStartResponseSchema);
-const validateTurnCompletedNotification = compileCodexSchema<CodexTurnCompletedNotification>(
-  turnCompletedNotificationSchema,
-);
 const validateTurnStartResponse =
   compileCodexSchema<CodexTurnStartResponse>(turnStartResponseSchema);
 
@@ -298,19 +293,6 @@ export function readCodexTurn(value: unknown): CodexTurn | undefined {
   return response?.turn;
 }
 
-/** Reads a Codex turn/completed notification payload if it matches the protocol schema. */
-export function readCodexTurnCompletedNotification(
-  value: unknown,
-): CodexTurnCompletedNotification | undefined {
-  return readCodexShape(
-    validateTurnCompletedNotification,
-    normalizeWithDefaults(
-      turnCompletedNotificationSchema,
-      normalizeTurnCompletedNotification(value),
-    ),
-  );
-}
-
 function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label: string): T {
   if (validate.check(value)) {
     return value;
@@ -375,24 +357,11 @@ function normalizeThreadResponse(value: unknown): unknown {
     if (typeof t.id === "string" && typeof t.sessionId !== "string") {
       return { ...value, thread: { ...thread, sessionId: t.id } };
     }
-    if (typeof t.sessionId === "string" && typeof t.id !== "string") {
-      return { ...value, thread: { ...thread, id: t.sessionId } };
-    }
   }
   return value;
 }
 
 function normalizeTurnStartResponse(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
-    return value;
-  }
-  return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
-  };
-}
-
-function normalizeTurnCompletedNotification(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
     return value;
   }

@@ -50,6 +50,78 @@ describe("CodexAppServerClient", () => {
     expect(outbound.method).toBe("model/list");
   });
 
+  it("keeps a shared thread subscribed until every local owner releases it", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const firstResume = harness.client.request("thread/resume", { threadId: "thread-1" });
+    const secondResume = harness.client.request("thread/resume", { threadId: "thread-1" });
+    const [firstRequest, secondRequest] = harness.writes.map((line) => JSON.parse(line)) as Array<{
+      id: number;
+    }>;
+    const resumeResult = {
+      thread: { id: "thread-1", cwd: "/tmp", status: { type: "idle" } },
+      model: "gpt-5.5",
+    };
+    harness.send({ id: firstRequest?.id, result: resumeResult });
+    harness.send({ id: secondRequest?.id, result: resumeResult });
+    await Promise.all([firstResume, secondResume]);
+
+    await expect(
+      harness.client.request("thread/unsubscribe", { threadId: "thread-1" }),
+    ).resolves.toEqual({ status: "unsubscribed" });
+    expect(harness.writes).toHaveLength(2);
+
+    const finalRelease = harness.client.request("thread/unsubscribe", {
+      threadId: "thread-1",
+    });
+    const releaseRequest = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };
+    harness.send({ id: releaseRequest.id, result: { status: "unsubscribed" } });
+    await expect(finalRelease).resolves.toEqual({ status: "unsubscribed" });
+    expect(harness.writes).toHaveLength(3);
+  });
+
+  it("pairs written resume failures without retaining pre-aborted requests", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const firstResume = harness.client.request("thread/resume", { threadId: "thread-1" });
+    const firstRequest = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: firstRequest.id,
+      result: {
+        thread: { id: "thread-1", cwd: "/tmp", status: { type: "idle" } },
+        model: "gpt-5.5",
+      },
+    });
+    await firstResume;
+
+    const failedResume = harness.client.request("thread/resume", { threadId: "thread-1" });
+    const failedRequest = JSON.parse(harness.writes[1] ?? "{}") as { id?: number };
+    harness.send({ id: failedRequest.id, error: { code: -32000, message: "resume failed" } });
+    await expect(failedResume).rejects.toThrow("resume failed");
+
+    await expect(
+      harness.client.request("thread/unsubscribe", { threadId: "thread-1" }),
+    ).resolves.toEqual({ status: "unsubscribed" });
+    expect(harness.writes).toHaveLength(2);
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      harness.client.request(
+        "thread/resume",
+        { threadId: "thread-1" },
+        { signal: controller.signal },
+      ),
+    ).rejects.toThrow("thread/resume aborted");
+    const unsubscribe = harness.client.request("thread/unsubscribe", { threadId: "thread-1" });
+    expect(harness.writes).toHaveLength(3);
+    const unsubscribeRequest = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };
+    harness.send({ id: unsubscribeRequest.id, result: { status: "unsubscribed" } });
+    await expect(unsubscribe).resolves.toEqual({ status: "unsubscribed" });
+  });
+
   it("removes unpaired surrogate code units from outbound JSON-RPC strings", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -70,9 +142,9 @@ describe("CodexAppServerClient", () => {
     expect(outbound.params?.nested).toEqual(["lowend", "emoji 🙈 ok"]);
     harness.send({
       id: JSON.parse(harness.writes[0] ?? "{}").id,
-      result: { threadId: "thread-1" },
+      result: { thread: { id: "thread-1" } },
     });
-    await expect(request).resolves.toEqual({ threadId: "thread-1" });
+    await expect(request).resolves.toEqual({ thread: { id: "thread-1" } });
   });
 
   it("logs a redacted preview for malformed app-server messages", async () => {
@@ -138,6 +210,30 @@ describe("CodexAppServerClient", () => {
       ]),
     );
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("contains synchronous notification handler failures and continues fanout", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const laterHandler = vi.fn();
+    harness.client.addNotificationHandler(() => {
+      throw new Error("handler exploded");
+    });
+    harness.client.addNotificationHandler(laterHandler);
+
+    expect(() =>
+      harness.send({
+        method: "item/commandExecution/outputDelta",
+        params: { delta: "still routed" },
+      }),
+    ).not.toThrow();
+
+    await vi.waitFor(() => expect(laterHandler).toHaveBeenCalledTimes(1));
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server notification handler failed",
+      expect.objectContaining({ error: expect.any(Error) }),
+    );
   });
 
   it("preserves JSON-RPC error codes", async () => {
@@ -218,6 +314,95 @@ describe("CodexAppServerClient", () => {
     await assertion;
     harness.send({ id: outbound.id, result: { data: [] } });
     expect(harness.writes).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      method: "thread/start" as const,
+      params: {},
+      abandonment: "timeout" as const,
+      expectedError: "thread/start timed out",
+    },
+    {
+      method: "thread/fork" as const,
+      params: { threadId: "parent-thread" },
+      abandonment: "abort" as const,
+      expectedError: "thread/fork aborted",
+    },
+  ])("unsubscribes a late successful $method after local $abandonment", async (testCase) => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const controller = new AbortController();
+    const options =
+      testCase.abandonment === "timeout" ? { timeoutMs: 1 } : { signal: controller.signal };
+    const request = harness.client.request(testCase.method, testCase.params, options);
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const rejected = expect(request).rejects.toThrow(testCase.expectedError);
+
+    if (testCase.abandonment === "timeout") {
+      await vi.advanceTimersByTimeAsync(100);
+    } else {
+      controller.abort();
+    }
+    await rejected;
+
+    harness.send({ id: outbound.id, result: { thread: { id: "late-thread" } } });
+    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({
+      id: expect.any(Number),
+      method: "thread/unsubscribe",
+      params: { threadId: "late-thread" },
+    });
+  });
+
+  it("closes when a late thread creation subscription cannot be released", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const controller = new AbortController();
+    const request = harness.client.request("thread/start", {}, { signal: controller.signal });
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const rejected = expect(request).rejects.toThrow("thread/start aborted");
+
+    controller.abort();
+    await rejected;
+    harness.send({ id: outbound.id, result: { thread: { id: "late-thread" } } });
+    const unsubscribe = JSON.parse(harness.writes[1] ?? "{}") as { id?: number };
+    harness.send({
+      id: unsubscribe.id,
+      error: { code: -32_000, message: "unsubscribe failed" },
+    });
+
+    await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true));
+  });
+
+  it("does not unsubscribe a late rejected thread creation", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const controller = new AbortController();
+    const request = harness.client.request("thread/start", {}, { signal: controller.signal });
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const rejected = expect(request).rejects.toThrow("thread/start aborted");
+
+    controller.abort();
+    await rejected;
+    harness.send({ id: outbound.id, error: { code: -32000, message: "start failed" } });
+
+    expect(harness.writes).toHaveLength(1);
+  });
+
+  it("closes after the bounded late-creation cleanup ledger fills", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    for (let index = 0; index < 129; index += 1) {
+      const controller = new AbortController();
+      const request = harness.client.request("thread/start", {}, { signal: controller.signal });
+      const rejected = expect(request).rejects.toThrow("thread/start aborted");
+      controller.abort();
+      await rejected;
+    }
+
+    expect(harness.stdinDestroyed).toBe(true);
   });
 
   it("initializes with the required client version", async () => {
@@ -516,6 +701,26 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it.each(["execCommandApproval", "applyPatchApproval"])(
+    "fails closed for unhandled legacy %s requests",
+    async (method) => {
+      const harness = createClientHarness();
+      clients.push(harness.client);
+
+      harness.send({
+        id: "legacy-approval-1",
+        method,
+        params: { conversationId: "thread-1" },
+      });
+      await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+      expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+        id: "legacy-approval-1",
+        result: { decision: "denied" },
+      });
+    },
+  );
+
   it("fails closed for unhandled native app-server approvals", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -530,6 +735,41 @@ describe("CodexAppServerClient", () => {
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
       id: "approval-1",
       result: { decision: "decline" },
+    });
+  });
+
+  it.each([
+    [
+      "item/tool/call",
+      {
+        contentItems: [
+          {
+            type: "inputText",
+            text: "OpenClaw did not register a handler for this app-server tool call.",
+          },
+        ],
+        success: false,
+      },
+    ],
+    ["item/permissions/requestApproval", { permissions: {}, scope: "turn" }],
+    ["mcpServer/elicitation/request", { action: "decline" }],
+    [
+      "item/future/requestApproval",
+      {
+        decision: "decline",
+        reason: "OpenClaw codex app-server bridge does not grant unknown native approvals.",
+      },
+    ],
+  ])("fails closed for an unhandled %s request", async (method, expected) => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    harness.send({ id: "unhandled-1", method, params: { threadId: "thread-1" } });
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "unhandled-1",
+      result: expected,
     });
   });
 

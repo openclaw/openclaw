@@ -60,14 +60,6 @@ describe("assertCodexThreadStartResponse", () => {
     expect(result.thread.sessionId).toBe("session-1");
   });
 
-  it("normalizes missing id from sessionId", () => {
-    const response = makeMinimalResponse({ id: undefined, sessionId: "session-1" });
-    delete (response.thread as Record<string, unknown>).id;
-    const result = assertCodexThreadStartResponse(response);
-    expect(result.thread.id).toBe("session-1");
-    expect(result.thread.sessionId).toBe("session-1");
-  });
-
   it("throws on invalid response", () => {
     expect(() => assertCodexThreadStartResponse({})).toThrow("Invalid Codex app-server");
   });

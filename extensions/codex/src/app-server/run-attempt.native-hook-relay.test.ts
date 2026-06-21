@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
+import { CodexAppServerRpcError } from "./client.js";
 import {
   createParams,
   createResumeHarness,
@@ -16,12 +17,21 @@ import {
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
+  threadStartResult,
 } from "./run-attempt-test-harness.js";
 import { testing } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
-  writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.js";
+  registerCodexTestSessionIdentity,
+  writeCodexAppServerBinding as writeStoredCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
+
+async function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeStoredCodexAppServerBinding>
+): Promise<void> {
+  registerCodexTestSessionIdentity(args[0], "session-1", "agent:main:session-1");
+  await writeStoredCodexAppServerBinding(...args);
+}
 
 setupRunAttemptTestHooks();
 
@@ -274,7 +284,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
-  it("lets Codex app-server approval modes own native permission requests by default", async () => {
+  it("installs policy-stable native hook relay events before thread policy is known", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
@@ -295,16 +305,83 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
     expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.Stop"]).toEqual([]);
-    expect(startConfig).not.toHaveProperty("hooks.PermissionRequest");
+    const permissionRequestHooks = startConfig?.["hooks.PermissionRequest"] as
+      | Array<{ hooks?: Array<{ command?: string }> }>
+      | undefined;
+    expect(permissionRequestHooks?.[0]?.hooks?.[0]?.command).toContain(
+      "--event permission_request",
+    );
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,
-    ).toEqual(["pre_tool_use", "post_tool_use", "before_agent_finalize"]);
+    ).toEqual(["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"]);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("defers permission hooks after Codex returns a provider with guarded policy", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method !== "thread/start") {
+        return undefined;
+      }
+      const response = threadStartResult();
+      return {
+        ...response,
+        thread: { ...response.thread, modelProvider: "lmstudio" },
+        model: "local-model",
+        modelProvider: "lmstudio",
+      };
+    });
+    const approvalRequester = vi.fn(async () => "allow" as const);
+    nativeHookRelayTesting.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    const params = createParams(sessionFile, workspaceDir);
+    params.modelId = "openai/gpt-5.4-codex";
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: {
+          mode: "yolo",
+          approvalsReviewer: "auto_review",
+        },
+      },
+      nativeHookRelay: { enabled: true },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = startRequest?.params as
+      | { approvalPolicy?: unknown; config?: Record<string, unknown> }
+      | undefined;
+    expect(startParams?.approvalPolicy).toBe("never");
+    expect(Array.isArray(startParams?.config?.["hooks.PermissionRequest"])).toBe(true);
+    const turnStartRequest = harness.requests.find((request) => request.method === "turn/start");
+    expect(
+      (turnStartRequest?.params as { approvalPolicy?: unknown } | undefined)?.approvalPolicy,
+    ).toBe("on-request");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        event: "permission_request",
+        rawPayload: {
+          hook_event_name: "PermissionRequest",
+          permission_mode: "default",
+          tool_name: "Bash",
+          tool_input: { command: "git push" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(approvalRequester).not.toHaveBeenCalled();
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 
   it("preserves explicit native permission request relay events in app-server approval modes", async () => {
@@ -454,7 +531,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       "run-2",
     );
 
-    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await secondRun;
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId).toBe(
       "run-2",
@@ -506,7 +583,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(extractRelayIdFromThreadRequest(resumeRequest?.params)).toBe(firstRelayId);
     expect(extractGenerationFromThreadRequest(resumeRequest?.params)).toBe(firstGeneration);
 
-    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await secondRun;
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
@@ -636,7 +713,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "thread/resume") {
-        throw new Error("resume failed");
+        throw new CodexAppServerRpcError({ code: -32000, message: "resume failed" }, method);
       }
       return undefined;
     });

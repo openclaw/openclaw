@@ -57,6 +57,10 @@ export type PluginHookMessageContext = {
 };
 
 export type PluginHookInboundClaimContext = PluginHookMessageContext & {
+  /** Resolved owner for session scopes whose canonical key does not encode an agent id. */
+  agentId?: string;
+  /** Prepared session-local exec policy; avoids plugin hot-path session-store discovery. */
+  execOverrides?: { security?: string; ask?: string };
   parentConversationId?: string;
   senderId?: string;
   messageId?: string;

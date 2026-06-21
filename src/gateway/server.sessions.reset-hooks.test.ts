@@ -3,6 +3,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import {
+  listRegisteredAgentHarnesses,
+  registerAgentHarness,
+  restoreRegisteredAgentHarnesses,
+} from "../agents/harness/registry.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -16,6 +21,7 @@ import {
   sessionStoreEntry,
   expectActiveRunCleanup,
   directSessionReq,
+  createDeferred,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
@@ -396,6 +402,141 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
     content: "hello from transcript",
   });
   expectMainHookContext(context, "sess-main");
+});
+
+test("sessions.reset clears all harness state before rotating the session generation", async () => {
+  const { storePath } = await seedActiveMainSession();
+  await writeMainSessionEntry("sess-main", { agentHarnessId: "reset-order-test" });
+  const registeredHarnesses = listRegisteredAgentHarnesses();
+  const releaseReset = createDeferred<void>();
+  const reset = vi.fn(async () => await releaseReset.promise);
+  const bystanderReset = vi.fn(async () => undefined);
+  registerAgentHarness({
+    id: "reset-order-test",
+    label: "reset-order-test",
+    supports: () => ({ supported: false }),
+    async runAttempt() {
+      throw new Error("not used");
+    },
+    reset,
+  });
+  registerAgentHarness({
+    id: "reset-order-bystander",
+    label: "reset-order-bystander",
+    supports: () => ({ supported: false }),
+    async runAttempt() {
+      throw new Error("not used");
+    },
+    reset: bystanderReset,
+  });
+
+  const resetPromise = performSessionReset({
+    key: "main",
+    reason: "reset",
+    commandSource: "gateway:sessions.reset",
+  });
+  try {
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+    expect(reset).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      sessionFile: undefined,
+      reason: "reset",
+    });
+    expect(bystanderReset).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      sessionFile: undefined,
+      reason: "reset",
+    });
+    const beforeRelease = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      { sessionId?: string }
+    >;
+    expect(Object.values(beforeRelease).map((entry) => entry.sessionId)).toContain("sess-main");
+
+    releaseReset.resolve();
+    const result = await resetPromise;
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected reset to succeed");
+    }
+    expect(result.entry.sessionId).not.toBe("sess-main");
+  } finally {
+    releaseReset.resolve();
+    await resetPromise.catch(() => undefined);
+    restoreRegisteredAgentHarnesses(registeredHarnesses);
+  }
+});
+
+test.each(["openclaw", "pi"])(
+  "sessions.reset rotates a stateless built-in %s harness session",
+  async (agentHarnessId) => {
+    await seedActiveMainSession();
+    await writeMainSessionEntry("sess-main", { agentHarnessId });
+
+    const result = await performSessionReset({
+      key: "main",
+      reason: "reset",
+      commandSource: "gateway:sessions.reset",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.entry.sessionId).not.toBe("sess-main");
+    }
+  },
+);
+
+test("sessions.reset remains recoverable when its recorded harness is unavailable", async () => {
+  await seedActiveMainSession();
+  await writeMainSessionEntry("sess-main", { agentHarnessId: "missing-reset-owner" });
+
+  const result = await performSessionReset({
+    key: "main",
+    reason: "reset",
+    commandSource: "gateway:sessions.reset",
+  });
+
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.entry.sessionId).not.toBe("sess-main");
+  }
+});
+
+test("sessions.reset publishes a successor when one harness cleanup fails", async () => {
+  const { storePath } = await seedActiveMainSession();
+  await writeMainSessionEntry("sess-main", { agentHarnessId: "reset-failure-test" });
+  const registeredHarnesses = listRegisteredAgentHarnesses();
+  registerAgentHarness({
+    id: "reset-failure-test",
+    label: "reset-failure-test",
+    supports: () => ({ supported: false }),
+    async runAttempt() {
+      throw new Error("not used");
+    },
+    reset: async () => {
+      throw new Error("reset failed");
+    },
+  });
+
+  try {
+    const result = await performSessionReset({
+      key: "main",
+      reason: "reset",
+      commandSource: "gateway:sessions.reset",
+    });
+    expect(result.ok).toBe(true);
+    const afterReset = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      { sessionId?: string }
+    >;
+    expect(Object.values(afterReset).map((entry) => entry.sessionId)).not.toContain("sess-main");
+  } finally {
+    restoreRegisteredAgentHarnesses(registeredHarnesses);
+  }
 });
 
 test("sessions.reset infers selected global agent from agent-prefixed aliases", async () => {

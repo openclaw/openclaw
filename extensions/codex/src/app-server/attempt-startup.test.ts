@@ -9,13 +9,16 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
-import { defaultLeasedCodexAppServerClientFactory } from "./client-factory.js";
 import { CodexAppServerClient } from "./client.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { threadStartResult } from "./run-attempt-test-harness.js";
 import {
-  clearSharedCodexAppServerClient,
-  getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
+import {
+  leaseSharedCodexAppServerClient,
+  resetSharedCodexAppServerClientForTests,
 } from "./shared-client.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
@@ -85,12 +88,10 @@ function startThreadWithHarness(
   signal = new AbortController().signal,
   overrides?: {
     pluginConfig?: CodexPluginConfig;
-    attemptClientFactory?: (
-      harness: ClientHarness,
-    ) => Parameters<typeof startCodexAttemptThread>[0]["attemptClientFactory"];
     harness?: ClientHarness;
     paths?: AttemptPaths;
     skipStartSpy?: boolean;
+    onThreadReserved?: Parameters<typeof startCodexAttemptThread>[0]["onThreadReserved"];
   },
 ) {
   const harness = overrides?.harness ?? createClientHarness();
@@ -101,8 +102,7 @@ function startThreadWithHarness(
   const effectivePluginConfig = overrides?.pluginConfig ?? pluginConfig;
 
   const run = startCodexAttemptThread({
-    attemptClientFactory:
-      overrides?.attemptClientFactory?.(harness) ?? defaultLeasedCodexAppServerClientFactory,
+    bindingStore: testCodexAppServerBindingStore,
     appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
     pluginConfig: effectivePluginConfig,
     computerUseConfig: effectivePluginConfig.computerUse ?? { enabled: false },
@@ -125,10 +125,11 @@ function startThreadWithHarness(
     sandboxExecServerEnabled: false,
     sandbox: null,
     contextEngineProjection: undefined,
+    startupTokenGuard: {},
     startupTimeoutMs,
     signal,
     onStartupTimeout: vi.fn(),
-    spawnedBy: undefined,
+    onThreadReserved: overrides?.onThreadReserved,
   });
 
   return { harness, run };
@@ -170,12 +171,13 @@ describe("startCodexAttemptThread", () => {
     vi.useRealTimers();
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
-    clearSharedCodexAppServerClient();
+    resetCodexTestBindingStore();
+    resetSharedCodexAppServerClientForTests();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
-    clearSharedCodexAppServerClient();
+    resetSharedCodexAppServerClientForTests();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     for (const root of tempRoots) {
@@ -184,7 +186,7 @@ describe("startCodexAttemptThread", () => {
     tempRoots.clear();
   });
 
-  it("clears the shared app-server when top-level thread startup fails with an app error", async () => {
+  it("keeps the shared app-server reusable after a structured startup rejection", async () => {
     const { harness, run } = startThreadWithHarness(5_000);
     await answerInitialize(harness);
     const threadStart = await waitForThreadStart(harness);
@@ -194,25 +196,57 @@ describe("startCodexAttemptThread", () => {
     });
 
     await expect(run).rejects.toThrow("Invalid bearer token");
+    expect(harness.process.stdin.destroyed).toBe(false);
+  });
+
+  it("retires the client when malformed startup cleanup cannot be confirmed", async () => {
+    const { harness, run } = startThreadWithHarness(5_000);
+    await answerInitialize(harness);
+    const threadStart = await waitForThreadStart(harness);
+    harness.send({ id: threadStart.id, result: { thread: { id: "thread-malformed" } } });
+    const unsubscribe = await waitForRequest(harness, "thread/unsubscribe");
+    harness.send({
+      id: unsubscribe.id,
+      error: { code: -32000, message: "unsubscribe failed" },
+    });
+
+    await expect(run).rejects.toThrow("subscription could not be released");
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
-  it("retires a failed startup client after another active lease releases", async () => {
+  it("retires the client when route cleanup cannot release the subscription", async () => {
+    const { harness, run } = startThreadWithHarness(5_000, undefined, {
+      onThreadReserved: () => {
+        throw new Error("route integration failed");
+      },
+    });
+    await answerInitialize(harness);
+    const threadStart = await waitForThreadStart(harness);
+    harness.send({ id: threadStart.id, result: threadStartResult("thread-route-failed") });
+    const unsubscribe = await waitForRequest(harness, "thread/unsubscribe");
+    harness.send({
+      id: unsubscribe.id,
+      error: { code: -32000, message: "unsubscribe failed" },
+    });
+
+    await expect(run).rejects.toThrow("Codex startup subscription cleanup failed");
+    expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
+  it("does not retire a peer-owned client after a structured startup rejection", async () => {
     const retained = createClientHarness();
-    const replacement = createClientHarness();
-    const startSpy = vi
-      .spyOn(CodexAppServerClient, "start")
-      .mockReturnValueOnce(retained.client)
-      .mockReturnValueOnce(replacement.client);
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(retained.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
     const paths = createAttemptPaths();
 
-    const retainedLease = getLeasedSharedCodexAppServerClient({
+    const retainedLeasePromise = leaseSharedCodexAppServerClient({
       startOptions: appServer.start,
       agentDir: paths.agentDir,
+      preparedAuth: {},
     });
     await answerInitialize(retained);
-    await expect(retainedLease).resolves.toBe(retained.client);
+    const retainedLease = await retainedLeasePromise;
+    expect(retainedLease.client).toBe(retained.client);
 
     const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
       harness: retained,
@@ -228,17 +262,16 @@ describe("startCodexAttemptThread", () => {
     await expect(run).rejects.toThrow("Invalid bearer token");
     expect(retained.process.stdin.destroyed).toBe(false);
 
-    expect(releaseLeasedSharedCodexAppServerClient(retained.client)).toBe(true);
-    await vi.waitFor(() => expect(retained.process.stdin.destroyed).toBe(true));
-
-    const replacementLease = getLeasedSharedCodexAppServerClient({
+    retainedLease.release();
+    const nextLeasePromise = leaseSharedCodexAppServerClient({
       startOptions: appServer.start,
       agentDir: paths.agentDir,
+      preparedAuth: {},
     });
-    await answerInitialize(replacement);
-    await expect(replacementLease).resolves.toBe(replacement.client);
-    expect(startSpy).toHaveBeenCalledTimes(2);
-    expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
+    const nextLease = await nextLeasePromise;
+    expect(nextLease.client).toBe(retained.client);
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    nextLease.release();
   });
 
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
@@ -260,18 +293,20 @@ describe("startCodexAttemptThread", () => {
     expect(harness.stdinDestroyed).toBe(true);
   });
 
-  it("aborts abandoned thread startup when another lease keeps the shared app-server alive", async () => {
+  it("retires abandoned thread startup even when another lease shares the client", async () => {
     const retained = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(retained.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
     const paths = createAttemptPaths();
 
-    const retainedLease = getLeasedSharedCodexAppServerClient({
+    const retainedLeasePromise = leaseSharedCodexAppServerClient({
       startOptions: appServer.start,
       agentDir: paths.agentDir,
+      preparedAuth: {},
     });
     await answerInitialize(retained);
-    await expect(retainedLease).resolves.toBe(retained.client);
+    const retainedLease = await retainedLeasePromise;
+    expect(retainedLease.client).toBe(retained.client);
 
     const { run } = startThreadWithHarness(100, new AbortController().signal, {
       harness: retained,
@@ -282,11 +317,9 @@ describe("startCodexAttemptThread", () => {
     const threadStart = await waitForThreadStart(retained);
 
     await rejected;
-    expect(retained.process.stdin.destroyed).toBe(false);
-
-    retained.send({ id: threadStart.id, result: { threadId: "late-thread" } });
-    expect(releaseLeasedSharedCodexAppServerClient(retained.client)).toBe(true);
-    await vi.waitFor(() => expect(retained.process.stdin.destroyed).toBe(true));
+    expect(threadStart.id).toBeDefined();
+    expect(retained.process.stdin.destroyed).toBe(true);
+    retainedLease.release();
   });
 
   it("closes the shared app-server when startup times out during initialize", async () => {
@@ -311,45 +344,37 @@ describe("startCodexAttemptThread", () => {
     ).toBe(false);
   });
 
-  it("closes a startup client that arrives after startup timeout", async () => {
-    let observedFactoryOptions:
-      | {
-          onStartedClient?: (client: CodexAppServerClient) => void;
-          abandonSignal?: AbortSignal;
-        }
-      | undefined;
-    let resolveFactoryDone: () => void = () => undefined;
-    const factoryDone = new Promise<void>((resolve) => {
-      resolveFactoryDone = resolve;
+  it("releases a late startup lease without retiring a peer-owned initializing client", async () => {
+    const harness = createClientHarness();
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const paths = createAttemptPaths();
+    const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+    const peerPromise = leaseSharedCodexAppServerClient({
+      startOptions: appServer.start,
+      agentDir: paths.agentDir,
+      preparedAuth: {},
     });
-    const { harness, run } = startThreadWithHarness(100, new AbortController().signal, {
-      attemptClientFactory:
-        (factoryHarness) => async (_startOptions, _authProfileId, _agentDir, _config, options) => {
-          try {
-            observedFactoryOptions = options;
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 250);
-            });
-            options?.onStartedClient?.(factoryHarness.client);
-            return factoryHarness.client;
-          } finally {
-            resolveFactoryDone();
-          }
-        },
+    const { run } = startThreadWithHarness(100, new AbortController().signal, {
+      harness,
+      paths,
+      skipStartSpy: true,
     });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
 
-    await rejected;
-    await factoryDone;
-    await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
-      interval: 1,
-      timeout: 2_000,
+    await expect(run).rejects.toThrow("codex app-server startup timed out");
+    expect(harness.stdinDestroyed).toBe(false);
+    await answerInitialize(harness);
+    const peer = await peerPromise;
+    expect(peer.client).toBe(harness.client);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
     });
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
     expect(
       readHarnessMessages(harness.writes).some((write) => write.method === "thread/start"),
     ).toBe(false);
-    expect(observedFactoryOptions?.onStartedClient).toBeTypeOf("function");
-    expect(observedFactoryOptions?.abandonSignal?.aborted).toBe(true);
+    await peer.abandon();
+    expect(harness.stdinDestroyed).toBe(true);
   });
 
   it("clears the shared app-server when cancellation abandons an in-flight thread request", async () => {

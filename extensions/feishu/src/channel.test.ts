@@ -103,6 +103,34 @@ describe("feishuPlugin metadata", () => {
   });
 });
 
+describe("feishuPlugin.bindings.resolveCommandConversation", () => {
+  it.each([
+    {
+      name: "shared topic",
+      sessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root",
+      conversationId: "oc_group_chat:topic:om_topic_root",
+    },
+    {
+      name: "sender-scoped topic",
+      sessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+      conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+    },
+  ])("preserves the canonical $name identity", ({ sessionKey, conversationId }) => {
+    expect(
+      feishuPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        threadId: "om_topic_root",
+        senderId: "ou_sender_1",
+        sessionKey,
+        originatingTo: "chat:oc_group_chat",
+      }),
+    ).toEqual({
+      conversationId,
+      parentConversationId: "oc_group_chat",
+    });
+  });
+});
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {

@@ -5,8 +5,41 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+  writeCodexAppServerBinding as writeCodexAppServerBindingImpl,
+} from "./session-binding.test-helpers.js";
+import { ensureCodexTestClientNotificationSurface } from "./test-support.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore" | "abandonClient"> & {
+    abandonClient?: () => Promise<void>;
+  },
+) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({
+    ...params,
+    client: ensureCodexTestClientNotificationSurface(params.client),
+    abandonClient: params.abandonClient ?? (async () => undefined),
+    bindingStore: testCodexAppServerBindingStore,
+  });
+}
+
+async function writeCodexAppServerBinding(
+  sessionFile: string,
+  binding: Parameters<typeof writeCodexAppServerBindingImpl>[1],
+): Promise<void> {
+  registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+  await writeCodexAppServerBindingImpl(sessionFile, binding);
+}
 
 function threadStartResult(threadId = "thread-1"): Record<string, unknown> {
   return {
@@ -92,6 +125,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
   let tempDir = "";
 
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-80814-"));
   });
 

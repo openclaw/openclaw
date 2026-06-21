@@ -159,6 +159,39 @@ describe("Codex app-server attempt timeouts", () => {
     expect(events).toEqual(["cleanup-start", "cleanup-done"]);
   });
 
+  it("keeps the timeout result when startup resolves during timeout cleanup", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    let resolveOperation!: (value: string) => void;
+    let finishCleanup!: () => void;
+    const run = withCodexStartupTimeout({
+      timeoutMs: 10,
+      signal: new AbortController().signal,
+      onTimeout: async () => {
+        events.push("cleanup-start");
+        await new Promise<void>((resolve) => {
+          finishCleanup = resolve;
+        });
+        events.push("cleanup-done");
+      },
+      operation: () =>
+        new Promise<string>((resolve) => {
+          resolveOperation = resolve;
+        }),
+    });
+    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(events).toEqual(["cleanup-start"]);
+    resolveOperation("late-ready");
+    await Promise.resolve();
+    expect(events).toEqual(["cleanup-start"]);
+    finishCleanup();
+
+    await rejected;
+    expect(events).toEqual(["cleanup-start", "cleanup-done"]);
+  });
+
   it("rejects startup timeout when aborted before completion", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();

@@ -4,9 +4,6 @@ import type {
   MigrationProviderContext,
   MigrationProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { applyCodexMigrationPlan, prepareTargetCodexAppServer } from "./apply.js";
-import { buildCodexMigrationPlan } from "./plan.js";
-import { discoverCodexSource, hasCodexSource } from "./source.js";
 
 export function buildCodexMigrationProvider(
   params: {
@@ -19,6 +16,7 @@ export function buildCodexMigrationProvider(
     description:
       "Inventory and promote Codex CLI skills while keeping Codex native plugins and hooks explicit.",
     async detect(ctx) {
+      const { discoverCodexSource, hasCodexSource } = await import("./source.js");
       const source = await discoverCodexSource({
         input: ctx.source,
       });
@@ -31,11 +29,16 @@ export function buildCodexMigrationProvider(
         message: found ? "Codex state found." : "Codex state not found.",
       };
     },
-    plan: buildCodexMigrationPlan,
-    prepareApply(ctx) {
+    async plan(ctx) {
+      const { buildCodexMigrationPlan } = await import("./plan.js");
+      return await buildCodexMigrationPlan(ctx);
+    },
+    async prepareApply(ctx) {
+      const { prepareTargetCodexAppServer } = await import("./apply.js");
       return prepareTargetCodexAppServer(ctx);
     },
     async apply(ctx, plan?: MigrationPlan) {
+      const { applyCodexMigrationPlan } = await import("./apply.js");
       return await applyCodexMigrationPlan({ ctx, plan, runtime: params.runtime });
     },
   };

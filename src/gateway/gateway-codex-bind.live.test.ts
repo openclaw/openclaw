@@ -19,7 +19,6 @@ import {
   releasePinnedPluginChannelRegistry,
   resetPluginRuntimeStateForTest,
 } from "../plugins/runtime.js";
-import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
@@ -93,45 +92,12 @@ function createSlackCurrentConversationBindingRegistry(outboundReplies: Captured
             return { channel: "slack", messageId: `slack-${outboundReplies.length}` };
           },
         },
-        bindings: {
-          compileConfiguredBinding: () => null,
-          matchInboundConversation: () => null,
-          resolveCommandConversation: ({
-            commandTo,
-            originatingTo,
-            fallbackTo,
-          }: {
-            commandTo?: string;
-            originatingTo?: string;
-            fallbackTo?: string;
-          }) => {
-            const conversationId = [commandTo, originatingTo, fallbackTo].find(Boolean)?.trim();
-            return conversationId ? { conversationId } : null;
-          },
-        },
       },
     },
   ]);
 }
 
-function extractAssistantTexts(messages: unknown[]): string[] {
-  const texts: string[] = [];
-  for (const entry of messages) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    if ((entry as { role?: unknown }).role !== "assistant") {
-      continue;
-    }
-    const text = extractFirstTextBlock(entry);
-    if (typeof text === "string" && text.trim().length > 0) {
-      texts.push(text);
-    }
-  }
-  return texts;
-}
-
-function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
+function formatTextPreview(texts: string[], maxChars = 800): string {
   const combined = texts.join("\n\n").trim();
   if (!combined) {
     return "<empty>";
@@ -166,7 +132,7 @@ async function waitForOutboundText(params: {
   }
 
   throw new Error(
-    `timed out waiting for outbound text containing ${params.contains}: ${formatAssistantTextPreview(
+    `timed out waiting for outbound text containing ${params.contains}: ${formatTextPreview(
       params.replies.map((reply) => reply.text),
     )}`,
   );
@@ -235,46 +201,6 @@ async function sendChatAndWait(params: {
   logCodexBindStep(`${params.context} started (${started.runId})`);
   await waitForAgentRunOk(params.client, started.runId, params.context);
   logCodexBindStep(`${params.context} completed`);
-}
-
-async function waitForAssistantText(params: {
-  client: GatewayClient;
-  sessionKey: string;
-  contains: string;
-  caseInsensitive?: boolean;
-  minAssistantCount?: number;
-  timeoutMs?: number;
-}): Promise<{ messages: unknown[]; assistantTexts: string[]; matchedAssistantText: string }> {
-  const timeoutMs = params.timeoutMs ?? 60_000;
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeoutMs) {
-    const history: { messages?: unknown[] } = await params.client.request("chat.history", {
-      sessionKey: params.sessionKey,
-      limit: 24,
-    });
-    const messages = history.messages ?? [];
-    const assistantTexts = extractAssistantTexts(messages);
-    const minAssistantCount = params.minAssistantCount ?? 1;
-    const expected = params.caseInsensitive ? params.contains.toLowerCase() : params.contains;
-    const matchedAssistantText = assistantTexts
-      .slice(Math.max(0, minAssistantCount - 1))
-      .find((text) => (params.caseInsensitive ? text.toLowerCase() : text).includes(expected));
-    if (assistantTexts.length >= minAssistantCount && matchedAssistantText) {
-      return { messages, assistantTexts, matchedAssistantText };
-    }
-    await sleep(500);
-  }
-
-  const finalHistory: { messages?: unknown[] } = await params.client.request("chat.history", {
-    sessionKey: params.sessionKey,
-    limit: 24,
-  });
-  throw new Error(
-    `timed out waiting for assistant text containing ${params.contains}: ${formatAssistantTextPreview(
-      extractAssistantTexts(finalHistory.messages ?? []),
-    )}`,
-  );
 }
 
 function resolveCodexPluginRoot(): string {
@@ -513,10 +439,10 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         });
         const bindReply = await waitForOutboundText({
           replies: outboundReplies,
-          contains: "Bound this conversation to Codex thread",
+          contains: "The next message will initialize it.",
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
-        expect(bindReply.matchedText).toContain("Bound this conversation to Codex thread");
+        expect(bindReply.matchedText).toContain("The next message will initialize it.");
         const boundSessionKey = resolveBoundSessionKey({
           channel: "slack",
           accountId,
@@ -547,6 +473,37 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           return result;
         };
 
+        const textNonce = randomBytes(4).toString("hex").toUpperCase();
+        const textToken = `CODEX-BIND-${textNonce}`;
+        await sendChatAndWait({
+          client: activeClient,
+          sessionKey,
+          idempotencyKey: `idem-codex-bound-text-${randomUUID()}`,
+          context: "bound text turn",
+          message: `Reply with exactly this token and nothing else: ${textToken}`,
+          originatingChannel: "slack",
+          originatingTo: conversationId,
+          originatingAccountId: accountId,
+          deliver: true,
+        });
+        const textReply = await waitForOutboundText({
+          replies: outboundReplies,
+          contains: textToken,
+          minReplyCount: commandReplyCount + 1,
+          timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
+        });
+        commandReplyCount = textReply.outboundTexts.length;
+        expect(textReply.matchedText).toContain(textToken);
+
+        const initializedBinding = await sendCodexCommand(
+          "/codex binding",
+          "Codex conversation binding:",
+        );
+        if (initializedBinding.matchedText.includes("- Thread: unknown")) {
+          throw new Error(
+            `bound turn did not persist its thread: ${initializedBinding.matchedText}`,
+          );
+        }
         await sendCodexCommand(
           "/codex status",
           "Codex app-server: connected",
@@ -567,26 +524,6 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           );
         }
 
-        const textNonce = randomBytes(4).toString("hex").toUpperCase();
-        const textToken = `CODEX-BIND-${textNonce}`;
-        await sendChatAndWait({
-          client: activeClient,
-          sessionKey,
-          idempotencyKey: `idem-codex-bound-text-${randomUUID()}`,
-          context: "bound text turn",
-          message: `Reply with exactly this token and nothing else: ${textToken}`,
-          originatingChannel: "slack",
-          originatingTo: conversationId,
-          originatingAccountId: accountId,
-        });
-        const textHistory = await waitForAssistantText({
-          client: activeClient,
-          sessionKey: boundSessionKey,
-          contains: textToken,
-          timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
-        });
-        expect(textHistory.matchedAssistantText).toContain(textToken);
-
         await sendChatAndWait({
           client: activeClient,
           sessionKey,
@@ -597,6 +534,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
+          deliver: true,
           attachments: [
             {
               mimeType: "image/png",
@@ -605,15 +543,14 @@ describeLive("gateway live (native Codex conversation binding)", () => {
             },
           ],
         });
-        const imageHistory = await waitForAssistantText({
-          client: activeClient,
-          sessionKey: boundSessionKey,
+        const imageReply = await waitForOutboundText({
+          replies: outboundReplies,
           contains: "cat",
-          caseInsensitive: true,
-          minAssistantCount: textHistory.assistantTexts.length + 1,
+          minReplyCount: commandReplyCount + 1,
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
-        expect(imageHistory.matchedAssistantText.toLowerCase()).toContain("cat");
+        commandReplyCount = imageReply.outboundTexts.length;
+        expect(imageReply.matchedText.toLowerCase()).toContain("cat");
 
         await sendCodexCommand("/codex detach", "Detached this conversation from Codex.");
         await sendCodexCommand("/codex binding", "No Codex conversation binding is attached.");

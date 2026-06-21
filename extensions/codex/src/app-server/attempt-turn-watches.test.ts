@@ -29,7 +29,7 @@ describe("Codex app-server attempt turn watches", () => {
     const progress: string[] = [];
     const diagnostics: string[] = [];
     const controller = createCodexAttemptTurnWatchController({
-      threadId: "thread-1",
+      getThreadId: () => "thread-1",
       signal: abortController.signal,
       getTurnId: () => "turn-1",
       isCompleted: () => completed,

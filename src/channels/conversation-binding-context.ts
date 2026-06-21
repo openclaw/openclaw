@@ -9,7 +9,7 @@ import {
 } from "./conversation-resolution.js";
 
 /** Canonical identity tuple used as the stable key for conversation binding state. */
-type ConversationBindingContext = {
+export type ConversationBindingContext = {
   channel: string;
   accountId: string;
   conversationId: string;

@@ -10,8 +10,31 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadStartParams } from "./protocol.js";
-import { createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  resetCodexTestBindingStore,
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
+import { createCodexTestModel, ensureCodexTestClientNotificationSurface } from "./test-support.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore" | "abandonClient"> & {
+    abandonClient?: () => Promise<void>;
+  },
+) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({
+    ...params,
+    client: ensureCodexTestClientNotificationSurface(params.client),
+    abandonClient: params.abandonClient ?? (async () => undefined),
+    bindingStore: testCodexAppServerBindingStore,
+  });
+}
 
 let tempDir: string;
 
@@ -91,6 +114,7 @@ function threadStartResult(threadId = "thread-1", serviceTier: string | null = n
 
 describe("Codex app-server dynamic tool schema boundary contract", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-schema-contract-"));
   });
 

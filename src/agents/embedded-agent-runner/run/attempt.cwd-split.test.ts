@@ -86,6 +86,39 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     });
   });
 
+  it("uses the explicit agent when a global session key has no agent namespace", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "global",
+      tempPaths,
+      attemptOverrides: { agentId: "work" },
+    });
+
+    expect(hoisted.resolveSandboxContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work", sessionKey: "global" }),
+    );
+  });
+
+  it("preserves the owner of an explicitly agent-scoped sandbox session key", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "global",
+      tempPaths,
+      attemptOverrides: {
+        agentId: "work",
+        sandboxSessionKey: "agent:main:shared:voice",
+      },
+    });
+
+    const sandboxCall = hoisted.resolveSandboxContextMock.mock.calls[0]?.[0];
+    expect(sandboxCall).toEqual({
+      config: {},
+      sessionKey: "agent:main:shared:voice",
+      workspaceDir: expect.any(String),
+    });
+    expect(sandboxCall).not.toHaveProperty("agentId");
+  });
+
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {
     // Sandboxed attempts already remap the workspace; accepting an extra cwd
     // override would make tool roots ambiguous.

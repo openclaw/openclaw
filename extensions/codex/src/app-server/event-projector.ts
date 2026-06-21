@@ -26,10 +26,7 @@ import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
-import {
-  readCodexNotificationThreadId,
-  readCodexNotificationTurnId,
-} from "./notification-correlation.js";
+import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -40,7 +37,6 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
@@ -65,6 +61,7 @@ export type CodexAppServerToolTelemetry = {
 
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
+  readRecentRateLimits?: () => JsonValue | undefined;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
 
@@ -91,22 +88,6 @@ const ZERO_USAGE: Usage = {
     total: 0,
   },
 };
-
-const CURRENT_TOKEN_USAGE_KEYS = [
-  "last",
-  "current",
-  "lastCall",
-  "lastCallUsage",
-  "lastTokenUsage",
-  "last_token_usage",
-] as const;
-
-const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
-  "inputTokens",
-  "input_tokens",
-  "promptTokens",
-  "prompt_tokens",
-] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
@@ -203,8 +184,6 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
-  private latestRateLimits: JsonValue | undefined;
-
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly threadId: string,
@@ -239,11 +218,6 @@ export class CodexAppServerEventProjector {
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
-      return;
-    }
-    if (notification.method === "account/rateLimits/updated") {
-      this.latestRateLimits = params;
-      rememberCodexRateLimits(params);
       return;
     }
     if (isHookNotificationMethod(notification.method)) {
@@ -298,7 +272,7 @@ export class CodexAppServerEventProjector {
         await this.handleRawResponseItemCompleted(params);
         break;
       case "error":
-        if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
+        if (params.willRetry === true) {
           break;
         }
         this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
@@ -709,9 +683,7 @@ export class CodexAppServerEventProjector {
 
   private handleTokenUsage(params: JsonObject): void {
     const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-    const current =
-      (tokenUsage ? readFirstJsonObject(tokenUsage, CURRENT_TOKEN_USAGE_KEYS) : undefined) ??
-      readFirstJsonObject(params, CURRENT_TOKEN_USAGE_KEYS);
+    const current = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
     if (!current) {
       return;
     }
@@ -782,7 +754,7 @@ export class CodexAppServerEventProjector {
         formatCodexUsageLimitErrorMessage({
           message: turn.error?.message,
           codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+          rateLimits: this.options.readRecentRateLimits?.(),
         }) ??
         turn.error?.message ??
         "codex app-server turn failed";
@@ -1689,7 +1661,7 @@ export class CodexAppServerEventProjector {
       formatCodexUsageLimitErrorMessage({
         message: error ? readString(error, "message") : undefined,
         codexErrorInfo: error?.codexErrorInfo,
-        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+        rateLimits: this.options.readRecentRateLimits?.(),
       }) ?? readCodexErrorNotificationMessage(params)
     );
   }
@@ -1884,9 +1856,7 @@ export class CodexAppServerEventProjector {
   }
 
   private isNotificationForTurn(params: JsonObject): boolean {
-    const threadId = readCodexNotificationThreadId(params);
-    const turnId = readNotificationTurnId(params);
-    return threadId === this.threadId && turnId === this.turnId;
+    return isCodexNotificationForTurn(params, this.threadId, this.turnId);
   }
 
   private isHookNotificationForCurrentThread(params: JsonObject): boolean {
@@ -1898,10 +1868,6 @@ export class CodexAppServerEventProjector {
 
 function isHookNotificationMethod(method: string): method is "hook/started" | "hook/completed" {
   return method === "hook/started" || method === "hook/completed";
-}
-
-function readNotificationTurnId(record: JsonObject): string | undefined {
-  return readCodexNotificationTurnId(record);
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
@@ -1993,21 +1959,6 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {
-  for (const key of keys) {
-    const value = readBoolean(record, key);
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
   if (isJsonObject(error)) {
@@ -2035,52 +1986,19 @@ function readHookOutputEntries(
   });
 }
 
-function readFirstJsonObject(record: JsonObject, keys: readonly string[]): JsonObject | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (isJsonObject(value)) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function readNumberAlias(record: JsonObject, keys: readonly string[]): number | undefined {
-  for (const key of keys) {
-    const value = readNumber(record, key);
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function normalizeCodexTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
-  const promptTotalInput = readNumberAlias(record, CODEX_PROMPT_TOTAL_INPUT_KEYS);
-  const cacheRead = readNumberAlias(record, [
-    "cachedInputTokens",
-    "cached_input_tokens",
-    "cacheRead",
-    "cache_read",
-    "cache_read_input_tokens",
-    "cached_tokens",
-  ]);
+  const promptTotalInput = readNumber(record, "inputTokens");
+  const cacheRead = readNumber(record, "cachedInputTokens");
   const input =
     promptTotalInput !== undefined && cacheRead !== undefined
       ? Math.max(0, promptTotalInput - cacheRead)
-      : (promptTotalInput ?? readNumber(record, "input"));
+      : promptTotalInput;
 
   return normalizeUsage({
     input,
-    output: readNumberAlias(record, ["outputTokens", "output_tokens", "output"]),
+    output: readNumber(record, "outputTokens"),
     cacheRead,
-    cacheWrite: readNumberAlias(record, [
-      "cacheWrite",
-      "cache_write",
-      "cacheCreationInputTokens",
-      "cache_creation_input_tokens",
-    ]),
-    total: readNumberAlias(record, ["totalTokens", "total_tokens", "total"]),
+    total: readNumber(record, "totalTokens"),
   });
 }
 

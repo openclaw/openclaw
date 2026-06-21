@@ -13,7 +13,6 @@ import {
   addTimerTimeoutGraceMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import type { CodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
 /** Codex hook events that can be registered through OpenClaw's native relay. */
@@ -24,8 +23,6 @@ export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
   "before_agent_finalize",
 ] as const;
 
-const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
-  CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 /** Extra relay lifetime after the expected turn budget, preventing late hook drops. */
 export const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
@@ -149,9 +146,8 @@ export function createCodexNativeHookRelay(params: {
     allowedEvents: params.events,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
-      attemptTimeoutMs: params.attemptTimeoutMs,
-      startupTimeoutMs: params.startupTimeoutMs,
-      turnStartTimeoutMs: params.turnStartTimeoutMs,
+      operationBudgetMs:
+        params.attemptTimeoutMs + params.startupTimeoutMs + params.turnStartTimeoutMs,
     }),
     signal: params.signal,
     command: {
@@ -163,38 +159,27 @@ export function createCodexNativeHookRelay(params: {
   });
 }
 
-/** Selects the native hook events Codex should install for the current approval mode. */
+/** Selects the native hook events Codex should install for this thread. */
 export function resolveCodexNativeHookRelayEvents(params: {
   configuredEvents?: readonly NativeHookRelayEvent[];
-  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy">;
 }): readonly NativeHookRelayEvent[] {
   if (params.configuredEvents?.length) {
     return params.configuredEvents;
   }
-  // Codex emits PermissionRequest before the app-server approval reviewer has
-  // resolved the command. In native approval modes, let Codex's app-server
-  // approval bridge own the real escalation instead of surfacing a stale
-  // pre-guardian OpenClaw plugin approval prompt.
-  return params.appServer.approvalPolicy === "never"
-    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
-    : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
+  // Thread config is fixed before Codex reports the authoritative provider.
+  // Install the stable superset; the relay defers permission prompts from guarded turns.
+  return CODEX_NATIVE_HOOK_RELAY_EVENTS;
 }
 
 /** Derives the native hook relay TTL from the turn budget unless explicitly configured. */
 export function resolveCodexNativeHookRelayTtlMs(params: {
   explicitTtlMs: number | undefined;
-  attemptTimeoutMs: number;
-  startupTimeoutMs: number;
-  turnStartTimeoutMs: number;
+  operationBudgetMs: number;
 }): number {
   if (params.explicitTtlMs !== undefined) {
     return params.explicitTtlMs;
   }
-  const relayBudgetMs =
-    params.attemptTimeoutMs +
-    params.startupTimeoutMs +
-    params.turnStartTimeoutMs +
-    CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS;
+  const relayBudgetMs = params.operationBudgetMs + CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS;
   return Math.max(CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS, Math.floor(relayBudgetMs));
 }
 

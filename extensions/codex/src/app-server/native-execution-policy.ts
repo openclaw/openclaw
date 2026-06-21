@@ -4,7 +4,12 @@
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
-import { getSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 
 type ExecHost = "sandbox" | "gateway" | "node";
 type ExecTarget = "auto" | ExecHost;
@@ -45,19 +50,17 @@ export function resolveCodexNativeExecutionPolicy(params: {
   const config = params.config ?? {};
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
   const agentId = resolvePolicyAgentId({ config, sessionKey, agentId: params.agentId });
-  const canReadSessionEntry =
-    params.readRuntimeSessionEntry &&
-    shouldReadRuntimeSessionEntry({ config, sessionKey, agentId: params.agentId });
   const sessionEntry =
     params.sessionEntry ??
-    (canReadSessionEntry && sessionKey
-      ? readRuntimeSessionEntryBestEffort({ sessionKey, agentId })
+    (params.readRuntimeSessionEntry && sessionKey
+      ? readRuntimeSessionEntryBestEffort(config, sessionKey, agentId)
       : undefined);
   const sandboxAvailable =
     params.sandboxAvailable ??
     (sessionKey
       ? resolveSandboxRuntimeStatus({
           cfg: config,
+          agentId,
           sessionKey,
         }).sandboxed
       : false);
@@ -230,16 +233,17 @@ function resolveEffectiveExecHost(params: {
   return params.requestedExecHost;
 }
 
-function readRuntimeSessionEntryBestEffort(params: {
-  sessionKey: string;
-  agentId: string;
-}): SessionEntry | undefined {
+function readRuntimeSessionEntryBestEffort(
+  config: OpenClawConfig,
+  sessionKey: string,
+  agentId: string,
+): SessionEntry | undefined {
   try {
-    return getSessionEntry({
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      hydrateSkillPromptRefs: false,
-    });
+    const storePath = resolveStorePath(config.session?.store, { agentId });
+    return resolveSessionStoreEntry({
+      store: loadSessionStore(storePath, { skipCache: true }),
+      sessionKey,
+    }).existing;
   } catch {
     return undefined;
   }

@@ -57,6 +57,7 @@ function resolveComparableSessionKeyForSandbox(params: {
 /** Resolves sandbox mode, effective session scope, and tool policy for a session. */
 export function resolveSandboxRuntimeStatus(params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
 }): {
   agentId: string;
@@ -69,6 +70,7 @@ export function resolveSandboxRuntimeStatus(params: {
   const sessionKey = params.sessionKey?.trim() ?? "";
   const agentId = resolveSessionAgentId({
     sessionKey,
+    agentId: params.agentId,
     config: params.cfg,
   });
   const cfg = params.cfg;

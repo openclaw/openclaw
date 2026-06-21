@@ -393,7 +393,7 @@ describe("diagnostics command", () => {
     expect(calls[1]?.diagnosticsUploadApproved).toBe(true);
   });
 
-  it("passes sidecar-bound session files to Codex diagnostics even when harness metadata is stale", async () => {
+  it("passes stable sessions to Codex diagnostics without requiring transcript files", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
@@ -412,7 +412,6 @@ describe("diagnostics command", () => {
           },
           "agent:main:discord:channel:123": {
             sessionId: "discord-session",
-            sessionFile: "/tmp/discord.jsonl",
             updatedAt: 2,
             channel: "discord",
           },
@@ -432,24 +431,21 @@ describe("diagnostics command", () => {
     expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
     expect(diagnosticsSessions[1]?.sessionKey).toBe("agent:main:discord:channel:123");
     expect(diagnosticsSessions[1]?.sessionId).toBe("discord-session");
-    expect(diagnosticsSessions[1]?.sessionFile).toBe("/tmp/discord.jsonl");
+    expect(diagnosticsSessions[1]?.sessionFile).toBeUndefined();
     expect(diagnosticsSessions[1]?.channel).toBe("discord");
     expect(requireExecCall(execCalls).defaults.approvalWarningText).toContain(
       "OpenAI Codex harness:",
     );
   });
 
-  it("omits the Codex section for ordinary sessions without Codex targets", async () => {
+  it("omits the Codex section for ordinary commands without a stable session identity", async () => {
     registerHostTrustedReservedCommandForTest({
       name: "codex",
       description: "Codex command",
       acceptsArgs: true,
       ownership: "reserved",
       handler: vi.fn(async () => ({
-        text: [
-          "No Codex thread is attached to this OpenClaw session yet.",
-          "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
-        ].join("\n"),
+        text: "Cannot send Codex diagnostics because this command did not include a stable session identity.",
       })),
     });
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();

@@ -1,7 +1,4 @@
-/**
- * Doctor contract hooks for Codex plugin config migrations and session-route
- * ownership warnings.
- */
+/** Doctor contract hooks for Codex config, state migration, and route ownership. */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
 
@@ -51,9 +48,7 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
-/**
- * Removes retired Codex plugin config keys while preserving unrelated config.
- */
+/** Removes retired Codex plugin config keys while preserving unrelated config. */
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
   changes: string[];
@@ -71,10 +66,9 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const nextConfig = structuredClone(cfg) as OpenClawConfig & {
     plugins?: Record<string, unknown>;
   };
-  const nextPlugins = asRecord(nextConfig.plugins);
-  const nextEntries = asRecord(nextPlugins?.entries);
-  const nextEntry = asRecord(nextEntries?.codex);
-  const nextPluginConfig = asRecord(nextEntry?.config);
+  const nextPluginConfig = asRecord(
+    asRecord(asRecord(asRecord(nextConfig.plugins)?.entries)?.codex)?.config,
+  );
   if (!nextPluginConfig) {
     return { config: cfg, changes: [] };
   }
@@ -121,3 +115,5 @@ export const sessionRouteStateOwners: DoctorSessionRouteStateOwner[] = [
     authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
   },
 ];
+
+export { stateMigrations } from "./src/migration/session-binding-sidecars.js";

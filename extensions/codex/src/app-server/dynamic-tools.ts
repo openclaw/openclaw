@@ -72,6 +72,12 @@ type CodexDynamicToolHookContext = {
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
+type AgentToolResultObserver = (event: {
+  toolName: string;
+  result: unknown;
+  isError: boolean;
+}) => void;
+
 type ProjectedCodexDynamicTool = {
   tool: AnyAgentTool;
   name: string;
@@ -108,8 +114,7 @@ export type CodexDynamicToolBridge = {
     params: CodexDynamicToolCallParams,
     options?: {
       signal?: AbortSignal;
-      onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
-      toolCallOrdinal?: number;
+      onAgentToolResult?: AgentToolResultObserver;
     },
   ) => Promise<CodexDynamicToolCallResponse>;
   telemetry: {
@@ -442,7 +447,7 @@ export function createCodexDynamicToolBridge(params: {
 }
 
 function notifyAgentToolResult(
-  observer: EmbeddedRunAttemptParams["onAgentToolResult"] | undefined,
+  observer: AgentToolResultObserver | undefined,
   toolName: string,
   result: unknown,
   isError: boolean,

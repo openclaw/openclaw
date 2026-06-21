@@ -1,8 +1,10 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import type {
+  CodexAppServerClientLease,
+  CodexAppServerClientLeaseFactory,
+} from "./shared-client.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 async function readConfiguredProviderWebSearchSupport(params: {
@@ -45,7 +47,7 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
 }
 
 export async function resolveCodexProviderWebSearchSupport(params: {
-  clientFactory: CodexAppServerClientFactory;
+  clientFactory: CodexAppServerClientLeaseFactory;
   appServer: CodexAppServerRuntimeOptions;
   authProfileId: string | undefined;
   agentDir: string;
@@ -53,17 +55,17 @@ export async function resolveCodexProviderWebSearchSupport(params: {
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
-  let client: CodexAppServerClient | undefined;
+  let lease: CodexAppServerClientLease | undefined;
   try {
-    client = await params.clientFactory(
-      params.appServer.start,
-      params.authProfileId,
-      params.agentDir,
-      params.config,
-      { timeoutMs: params.appServer.requestTimeoutMs },
-    );
+    lease = await params.clientFactory({
+      startOptions: params.appServer.start,
+      authProfileId: params.authProfileId,
+      agentDir: params.agentDir,
+      config: params.config,
+      timeoutMs: params.appServer.requestTimeoutMs,
+    });
     return await resolveCodexProviderWebSearchSupportForClient({
-      client,
+      client: lease.client,
       timeoutMs: params.appServer.requestTimeoutMs,
       modelProviderOverride: params.modelProviderOverride,
       signal: params.signal,
@@ -71,8 +73,6 @@ export async function resolveCodexProviderWebSearchSupport(params: {
   } catch {
     return "unknown";
   } finally {
-    if (client) {
-      releaseLeasedSharedCodexAppServerClient(client);
-    }
+    lease?.release();
   }
 }

@@ -274,6 +274,28 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("uses the explicit agent when a global session key has no agent namespace", async () => {
+    resolveSessionAgentIdsMock.mockReturnValue({
+      defaultAgentId: "main",
+      sessionAgentId: "work",
+    });
+
+    await compactEmbeddedAgentSessionDirect({
+      agentId: "work",
+      sessionId: "session-1",
+      sessionKey: "global",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolveSandboxContextMock).toHaveBeenCalledWith({
+      config: undefined,
+      agentId: "work",
+      sessionKey: "global",
+      workspaceDir: "/tmp/workspace",
+    });
+  });
+
   it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
@@ -1197,6 +1219,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("emits post-compaction side effects once for a rotated successor transcript", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);
     const sync = vi.fn(async () => {});
@@ -1237,6 +1260,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(sync).toHaveBeenCalledWith({
         reason: "post-compaction",
         sessionFiles: ["/tmp/rotated-session.jsonl"],
+      });
+      expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
+        previousSessionId: "session-1",
+        sessionFile: "/tmp/rotated-session.jsonl",
+      });
+      expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
+        sessionId: "rotated-session",
       });
     } finally {
       cleanup();
@@ -1680,6 +1710,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
       sessionFile: rotatedSessionFile,
+      previousSessionId: TEST_SESSION_ID,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
       sessionId: rotatedSessionId,
@@ -2148,6 +2179,39 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.result?.summary).toBe("engine-summary");
     expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes native harness compaction through the session and global lanes", async () => {
+    const enqueueGlobal = vi.fn(async <T>(task: () => Promise<T> | T) => await task());
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      result: { summary: "", firstKeptEntryId: "", tokensBefore: 100 },
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "codex",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        enqueue: enqueueGlobal,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(enqueueCommandInLaneMock).toHaveBeenCalledTimes(1);
+    expect(enqueueGlobal).toHaveBeenCalledTimes(1);
+    expect(enqueueCommandInLaneMock.mock.invocationCallOrder[0]).toBeLessThan(
+      enqueueGlobal.mock.invocationCallOrder[0],
+    );
+    expect(enqueueGlobal.mock.invocationCallOrder[0]).toBeLessThan(
+      maybeCompactAgentHarnessSessionMock.mock.invocationCallOrder[0],
+    );
   });
 
   it("keeps owning context-engine compaction primary for legacy Codex native sessions", async () => {

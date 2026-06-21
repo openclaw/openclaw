@@ -24,7 +24,6 @@ import {
   type CodexAppServerEventProjectorOptions,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
-import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -108,7 +107,6 @@ afterEach(async () => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
   resetGlobalHookRunner();
-  resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const tempDir of tempDirs) {
@@ -863,10 +861,11 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
-    const projector = await createProjector();
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
+    });
 
-    await projector.handleNotification(rateLimitsUpdated(resetsAt));
     await projector.handleNotification(
       forCurrentTurn("error", {
         error: {
@@ -887,10 +886,11 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("uses Codex rate-limit resets for failed turns", async () => {
-    const projector = await createProjector();
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
+    });
 
-    await projector.handleNotification(rateLimitsUpdated(resetsAt));
     await projector.handleNotification(
       forCurrentTurn("turn/completed", {
         turn: {
@@ -914,9 +914,8 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("uses a recent Codex rate-limit snapshot when failed turns omit reset details", async () => {
-    const projector = await createProjector();
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    rememberCodexRateLimits({
+    const rateLimits = {
       rateLimits: {
         limitId: "codex",
         limitName: "Codex",
@@ -927,6 +926,9 @@ describe("CodexAppServerEventProjector", () => {
         rateLimitReachedType: "rate_limit_reached",
       },
       rateLimitsByLimitId: null,
+    };
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => rateLimits,
     });
 
     await projector.handleNotification(
@@ -978,19 +980,19 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.promptErrorSource).toBe("prompt");
   });
 
-  it("normalizes snake_case current token usage fields", async () => {
+  it("normalizes current app-server token usage", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(agentMessageDelta("done"));
     await projector.handleNotification(
       forCurrentTurn("thread/tokenUsage/updated", {
         tokenUsage: {
-          total: { total_tokens: 1_000_000 },
-          last_token_usage: {
-            total_tokens: 17,
-            input_tokens: 8,
-            cached_input_tokens: 3,
-            output_tokens: 9,
+          total: { totalTokens: 1_000_000 },
+          last: {
+            totalTokens: 17,
+            inputTokens: 8,
+            cachedInputTokens: 3,
+            outputTokens: 9,
           },
         },
       }),

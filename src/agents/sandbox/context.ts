@@ -160,7 +160,11 @@ export async function resolveSandboxDockerUser(params: {
   }
 }
 
-function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
+function resolveSandboxSession(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
@@ -168,6 +172,7 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
 
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
+    agentId: params.agentId,
     sessionKey: rawSessionKey,
   });
   if (!runtime.sandboxed) {
@@ -198,6 +203,7 @@ function resolveSandboxWorkspaceInfoWorkdir(params: {
 
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
@@ -317,6 +323,7 @@ export async function resolveSandboxContext(params: {
 
 export async function ensureSandboxWorkspaceForSession(params: {
   config?: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxWorkspaceInfo | null> {

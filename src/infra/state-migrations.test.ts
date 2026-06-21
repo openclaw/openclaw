@@ -5,9 +5,24 @@ import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
+import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
+
+const pluginDoctorMocks = vi.hoisted(() => ({
+  listEntries: vi.fn<() => Array<{ pluginId: string; migration: PluginDoctorStateMigration }>>(
+    () => [],
+  ),
+}));
+
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  return {
+    ...actual,
+    listPluginDoctorStateMigrationEntries: pluginDoctorMocks.listEntries,
+  };
+});
 
 vi.mock("../channels/plugins/bundled.js", () => {
   function fileExists(filePath: string): boolean {
@@ -173,6 +188,8 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 
 afterEach(async () => {
   vi.useRealTimers();
+  pluginDoctorMocks.listEntries.mockReset();
+  pluginDoctorMocks.listEntries.mockReturnValue([]);
   await tempDirs.cleanup();
 });
 
@@ -211,6 +228,42 @@ describe("state migrations", () => {
       `- MobileAuth auth creds.json: ${path.join(detectionCase.stateDir, "credentials", "creds.json")} → ${path.join(detectionCase.stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
       `- ChatApp pairing allowFrom: ${resolveChannelAllowFromPath("chatapp", detectionCase.env)} → ${resolveChannelAllowFromPath("chatapp", detectionCase.env, "alpha")}`,
     ]);
+  });
+
+  it("uses the requested environment for plugin migration refresh and writes", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, "custom-state");
+    const customHome = path.join(root, "custom-home");
+    const env = {
+      ...process.env,
+      HOME: customHome,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const observed: string[] = [];
+    const migration: PluginDoctorStateMigration = {
+      id: "fixture-env",
+      label: "Fixture environment",
+      detectLegacyState(params) {
+        observed.push(`detect:${params.env.HOME}`);
+        return { preview: ["- Fixture environment"] };
+      },
+      migrateLegacyState(params) {
+        observed.push(`migrate:${params.env.HOME}`);
+        return { changes: ["Migrated fixture environment"], warnings: [] };
+      },
+    };
+    pluginDoctorMocks.listEntries.mockReturnValue([{ pluginId: "fixture", migration }]);
+
+    const config = createConfig();
+    const detected = await detectLegacyStateMigrations({ cfg: config, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config, env });
+
+    expect(observed).toEqual([
+      `detect:${customHome}`,
+      `detect:${customHome}`,
+      `migrate:${customHome}`,
+    ]);
+    expect(result.changes).toContain("Migrated fixture environment");
   });
 
   it("runs legacy state migrations and canonicalizes the merged session store", async () => {

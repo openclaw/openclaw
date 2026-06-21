@@ -9,7 +9,6 @@ import {
   isFileChangePatchUpdatedNotification,
   isAssistantCommentaryCompletionNotification,
   isNativeToolProgressNotification,
-  isNativeResponseStreamDeltaNotification,
   isPendingOpenClawDynamicToolCompletionNotification,
   isRawAssistantProgressNotification,
   isRawReasoningCompletionNotification,
@@ -17,7 +16,6 @@ import {
   isReasoningProgressNotification,
   isReasoningItemCompletionNotification,
   isRetryableErrorNotification,
-  isTurnNotification,
   readCodexNotificationItem,
   readNotificationItemId,
   shouldDisarmAssistantCompletionIdleWatch,
@@ -25,6 +23,7 @@ import {
 } from "./attempt-notifications.js";
 import { CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS } from "./attempt-timeouts.js";
 import type { CodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
+import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import type { CodexServerNotification } from "./protocol.js";
 
 type CodexExecutionPhase =
@@ -70,7 +69,7 @@ export function isTerminalCodexTurnNotificationForTurn(params: {
   turnId: string;
   currentPromptTexts: string[];
 }): boolean {
-  if (!isTurnNotification(params.notification.params, params.threadId, params.turnId)) {
+  if (!isCodexNotificationForTurn(params.notification.params, params.threadId, params.turnId)) {
     return false;
   }
   return (
@@ -105,16 +104,15 @@ export function applyCodexTurnNotificationState(params: {
   turnCrossedToolHandoff: boolean;
 } {
   const { notification, turnWatches } = params;
-  const isCurrentTurnNotification = isTurnNotification(
+  const isCurrentTurnNotification = isCodexNotificationForTurn(
     notification.params,
     params.threadId,
     params.turnId,
   );
   const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
-  const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
-  if (isCurrentTurnNotification && !isNativeResponseStreamDelta) {
+  if (isCurrentTurnNotification) {
     turnWatches.touchActivity(`notification:${notification.method}`, {
       details: describeNotificationActivity(notification),
       attemptProgress: true,
@@ -250,7 +248,6 @@ export function applyCodexTurnNotificationState(params: {
     !turnWatches.isCompletionIdleWatchPinnedByTerminalError() &&
     notification.method !== "turn/completed" &&
     isCurrentTurnNotification &&
-    !isNativeResponseStreamDelta &&
     !trackedDynamicToolCompletion &&
     !rawToolOutputCompletion &&
     !postToolProgressNeedsTerminalGuard &&

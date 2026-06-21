@@ -24,6 +24,7 @@ import {
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import { resolvePluginCommandConversationBindingContext } from "./conversation-binding-input.js";
 
 const DIAGNOSTICS_COMMAND = "/diagnostics";
 const CODEX_DIAGNOSTICS_COMMAND = "/codex diagnostics";
@@ -429,7 +430,7 @@ function isCodexDiagnosticsUnavailableText(text: string | undefined): boolean {
   return (
     text?.startsWith("No Codex thread is attached to this OpenClaw session yet.") === true ||
     text?.startsWith(
-      "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.",
+      "Cannot send Codex diagnostics because this command did not include a stable session identity.",
     ) === true
   );
 }
@@ -465,6 +466,7 @@ async function executeCodexDiagnosticsAddon(
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
     config: params.cfg,
+    bindingConversation: resolvePluginCommandConversationBindingContext(params),
     from: params.command.from,
     to: params.command.to,
     accountId: params.ctx.AccountId ?? undefined,
@@ -501,7 +503,7 @@ function buildCodexDiagnosticsSessions(
     }
   }
   return Array.from(sessions.entries())
-    .filter(([, entry]) => Boolean(entry.sessionFile))
+    .filter(([, entry]) => Boolean(entry.sessionId?.trim()))
     .map(([sessionKey, entry]) => ({
       sessionKey,
       sessionId: entry.sessionId,

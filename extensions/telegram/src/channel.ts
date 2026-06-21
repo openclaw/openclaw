@@ -54,6 +54,7 @@ import {
 import type { TelegramBotInfo } from "./bot-info.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
+import { resolveTelegramCommandConversation } from "./channel.conversation.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -377,36 +378,6 @@ function targetsMatchTelegramReplySuppression(params: {
     return originThreadId === targetThreadId;
   }
   return originThreadId == null && targetThreadId == null;
-}
-
-function resolveTelegramCommandConversation(params: {
-  threadId?: string;
-  originatingTo?: string;
-  commandTo?: string;
-  fallbackTo?: string;
-}) {
-  const chatId = [params.originatingTo, params.commandTo, params.fallbackTo]
-    .map((candidate) => {
-      const trimmed = normalizeOptionalString(candidate) ?? "";
-      return trimmed ? (normalizeOptionalString(parseTelegramTarget(trimmed).chatId) ?? "") : "";
-    })
-    .find((candidate) => candidate.length > 0);
-  if (!chatId) {
-    return null;
-  }
-  if (params.threadId) {
-    return {
-      conversationId: `${chatId}:topic:${params.threadId}`,
-      parentConversationId: chatId,
-    };
-  }
-  if (chatId.startsWith("-")) {
-    return null;
-  }
-  return {
-    conversationId: chatId,
-    parentConversationId: chatId,
-  };
 }
 
 function resolveTelegramInboundConversation(params: {

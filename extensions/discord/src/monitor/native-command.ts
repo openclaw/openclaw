@@ -24,6 +24,7 @@ import {
   resolveDiscordAccountDmPolicy,
   resolveDiscordMaxLinesPerMessage,
 } from "../accounts.js";
+import { resolveDiscordCommandConversation } from "../channel.conversation.js";
 import {
   Button,
   Command,
@@ -550,6 +551,19 @@ async function dispatchDiscordCommandInteraction(params: {
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });
+    const commandFrom = isDirectMessage
+      ? `discord:${user.id}`
+      : isGroupDm
+        ? `discord:group:${channelId}`
+        : `discord:channel:${channelId}`;
+    const commandConversation = resolveDiscordCommandConversation({
+      threadId: messageThreadId,
+      threadParentId: pluginThreadParentId,
+      from: commandFrom,
+      chatType: isDirectMessage ? "direct" : "group",
+      originatingTo: commandFrom,
+      commandTo: `slash:${user.id}`,
+    });
     const pluginReply = await nativeCommandRuntime.executePluginCommand({
       command: pluginMatch.command,
       args: pluginMatch.args,
@@ -560,14 +574,20 @@ async function dispatchDiscordCommandInteraction(params: {
       senderIsOwner: senderIsCommandOwner,
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
+      sessionId: targetSessionEntry?.sessionId,
+      sessionFile: targetSessionEntry?.sessionFile,
       authProfileId: targetSessionEntry?.authProfileOverride,
       commandBody: prompt,
       config: cfg,
-      from: isDirectMessage
-        ? `discord:${user.id}`
-        : isGroupDm
-          ? `discord:group:${channelId}`
-          : `discord:channel:${channelId}`,
+      bindingConversation: commandConversation
+        ? {
+            channel: "discord",
+            accountId,
+            ...commandConversation,
+            ...(messageThreadId ? { threadId: messageThreadId } : {}),
+          }
+        : null,
+      from: commandFrom,
       to: `slash:${user.id}`,
       accountId,
       messageThreadId,

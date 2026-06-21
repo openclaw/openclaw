@@ -4,10 +4,10 @@ import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
 import { codexProviderDiscovery } from "./provider-discovery.js";
 import { buildCodexProvider, buildCodexProviderCatalog } from "./provider.js";
 import { CodexAppServerClient } from "./src/app-server/client.js";
-import type { listCodexAppServerModels } from "./src/app-server/models.js";
+import type { listAllCodexAppServerModels } from "./src/app-server/models.js";
 import {
   createIsolatedCodexAppServerClient,
-  getSharedCodexAppServerClient,
+  leaseSharedCodexAppServerClient,
   resetSharedCodexAppServerClientForTests,
 } from "./src/app-server/shared-client.js";
 
@@ -26,7 +26,8 @@ function createFakeCodexClient(): CodexAppServerClient {
   return {
     initialize: vi.fn(async () => undefined),
     request: vi.fn(async () => ({ data: [] })),
-    setActiveSharedLeaseCountProviderForUnscopedNotifications: vi.fn(),
+    addNotificationHandler: vi.fn(() => () => undefined),
+    addRequestHandler: vi.fn(() => () => undefined),
     addCloseHandler: vi.fn(() => () => undefined),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
@@ -39,7 +40,7 @@ const TEST_CODEX_APP_SERVER_CONFIG = {
 };
 
 async function listTestCodexAppServerModels(
-  options: Parameters<typeof listCodexAppServerModels>[0] = {},
+  options: Parameters<typeof listAllCodexAppServerModels>[0] = {},
 ) {
   expect(options.sharedClient).toBe(false);
   const client = await createIsolatedCodexAppServerClient({
@@ -183,45 +184,33 @@ describe("codex provider", () => {
     expect(resultProvider?.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
   });
 
-  it("pages through live discovery before building the provider catalog", async () => {
-    const listModels = vi
-      .fn()
-      .mockResolvedValueOnce({
-        models: [
-          {
-            id: "gpt-5.4",
-            model: "gpt-5.4",
-            hidden: false,
-            inputModalities: ["text", "image"],
-            supportedReasoningEfforts: ["medium"],
-          },
-        ],
-        nextCursor: "page-2",
-      })
-      .mockResolvedValueOnce({
-        models: [
-          {
-            id: "gpt-5.5",
-            model: "gpt-5.5",
-            hidden: false,
-            inputModalities: ["text"],
-            supportedReasoningEfforts: [],
-          },
-        ],
-      });
+  it("delegates all-page discovery to one model lister call", async () => {
+    const listModels = vi.fn(async () => ({
+      models: [
+        {
+          id: "gpt-5.4",
+          model: "gpt-5.4",
+          hidden: false,
+          inputModalities: ["text", "image"],
+          supportedReasoningEfforts: ["medium"],
+        },
+        {
+          id: "gpt-5.5",
+          model: "gpt-5.5",
+          hidden: false,
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    }));
 
     const result = await buildCodexProviderCatalog({
       env: {},
       listModels,
     });
 
+    expect(listModels).toHaveBeenCalledTimes(1);
     expectRecordFields(mockCallArg(listModels, 0), {
-      cursor: undefined,
-      limit: 100,
-      sharedClient: false,
-    });
-    expectRecordFields(mockCallArg(listModels, 1), {
-      cursor: "page-2",
       limit: 100,
       sharedClient: false,
     });
@@ -277,7 +266,7 @@ describe("codex provider", () => {
       .mockReturnValueOnce(activeClient)
       .mockReturnValueOnce(discoveryClient);
 
-    await getSharedCodexAppServerClient({
+    await leaseSharedCodexAppServerClient({
       startOptions: {
         transport: "stdio",
         command: "/tmp/openclaw-test-codex",

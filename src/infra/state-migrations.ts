@@ -3300,12 +3300,13 @@ export async function migrateLegacyAgentDir(
 async function runPluginDoctorStateMigrationPlans(params: {
   detected: LegacyStateDetection;
   config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const refreshedPlans = await collectPluginDoctorStateMigrationPlans({
     cfg: params.config,
-    env: process.env,
+    env: params.env,
     stateDir: params.detected.stateDir,
     oauthDir: params.detected.oauthDir,
   });
@@ -3315,10 +3316,10 @@ async function runPluginDoctorStateMigrationPlans(params: {
     try {
       const result = await plan.migration.migrateLegacyState({
         config: params.config,
-        env: process.env,
+        env: params.env,
         stateDir: params.detected.stateDir,
         oauthDir: params.detected.oauthDir,
-        context: createPluginDoctorStateMigrationContext(plan.pluginId, process.env),
+        context: createPluginDoctorStateMigrationContext(plan.pluginId, params.env),
       });
       changes.push(...result.changes);
       warnings.push(...result.warnings);
@@ -3515,24 +3516,29 @@ function migrateLegacyExecApprovals(detected: LegacyExecApprovalsMigrationDetect
   return { changes, warnings };
 }
 
-function migrateLegacyStateSchema(detected: LegacyStateDetection): {
+function migrateLegacyStateSchema(
+  detected: LegacyStateDetection,
+  env: NodeJS.ProcessEnv,
+): {
   changes: string[];
   warnings: string[];
 } {
   return repairOpenClawStateDatabaseSchema({
-    env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
+    env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
   });
 }
 
 export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
-  const stateSchema = migrateLegacyStateSchema(detected);
+  const env = params.env ?? process.env;
+  const stateSchema = migrateLegacyStateSchema(detected, env);
   if (detected.stateSchema.hasLegacy && stateSchema.warnings.length > 0) {
     return stateSchema;
   }
@@ -3561,13 +3567,14 @@ export async function runLegacyStateMigrations(params: {
     : await runPluginDoctorStateMigrationPlans({
         detected,
         config: params.config ?? ({} as OpenClawConfig),
+        env,
       });
   const sessions = await migrateLegacySessions(detected, now, {
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,
   });
   const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
     cfg: params.config ?? ({} as OpenClawConfig),
-    env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
+    env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
     now,
   });
   const agentDir = await migrateLegacyAgentDir(detected, now);
@@ -3925,6 +3932,7 @@ export async function autoMigrateLegacyState(params: {
     const pluginPlans = await runPluginDoctorStateMigrationPlans({
       detected,
       config: params.cfg,
+      env,
     });
     const changes = [
       ...stateDirResult.changes,
@@ -4036,6 +4044,7 @@ export async function autoMigrateLegacyState(params: {
   const pluginPlans = await runPluginDoctorStateMigrationPlans({
     detected,
     config: params.cfg,
+    env,
   });
   const sessions = await migrateLegacySessions(detected, now, {
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,

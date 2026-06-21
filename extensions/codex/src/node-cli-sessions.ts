@@ -5,10 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import type {
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
-} from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -17,9 +13,10 @@ import {
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
 import { formatCodexDisplayText } from "./command-formatters.js";
-
-export const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
-export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
+import {
+  CODEX_CLI_SESSIONS_LIST_COMMAND,
+  CODEX_CLI_SESSION_RESUME_COMMAND,
+} from "./node-cli-session-registration.js";
 
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;
@@ -66,37 +63,6 @@ const DEFAULT_RESUME_SPAWN_RUNTIME: CodexCliResumeSpawnRuntime = {
   env: process.env,
   execPath: process.execPath,
 };
-
-export function createCodexCliSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
-  return [
-    {
-      command: CODEX_CLI_SESSIONS_LIST_COMMAND,
-      cap: "codex-cli-sessions",
-      handle: listLocalCodexCliSessions,
-    },
-    {
-      command: CODEX_CLI_SESSION_RESUME_COMMAND,
-      cap: "codex-cli-sessions",
-      dangerous: true,
-      handle: resumeLocalCodexCliSession,
-    },
-  ];
-}
-
-export function createCodexCliSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
-  return [
-    {
-      commands: [CODEX_CLI_SESSIONS_LIST_COMMAND],
-      defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (ctx) => ctx.invokeNode(),
-    },
-    {
-      commands: [CODEX_CLI_SESSION_RESUME_COMMAND],
-      dangerous: true,
-      handle: (ctx) => ctx.invokeNode(),
-    },
-  ];
-}
 
 export async function listCodexCliSessionsOnNode(params: {
   runtime: PluginRuntime;
@@ -195,7 +161,7 @@ export function formatCodexCliSessions(params: {
   ].join("\n");
 }
 
-async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
+export async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
   const params = readRecordParam(paramsJSON);
   const limit = normalizeLimit(params.limit);
   const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
@@ -217,7 +183,7 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
   return JSON.stringify({ sessions, codexHome } satisfies CodexCliSessionsListResult);
 }
 
-async function resumeLocalCodexCliSession(paramsJSON?: string | null): Promise<string> {
+export async function resumeLocalCodexCliSession(paramsJSON?: string | null): Promise<string> {
   const params = readRecordParam(paramsJSON);
   const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
   const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";

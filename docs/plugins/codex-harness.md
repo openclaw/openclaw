@@ -143,12 +143,39 @@ The native Codex app-server harness supports context engines that require
 pre-prompt assembly. Generic CLI backends, including `codex-cli`, do not provide
 that host capability.
 
+Codex thread bindings live in OpenClaw's SQLite plugin state and use the stable
+agent-scoped OpenClaw session key, or an opaque conversation-binding id, as
+their owner. Physical session ids fence delayed cleanup but may rotate without
+losing the Codex thread. Context-engine compaction adopts the successor id
+before continuing native Codex compaction. The bounded store rejects a new
+binding at its safety limit instead of evicting an existing thread's continuity
+record.
+Conversation binds create or resume their Codex thread on the first bound
+message after channel approval; an abandoned approval consumes no thread row.
+That first message carries the prepared thread directly into its turn.
+Subsequent messages use a metadata-only resume to subscribe the shared client,
+then unsubscribe after the turn completes.
+The runtime does not poll transcript-adjacent binding files. Upgrades from
+releases that used `*.jsonl.codex-app-server.json` sidecars migrate them during
+normal startup preflight. `openclaw doctor --fix` can run the same migration
+manually.
+Successfully matched sidecars are archived before the new runtime resumes their
+threads. Migration imports durable thread ownership only; it does not infer
+Codex context usage from OpenClaw counters or crawl Codex rollout files. For
+agent-session harness bindings, the next resume attempts to restore a cached
+native snapshot when Codex has one, and ongoing turns persist the current-context
+usage reported by app-server notifications, not the cumulative thread lifetime
+total. Conversation bindings
+keep metadata-only resumes and leave continuity and compaction with the native
+Codex thread. Conflicting or ambiguous sidecars stay in place with a warning for
+operator review.
+
 For Codex-backed agents, `/compact` starts native Codex app-server compaction on
-the bound thread. OpenClaw does not wait for completion, impose an OpenClaw
-timeout, restart the shared app-server, or fall back to a context-engine or
-public OpenAI summarizer. If the native Codex thread binding is missing or
-stale, the command fails closed so the operator sees the real runtime boundary
-instead of silently switching compaction backends.
+the bound thread. OpenClaw bounds the request-acceptance RPC but does not wait
+for compaction completion, restart the shared app-server, or fall back to a
+context-engine or public OpenAI summarizer. If the native Codex thread binding
+is missing or stale, the command fails closed so the operator sees the real
+runtime boundary instead of silently switching compaction backends.
 
 ```json5
 {

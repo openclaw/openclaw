@@ -178,6 +178,8 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         phase?: string;
         startedAt?: number;
         text?: string;
+        threadId?: string;
+        turnId?: string;
       };
       stream: string;
     }>;
@@ -185,6 +187,11 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       (event) => event.stream === "lifecycle" && event.data.phase === "start",
     );
     expect(typeof lifecycleStart?.data.startedAt).toBe("number");
+    const turnAccepted = agentEvents.find(
+      (event) =>
+        event.stream === "codex_app_server.lifecycle" && event.data.phase === "turn_accepted",
+    );
+    expect(turnAccepted?.data).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
     const assistantEvent = agentEvents.find((event) => event.stream === "assistant");
     expect(assistantEvent?.data).toEqual({ text: "hello back" });
     const lifecycleEnd = agentEvents.find(
@@ -196,10 +203,16 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       (event) => event.stream === "lifecycle" && event.data.phase === "start",
     );
     const assistantIndex = agentEvents.findIndex((event) => event.stream === "assistant");
+    const acceptedIndex = agentEvents.findIndex(
+      (event) =>
+        event.stream === "codex_app_server.lifecycle" && event.data.phase === "turn_accepted",
+    );
     const endIndex = agentEvents.findIndex(
       (event) => event.stream === "lifecycle" && event.data.phase === "end",
     );
     expect(startIndex).toBeGreaterThanOrEqual(0);
+    expect(acceptedIndex).toBeGreaterThanOrEqual(0);
+    expect(startIndex).toBeGreaterThan(acceptedIndex);
     expect(assistantIndex).toBeGreaterThan(startIndex);
     expect(endIndex).toBeGreaterThan(assistantIndex);
     const globalAssistantEvent = globalAgentEvents.find((event) => event.stream === "assistant");

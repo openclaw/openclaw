@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
-  testing,
   clearPluginCommands,
   executePluginCommand,
   getPluginCommandSpecs,
@@ -71,12 +70,6 @@ function registerVoiceCommandForTest(
   return registerPluginCommand("demo-plugin", createVoiceCommand(overrides));
 }
 
-function resolveBindingConversationFromCommand(
-  params: Parameters<typeof testing.resolveBindingConversationFromCommand>[0],
-) {
-  return testing.resolveBindingConversationFromCommand(params);
-}
-
 function expectCommandMatch(
   commandBody: string,
   params: { name: string; pluginId: string; args: string },
@@ -130,13 +123,6 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
       detached: { removed: false },
     }),
   );
-}
-
-function expectBindingConversationCase(
-  params: Parameters<typeof resolveBindingConversationFromCommand>[0],
-  expected: ReturnType<typeof resolveBindingConversationFromCommand>,
-) {
-  expect(resolveBindingConversationFromCommand(params)).toEqual(expected);
 }
 
 beforeEach(() => {
@@ -1070,78 +1056,6 @@ describe("registerPluginCommand", () => {
     expect(registerPluginCommand("other-plugin", candidate)).toEqual(expected);
   });
 
-  it.each([
-    {
-      name: "resolves Discord DM command bindings with the user target prefix intact",
-      params: {
-        channel: "discord",
-        from: "discord:1177378744822943744",
-        to: "slash:1177378744822943744",
-        accountId: "default",
-      },
-      expected: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-    },
-    {
-      name: "resolves Discord guild command bindings with the channel target prefix intact",
-      params: {
-        channel: "discord",
-        from: "discord:channel:1480554272859881494",
-        accountId: "default",
-      },
-      expected: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1480554272859881494",
-      },
-    },
-    {
-      name: "resolves Discord thread command bindings with parent channel context intact",
-      params: {
-        channel: "discord",
-        from: "discord:channel:1480554272859881494",
-        accountId: "default",
-        messageThreadId: "thread-42",
-        threadParentId: "channel-parent-7",
-      },
-      expected: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1480554272859881494",
-        parentConversationId: "channel-parent-7",
-        threadId: "thread-42",
-      },
-    },
-    {
-      name: "does not resolve binding conversations for unsupported command channels",
-      params: {
-        channel: "slack",
-        from: "slack:U123",
-        to: "C456",
-        accountId: "default",
-      },
-      expected: null,
-    },
-    {
-      name: "resolves sender-keyed command bindings when only senderId is available",
-      params: {
-        channel: "signal",
-        senderId: "signal-user-42",
-        accountId: "default",
-      },
-      expected: {
-        channel: "signal",
-        accountId: "default",
-        conversationId: "dm:signal-user-42",
-      },
-    },
-  ] as const)("$name", ({ params, expected }) => {
-    expectBindingConversationCase(params, expected);
-  });
-
   it("does not expose binding APIs to plugin commands on unsupported channels", async () => {
     const handler = async (ctx: {
       requestConversationBinding: (params: { summary: string }) => Promise<unknown>;
@@ -1197,11 +1111,12 @@ describe("registerPluginCommand", () => {
   it("passes host session identity through to the plugin command context", async () => {
     let receivedCtx:
       | {
+          agentId?: string;
           sessionKey?: string;
           sessionId?: string;
         }
       | undefined;
-    const handler = async (ctx: { sessionKey?: string; sessionId?: string }) => {
+    const handler = async (ctx: { agentId?: string; sessionKey?: string; sessionId?: string }) => {
       receivedCtx = ctx;
       return { text: "ok" };
     };
@@ -1217,6 +1132,7 @@ describe("registerPluginCommand", () => {
       channel: "whatsapp",
       senderId: "U123",
       isAuthorizedSender: true,
+      agentId: "work",
       sessionKey: "agent:main:whatsapp:direct:123",
       sessionId: "session-123",
       commandBody: "/sessioncheck",
@@ -1224,6 +1140,7 @@ describe("registerPluginCommand", () => {
     });
 
     expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx?.agentId).toBe("work");
     expect(receivedCtx?.sessionKey).toBe("agent:main:whatsapp:direct:123");
     expect(receivedCtx?.sessionId).toBe("session-123");
   });
@@ -1376,46 +1293,7 @@ describe("registerPluginCommand", () => {
     expect(result).toStrictEqual({});
   });
 
-  it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "line",
-              label: "LINE",
-              config: {
-                listAccountIds: () => ["default", "work"],
-                defaultAccountId: () => "work",
-                resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "work" }),
-              },
-            }),
-            bindings: {
-              resolveCommandConversation: ({
-                originatingTo,
-                commandTo,
-                fallbackTo,
-              }: {
-                originatingTo?: string;
-                commandTo?: string;
-                fallbackTo?: string;
-              }) => {
-                const rawTarget = [originatingTo, commandTo, fallbackTo].find(Boolean)?.trim();
-                if (!rawTarget) {
-                  return null;
-                }
-                return {
-                  conversationId: rawTarget.replace(/^line:/i, "").replace(/^user:/i, ""),
-                };
-              },
-            },
-          },
-        },
-      ]),
-    );
-
+  it("passes the prepared binding account to plugin command handlers", async () => {
     let receivedCtx:
       | {
           accountId?: string;
@@ -1439,6 +1317,11 @@ describe("registerPluginCommand", () => {
       isAuthorizedSender: true,
       commandBody: "/accountcheck",
       config: {} as never,
+      bindingConversation: {
+        channel: "line",
+        accountId: "work",
+        conversationId: "U1234567890abcdef1234567890abcdef",
+      },
       from: "line:user:U1234567890abcdef1234567890abcdef",
     });
 

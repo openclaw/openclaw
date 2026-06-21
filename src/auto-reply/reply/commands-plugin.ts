@@ -8,6 +8,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
+import { resolvePluginCommandConversationBindingContext } from "./conversation-binding-input.js";
 
 /**
  * Handle plugin-registered commands.
@@ -48,6 +49,7 @@ export const handlePluginCommand: CommandHandler = async (
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody: command.commandBodyNormalized,
     config: cfg,
+    bindingConversation: resolvePluginCommandConversationBindingContext(params),
     from: command.from,
     to: command.to,
     accountId: params.ctx.AccountId ?? undefined,

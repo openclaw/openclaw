@@ -13,6 +13,7 @@ import {
 import type { CodexPluginConfig } from "./src/app-server/config.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
+import { joinCodexPromptSections } from "./src/app-server/prompt-sections.js";
 import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
 import {
   buildDeveloperInstructions,
@@ -52,7 +53,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   turnScopedDeveloperInstructions?: string;
   heartbeatCollaborationInstructions?: string;
 }): CodexHarnessPromptSnapshot {
-  const developerInstructions = joinPresentSections(
+  const developerInstructions = joinCodexPromptSections(
     buildDeveloperInstructions(params.attempt, {
       dynamicTools: params.dynamicTools,
     }),
@@ -82,10 +83,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
       heartbeatCollaborationInstructions: params.heartbeatCollaborationInstructions,
     }),
   };
-}
-
-function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 /** Converts harness tools into Codex dynamic-tool specs for prompt snapshot tests. */

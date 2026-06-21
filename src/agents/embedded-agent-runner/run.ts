@@ -1670,13 +1670,17 @@ async function runEmbeddedAgentInternal(
         });
         const adoptCompactionTranscript = (
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
-        ) => {
+        ): string | undefined => {
+          const previousSessionId = activeSessionId;
           const nextSessionId = compactResult.result?.sessionId;
           const nextSessionFile = compactResult.result?.sessionFile;
           adoptActiveSessionId(nextSessionId);
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
           }
+          return nextSessionId && nextSessionId !== previousSessionId
+            ? previousSessionId
+            : undefined;
         };
         const onCompactionHookMessages = async (payload: {
           phase: "before" | "after";
@@ -1718,6 +1722,7 @@ async function runEmbeddedAgentInternal(
         const runOwnsCompactionAfterHook = async (
           reason: string,
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
+          previousSessionId?: string,
         ) => {
           if (
             contextEngine.info.ownsCompaction !== true ||
@@ -1734,6 +1739,7 @@ async function runEmbeddedAgentInternal(
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
                 sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
+                ...(previousSessionId ? { previousSessionId } : {}),
               },
               resolveActiveHookContext(),
             );
@@ -2376,10 +2382,14 @@ async function runEmbeddedAgentInternal(
                   reason: String(compactErr),
                 };
               }
-              if (timeoutCompactResult.compacted) {
-                adoptCompactionTranscript(timeoutCompactResult);
-              }
-              await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
+              const previousSessionId = timeoutCompactResult.compacted
+                ? adoptCompactionTranscript(timeoutCompactResult)
+                : undefined;
+              await runOwnsCompactionAfterHook(
+                "timeout recovery",
+                timeoutCompactResult,
+                previousSessionId,
+              );
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
                 if (
@@ -2489,6 +2499,7 @@ async function runEmbeddedAgentInternal(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
               let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              let previousSessionId: string | undefined;
               await runOwnsCompactionBeforeHook("overflow recovery");
               try {
                 const overflowCompactionRuntimeContext = {
@@ -2572,7 +2583,7 @@ async function runEmbeddedAgentInternal(
                   params.abortSignal,
                 );
                 if (compactResult.ok && compactResult.compacted) {
-                  adoptCompactionTranscript(compactResult);
+                  previousSessionId = adoptCompactionTranscript(compactResult);
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: activeSessionId,
@@ -2595,7 +2606,11 @@ async function runEmbeddedAgentInternal(
                   reason: String(compactErr),
                 };
               }
-              await runOwnsCompactionAfterHook("overflow recovery", compactResult);
+              await runOwnsCompactionAfterHook(
+                "overflow recovery",
+                compactResult,
+                previousSessionId,
+              );
               if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
                 lastCompactionTokensAfter = undefined;
                 lastContextBudgetStatus = undefined;

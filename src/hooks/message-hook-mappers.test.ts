@@ -1,11 +1,8 @@
 // Message hook mapper tests cover mapping runtime messages into hook payloads.
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import type { ChannelMessagingAdapter } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCanonicalSentMessageHookContext,
   deriveInboundMessageHookContext,
@@ -19,10 +16,6 @@ import {
   toPluginMessageReceivedEvent,
   toPluginMessageSentEvent,
 } from "./message-hook-mappers.js";
-
-type ResolveInboundConversationParams = Parameters<
-  NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
->[0];
 
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -57,67 +50,8 @@ function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): Finalized
 }
 
 describe("message hook mappers", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "claim-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "claim-chat", label: "Claim chat" }),
-            messaging: {
-              resolveInboundConversation: ({
-                from,
-                to,
-                isGroup,
-              }: {
-                from?: string;
-                to?: string;
-                isGroup?: boolean;
-              }) => {
-                const normalizedTo = to?.replace(/^channel:/i, "").trim();
-                const normalizedFrom = from?.replace(/^claim-chat:/i, "").trim();
-                if (isGroup && normalizedTo) {
-                  return { conversationId: `channel:${normalizedTo}` };
-                }
-                if (normalizedFrom) {
-                  return { conversationId: `user:${normalizedFrom}` };
-                }
-                return null;
-              },
-            },
-          },
-        },
-        {
-          pluginId: "thread-claim-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "thread-claim-chat", label: "Thread claim chat" }),
-            messaging: {
-              resolveInboundConversation: ({
-                to,
-                threadId,
-                threadParentId,
-              }: ResolveInboundConversationParams) => {
-                if (threadId) {
-                  return {
-                    conversationId: String(threadId),
-                    ...(threadParentId
-                      ? { parentConversationId: `channel:${threadParentId}` }
-                      : {}),
-                  };
-                }
-                return to ? { conversationId: to } : null;
-              },
-            },
-          },
-        },
-      ]),
-    );
-  });
-
   it("derives canonical inbound context with body precedence and group metadata", () => {
-    const canonical = deriveInboundMessageHookContext(makeInboundCtx());
+    const canonical = deriveInboundMessageHookContext(makeInboundCtx({ AgentId: "work" }));
 
     expect(canonical.content).toBe("commands-body");
     expect(canonical.channelId).toBe("demo-chat");
@@ -126,6 +60,13 @@ describe("message hook mappers", () => {
     expect(canonical.isGroup).toBe(true);
     expect(canonical.groupId).toBe("demo-chat:chat:456");
     expect(canonical.guildId).toBe("guild-1");
+    expect(canonical.agentId).toBe("work");
+    expect(
+      toPluginInboundClaimContext(canonical, null, { security: "full", ask: "off" }),
+    ).toMatchObject({
+      agentId: "work",
+      execOverrides: { security: "full", ask: "off" },
+    });
   });
 
   it("maps inbound reply metadata into canonical and plugin payloads", () => {
@@ -153,7 +94,7 @@ describe("message hook mappers", () => {
       replyToIsQuote: true,
     });
 
-    const claimContext = toPluginInboundClaimContext(canonical);
+    const claimContext = toPluginInboundClaimContext(canonical, null);
     expect(claimContext).toMatchObject({
       replyToId: "discord-message-42",
       replyToIdFull: "discord:channel-1:discord-message-42",
@@ -162,7 +103,7 @@ describe("message hook mappers", () => {
       replyToIsQuote: true,
     });
 
-    const claimEvent = toPluginInboundClaimEvent(canonical);
+    const claimEvent = toPluginInboundClaimEvent(canonical, undefined, claimContext);
     expect(claimEvent).toMatchObject({
       replyToId: "discord-message-42",
       replyToIdFull: "discord:channel-1:discord-message-42",
@@ -277,7 +218,8 @@ describe("message hook mappers", () => {
       "https://example.test/ramp.jpg",
     ]);
     expect(canonical.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
-    const claimEvent = toPluginInboundClaimEvent(canonical);
+    const claimContext = toPluginInboundClaimContext(canonical, null);
+    const claimEvent = toPluginInboundClaimEvent(canonical, undefined, claimContext);
     expect(claimEvent.metadata?.mediaPath).toBe("/tmp/tree.jpg");
     expect(claimEvent.metadata?.mediaUrl).toBe("https://example.test/tree.jpg");
     expect(claimEvent.metadata?.mediaType).toBe("image/jpeg");
@@ -395,8 +337,8 @@ describe("message hook mappers", () => {
       ...deriveInboundMessageHookContext(makeInboundCtx()),
       trace,
     };
-    const inboundContext = toPluginInboundClaimContext(inbound);
-    const inboundEvent = toPluginInboundClaimEvent(inbound);
+    const inboundContext = toPluginInboundClaimContext(inbound, null);
+    const inboundEvent = toPluginInboundClaimEvent(inbound, undefined, inboundContext);
     expect(inboundContext.trace).not.toBe(trace);
     expect(inboundContext.trace).toEqual(trace);
     expect(Object.isFrozen(inboundContext.trace)).toBe(true);
@@ -415,89 +357,6 @@ describe("message hook mappers", () => {
     expect(sentEvent.trace).not.toBe(trace);
     expect(sentEvent.trace).toEqual(trace);
     expect(Object.isFrozen(sentEvent.trace)).toBe(true);
-  });
-
-  it("uses channel plugin claim resolvers for grouped conversations", () => {
-    const canonical = deriveInboundMessageHookContext(
-      makeInboundCtx({
-        Provider: "claim-chat",
-        Surface: "claim-chat",
-        OriginatingChannel: "claim-chat",
-        To: "channel:123456789012345678",
-        OriginatingTo: "channel:123456789012345678",
-        GroupChannel: "general",
-        GroupSubject: "guild",
-      }),
-    );
-
-    expect(toPluginInboundClaimContext(canonical)).toEqual({
-      channelId: "claim-chat",
-      accountId: "acc-1",
-      conversationId: "channel:123456789012345678",
-      sessionKey: "session-1",
-      parentConversationId: undefined,
-      senderId: "sender-1",
-      messageId: "msg-1",
-      runId: undefined,
-      trace: undefined,
-      traceId: undefined,
-      spanId: undefined,
-      parentSpanId: undefined,
-      callDepth: undefined,
-    });
-  });
-
-  it("passes thread parent ids to channel plugin claim resolvers", () => {
-    const canonical = deriveInboundMessageHookContext(
-      makeInboundCtx({
-        Provider: "thread-claim-chat",
-        Surface: "thread-claim-chat",
-        OriginatingChannel: "thread-claim-chat",
-        To: "channel:1510164477642014740",
-        OriginatingTo: "channel:1510164477642014740",
-        MessageThreadId: "1510164477642014740",
-        ThreadParentId: "1510164477642014999",
-        GroupChannel: "thread",
-        GroupSubject: "guild",
-      }),
-    );
-
-    expect(toPluginInboundClaimContext(canonical)).toMatchObject({
-      channelId: "thread-claim-chat",
-      conversationId: "1510164477642014740",
-      parentConversationId: "channel:1510164477642014999",
-    });
-  });
-
-  it("uses channel plugin claim resolvers for direct-message conversations", () => {
-    const canonical = deriveInboundMessageHookContext(
-      makeInboundCtx({
-        Provider: "claim-chat",
-        Surface: "claim-chat",
-        OriginatingChannel: "claim-chat",
-        From: "claim-chat:1177378744822943744",
-        To: "channel:1480574946919846079",
-        OriginatingTo: "channel:1480574946919846079",
-        GroupChannel: undefined,
-        GroupSubject: undefined,
-      }),
-    );
-
-    expect(toPluginInboundClaimContext(canonical)).toEqual({
-      channelId: "claim-chat",
-      accountId: "acc-1",
-      conversationId: "user:1177378744822943744",
-      sessionKey: "session-1",
-      parentConversationId: undefined,
-      senderId: "sender-1",
-      messageId: "msg-1",
-      runId: undefined,
-      trace: undefined,
-      traceId: undefined,
-      spanId: undefined,
-      parentSpanId: undefined,
-      callDepth: undefined,
-    });
   });
 
   it("maps transcribed and preprocessed internal payloads", () => {

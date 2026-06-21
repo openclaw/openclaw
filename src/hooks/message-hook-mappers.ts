@@ -1,9 +1,6 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import type { ConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   freezeDiagnosticTraceContext,
@@ -35,6 +32,7 @@ export type CanonicalInboundMessageHookContext = {
   accountId?: string;
   conversationId?: string;
   sessionKey?: string;
+  agentId?: string;
   runId?: string;
   messageId?: string;
   senderId?: string;
@@ -138,6 +136,7 @@ export function deriveInboundMessageHookContext(
     accountId: ctx.AccountId,
     conversationId,
     sessionKey: ctx.SessionKey,
+    agentId: ctx.AgentId,
     messageId:
       overrides?.messageId ??
       ctx.MessageSidFull ??
@@ -272,62 +271,23 @@ export function toPluginMessageContext(
   return context;
 }
 
-function stripChannelPrefix(value: string | undefined, channelId: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const genericPrefixes = ["channel:", "chat:", "user:"];
-  for (const prefix of genericPrefixes) {
-    if (value.startsWith(prefix)) {
-      return value.slice(prefix.length);
-    }
-  }
-  const prefix = `${channelId}:`;
-  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
-}
-
-function resolveInboundConversation(canonical: CanonicalInboundMessageHookContext): {
-  conversationId?: string;
-  parentConversationId?: string;
-} {
-  const channelId = normalizeChannelId(canonical.channelId);
-  const pluginResolved = channelId
-    ? getChannelPlugin(channelId)?.messaging?.resolveInboundConversation?.({
-        from: canonical.from,
-        to: canonical.to ?? canonical.originatingTo,
-        conversationId: canonical.conversationId,
-        threadId: canonical.threadId,
-        threadParentId: canonical.threadParentId,
-        isGroup: canonical.isGroup,
-      })
-    : null;
-  if (pluginResolved) {
-    return {
-      conversationId: normalizeOptionalString(pluginResolved.conversationId),
-      parentConversationId: normalizeOptionalString(pluginResolved.parentConversationId),
-    };
-  }
-  const baseConversationId = stripChannelPrefix(
-    canonical.to ?? canonical.originatingTo ?? canonical.conversationId,
-    canonical.channelId,
-  );
-  return { conversationId: baseConversationId };
-}
-
 export function toPluginInboundClaimContext(
   canonical: CanonicalInboundMessageHookContext,
+  preparedConversation: ConversationBindingContext | null,
+  execOverrides?: PluginHookInboundClaimContext["execOverrides"],
 ): PluginHookInboundClaimContext {
-  const conversation = resolveInboundConversation(canonical);
   const context: PluginHookInboundClaimContext = {
-    channelId: canonical.channelId,
-    accountId: canonical.accountId,
-    conversationId: conversation.conversationId,
+    channelId: preparedConversation?.channel ?? canonical.channelId,
+    accountId: preparedConversation?.accountId ?? canonical.accountId,
+    conversationId: preparedConversation?.conversationId,
     sessionKey: canonical.sessionKey,
-    parentConversationId: conversation.parentConversationId,
+    agentId: canonical.agentId,
+    parentConversationId: preparedConversation?.parentConversationId,
     senderId: canonical.senderId,
     messageId: canonical.messageId,
     runId: canonical.runId,
     callDepth: canonical.callDepth,
+    ...(execOverrides ? { execOverrides } : {}),
   };
   if (canonical.replyToId !== undefined) {
     context.replyToId = canonical.replyToId;
@@ -350,12 +310,14 @@ export function toPluginInboundClaimContext(
 
 export function toPluginInboundClaimEvent(
   canonical: CanonicalInboundMessageHookContext,
-  extras?: {
-    commandAuthorized?: boolean;
-    wasMentioned?: boolean;
-  },
+  extras:
+    | {
+        commandAuthorized?: boolean;
+        wasMentioned?: boolean;
+      }
+    | undefined,
+  context: PluginHookInboundClaimContext,
 ): PluginHookInboundClaimEvent {
-  const context = toPluginInboundClaimContext(canonical);
   const event: PluginHookInboundClaimEvent = {
     content: canonical.content,
     body: canonical.body,
@@ -363,7 +325,7 @@ export function toPluginInboundClaimEvent(
     transcript: canonical.transcript,
     timestamp: canonical.timestamp,
     channel: canonical.channelId,
-    accountId: canonical.accountId,
+    accountId: context.accountId,
     conversationId: context.conversationId,
     parentConversationId: context.parentConversationId,
     senderId: canonical.senderId,

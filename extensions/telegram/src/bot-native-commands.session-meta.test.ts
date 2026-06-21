@@ -1405,6 +1405,55 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         sessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
         authProfileId: "openai:owner@example.com",
         messageThreadId: 42,
+        bindingConversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1001234567890:topic:42",
+          parentConversationId: "-1001234567890",
+          threadId: 42,
+        },
+      },
+      "plugin command params",
+    );
+  });
+
+  it("passes the current top-level group to plugin commands", async () => {
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "codex",
+      cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
+      groupAllowFrom: ["-1001234567890"],
+      useAccessGroups: false,
+      pluginCommandSpecs: [
+        {
+          name: "codex",
+          description: "Codex",
+          acceptsArgs: true,
+        },
+      ] as TelegramPluginCommandSpecs,
+    });
+    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        name: "codex",
+        description: "Codex",
+        handler: vi.fn(),
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex",
+        requireAuth: true,
+      },
+      args: "bind --cwd /tmp/work",
+    });
+
+    await handler(createTelegramGroupCommandContext({ match: "bind --cwd /tmp/work" }));
+
+    expectRecordFields(
+      (pluginRuntimeMocks.executePluginCommand.mock.calls as unknown as Array<[unknown]>)[0]?.[0],
+      {
+        bindingConversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1001234567890",
+          parentConversationId: "-1001234567890",
+        },
       },
       "plugin command params",
     );

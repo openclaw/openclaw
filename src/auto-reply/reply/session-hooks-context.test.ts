@@ -96,6 +96,7 @@ async function createStoredSession(params: {
   prefix: string;
   sessionKey: string;
   sessionId: string;
+  agentHarnessId?: string;
   text?: string;
   updatedAt?: number;
 }): Promise<{ storePath: string; transcriptPath: string }> {
@@ -105,6 +106,7 @@ async function createStoredSession(params: {
     [params.sessionKey]: {
       sessionId: params.sessionId,
       sessionFile: transcriptPath,
+      agentHarnessId: params.agentHarnessId,
       updatedAt: params.updatedAt ?? Date.now(),
     },
   });
@@ -170,7 +172,8 @@ describe("session hook context wiring", () => {
     hookRunnerMocks.runSessionStart.mockReset();
     hookRunnerMocks.runSessionEnd.mockReset();
     sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockClear();
-    sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockClear();
+    sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockReset();
+    sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockResolvedValue(undefined);
     sessionCleanupMocks.retireSessionMcpRuntime.mockClear();
     hookRunnerMocks.runSessionStart.mockResolvedValue(undefined);
     hookRunnerMocks.runSessionEnd.mockResolvedValue(undefined);
@@ -234,6 +237,53 @@ describe("session hook context wiring", () => {
     expectFields(startEvent, { resumedFrom: "old-session" });
     expect(event?.nextSessionId).toBe(startEvent?.sessionId);
     expectFields(startContext, { sessionId: startEvent?.sessionId });
+  });
+
+  it("retires the recorded harness before publishing the next generation", async () => {
+    const sessionKey = "agent:main:telegram:direct:owned";
+    const { storePath, transcriptPath } = await createStoredSession({
+      prefix: "openclaw-session-owned-reset",
+      sessionKey,
+      sessionId: "owned-session",
+      agentHarnessId: "codex",
+    });
+    let releaseCleanup: (() => void) | undefined;
+    const cleanupBlocked = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockImplementationOnce(async () => {
+      await cleanupBlocked;
+      return undefined;
+    });
+
+    const initPromise = initSessionState({
+      ctx: { Body: "/new", SessionKey: sessionKey },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+    try {
+      await vi.waitFor(() =>
+        expect(sessionCleanupMocks.resetRegisteredAgentHarnessSessions).toHaveBeenCalledWith({
+          agentId: "main",
+          sessionId: "owned-session",
+          sessionKey,
+          sessionFile: transcriptPath,
+          reason: "new",
+        }),
+      );
+      const blockedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        SessionEntry
+      >;
+      expect(blockedStore[sessionKey]?.sessionId).toBe("owned-session");
+
+      releaseCleanup?.();
+      const result = await initPromise;
+      expect(result.sessionId).not.toBe("owned-session");
+    } finally {
+      releaseCleanup?.();
+      await initPromise.catch(() => undefined);
+    }
   });
 
   it("marks explicit /reset rollovers with reason reset", async () => {

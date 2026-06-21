@@ -4,9 +4,29 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
+import {
+  createCodexAppServerBindingStore,
+  sessionBindingIdentity,
+} from "./src/app-server/session-binding.js";
+import {
+  createCodexTestBindingStateStore,
+  testCodexAppServerBindingStore,
+} from "./src/app-server/session-binding.test-helpers.js";
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
 const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
+
+function createCodexTestRuntime(
+  current?: () => unknown,
+  stateStore = createCodexTestBindingStateStore(),
+) {
+  return {
+    ...(current ? { config: { current } } : {}),
+    state: {
+      openSyncKeyedStore: () => stateStore,
+    },
+  } as never;
+}
 
 vi.mock("./src/app-server/run-attempt.js", () => ({
   runCodexAppServerAttempt: runCodexAppServerAttemptMock,
@@ -40,7 +60,6 @@ describe("codex plugin", () => {
     const registerProvider = vi.fn();
     const registerWebSearchProvider = vi.fn();
     const on = vi.fn();
-    const onConversationBindingResolved = vi.fn();
 
     plugin.register(
       createTestPluginApi({
@@ -49,7 +68,7 @@ describe("codex plugin", () => {
         source: "test",
         config: {},
         pluginConfig: {},
-        runtime: {} as never,
+        runtime: createCodexTestRuntime(),
         registerAgentHarness,
         registerCommand,
         registerMediaUnderstandingProvider,
@@ -57,7 +76,6 @@ describe("codex plugin", () => {
         registerProvider,
         registerWebSearchProvider,
         on,
-        onConversationBindingResolved,
       }),
     );
 
@@ -67,9 +85,6 @@ describe("codex plugin", () => {
       | Record<string, unknown>
       | undefined;
     const inboundClaimRegistration = mockCall(on) as [unknown, unknown] | undefined;
-    const bindingResolvedRegistration = mockCall(onConversationBindingResolved) as
-      | [unknown]
-      | undefined;
 
     expect(providerRegistration.id).toBe("codex");
     expect(providerRegistration.label).toBe("Codex");
@@ -103,33 +118,12 @@ describe("codex plugin", () => {
     expect(migrationRegistration?.label).toBe("Codex");
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");
-    expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
-  });
-
-  it("registers with capture APIs that do not expose conversation binding hooks yet", () => {
-    const registerProvider = vi.fn();
-    const api = createTestPluginApi({
-      id: "codex",
-      name: "Codex",
-      source: "test",
-      config: {},
-      pluginConfig: {},
-      runtime: {} as never,
-      registerAgentHarness: vi.fn(),
-      registerCommand: vi.fn(),
-      registerMediaUnderstandingProvider: vi.fn(),
-      registerProvider,
-      on: vi.fn(),
-    });
-    delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
-
-    plugin.register(api);
-    expect(registerProvider).toHaveBeenCalledTimes(1);
-    expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
   });
 
   it("claims the Codex routing providers by default", () => {
-    const harness = createCodexAppServerAgentHarness();
+    const harness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+    });
 
     expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
     expect(
@@ -150,8 +144,196 @@ describe("codex plugin", () => {
     expect(unsupported.supported).toBe(false);
   });
 
+  it("clears only ended session binding rows in the owning agent scope", async () => {
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = createCodexAppServerBindingStore(stateStore);
+    const on = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: createCodexTestRuntime(undefined, stateStore),
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on,
+      }),
+    );
+    const sessionEnd = on.mock.calls.find(([name]) => name === "session_end")?.[1] as
+      | ((
+          event: { sessionId: string; sessionKey?: string; reason?: string },
+          ctx: { agentId?: string; sessionId: string; sessionKey?: string },
+        ) => Promise<void>)
+      | undefined;
+    if (!sessionEnd) {
+      throw new Error("missing Codex session_end hook");
+    }
+    const identity = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:session-1",
+    });
+    const setBinding = () =>
+      bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-1", cwd: "/repo" },
+      });
+
+    for (const reason of ["shutdown", "restart", "compaction", "unknown"] as const) {
+      await setBinding();
+      await sessionEnd(
+        { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
+        { agentId: "worker", sessionId: "session-1" },
+      );
+      await expect(bindingStore.read(identity)).resolves.toMatchObject({
+        threadId: "thread-1",
+      });
+    }
+    for (const reason of ["new", "reset", "idle", "daily", "deleted"] as const) {
+      await setBinding();
+      await sessionEnd(
+        { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
+        { agentId: "worker", sessionId: "session-1" },
+      );
+      await expect(bindingStore.read(identity)).resolves.toBeUndefined();
+    }
+  });
+
+  it("adopts compaction successors before delayed lifecycle cleanup", async () => {
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = createCodexAppServerBindingStore(stateStore);
+    const on = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: createCodexTestRuntime(undefined, stateStore),
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on,
+      }),
+    );
+    const afterCompaction = on.mock.calls.find(([name]) => name === "after_compaction")?.[1] as
+      | ((
+          event: {
+            messageCount: number;
+            compactedCount: number;
+            previousSessionId?: string;
+          },
+          ctx: { agentId?: string; sessionId?: string; sessionKey?: string },
+        ) => Promise<void>)
+      | undefined;
+    const sessionEnd = on.mock.calls.find(([name]) => name === "session_end")?.[1] as
+      | ((
+          event: { sessionId: string; sessionKey?: string; reason?: string },
+          ctx: { agentId?: string; sessionId: string; sessionKey?: string },
+        ) => Promise<void>)
+      | undefined;
+    if (!afterCompaction || !sessionEnd) {
+      throw new Error("missing Codex compaction lifecycle hooks");
+    }
+    const sessionKey = "agent:worker:telegram:chat-1";
+    const previous = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey,
+    });
+    const successor = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "session-2",
+      sessionKey,
+    });
+    const newest = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "session-3",
+      sessionKey,
+    });
+    await bindingStore.mutate(previous, {
+      kind: "set",
+      binding: { threadId: "thread-1", cwd: "/repo" },
+    });
+
+    await afterCompaction(
+      { messageCount: 1, compactedCount: 1, previousSessionId: "session-1" },
+      { agentId: "worker", sessionId: "session-2", sessionKey },
+    );
+    await expect(bindingStore.read(previous)).resolves.toBeUndefined();
+    await expect(bindingStore.read(successor)).resolves.toMatchObject({ threadId: "thread-1" });
+
+    await afterCompaction(
+      { messageCount: 1, compactedCount: 1, previousSessionId: "session-2" },
+      { agentId: "worker", sessionId: "session-3", sessionKey },
+    );
+    await afterCompaction(
+      { messageCount: 1, compactedCount: 1, previousSessionId: "session-1" },
+      { agentId: "worker", sessionId: "session-2", sessionKey },
+    );
+    await expect(bindingStore.read(successor)).resolves.toBeUndefined();
+    await expect(bindingStore.read(newest)).resolves.toMatchObject({ threadId: "thread-1" });
+
+    await sessionEnd(
+      { sessionId: "session-1", sessionKey, reason: "reset" },
+      { agentId: "worker", sessionId: "session-1", sessionKey },
+    );
+    await sessionEnd(
+      { sessionId: "session-2", sessionKey, reason: "compaction" },
+      { agentId: "worker", sessionId: "session-2", sessionKey },
+    );
+    await expect(bindingStore.read(newest)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(stateStore.entries()).toHaveLength(1);
+  });
+
+  it("ignores compaction for a session without a Codex binding", async () => {
+    const warn = vi.fn();
+    const on = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+        runtime: createCodexTestRuntime(),
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on,
+      }),
+    );
+    const afterCompaction = on.mock.calls.find(([name]) => name === "after_compaction")?.[1] as
+      | ((event: object, ctx: { sessionId?: string; sessionKey?: string }) => Promise<void>)
+      | undefined;
+    if (!afterCompaction) {
+      throw new Error("missing Codex after_compaction hook");
+    }
+
+    await afterCompaction(
+      { previousSessionId: "session-1" },
+      { sessionId: "session-2", sessionKey: "agent:main:main" },
+    );
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("enables the native hook relay for public Codex app-server attempts", async () => {
-    const harness = createCodexAppServerAgentHarness({ pluginConfig: { appServer: {} } });
+    const harness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: { appServer: {} },
+    });
     const result = { success: true };
     runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
 
@@ -160,6 +342,7 @@ describe("codex plugin", () => {
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "hello" },
       {
+        bindingStore: testCodexAppServerBindingStore,
         pluginConfig: { appServer: {} },
         nativeHookRelay: { enabled: true },
       },
@@ -194,11 +377,7 @@ describe("codex plugin", () => {
         source: "test",
         config: {},
         pluginConfig: { codexPlugins: { enabled: false } },
-        runtime: {
-          config: {
-            current: () => liveConfig,
-          },
-        } as never,
+        runtime: createCodexTestRuntime(() => liveConfig),
         registerAgentHarness,
         registerCommand: vi.fn(),
         registerMediaUnderstandingProvider: vi.fn(),
@@ -218,14 +397,49 @@ describe("codex plugin", () => {
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "calendar" },
       {
+        bindingStore: expect.any(Object),
         pluginConfig: liveConfig.plugins.entries.codex.config,
         nativeHookRelay: { enabled: true },
       },
     );
   });
 
+  it("does not resurrect startup Codex config after the live entry is removed", async () => {
+    const registerAgentHarness = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { appServer: { mode: "yolo" } },
+        runtime: createCodexTestRuntime(() => ({ plugins: { entries: {} } })),
+        registerAgentHarness,
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+    const harness = mockCallArg(registerAgentHarness) as ReturnType<
+      typeof createCodexAppServerAgentHarness
+    >;
+    runCodexAppServerAttemptMock.mockResolvedValueOnce({ success: true });
+
+    await harness.runAttempt({ prompt: "default policy" } as never);
+
+    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
+      { prompt: "default policy" },
+      expect.objectContaining({ pluginConfig: undefined }),
+    );
+  });
+
   it("enables the native hook relay for public Codex side questions", async () => {
-    const harness = createCodexAppServerAgentHarness({ pluginConfig: { appServer: {} } });
+    const harness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: { appServer: {} },
+    });
     const runSideQuestion = harness["runSideQuestion"];
     const result = { text: "ok" };
     runCodexAppServerSideQuestionMock.mockResolvedValueOnce(result);
@@ -238,6 +452,7 @@ describe("codex plugin", () => {
     expect(runCodexAppServerSideQuestionMock).toHaveBeenCalledWith(
       { question: "btw" },
       {
+        bindingStore: testCodexAppServerBindingStore,
         pluginConfig: { appServer: {} },
         nativeHookRelay: { enabled: true },
       },

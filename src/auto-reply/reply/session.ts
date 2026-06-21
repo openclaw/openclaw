@@ -488,6 +488,18 @@ export async function initSessionState(params: {
         entry,
         freshness: entryFreshness,
       });
+  if (previousSessionEntry?.sessionId) {
+    // Retire every native runtime generation before publishing its successor.
+    // Individual reset failures are logged by the fan-out; a successor must
+    // still publish because another harness may already have retired its state.
+    await resetRegisteredAgentHarnessSessions({
+      agentId,
+      sessionId: previousSessionEntry.sessionId,
+      sessionKey,
+      sessionFile: previousSessionEntry.sessionFile,
+      reason: previousSessionEndReason ?? "unknown",
+    });
+  }
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
     previousSessionId: previousSessionEntry?.sessionId,
@@ -867,12 +879,6 @@ export async function initSessionState(params: {
           error: String(error),
         });
       },
-    });
-    await resetRegisteredAgentHarnessSessions({
-      sessionId: previousSessionEntry.sessionId,
-      sessionKey,
-      sessionFile: previousSessionEntry.sessionFile,
-      reason: previousSessionEndReason ?? "unknown",
     });
     void cleanupBrowserSessionsForLifecycleEnd({
       cfg,

@@ -52,13 +52,13 @@ export async function withCodexStartupTimeout<T>(params: {
         };
         timeout = setTimeout(() => {
           timeoutError = new Error("codex app-server startup timed out");
-          timeoutCleanup = Promise.resolve(params.onTimeout?.()).then(
-            () => undefined,
-            () => undefined,
-          );
-          void timeoutCleanup.finally(() => {
-            rejectOnce(timeoutError!);
-          });
+          rejectOnce(timeoutError);
+          timeoutCleanup = Promise.resolve()
+            .then(() => params.onTimeout?.())
+            .then(
+              () => undefined,
+              () => undefined,
+            );
         }, params.timeoutMs);
         const abortListener = () => rejectOnce(new Error("codex app-server startup aborted"));
         params.signal.addEventListener("abort", abortListener, { once: true });
