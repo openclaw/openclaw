@@ -21,10 +21,6 @@ vi.mock("./media-understanding.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
 
-vi.mock("./sticker-vision.runtime.js", () => ({
-  resolveStickerVisionSupportRuntime: async () => false,
-}));
-
 vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/hook-runtime")>(
     "openclaw/plugin-sdk/hook-runtime",
