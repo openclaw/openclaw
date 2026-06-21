@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -342,6 +343,7 @@ export async function runCommandWithTimeout(
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal, killProcessTree } =
     options;
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, baseEnv, env });
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
@@ -394,6 +396,9 @@ export async function runCommandWithTimeout(
       typeof noOutputTimeoutMs === "number" &&
       Number.isFinite(noOutputTimeoutMs) &&
       noOutputTimeoutMs > 0;
+    const resolvedNoOutputTimeoutMs = shouldTrackOutputTimeout
+      ? resolveTimerTimeoutMs(noOutputTimeoutMs, 1)
+      : undefined;
     let removeAbortListener: (() => void) | null = null;
 
     const clearNoOutputTimer = () => {
@@ -496,13 +501,13 @@ export async function runCommandWithTimeout(
         }
         noOutputTimedOut = true;
         killChild();
-      }, Math.floor(noOutputTimeoutMs));
+      }, resolvedNoOutputTimeoutMs);
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
       killChild();
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
     armNoOutputTimer();
     if (signal) {
       const onAbort = () => killChild(false);

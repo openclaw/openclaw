@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -256,6 +257,49 @@ describe("runCommandWithTimeout", () => {
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
       expect(result.code).toBe(124);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "caps oversized process timeouts before arming timers",
+    async () => {
+      vi.useFakeTimers();
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      child.emit("exit", 0, null);
+      child.emit("close", 0, null);
+      const result = await resultPromise;
+      expect(result.termination).toBe("exit");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "caps oversized no-output timeouts before arming timers",
+    async () => {
+      vi.useFakeTimers();
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: 1_000,
+        noOutputTimeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      child.emit("exit", 0, null);
+      child.emit("close", 0, null);
+      const result = await resultPromise;
+      expect(result.termination).toBe("exit");
     },
   );
 

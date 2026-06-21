@@ -1,5 +1,5 @@
-// Telegram tests cover bot plugin behavior.
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
@@ -14,6 +14,10 @@ import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
@@ -143,6 +147,59 @@ function mockMsgContextArg(
   label: string,
 ): MsgContext {
   return mockArg(source, callIndex, argIndex, label) as MsgContext;
+}
+
+async function writeDirectTelegramTranscriptContext(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  chatId: number;
+  senderId: number;
+  sessionId: string;
+  text: string;
+  timestamp: number;
+}) {
+  const route = resolveTelegramConversationRoute({
+    cfg: params.cfg,
+    accountId: "default",
+    chatId: params.chatId,
+    isGroup: false,
+    senderId: params.senderId,
+  }).route;
+  const sessionKey = resolveTelegramConversationBaseSessionKey({
+    cfg: params.cfg,
+    route,
+    chatId: params.chatId,
+    isGroup: false,
+    senderId: params.senderId,
+  });
+  await writeFile(
+    params.storePath,
+    JSON.stringify({
+      [sessionKey]: {
+        sessionId: params.sessionId,
+        chatType: "direct",
+        channel: "telegram",
+      },
+    }),
+    "utf-8",
+  );
+  await writeFile(
+    path.join(path.dirname(params.storePath), `${params.sessionId}.jsonl`),
+    [
+      JSON.stringify({ type: "session", id: params.sessionId }),
+      JSON.stringify({
+        id: "transcript-user-1",
+        type: "message",
+        message: {
+          role: "user",
+          content: params.text,
+          timestamp: params.timestamp,
+        },
+      }),
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
 }
 
 function execApprovalCall(index = 0) {
@@ -2024,6 +2081,153 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("35016")?.sender).toBe("Super Serious Bot");
     expect(messagesById.get("35016")?.body).toBe(fullAnswer);
     expect(messagesById.get("35016")?.body).not.toBe("K");
+  });
+
+  it("keeps direct Telegram media context when transcript context exists", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-media-context-${process.pid}-${Date.now()}.json`;
+    const config = {
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      session: {
+        store: storePath,
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+    await rm(storePath, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({ token: "tok", config });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const baseCtx = {
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+
+      await handler({
+        ...baseCtx,
+        message: {
+          chat: { id: 7771, type: "private" },
+          caption: "the reference image",
+          date: 1778474800,
+          message_id: 100,
+          from: { id: 202, is_bot: false, first_name: "Kesava" },
+          photo: [{ file_id: "reference-photo-1", width: 1, height: 1 }],
+        },
+      });
+
+      await writeDirectTelegramTranscriptContext({
+        cfg: config,
+        storePath,
+        chatId: 7771,
+        senderId: 202,
+        sessionId: "telegram-dm-media-context-session",
+        text: "remember the launch checklist",
+        timestamp: 1778474700000,
+      });
+
+      replySpy.mockClear();
+      await handler({
+        ...baseCtx,
+        message: {
+          chat: { id: 7771, type: "private" },
+          text: "what about the image above?",
+          date: 1778474850,
+          message_id: 101,
+          from: { id: 202, is_bot: false, first_name: "Kesava" },
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = mockMsgContextArg(
+        replySpy as unknown as MockCallSource,
+        0,
+        0,
+        "replySpy call",
+      );
+      const [conversationContext] = requireArray(
+        payload.UntrustedStructuredContext,
+        "structured context",
+      );
+      const contextRecord = requireRecord(conversationContext, "conversation context");
+      const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+      const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+        (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+      );
+      expect(messages.some((message) => message.body === "remember the launch checklist")).toBe(
+        true,
+      );
+      const photoMessage = messages.find((message) => message.message_id === "100");
+      expect(photoMessage?.body).toBe("the reference image");
+      expect(photoMessage?.media_ref).toBe("telegram:file/reference-photo-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
+  it("skips direct transcript context for hard reset messages", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-reset-context-${process.pid}-${Date.now()}.json`;
+    const config = {
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      session: {
+        store: storePath,
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+    await rm(storePath, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({ token: "tok", config });
+      await writeDirectTelegramTranscriptContext({
+        cfg: config,
+        storePath,
+        chatId: 7772,
+        senderId: 202,
+        sessionId: "telegram-dm-reset-context-session",
+        text: "old private transcript text",
+        timestamp: 1778474700000,
+      });
+
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+        message: {
+          chat: { id: 7772, type: "private" },
+          text: "/reset summarize my workspace",
+          date: 1778474850,
+          message_id: 101,
+          from: { id: 202, is_bot: false, first_name: "Kesava" },
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = mockMsgContextArg(
+        replySpy as unknown as MockCallSource,
+        0,
+        0,
+        "replySpy call",
+      );
+      expect(JSON.stringify(payload.UntrustedStructuredContext ?? [])).not.toContain(
+        "old private transcript text",
+      );
+    } finally {
+      await rm(storePath, { force: true });
+    }
   });
 
   it("uses quote text when a Telegram partial reply is received", async () => {

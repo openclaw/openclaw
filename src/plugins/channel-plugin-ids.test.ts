@@ -20,7 +20,6 @@ const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() =>
   }),
 );
 const listPotentialConfiguredChannelPresenceSignals = vi.hoisted(() => vi.fn());
-const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
 const hasMeaningfulChannelConfig = vi.hoisted(() =>
   vi.fn((value: unknown) => {
     return (
@@ -40,7 +39,6 @@ vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
-  hasPotentialConfiguredChannels,
   hasMeaningfulChannelConfig,
 }));
 
@@ -739,12 +737,6 @@ describe("resolveGatewayStartupPluginIds", () => {
           source: "config",
         }));
       });
-    hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
-      if (Object.hasOwn(config, "channels")) {
-        return Object.keys(config.channels ?? {}).length > 0;
-      }
-      return true;
-    });
     useManifestRegistryFixture();
     loadPluginManifestRegistryForInstalledIndex
       .mockReset()
@@ -2813,12 +2805,6 @@ describe("resolveConfiguredChannelPluginIds", () => {
           source: "config",
         }));
       });
-    hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
-      if (Object.hasOwn(config, "channels")) {
-        return Object.keys(config.channels ?? {}).length > 0;
-      }
-      return false;
-    });
     useManifestRegistryFixture();
   });
 
@@ -2995,7 +2981,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockReturnValue([]);
     listPotentialConfiguredChannelPresenceSignals.mockReset().mockReturnValue([]);
-    hasPotentialConfiguredChannels.mockReset().mockReturnValue(false);
     hasMeaningfulChannelConfig.mockClear();
     useManifestRegistryFixture();
   });
@@ -3592,7 +3577,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   it("uses manifest env vars for read-only channel presence checks", () => {
     listPotentialConfiguredChannelIds.mockReturnValue([]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([]);
-    hasPotentialConfiguredChannels.mockReturnValue(false);
 
     expect(
       hasConfiguredChannelsForReadOnlyScope({

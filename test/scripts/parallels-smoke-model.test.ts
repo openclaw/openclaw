@@ -351,6 +351,25 @@ describe("Parallels smoke model selection", () => {
     ).toBe(false);
   });
 
+  it("rejects short flags as Parallels smoke option values", () => {
+    const cases = [
+      [TS_PATHS.linux, "--mode", "-h"],
+      [TS_PATHS.macos, "--vm", "-h"],
+      [TS_PATHS.windows, "--model", "-h"],
+      [TS_PATHS.npmUpdate, "--target-tarball", "-h"],
+    ];
+
+    for (const [scriptPath, flag, value] of cases) {
+      const result = spawnNodeEvalSync(
+        `process.argv = ["node", "${scriptPath}", "${flag}", "${value}"]; await import("./${scriptPath}");`,
+        { env: process.env, imports: ["tsx"] },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`error: ${flag} requires a value`);
+    }
+  });
+
   it("keeps provider auth and model defaults in the shared TypeScript helper", () => {
     const providerAuth = readFileSync(TS_PATHS.providerAuth, "utf8");
 

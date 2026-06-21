@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   hasMeaningfulChannelConfig,
-  hasPotentialConfiguredChannels,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
   listPotentialConfiguredChannelIds,
@@ -33,15 +32,11 @@ function expectPotentialConfiguredChannelCase(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   expectedIds: string[];
-  expectedConfigured: boolean;
   options?: Parameters<typeof listPotentialConfiguredChannelIds>[2];
 }) {
   const options = params.options ?? matrixPresenceOptions;
   expect(listPotentialConfiguredChannelIds(params.cfg, params.env, options)).toEqual(
     params.expectedIds,
-  );
-  expect(hasPotentialConfiguredChannels(params.cfg, params.env, options)).toBe(
-    params.expectedConfigured,
   );
 }
 
@@ -70,7 +65,6 @@ describe("config presence", () => {
       cfg,
       env,
       expectedIds: [],
-      expectedConfigured: false,
       options: { includePersistedAuthState: false },
     });
   });
@@ -97,7 +91,6 @@ describe("config presence", () => {
       cfg: {},
       env,
       expectedIds: ["matrix"],
-      expectedConfigured: true,
       options: { includePersistedAuthState: false },
     });
     expect(
@@ -120,7 +113,6 @@ describe("config presence", () => {
       cfg: {},
       env,
       expectedIds: ["matrix"],
-      expectedConfigured: true,
       options: {
         persistedAuthStateProbe: {
           listChannelIds: () => ["matrix"],
