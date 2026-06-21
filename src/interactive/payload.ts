@@ -503,6 +503,18 @@ export function interactiveReplyToPresentation(
   return blocks.length > 0 ? { blocks } : undefined;
 }
 
+/**
+ * Render presentation blocks as plain-text fallback for channels that do not
+ * support native interactive controls.
+ *
+ * Text and context blocks are rendered as-is. Buttons with a `command`-typed
+ * action render as `label: \`command\`` so the value is copyable. Buttons with
+ * a `callback` action, legacy `value`, or `select` options render as label-only
+ * to keep opaque callback values private — downstream consumers should not
+ * claim a manual command is available unless they verify one was actually rendered.
+ *
+ * Exported through the plugin SDK for channel adapters.
+ */
 export function renderMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
   emptyFallback?: string | null;
