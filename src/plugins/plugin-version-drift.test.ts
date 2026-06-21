@@ -348,6 +348,19 @@ describe("resolvePluginVersionDriftUpdateCommand", () => {
     ).toBe("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
   });
 
+  it("prefers the parsed exact npm spec package over inconsistent drift metadata", () => {
+    expect(
+      resolvePluginVersionDriftUpdateCommand({
+        pluginId: "brave",
+        installedVersion: "2026.6.9",
+        gatewayVersion: "2026.6.10-beta.1",
+        source: "npm",
+        packageName: "@openclaw/other-plugin",
+        spec: "@openclaw/brave-plugin@2026.6.9",
+      }),
+    ).toBe("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
+  });
+
   it("keeps plugin-id updates for floating npm install records", () => {
     expect(
       resolvePluginVersionDriftUpdateCommand({

@@ -31,7 +31,7 @@ function resolveExactNpmPinPackageName(entry: PluginVersionDriftEntry): string |
   if (parsed?.selectorKind !== "exact-version") {
     return undefined;
   }
-  return entry.packageName ?? parsed.name;
+  return parsed.name;
 }
 
 /** Exact npm pins need a package@version target; id-only updates preserve the old pin. */
