@@ -923,6 +923,13 @@ async function restartStartupEntry(
   return { outcome: "completed" };
 }
 
+function resolveScheduledTaskRenderEnv(
+  env: GatewayServiceEnv,
+  environment: GatewayServiceEnv | undefined,
+): GatewayServiceEnv {
+  return environment ? { ...env, ...environment } : env;
+}
+
 async function writeScheduledTaskScript({
   env,
   programArguments,
@@ -933,12 +940,18 @@ async function writeScheduledTaskScript({
   scriptPath: string;
   taskLaunchPath: string;
   taskDescription: string;
+  taskEnv: GatewayServiceEnv;
 }> {
   await assertSchtasksAvailable().catch(() => undefined);
-  const scriptPath = resolveTaskScriptPath(env);
-  const taskLaunchPath = resolveTaskLauncherScriptPath(env, scriptPath);
+  const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
+  const scriptPath = resolveTaskScriptPath(taskEnv);
+  const taskLaunchPath = resolveTaskLauncherScriptPath(taskEnv, scriptPath);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const taskDescription = resolveGatewayServiceDescription({
+    env: taskEnv,
+    environment,
+    description,
+  });
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,
@@ -953,7 +966,7 @@ async function writeScheduledTaskScript({
     });
     await fs.writeFile(taskLaunchPath, launcher, "utf8");
   }
-  return { scriptPath, taskLaunchPath, taskDescription };
+  return { scriptPath, taskLaunchPath, taskDescription, taskEnv };
 }
 
 export async function stageScheduledTask({
@@ -1243,7 +1256,7 @@ export async function installScheduledTask(
 ): Promise<{ scriptPath: string }> {
   const staged = await writeScheduledTaskScript(args);
   await activateScheduledTask({
-    env: args.env,
+    env: staged.taskEnv,
     stdout: args.stdout,
     scriptPath: staged.scriptPath,
     taskLaunchPath: staged.taskLaunchPath,

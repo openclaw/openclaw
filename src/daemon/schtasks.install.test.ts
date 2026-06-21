@@ -246,18 +246,27 @@ describe("installScheduledTask", () => {
   it("uses the hidden launcher for generated Windows gateway service installs", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
+      const callerEnv = {
+        ...env,
+        HOME: env.USERPROFILE,
+        USERDOMAIN: "WORKSTATION",
+        USERNAME: "alice",
+      };
       const gatewayEnv = buildServiceEnvironment({
-        env: {
-          ...env,
-          HOME: env.USERPROFILE,
-          USERDOMAIN: "WORKSTATION",
-          USERNAME: "alice",
-        },
+        env: callerEnv,
         port: 18789,
         platform: "win32",
       });
 
-      const { scriptPath } = await installDefaultGatewayTask(gatewayEnv as Record<string, string>);
+      expect(callerEnv.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
+      expect(gatewayEnv.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
+
+      const { scriptPath } = await installScheduledTask({
+        env: callerEnv,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js"],
+        environment: gatewayEnv,
+      });
       const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
       const launcher = await fs.readFile(launcherPath, "utf8");
 
@@ -268,7 +277,7 @@ describe("installScheduledTask", () => {
         "OpenClaw Gateway",
         "/XML",
       ]);
-      expect(schtasksCalls[2]).not.toContain("/RU");
+      expect(schtasksCalls[2]?.slice(6)).toEqual(["/RU", "WORKSTATION\\alice", "/NP"]);
       const captured = xmlPayloadCaptures.find((entry) => entry.index === 2);
       expect(captured?.xml).toContain("gateway.vbs</Command>");
       expect(launcher).toContain("WScript.Shell");
