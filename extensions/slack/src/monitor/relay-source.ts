@@ -22,6 +22,19 @@ export type SlackRelaySourceConfig = {
 
 export type SlackRelayIdentity = SlackSendIdentity;
 
+type OpenRelayWebSocket = {
+  ws: WebSocket;
+  bufferedMessages: RawData[];
+  detachBuffer: () => void;
+};
+
+const SLACK_RELAY_ROUTE_KINDS = new Set(["user_group", "thread_affinity", "channel_default"]);
+
+export type SlackRelayRoute = {
+  kind: "user_group" | "thread_affinity" | "channel_default";
+  key: string;
+};
+
 export async function monitorSlackRelaySource(params: {
   config: SlackRelaySourceConfig;
   handleSlackMessage: SlackMessageHandler;
@@ -32,9 +45,9 @@ export async function monitorSlackRelaySource(params: {
 }): Promise<void> {
   let reconnectAttempts = 0;
   while (!params.abortSignal?.aborted) {
-    let ws: WebSocket | undefined;
+    let connection: OpenRelayWebSocket | undefined;
     try {
-      ws = await openRelayWebSocket(params.config, params.abortSignal);
+      connection = await openRelayWebSocket(params.config, params.abortSignal);
       reconnectAttempts = 0;
       params.setStatus?.({
         connected: true,
@@ -44,7 +57,7 @@ export async function monitorSlackRelaySource(params: {
       });
       params.runtime.log?.(`slack relay mode connected gateway_id:${params.config.gatewayId}`);
       await runRelayWebSocket({
-        ws,
+        connection,
         handleSlackMessage: params.handleSlackMessage,
         runtime: params.runtime,
         abortSignal: params.abortSignal,
@@ -56,12 +69,6 @@ export async function monitorSlackRelaySource(params: {
         break;
       }
       reconnectAttempts += 1;
-      if (
-        SLACK_SOCKET_RECONNECT_POLICY.maxAttempts > 0 &&
-        reconnectAttempts >= SLACK_SOCKET_RECONNECT_POLICY.maxAttempts
-      ) {
-        throw err;
-      }
       const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
       params.setStatus?.({
         connected: false,
@@ -72,13 +79,13 @@ export async function monitorSlackRelaySource(params: {
       params.runtime.log?.(
         warn(
           `slack relay mode disconnected; reconnecting in ${Math.round(delayMs / 1000)}s ` +
-            `(attempt ${reconnectAttempts}/${SLACK_SOCKET_RECONNECT_POLICY.maxAttempts}) ` +
+            `(attempt ${reconnectAttempts}) ` +
             `reason="${formatUnknownError(err)}"`,
         ),
       );
       await sleepWithAbort(delayMs, params.abortSignal);
     } finally {
-      closeRelayWebSocket(ws);
+      closeRelayWebSocket(connection?.ws);
       params.setIdentity?.(undefined);
     }
   }
@@ -87,7 +94,7 @@ export async function monitorSlackRelaySource(params: {
 function openRelayWebSocket(
   config: SlackRelaySourceConfig,
   abortSignal?: AbortSignal,
-): Promise<WebSocket> {
+): Promise<OpenRelayWebSocket> {
   if (abortSignal?.aborted) {
     return Promise.reject(new Error("Slack relay websocket aborted before connect"));
   }
@@ -99,6 +106,10 @@ function openRelayWebSocket(
       },
       handshakeTimeout: 30_000,
     });
+    const bufferedMessages: RawData[] = [];
+    const onEarlyMessage = (data: RawData) => bufferedMessages.push(data);
+    const detachBuffer = () => ws.off("message", onEarlyMessage);
+    ws.on("message", onEarlyMessage);
 
     const cleanup = () => {
       ws.off("open", onOpen);
@@ -108,18 +119,21 @@ function openRelayWebSocket(
     };
     const onOpen = () => {
       cleanup();
-      resolve(ws);
+      resolve({ ws, bufferedMessages, detachBuffer });
     };
     const onError = (error: Error) => {
       cleanup();
+      detachBuffer();
       reject(error);
     };
     const onClose = (code: number, reason: Buffer) => {
       cleanup();
+      detachBuffer();
       reject(new Error(formatRelayClose(code, reason)));
     };
     const onAbort = () => {
       cleanup();
+      detachBuffer();
       closeRelayWebSocket(ws);
       reject(new Error("Slack relay websocket aborted during connect"));
     };
@@ -132,19 +146,20 @@ function openRelayWebSocket(
 }
 
 function runRelayWebSocket(params: {
-  ws: WebSocket;
+  connection: OpenRelayWebSocket;
   handleSlackMessage: SlackMessageHandler;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
   setStatus?: (next: Record<string, unknown>) => void;
   setIdentity?: (identity: SlackRelayIdentity | undefined) => void;
 }): Promise<void> {
+  const { ws } = params.connection;
   let pending = Promise.resolve();
   return new Promise((resolve, reject) => {
     const cleanup = () => {
-      params.ws.off("message", onMessage);
-      params.ws.off("error", onError);
-      params.ws.off("close", onClose);
+      ws.off("message", onMessage);
+      ws.off("error", onError);
+      ws.off("close", onClose);
       params.abortSignal?.removeEventListener("abort", onAbort);
     };
     const settleResolve = () => {
@@ -159,7 +174,7 @@ function runRelayWebSocket(params: {
       pending = pending
         .then(() =>
           handleRelayFrame({
-            ws: params.ws,
+            ws,
             data,
             handleSlackMessage: params.handleSlackMessage,
             setStatus: params.setStatus,
@@ -184,14 +199,18 @@ function runRelayWebSocket(params: {
       settleReject(new Error(closeReason));
     };
     const onAbort = () => {
-      closeRelayWebSocket(params.ws);
+      closeRelayWebSocket(ws);
       settleResolve();
     };
 
-    params.ws.on("message", onMessage);
-    params.ws.once("error", onError);
-    params.ws.once("close", onClose);
+    params.connection.detachBuffer();
+    ws.on("message", onMessage);
+    ws.once("error", onError);
+    ws.once("close", onClose);
     params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    for (const message of params.connection.bufferedMessages) {
+      onMessage(message);
+    }
   });
 }
 
@@ -215,15 +234,16 @@ async function handleRelayFrame(params: {
   }
   const now = Date.now();
   params.setStatus?.({ lastEventAt: now, lastInboundAt: now });
-  // Relay delivery is already authorized by its user-group mention route.
+  params.setStatus?.({ relayRoute: event.route });
+  // Relay delivery is already authorized by the router's selected route.
   await params.handleSlackMessage(event.message, {
     source: "message",
     wasMentioned: true,
   });
-  sendRelayAck(params.ws, event.envelopeId);
+  sendRelayAck(params.ws, event.deliveryId);
 }
 
-function buildRelayWebSocketUrl(config: SlackRelaySourceConfig): string {
+export function buildRelayWebSocketUrl(config: SlackRelaySourceConfig): string {
   const url = new URL(config.url);
   if (url.protocol === "http:") {
     url.protocol = "ws:";
@@ -276,18 +296,30 @@ function rawDataToString(data: RawData): string {
 
 function extractRelaySlackMessageEvent(
   frame: unknown,
-): { envelopeId?: string; message: SlackMessageEvent } | undefined {
+): { deliveryId: string; message: SlackMessageEvent; route: SlackRelayRoute } | undefined {
   const record = asRecord(frame);
-  if (!record) {
+  if (!record || record.type !== "slack_event") {
     return undefined;
   }
-  const event = asRecord(record.event);
+  const deliveryId = stringValue(record.delivery_id);
+  const routeRecord = asRecord(record.route);
+  const routeKind = stringValue(routeRecord?.kind);
+  const routeKey = stringValue(routeRecord?.key);
+  const payload = asRecord(record.payload);
+  const event = asRecord(payload?.event);
   if (event?.type !== "message" || typeof event.channel !== "string") {
     return undefined;
   }
+  if (!deliveryId || !routeKind || !SLACK_RELAY_ROUTE_KINDS.has(routeKind) || !routeKey) {
+    return undefined;
+  }
   return {
-    envelopeId: stringValue(record.event_id),
+    deliveryId,
     message: event as SlackMessageEvent,
+    route: {
+      kind: routeKind as SlackRelayRoute["kind"],
+      key: routeKey,
+    },
   };
 }
 
@@ -325,14 +357,14 @@ function extractRelayIdentity(record: Record<string, unknown>): SlackRelayIdenti
   };
 }
 
-function sendRelayAck(ws: WebSocket, envelopeId: string | undefined): void {
+function sendRelayAck(ws: WebSocket, deliveryId: string): void {
   if (ws.readyState !== WebSocket.OPEN) {
     return;
   }
   ws.send(
     JSON.stringify({
       type: "ack",
-      envelope_id: envelopeId,
+      delivery_id: deliveryId,
     }),
   );
 }
