@@ -290,7 +290,7 @@ describe("feishu setup wizard status", () => {
     });
 
     expect(status.configured).toBe(true);
-    expect(status.statusLines).toEqual(["Feishu: connected as Feishu Main"]);
+    expect(status.statusLines).toEqual(["Feishu: 已连接为 Feishu Main"]);
     expect(probeFeishuMock).toHaveBeenCalledWith({
       accountId: "main-bot",
       selectionSource: "explicit-default",
