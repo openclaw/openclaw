@@ -232,6 +232,24 @@ describe("package-mac-dist plist validation", () => {
     expect(result.stderr).not.toContain("node reran after failed install");
   });
 
+  it("cleans the temporary notary zip when notarization exits early", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const notaryBlock = script.slice(
+      script.indexOf('if [[ "$NOTARIZE" == "1" ]]'),
+      script.indexOf('if [[ "$SKIP_DMG" != "1" ]]'),
+    );
+
+    expect(script).toContain("cleanup_notary_zip()");
+    expect(notaryBlock).toContain("NOTARY_ZIP_PENDING_CLEANUP=1");
+    expect(notaryBlock).toContain("trap cleanup_notary_zip EXIT");
+    expect(notaryBlock).toContain(
+      'STAPLE_APP_PATH="$APP" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$NOTARY_ZIP"',
+    );
+    expect(notaryBlock).toContain('rm -f "$NOTARY_ZIP"');
+    expect(notaryBlock).toContain("NOTARY_ZIP_PENDING_CLEANUP=0");
+    expect(notaryBlock).toContain("trap - EXIT");
+  });
+
   it("fails closed when required dSYM outputs are missing", () => {
     const script = readFileSync(scriptPath, "utf8");
     const dsymBlock = script.slice(script.indexOf('if [[ "$SKIP_DSYM" != "1" ]]'));
@@ -245,6 +263,15 @@ describe("package-mac-dist plist validation", () => {
     expect(dsymBlock).toContain("Error: missing DWARF binaries for dSYM merge");
     expect(dsymBlock).toContain("Error: dSYM not found");
     expect(dsymBlock).toContain("exit 1");
+    expect(script).toContain('if ! cp -R "$1" "$TMP_DSYM"; then');
+    expect(dsymBlock).toContain("cleanup_tmp_dsym");
+    expect(dsymBlock).toContain('copy_dsym_to_tmp "${DSYM_PATHS[0]}"');
+    expect(dsymBlock).not.toContain('cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"');
+    expect(dsymBlock).toContain(
+      'if ! /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"; then',
+    );
+    expect(dsymBlock).toContain('if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then');
+    expect(dsymBlock).toContain('rm -rf "$TMP_DSYM"');
     expect(dsymBlock).not.toContain("WARN:");
     expect(dsymBlock).not.toContain("continuing");
   });

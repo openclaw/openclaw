@@ -149,6 +149,9 @@ export class CodexAppServerEventProjector {
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
+  // Codex emits each typed item completion before its matching raw response item.
+  // Pair by protocol order because contributors may rewrite only the typed text.
+  private pendingRawCommentaryEchoes = 0;
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
   private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
@@ -170,6 +173,8 @@ export class CodexAppServerEventProjector {
     string,
     { toolName: string; meta?: string; asyncStarted?: boolean }
   >();
+  private readonly terminalPresentationClearedItemIds = new Set<string>();
+  private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
   private readonly sideEffectingToolItemIds = new Set<string>();
   private readonly sideEffectingDynamicToolCallIds = new Set<string>();
   private readonly toolTranscriptMessages: AgentMessage[] = [];
@@ -214,6 +219,21 @@ export class CodexAppServerEventProjector {
   hasCompletedTerminalAssistantText(): boolean {
     const finalItem = this.resolveFinalAssistantTextItem();
     return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
+  }
+
+  /** Resolves the shared model-order position for a native tool item. */
+  recordNativeToolOutcome(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.nativeToolOutcomeOrdinals.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const ordinal = this.params.allocateToolOutcomeOrdinal?.(item.id);
+    if (ordinal !== undefined) {
+      this.nativeToolOutcomeOrdinals.set(item.id, ordinal);
+    }
   }
 
   async handleNotification(notification: CodexServerNotification): Promise<void> {
@@ -434,6 +454,7 @@ export class CodexAppServerEventProjector {
     sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
   }): void {
+    const resultText = collectDynamicToolContentText(params.contentItems);
     if (params.asyncStarted === true) {
       const existing = this.toolMetas.get(params.callId);
       this.toolMetas.set(params.callId, {
@@ -445,11 +466,22 @@ export class CodexAppServerEventProjector {
     this.recordToolTranscriptResult({
       id: params.callId,
       name: params.tool,
-      text: collectDynamicToolContentText(params.contentItems),
+      text: resultText,
       isError: !params.success,
     });
-    const terminalType = params.terminalType ?? (params.success ? "completed" : "error");
-    if (terminalType !== "blocked" && params.sideEffectEvidence === true) {
+    if (!params.success && params.terminalType === "blocked") {
+      this.lastNativeToolError = {
+        toolName: params.tool,
+        error: resultText || "codex dynamic tool blocked",
+      };
+    } else if (
+      params.success &&
+      this.lastNativeToolError &&
+      !this.lastNativeToolError.mutatingAction
+    ) {
+      this.lastNativeToolError = undefined;
+    }
+    if (params.sideEffectEvidence === true) {
       this.sideEffectingDynamicToolCallIds.add(params.callId);
     }
   }
@@ -570,6 +602,7 @@ export class CodexAppServerEventProjector {
     if (itemId) {
       this.activeItemIds.add(itemId);
     }
+    this.recordNativeToolOutcome(item);
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.add(itemId);
       await runAgentHarnessBeforeCompactionHook({
@@ -610,6 +643,8 @@ export class CodexAppServerEventProjector {
 
   private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    this.recordNativeToolOutcome(item);
+    this.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (itemId) {
       this.activeItemIds.delete(itemId);
@@ -621,6 +656,7 @@ export class CodexAppServerEventProjector {
       this.assistantTextByItem.set(item.id, item.text);
       if (item.text && this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text });
+        this.pendingRawCommentaryEchoes += 1;
       }
     }
     this.recordNativeGeneratedMedia(item);
@@ -752,7 +788,23 @@ export class CodexAppServerEventProjector {
         "codex app-server turn failed";
       this.promptErrorSource = "prompt";
     }
-    for (const item of turn.items ?? []) {
+    const turnItems = turn.items ?? [];
+    // The final snapshot is authoritative when item notifications were omitted.
+    // Only its last relevant tool may change the terminal presentation.
+    for (let index = turnItems.length - 1; index >= 0; index -= 1) {
+      const item = turnItems[index];
+      if (!item || !this.isCurrentTurnSnapshotItem(item)) {
+        continue;
+      }
+      if (item?.type === "dynamicToolCall") {
+        break;
+      }
+      if (shouldClearTerminalPresentationForNativeItem(item)) {
+        this.clearTerminalPresentationForNativeItem(item);
+        break;
+      }
+    }
+    for (const item of turnItems) {
       this.rememberAssistantPhase(item);
       if (item.type === "agentMessage" && typeof item.text === "string") {
         this.rememberAssistantItem(item.id);
@@ -866,12 +918,16 @@ export class CodexAppServerEventProjector {
     if (readString(item, "role") !== "assistant") {
       return;
     }
+    const phase = readString(item, "phase");
+    if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
+      this.pendingRawCommentaryEchoes -= 1;
+      return;
+    }
     const text = extractRawAssistantText(item);
     if (!text) {
       return;
     }
     const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
-    const phase = readString(item, "phase");
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }
@@ -1107,6 +1163,26 @@ export class CodexAppServerEventProjector {
     if (params.phase === "result") {
       this.emitAfterToolCallObservation(item);
     }
+  }
+
+  private clearTerminalPresentationForNativeItem(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.terminalPresentationClearedItemIds.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const toolCallOrdinal = this.nativeToolOutcomeOrdinals.get(item.id);
+    this.terminalPresentationClearedItemIds.add(item.id);
+    this.params.onToolOutcome?.({
+      toolName: itemName(item) ?? item.type,
+      argsHash: "",
+      resultHash: "",
+      ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
+      terminalPresentation: undefined,
+      presentationOnly: true,
+    });
   }
 
   private recordNativeToolError(params: {
@@ -1373,6 +1449,11 @@ export class CodexAppServerEventProjector {
     if (!item) {
       return;
     }
+    if (isSideEffectingNativeToolItem(item)) {
+      this.sideEffectingToolItemIds.add(item.id);
+    } else {
+      this.sideEffectingToolItemIds.delete(item.id);
+    }
     const toolName = itemName(item);
     if (!toolName) {
       return;
@@ -1384,11 +1465,6 @@ export class CodexAppServerEventProjector {
       ...(meta ? { meta } : {}),
       ...(existing?.asyncStarted ? { asyncStarted: true } : {}),
     });
-    if (isSideEffectingNativeToolItem(item)) {
-      this.sideEffectingToolItemIds.add(item.id);
-    } else {
-      this.sideEffectingToolItemIds.delete(item.id);
-    }
   }
 
   private recordNativeToolTranscriptCall(item: CodexThreadItem | undefined): void {
@@ -2168,7 +2244,31 @@ function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
 }
 
 function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
-  return item.type === "commandExecution" || item.type === "fileChange";
+  if (item.type === "commandExecution") {
+    // Codex commandActions describe presentation, not safety. Upstream may
+    // classify mutating commands as read/search, so native commands fail closed.
+    return true;
+  }
+  return (
+    item.type === "fileChange" ||
+    item.type === "collabAgentToolCall" ||
+    item.type === "imageGeneration"
+  );
+}
+
+function shouldClearTerminalPresentationForNativeItem(item: CodexThreadItem): boolean {
+  switch (item.type) {
+    case "collabAgentToolCall":
+    case "commandExecution":
+    case "fileChange":
+    case "imageGeneration":
+    case "imageView":
+    case "mcpToolCall":
+    case "webSearch":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function nativeToolActionFingerprint(item: CodexThreadItem): string | undefined {

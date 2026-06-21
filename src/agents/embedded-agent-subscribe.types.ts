@@ -73,6 +73,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
     sessionKey?: string;
   }) => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
+  /** "finishing" defers both success and error terminal ownership to the caller. */
   terminalLifecyclePhase?: "end" | "finishing";
   /** Read immediately before terminal lifecycle emission. */
   isTerminalAborted?: () => boolean | undefined;

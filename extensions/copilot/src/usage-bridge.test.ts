@@ -3,7 +3,6 @@ import type { NormalizedUsage } from "openclaw/plugin-sdk/agent-harness-runtime"
 import { describe, expect, it } from "vitest";
 import {
   buildCopilotAssistantUsage,
-  deriveCopilotUsageTotal,
   normalizeCopilotUsage,
 } from "./usage-bridge.js";
 
@@ -251,21 +250,4 @@ describe("usage-bridge", () => {
     });
   });
 
-  describe("deriveCopilotUsageTotal", () => {
-    it("returns undefined when usage is undefined", () => {
-      expect(deriveCopilotUsageTotal(undefined)).toBeUndefined();
-    });
-
-    it("sums input/output/cacheRead/cacheWrite for total", () => {
-      const usage: NormalizedUsage = {
-        cacheRead: 3,
-        cacheWrite: 4,
-        input: 1,
-        output: 2,
-        total: 999,
-      };
-
-      expect(deriveCopilotUsageTotal(usage)).toBe(10);
-    });
-  });
 });

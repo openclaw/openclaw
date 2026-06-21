@@ -893,7 +893,10 @@ export function applyJobResult(
         }
       }
       // Apply exponential backoff for errored jobs to prevent retry storms.
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      const backoff = errorBackoffMs(
+        job.state.consecutiveErrors ?? 1,
+        state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+      );
       normalNext = computeNormalNext();
       const backoffNext = result.endedAt + backoff;
       // Use whichever is later: the natural next run or the backoff delay.
@@ -1597,13 +1600,13 @@ function deferPendingBackoffMissedCronSlots(
 export async function runMissedJobs(
   state: CronServiceState,
   opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
-) {
+): Promise<ReadonlySet<string>> {
   if (state.stopped) {
-    return;
+    return new Set();
   }
   const plan = await planStartupCatchup(state, opts);
   if (plan.candidates.length === 0 && plan.deferredJobs.length === 0) {
-    return;
+    return new Set();
   }
 
   const outcomes = await executeStartupCatchupPlan(state, plan);
@@ -1611,6 +1614,7 @@ export async function runMissedJobs(
   for (const outcome of finalizedOutcomes) {
     maybeNotifyIsolatedAgentSetupTimeout(state, outcome);
   }
+  return new Set(plan.deferredJobs.map((deferred) => deferred.jobId));
 }
 
 async function planStartupCatchup(

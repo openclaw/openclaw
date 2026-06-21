@@ -105,6 +105,9 @@ function manifestSuppressionMatchesConditions(params: {
   }
   if (when.baseUrlHosts?.length) {
     const baseUrlHost = normalizeBaseUrlHost(params.baseUrl ?? configuredProvider?.baseUrl);
+    if (!baseUrlHost && !params.baseUrl && !configuredProvider?.baseUrl) {
+      return true;
+    }
     if (!baseUrlHost) {
       return false;
     }

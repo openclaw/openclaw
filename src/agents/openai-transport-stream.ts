@@ -82,7 +82,7 @@ import {
 import {
   findOpenAIStrictToolProjectionDiagnostics,
   normalizeOpenAIStrictToolParameters,
-  resolveOpenAIStrictToolFlagForProjection,
+  resolveOpenAIProjectedToolsStrictToolFlag,
 } from "./openai-tool-schema.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
@@ -1336,7 +1336,7 @@ function resolveOpenAIStrictToolFlagWithDiagnostics(
   strictSetting: boolean | null | undefined,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): boolean | undefined {
-  const strict = resolveOpenAIStrictToolFlagForProjection(projection, strictSetting);
+  const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
   if (strictSetting === true && strict === false && log.isEnabled("debug", "any")) {
     const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
     if (!shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)) {
@@ -1875,12 +1875,18 @@ function buildOpenAISdkClientOptions(model: Model): { timeout?: number } {
 function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
-): { signal?: AbortSignal; timeout?: number } | undefined {
+  options?: { stream?: boolean },
+): { signal?: AbortSignal; timeout?: number; headers?: Record<string, string> } | undefined {
   const timeout = resolveOpenAISdkTimeoutMs(model);
-  if (timeout === undefined && !signal) {
+  const headers =
+    options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
+      ? { Accept: "text/event-stream" }
+      : undefined;
+  if (timeout === undefined && !signal && !headers) {
     return undefined;
   }
   return {
+    ...(headers ? { headers } : {}),
     ...(signal ? { signal } : {}),
     ...(timeout !== undefined ? { timeout } : {}),
   };
@@ -1967,7 +1973,9 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           assertCodeModeResponsesToolSurface(params);
         }
         const requestStartedAt = Date.now();
-        const requestOptions = buildOpenAISdkRequestOptions(model, options?.signal);
+        const requestOptions = buildOpenAISdkRequestOptions(model, options?.signal, {
+          stream: true,
+        });
         emitModelTransportDebug(
           log,
           `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
@@ -2516,7 +2524,11 @@ function hasToolHistory(messages: Context["messages"]): boolean {
   return messages.some(
     (message) =>
       message.role === "toolResult" ||
-      (message.role === "assistant" && message.content.some((block) => block.type === "toolCall")),
+      // Assistant content can be a raw string from transcript replay; a string
+      // never carries tool calls, so it should not count toward tool history.
+      (message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some((block) => block.type === "toolCall")),
   );
 }
 

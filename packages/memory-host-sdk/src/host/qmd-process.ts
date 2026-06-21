@@ -1,6 +1,7 @@
 // Memory Host SDK module implements qmd process behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
+import path from "node:path";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
@@ -10,6 +11,13 @@ export type CliSpawnInvocation = {
   shell?: boolean;
   windowsHide?: boolean;
 };
+
+type QmdChildProcess = {
+  pid?: number;
+  kill: (signal?: NodeJS.Signals) => boolean;
+};
+
+const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
 export type QmdBinaryUnavailableReason = "binary" | "workspace-cwd";
 
@@ -92,10 +100,11 @@ export async function checkQmdBinaryAvailability(params: {
       shell: spawnInvocation.shell,
       windowsHide: spawnInvocation.windowsHide,
       stdio: "ignore",
+      detached: shouldUseQmdProcessGroup(),
     });
     const timeoutMs = resolveSafeTimeoutDelayMs(params.timeoutMs ?? 2_000, { minMs: 0 });
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      signalQmdProcessTree(child, "SIGKILL");
       finish({
         available: false,
         reason: "binary",
@@ -108,7 +117,7 @@ export async function checkQmdBinaryAvailability(params: {
     });
     child.once("spawn", () => {
       didSpawn = true;
-      child.kill();
+      signalQmdProcessTree(child);
       finish({ available: true });
     });
     child.once("close", () => {
@@ -162,6 +171,7 @@ export async function runCliCommand(params: {
       cwd: params.cwd,
       shell: params.spawnInvocation.shell,
       windowsHide: params.spawnInvocation.windowsHide,
+      detached: shouldUseQmdProcessGroup(),
     });
     let stdout = "";
     let stderr = "";
@@ -172,7 +182,7 @@ export async function runCliCommand(params: {
       params.timeoutMs === undefined ? undefined : resolveSafeTimeoutDelayMs(params.timeoutMs);
     const timer = timeoutMs
       ? setTimeout(() => {
-          child.kill("SIGKILL");
+          signalQmdProcessTree(child, "SIGKILL");
           reject(new Error(`${params.commandSummary} timed out after ${timeoutMs}ms`));
         }, timeoutMs)
       : null;
@@ -222,6 +232,93 @@ export async function runCliCommand(params: {
       }
     });
   });
+}
+
+function shouldUseQmdProcessGroup(): boolean {
+  return process.platform !== "win32";
+}
+
+function getEnvValueCaseInsensitive(
+  env: Record<string, string | undefined>,
+  expectedKey: string,
+): string | undefined {
+  const direct = env[expectedKey];
+  if (direct !== undefined) {
+    return direct;
+  }
+  const expected = expectedKey.toUpperCase();
+  const actualKey = Object.keys(env).find((key) => key.toUpperCase() === expected);
+  return actualKey ? env[actualKey] : undefined;
+}
+
+function normalizeWindowsSystemRoot(raw: string | undefined): string | null {
+  const trimmed = raw?.trim();
+  if (
+    !trimmed ||
+    trimmed.includes("\0") ||
+    trimmed.includes("\r") ||
+    trimmed.includes("\n") ||
+    trimmed.includes(";")
+  ) {
+    return null;
+  }
+  const normalized = path.win32.normalize(trimmed);
+  if (!path.win32.isAbsolute(normalized) || normalized.startsWith("\\\\")) {
+    return null;
+  }
+  const parsed = path.win32.parse(normalized);
+  if (!/^[A-Za-z]:\\$/.test(parsed.root) || normalized.length <= parsed.root.length) {
+    return null;
+  }
+  return normalized.replace(/[\\/]+$/, "");
+}
+
+function resolveWindowsTaskkillPath(env: Record<string, string | undefined> = process.env): string {
+  const systemRoot =
+    normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "SystemRoot")) ??
+    normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "WINDIR")) ??
+    DEFAULT_WINDOWS_SYSTEM_ROOT;
+  return path.win32.join(systemRoot, "System32", "taskkill.exe");
+}
+
+function signalQmdProcessTree(child: QmdChildProcess, signal?: NodeJS.Signals): void {
+  if (shouldUseQmdProcessGroup() && typeof child.pid === "number") {
+    try {
+      if (signal === undefined) {
+        process.kill(-child.pid);
+      } else {
+        process.kill(-child.pid, signal);
+      }
+      return;
+    } catch {
+      // Fall back to the direct child if the process group already disappeared.
+    }
+  }
+  if (!shouldUseQmdProcessGroup() && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = spawnSync(taskkillPath, args, { stdio: "ignore", windowsHide: true });
+    if (!result.error && result.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = spawnSync(taskkillPath, [...args, "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      if (!forceResult.error && forceResult.status === 0) {
+        return;
+      }
+    }
+  }
+  if (signal === undefined) {
+    child.kill();
+  } else {
+    child.kill(signal);
+  }
 }
 
 class CliCommandError extends Error {

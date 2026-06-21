@@ -2,6 +2,11 @@
 import { z } from "zod";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
+import {
+  qaScorecardEvidenceModeSchema,
+  readQaScorecardProfileOptions,
+  type QaScorecardEvidenceMode,
+} from "./scorecard-taxonomy.js";
 
 export const QA_EVIDENCE_SUMMARY_KIND = "openclaw.qa.evidence-summary";
 export const QA_EVIDENCE_FILENAME = "qa-evidence.json";
@@ -176,7 +181,7 @@ export const qaEvidenceSummaryEntrySchema = z
     coverage: z.array(qaEvidenceCoverageSchema),
     refs: z.array(qaEvidenceRefSchema).optional(),
     runtimeParityTier: nonEmptyStringSchema.optional(),
-    execution: qaEvidenceExecutionSchema,
+    execution: qaEvidenceExecutionSchema.optional(),
     result: qaEvidenceResultSchema,
   })
   .strict();
@@ -186,6 +191,7 @@ export const qaEvidenceSummarySchema = z
     kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
     schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
     generatedAt: nonEmptyStringSchema,
+    evidenceMode: qaScorecardEvidenceModeSchema,
     entries: z.array(qaEvidenceSummaryEntrySchema),
     profile: qaEvidenceProfileIdSchema.optional(),
     scorecard: qaEvidenceScorecardSchema.optional(),
@@ -274,6 +280,7 @@ type QaEvidenceArtifactInput = {
 
 type QaEvidenceBuildBase = {
   artifactPaths: readonly QaEvidenceArtifactInput[];
+  evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
   generatedAt: string;
   primaryModel: string;
@@ -342,7 +349,7 @@ function uniqueSortedStrings(values: readonly (string | undefined)[]) {
   );
 }
 
-function resolveQaEvidenceProfile(params: {
+export function resolveQaEvidenceProfile(params: {
   env?: NodeJS.ProcessEnv;
   explicit?: QaEvidenceProfile;
 }) {
@@ -491,15 +498,28 @@ function resultForEvidence(
 
 function buildQaEvidenceSummary(params: {
   entries: QaEvidenceSummaryEntry[];
+  evidenceMode?: QaScorecardEvidenceMode;
   generatedAt: string;
   profile?: QaEvidenceProfile;
+  scorecard?: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
+  const profileOptions = readQaScorecardProfileOptions(params.profile);
+  const evidenceMode = params.evidenceMode ?? profileOptions.evidenceMode;
+  const entries =
+    evidenceMode === "slim"
+      ? params.entries.map((entry) => {
+          const { execution: _execution, ...withoutExecution } = entry;
+          return withoutExecution;
+        })
+      : params.entries;
   return qaEvidenceSummarySchema.parse({
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
-    entries: params.entries,
+    evidenceMode,
+    entries,
     profile: params.profile,
+    scorecard: params.scorecard,
   });
 }
 
@@ -508,12 +528,15 @@ export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSumma
 }
 
 export function attachQaEvidenceScorecard(params: {
+  evidenceMode?: QaScorecardEvidenceMode;
   summary: QaEvidenceSummaryJson;
   profile: QaEvidenceProfile;
   scorecard: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
-  return validateQaEvidenceSummaryJson({
-    ...params.summary,
+  return buildQaEvidenceSummary({
+    entries: params.summary.entries,
+    evidenceMode: params.evidenceMode,
+    generatedAt: params.summary.generatedAt,
     profile: params.profile,
     scorecard: params.scorecard,
   });
@@ -582,7 +605,12 @@ export function buildQaSuiteEvidenceSummary(
       result: resultForEvidence(result, timing),
     };
   });
-  return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries, profile });
+  return buildQaEvidenceSummary({
+    entries,
+    evidenceMode: params.evidenceMode,
+    generatedAt: params.generatedAt,
+    profile,
+  });
 }
 
 function buildTestRunnerEvidenceSummary(
@@ -641,7 +669,12 @@ function buildTestRunnerEvidenceSummary(
       result: resultForEvidence(result, timing),
     };
   });
-  return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries, profile });
+  return buildQaEvidenceSummary({
+    entries,
+    evidenceMode: params.evidenceMode,
+    generatedAt: params.generatedAt,
+    profile,
+  });
 }
 
 export function buildVitestEvidenceSummary(
@@ -669,6 +702,20 @@ export function buildPlaywrightEvidenceSummary(
     defaultRunner: "playwright",
     testKind: "playwright-test",
     runner: params.runner ?? "playwright",
+  });
+}
+
+export function buildScriptEvidenceSummary(
+  params: QaEvidenceBuildBase & {
+    targets: readonly QaEvidenceTestTargetInput[];
+    results: readonly QaEvidenceTestResultInput[];
+  },
+): QaEvidenceSummaryJson {
+  return buildTestRunnerEvidenceSummary({
+    ...params,
+    defaultRunner: "script",
+    testKind: "script-test",
+    runner: params.runner ?? "script",
   });
 }
 
@@ -734,5 +781,10 @@ export function buildLiveTransportEvidenceSummary(
       result: resultForEvidence(check, timing),
     };
   });
-  return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries, profile });
+  return buildQaEvidenceSummary({
+    entries,
+    evidenceMode: params.evidenceMode,
+    generatedAt: params.generatedAt,
+    profile,
+  });
 }

@@ -13,7 +13,7 @@ import {
 } from "../infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
-import { CONTROL_UI_CLIENT, TEST_OPERATOR_CLIENT } from "./server.auth.shared.js";
+import { CONTROL_UI_CLIENT, TEST_OPERATOR_CLIENT } from "./server.auth.test-helpers.js";
 import {
   connectReq,
   connectOk,

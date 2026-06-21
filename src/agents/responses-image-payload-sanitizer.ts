@@ -44,8 +44,3 @@ export function sanitizeResponsesImagePayload<T extends Record<string, unknown>>
     input: sanitizeValue(params.input),
   };
 }
-
-/** Sanitize one inline image data URL for Responses payload use. */
-export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
-  return sanitizeSharedInlineImageDataUrl(imageUrl);
-}

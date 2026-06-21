@@ -7,7 +7,7 @@ export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
-export type FeishuClientTimeoutConfig = {
+type FeishuClientTimeoutConfig = {
   httpTimeoutMs?: number;
   config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };

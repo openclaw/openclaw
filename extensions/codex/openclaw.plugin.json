@@ -5,7 +5,8 @@
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
-    "migrationProviders": ["codex"]
+    "migrationProviders": ["codex"],
+    "webSearchProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
     "codex": {
@@ -151,14 +152,17 @@
             ]
           },
           "url": { "type": "string" },
-          "authToken": { "type": "string" },
+          "authToken": { "type": ["string", "object"] },
           "headers": {
             "type": "object",
-            "additionalProperties": { "type": "string" }
+            "additionalProperties": { "type": ["string", "object"] }
           },
           "clearEnv": {
             "type": "array",
             "items": { "type": "string" }
+          },
+          "remoteWorkspaceRoot": {
+            "type": "string"
           },
           "codeModeOnly": {
             "type": "boolean",
@@ -192,6 +196,47 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"] },
+          "networkProxy": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "profileName": { "type": "string" },
+              "baseProfile": {
+                "type": "string",
+                "enum": ["read-only", "workspace"]
+              },
+              "mode": {
+                "type": "string",
+                "enum": ["limited", "full"]
+              },
+              "domains": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": ["allow", "deny"]
+                }
+              },
+              "unixSockets": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": ["allow", "none"]
+                }
+              },
+              "proxyUrl": { "type": "string" },
+              "socksUrl": { "type": "string" },
+              "enableSocks5": { "type": "boolean" },
+              "enableSocks5Udp": { "type": "boolean" },
+              "allowUpstreamProxy": { "type": "boolean" },
+              "allowLocalBinding": { "type": "boolean" },
+              "dangerouslyAllowNonLoopbackProxy": { "type": "boolean" },
+              "dangerouslyAllowAllUnixSockets": { "type": "boolean" }
+            }
+          },
           "defaultWorkspaceDir": {
             "type": "string"
           },
@@ -207,6 +252,14 @@
           }
         }
       }
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "appServer.authToken", "expected": "string" },
+        { "path": "appServer.headers.*", "expected": "string" }
+      ]
     }
   },
   "uiHints": {
@@ -337,11 +390,17 @@
     "appServer.headers": {
       "label": "Headers",
       "help": "Additional headers sent to the WebSocket app-server.",
+      "sensitive": true,
       "advanced": true
     },
     "appServer.clearEnv": {
       "label": "Clear Environment",
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
+      "advanced": true
+    },
+    "appServer.remoteWorkspaceRoot": {
+      "label": "Remote Workspace Root",
+      "help": "Remote Codex app-server workspace root used to project OpenClaw cwd suffixes before starting Codex threads.",
       "advanced": true
     },
     "appServer.codeModeOnly": {
@@ -382,6 +441,81 @@
     "appServer.serviceTier": {
       "label": "Service Tier",
       "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
+      "advanced": true
+    },
+    "appServer.networkProxy": {
+      "label": "Network Proxy",
+      "help": "Enable Codex permissions-profile networking for app-server commands.",
+      "advanced": true
+    },
+    "appServer.networkProxy.enabled": {
+      "label": "Network Proxy Enabled",
+      "help": "When enabled, OpenClaw defines a Codex permissions profile and selects it with default_permissions instead of sandbox fields.",
+      "advanced": true
+    },
+    "appServer.networkProxy.profileName": {
+      "label": "Network Proxy Profile",
+      "help": "Optional stable Codex permissions profile name. Leave unset to use a generated openclaw-network fingerprint name.",
+      "advanced": true
+    },
+    "appServer.networkProxy.baseProfile": {
+      "label": "Network Proxy Base",
+      "help": "Filesystem access used by the generated profile. Defaults to read-only for read-only sandboxes and workspace otherwise.",
+      "advanced": true
+    },
+    "appServer.networkProxy.domains": {
+      "label": "Network Domains",
+      "help": "Domain allow and deny rules for Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.unixSockets": {
+      "label": "Unix Sockets",
+      "help": "Unix socket allow and none rules for Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.proxyUrl": {
+      "label": "HTTP Proxy URL",
+      "help": "HTTP listener URL used by Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.socksUrl": {
+      "label": "SOCKS Proxy URL",
+      "help": "SOCKS listener URL used by Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.enableSocks5": {
+      "label": "Enable SOCKS5",
+      "help": "Expose SOCKS5 support for the generated Codex permissions profile.",
+      "advanced": true
+    },
+    "appServer.networkProxy.enableSocks5Udp": {
+      "label": "Enable SOCKS5 UDP",
+      "help": "Allow UDP over the SOCKS5 listener when SOCKS5 is enabled.",
+      "advanced": true
+    },
+    "appServer.networkProxy.allowUpstreamProxy": {
+      "label": "Allow Upstream Proxy",
+      "help": "Allow Codex sandboxed networking to chain through inherited HTTP(S)_PROXY or ALL_PROXY settings.",
+      "advanced": true
+    },
+    "appServer.networkProxy.allowLocalBinding": {
+      "label": "Allow Local Binding",
+      "help": "Permit broader local and private-network access through Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.mode": {
+      "label": "Network Mode",
+      "help": "Codex sandboxed networking mode for subprocess traffic.",
+      "advanced": true
+    },
+    "appServer.networkProxy.dangerouslyAllowNonLoopbackProxy": {
+      "label": "Allow Non-Loopback Proxy",
+      "help": "Permit non-loopback bind addresses for Codex sandboxed networking listeners.",
+      "advanced": true
+    },
+    "appServer.networkProxy.dangerouslyAllowAllUnixSockets": {
+      "label": "Allow All Unix Sockets",
+      "help": "Bypass Codex's Unix socket allowlist for tightly controlled environments.",
       "advanced": true
     },
     "appServer.defaultWorkspaceDir": {

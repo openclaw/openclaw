@@ -39,7 +39,6 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
 vi.mock("./external-auth.js", () => ({
   listRuntimeExternalAuthProfiles: () => [],
   overlayExternalAuthProfiles: <T>(store: T) => store,
-  shouldPersistExternalAuthProfile: () => true,
 }));
 
 import { isStoredCredentialCompatibleWithAuthProvider, resolveAuthProfileOrder } from "./order.js";

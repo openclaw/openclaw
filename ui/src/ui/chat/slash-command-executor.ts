@@ -9,6 +9,7 @@ import {
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../session-key.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -29,6 +30,7 @@ import type {
 } from "../types.ts";
 import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
+import { formatCompactTokenCount } from "./token-format.ts";
 
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
@@ -435,16 +437,16 @@ async function executeUsage(
     const totalDisplay =
       cumulativeTotal === null
         ? "n/a"
-        : `${totalTokensFresh ? "" : "~"}${fmtTokens(cumulativeTotal)}`;
+        : `${totalTokensFresh ? "" : "~"}${formatCompactTokenCount(cumulativeTotal)}`;
 
     const lines = [
       "**Session Usage**",
-      `Input: **${fmtTokens(input)}** tokens`,
-      `Output: **${fmtTokens(output)}** tokens`,
+      `Input: **${formatCompactTokenCount(input)}** tokens`,
+      `Output: **${formatCompactTokenCount(output)}** tokens`,
       `Total: **${totalDisplay}** tokens`,
     ];
     if (pct !== null) {
-      lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
+      lines.push(`Context: **${pct}%** of ${formatCompactTokenCount(ctx)}`);
     }
     if (session.model) {
       lines.push(`Model: \`${session.model}\``);
@@ -592,16 +594,6 @@ function resolveThinkingLevelOptionsForSession(
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
     label,
   }));
-}
-
-function sessionModelMatchesDefaults(
-  session: GatewaySessionRow | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-): boolean {
-  return (
-    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
-    (!session?.model || session.model === defaults?.model)
-  );
 }
 
 async function loadCurrentSession(
@@ -793,14 +785,4 @@ async function executeRedirect(
   } catch (err) {
     return { content: `Failed to redirect: ${String(err)}` };
   }
-}
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  }
-  if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  return String(n);
 }

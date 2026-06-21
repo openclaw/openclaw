@@ -6,24 +6,36 @@ vi.mock("./group-activation.js", () => ({
 }));
 
 import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./group-gating.js";
 
-function makeGroupAudioMsg(): WebInboundMessage {
+function makeGroupAudioMsg(): AdmittedWebInboundMessage {
   return createTestWebAudioInboundMessage({
     platform: {
       chatJid: "1203630@g.us",
       sender: { e164: "+15550000002", name: "Alice" },
     },
-    from: "1203630@g.us",
-    conversationId: "1203630@g.us",
-    chatType: "group",
+    admission: {
+      conversation: {
+        kind: "group",
+        id: "1203630@g.us",
+      },
+      sender: {
+        id: "+15550000002",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
     wasMentioned: false,
   });
 }
 
-function makeParams(msg: WebInboundMessage, groupHistories: Map<string, GroupHistoryEntry[]>) {
+function makeParams(
+  msg: AdmittedWebInboundMessage,
+  groupHistories: Map<string, GroupHistoryEntry[]>,
+) {
   return {
     cfg: {
       channels: {
@@ -38,7 +50,6 @@ function makeParams(msg: WebInboundMessage, groupHistories: Map<string, GroupHis
       },
     } as never,
     msg,
-    conversationId: "1203630@g.us",
     groupHistoryKey: "whatsapp:group:1203630",
     agentId: "main",
     sessionKey: "agent:main:whatsapp:group:1203630",

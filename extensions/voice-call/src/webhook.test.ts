@@ -250,7 +250,6 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       }
       expect(mediaStreamHandler["handleUpgrade"]).toBeTypeOf("function");
       expect(mediaStreamHandler["sendAudio"]).toBeTypeOf("function");
-      expect(mediaStreamHandler["closeAll"]).toBeTypeOf("function");
     } finally {
       await server.stop();
     }
@@ -558,6 +557,145 @@ async function postWebhookFormWithHeadersResult(
     req.end(body);
   });
 }
+
+async function requestWebSocketUpgrade(
+  server: VoiceCallWebhookServer,
+  baseUrl: string,
+  pathname: string,
+): Promise<
+  | { kind: "response"; statusCode: number; body: string }
+  | { kind: "upgrade"; statusCode: number }
+  | { kind: "error"; code: string | undefined }
+> {
+  const requestUrl = requireBoundRequestUrl(server, baseUrl);
+  requestUrl.pathname = pathname;
+  requestUrl.search = "";
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (
+      result:
+        | { kind: "response"; statusCode: number; body: string }
+        | { kind: "upgrade"; statusCode: number }
+        | { kind: "error"; code: string | undefined },
+    ) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      req.destroy();
+      finish({ kind: "error", code: "timeout" });
+    }, 2_000);
+    const req = request(
+      {
+        hostname: requestUrl.hostname,
+        port: requestUrl.port,
+        path: requestUrl.pathname,
+        method: "GET",
+        headers: {
+          connection: "Upgrade",
+          upgrade: "websocket",
+        },
+      },
+      (res) => {
+        res.setEncoding("utf8");
+        let responseBody = "";
+        res.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+        res.on("end", () => {
+          finish({
+            kind: "response",
+            statusCode: res.statusCode ?? 0,
+            body: responseBody,
+          });
+        });
+      },
+    );
+    req.on("upgrade", (res, socket) => {
+      socket.destroy();
+      finish({ kind: "upgrade", statusCode: res.statusCode ?? 0 });
+    });
+    req.on("error", (error: NodeJS.ErrnoException) => {
+      finish({ kind: "error", code: error.code });
+    });
+    req.end();
+  });
+}
+
+describe("VoiceCallWebhookServer realtime WebSocket routing", () => {
+  function createRealtimeRoutingServer(streamPathPattern: string): {
+    server: VoiceCallWebhookServer;
+    handleWebSocketUpgrade: ReturnType<typeof vi.fn<RealtimeCallHandler["handleWebSocketUpgrade"]>>;
+  } {
+    const { manager } = createManager([]);
+    const server = new VoiceCallWebhookServer(
+      createConfig({
+        realtime: {
+          enabled: true,
+          streamPath: streamPathPattern,
+          instructions: "Be helpful.",
+          toolPolicy: "safe-read-only",
+          tools: [],
+          providers: {},
+        },
+      }),
+      manager,
+      provider,
+    );
+    const handleWebSocketUpgrade = vi.fn<RealtimeCallHandler["handleWebSocketUpgrade"]>(
+      (_req, socket) => {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+      },
+    );
+    server.setRealtimeHandler({
+      buildTwiMLPayload: () => ({
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: "<Response />",
+      }),
+      getStreamPathPattern: () => streamPathPattern,
+      handleWebSocketUpgrade,
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+    return { server, handleWebSocketUpgrade };
+  }
+
+  it("does not route sibling paths through the realtime stream handler", async () => {
+    const { server, handleWebSocketUpgrade } =
+      createRealtimeRoutingServer("/voice/stream/realtime");
+
+    try {
+      const baseUrl = await server.start();
+      const valid = await requestWebSocketUpgrade(server, baseUrl, "/voice/stream/realtime/token");
+      expect(valid).toMatchObject({ kind: "response", statusCode: 401 });
+      expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
+
+      await requestWebSocketUpgrade(server, baseUrl, "/voice/stream/realtime-extra/token");
+      expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("routes root stream child paths through the realtime stream handler", async () => {
+    const { server, handleWebSocketUpgrade } = createRealtimeRoutingServer("/");
+
+    try {
+      const baseUrl = await server.start();
+      const valid = await requestWebSocketUpgrade(server, baseUrl, "/token");
+      expect(valid).toMatchObject({ kind: "response", statusCode: 401 });
+      expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.stop();
+    }
+  });
+});
 
 describe("VoiceCallWebhookServer stale call reaper", () => {
   beforeEach(() => {

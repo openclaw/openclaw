@@ -74,6 +74,7 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
@@ -95,6 +96,7 @@ fun ChatScreen(
   val sessions by viewModel.chatSessions.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
   val context = LocalContext.current
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
@@ -196,6 +198,7 @@ fun ChatScreen(
       onValueChange = { input = it },
       attachments = attachments,
       thinkingLevel = thinkingLevel,
+      contextUsage = contextUsage,
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
@@ -685,6 +688,7 @@ private fun ChatComposer(
   onValueChange: (String) -> Unit,
   attachments: List<PendingImageAttachment>,
   thinkingLevel: String,
+  contextUsage: ChatContextUsage,
   healthOk: Boolean,
   pendingRunCount: Int,
   onThinkingLevelChange: (String) -> Unit,
@@ -699,7 +703,11 @@ private fun ChatComposer(
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
-    ChatContextMeter(thinkingLevel = thinkingLevel, onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) })
+    ChatContextMeter(
+      thinkingLevel = thinkingLevel,
+      contextUsage = contextUsage,
+      onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) },
+    )
 
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
       ChatInputPill(value = value, onValueChange = onValueChange, onPickImages = onPickImages, onVoice = onVoice, modifier = Modifier.weight(1f))
@@ -735,8 +743,10 @@ private fun ChatComposer(
 @Composable
 private fun ChatContextMeter(
   thinkingLevel: String,
+  contextUsage: ChatContextUsage,
   onClick: () -> Unit,
 ) {
+  val contextFraction = contextMeterWidth(contextUsage) ?: 0f
   Row(
     modifier = Modifier.width(178.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -755,7 +765,13 @@ private fun ChatContextMeter(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.textSubtle)
-        Text(text = "Context ${contextPercent(thinkingLevel)}%", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+        Text(
+          text = contextMeterLabel(contextUsage, thinkingLevel),
+          style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+          color = ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
       }
     }
     Box(
@@ -768,7 +784,7 @@ private fun ChatContextMeter(
       Box(
         modifier =
           Modifier
-            .fillMaxWidth(thinkingMeterWidth(thinkingLevel))
+            .fillMaxWidth(contextFraction)
             .height(3.dp)
             .background(ClawTheme.colors.primary, RoundedCornerShape(999.dp)),
       )
@@ -902,6 +918,32 @@ private fun isActiveSessionChoice(
   return choiceKey == current
 }
 
+internal data class ChatContextUsage(
+  val totalTokens: Long?,
+  val totalTokensFresh: Boolean?,
+  val contextTokens: Long?,
+)
+
+internal fun resolveChatContextUsage(
+  sessionKey: String,
+  mainSessionKey: String,
+  sessions: List<ChatSessionEntry>,
+): ChatContextUsage {
+  val entry =
+    sessions.firstOrNull {
+      isActiveSessionChoice(
+        choiceKey = it.key,
+        sessionKey = sessionKey,
+        mainSessionKey = mainSessionKey,
+      )
+  }
+  return ChatContextUsage(
+    totalTokens = entry?.totalTokens,
+    totalTokensFresh = entry?.totalTokensFresh,
+    contextTokens = entry?.contextTokens,
+  )
+}
+
 @Composable
 private fun SendButton(
   enabled: Boolean,
@@ -958,16 +1000,28 @@ private fun nextThinkingValue(value: String): String =
     else -> "off"
   }
 
-/** Maps thinking presets to the visual context meter fill fraction. */
-private fun thinkingMeterWidth(value: String): Float =
-  when (value.lowercase(Locale.US)) {
-    "low" -> 0.34f
-    "medium" -> 0.58f
-    "high" -> 0.82f
-    else -> 0.18f
-  }
+internal fun contextMeterWidth(usage: ChatContextUsage): Float? {
+  if (usage.totalTokensFresh == false) return null
+  val total = usage.totalTokens?.takeIf { it >= 0L } ?: return null
+  val context = usage.contextTokens?.takeIf { it > 0L } ?: return null
+  return (total.toDouble() / context.toDouble()).coerceIn(0.0, 1.0).toFloat()
+}
 
-private fun contextPercent(value: String): Int = (thinkingMeterWidth(value) * 100).toInt()
+internal fun contextMeterLabel(
+  usage: ChatContextUsage,
+  thinkingLevel: String,
+): String {
+  val contextLabel = contextMeterWidth(usage)?.let { "Context ${(it * 100).roundToInt()}%" } ?: "Context --"
+  return "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}"
+}
+
+internal fun contextMeterThinkingLabel(value: String): String =
+  when (value.lowercase(Locale.US)) {
+    "low" -> "low"
+    "medium" -> "medium"
+    "high" -> "high"
+    else -> "off"
+  }
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))
 

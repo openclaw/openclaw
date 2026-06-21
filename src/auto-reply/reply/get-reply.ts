@@ -529,13 +529,10 @@ export async function getReplyFromConfig(
           sessionStore[sessionKey] = sessionEntry;
         }
         if (sessionKey && storePath) {
-          const { applySessionStoreEntryPatch } = await import("../../config/sessions.js");
-          await applySessionStoreEntryPatch({
-            storePath,
-            sessionKey,
-            skipMaintenance: true,
-            takeCacheOwnership: true,
-            patch: {
+          const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
+          await updateSessionEntry(
+            { storePath, sessionKey },
+            () => ({
               pendingFinalDelivery: undefined,
               pendingFinalDeliveryText: undefined,
               pendingFinalDeliveryCreatedAt: undefined,
@@ -543,8 +540,12 @@ export async function getReplyFromConfig(
               pendingFinalDeliveryAttemptCount: undefined,
               pendingFinalDeliveryLastError: undefined,
               pendingFinalDeliveryContext: undefined,
+            }),
+            {
+              skipMaintenance: true,
+              takeCacheOwnership: true,
             },
-          });
+          );
         }
       }
     }

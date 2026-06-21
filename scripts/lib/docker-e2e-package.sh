@@ -76,6 +76,15 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
     return 1
   }
 
+  docker_e2e_resolve_pids_limit() {
+    local pids_limit="$1"
+    if [[ ! "$pids_limit" =~ ^[0-9]+$ ]] || (( 10#$pids_limit < 1 )); then
+      echo "invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: $pids_limit" >&2
+      return 2
+    fi
+    printf '%s\n' "$((10#$pids_limit))"
+  }
+
   docker_e2e_docker_run_resource_args() {
     DOCKER_E2E_RUN_RESOURCE_ARGS=()
     if docker_e2e_resource_limits_disabled; then
@@ -94,6 +103,7 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
       DOCKER_E2E_RUN_RESOURCE_ARGS+=(--cpus "$cpus")
     fi
     if ! docker_e2e_resource_value_disabled "$pids_limit" && ! docker_e2e_run_arg_present --pids-limit "$@"; then
+      pids_limit="$(docker_e2e_resolve_pids_limit "$pids_limit")" || return $?
       DOCKER_E2E_RUN_RESOURCE_ARGS+=(--pids-limit "$pids_limit")
     fi
   }
@@ -102,7 +112,7 @@ if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
   docker_e2e_docker_run_cmd() {
     if [ "${1:-}" = "run" ]; then
       shift
-      docker_e2e_docker_run_resource_args "$@"
+      docker_e2e_docker_run_resource_args "$@" || return $?
       if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
         if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
           docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
@@ -251,6 +261,8 @@ docker_e2e_harness_mount_args() {
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro"
     -v "$ROOT_DIR/scripts/lib:/app/scripts/lib:ro"
+    -v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
+    -v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"
     -v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"
   )
 }
@@ -397,9 +409,11 @@ docker_e2e_run_logged_with_harness() {
 docker_e2e_run_logged_print_with_harness() {
   local label="$1"
   shift
+  local heartbeat_seconds
+  heartbeat_seconds="$(docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS 30)" || return $?
   run_logged_print_heartbeat \
     "$label" \
-    "${OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS:-30}" \
+    "$heartbeat_seconds" \
     docker_e2e_run_with_harness \
     "$@"
 }

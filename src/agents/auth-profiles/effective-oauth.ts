@@ -3,7 +3,7 @@
  * Delegates to the managed OAuth selector while allowing external CLI
  * bootstrap credentials to fill unusable local profile state.
  */
-import { readManagedExternalCliCredential } from "./external-cli-sync.js";
+import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { resolveEffectiveOAuthCredential as resolveManagedOAuthCredential } from "./oauth-manager.js";
 import type { OAuthCredential } from "./types.js";
 
@@ -17,7 +17,7 @@ export function resolveEffectiveOAuthCredential(params: {
     profileId: params.profileId,
     credential: params.credential,
     readBootstrapCredential: ({ profileId, credential }) =>
-      readManagedExternalCliCredential({
+      readExternalCliBootstrapCredential({
         profileId,
         credential,
         allowKeychainPrompt: params.allowKeychainPrompt ?? false,

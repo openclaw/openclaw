@@ -80,9 +80,9 @@ export function isInvalidCronRunLogJobIdError(err: unknown): boolean {
 const writesByTarget = new Map<string, Promise<void>>();
 
 /** Legacy byte cap kept for config parsing compatibility with older file-backed run logs. */
-export const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
+const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
 /** Default SQLite row retention per cron job when no explicit keepLines value is configured. */
-export const DEFAULT_CRON_RUN_LOG_KEEP_LINES = 2_000;
+const DEFAULT_CRON_RUN_LOG_KEEP_LINES = 2_000;
 
 /** Resolves configured run-log pruning limits while preserving legacy maxBytes parsing. */
 export function resolveCronRunLogPruneOptions(cfg?: CronConfig["runLog"]): {
@@ -165,25 +165,6 @@ export async function appendCronRunLog(params: {
       writesByTarget.delete(writeKey);
     }
   }
-}
-
-/** Reads recent run-log entries in chronological order after draining pending async writes. */
-export async function readCronRunLogEntries(params: {
-  storePath: string;
-  jobId?: string;
-  limit?: number;
-}): Promise<CronRunLogEntry[]> {
-  await drainPendingWrite(params.storePath, params.jobId);
-  const limit = Math.max(1, Math.min(5000, Math.floor(params.limit ?? 200)));
-  const page = await readCronRunLogEntriesPage({
-    storePath: params.storePath,
-    jobId: params.jobId,
-    limit,
-    offset: 0,
-    status: "all",
-    sortDir: "desc",
-  });
-  return page.entries.toReversed();
 }
 
 /** Reads recent run-log entries synchronously for startup/task reconciliation paths. */

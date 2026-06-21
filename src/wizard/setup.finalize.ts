@@ -529,7 +529,7 @@ export async function finalizeSetupWizard(
     });
 
     if (hatchChoice === "tui") {
-      restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
+      restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
         await launchTuiCli({
           local: true,
@@ -538,7 +538,7 @@ export async function finalizeSetupWizard(
           timeoutMs: HATCH_TUI_TIMEOUT_MS,
         });
       } finally {
-        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
+        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
       }
       launchedTui = true;
     } else if (hatchChoice === "web") {

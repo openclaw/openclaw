@@ -1,14 +1,4 @@
 // Shared argument parsing helpers for repository scripts.
-/** Read a finite number from an environment variable, returning null when unset or invalid. */
-export function readEnvNumber(name, env = process.env) {
-  const raw = env[name]?.trim();
-  if (!raw) {
-    return null;
-  }
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 /** Read a flag value from `--flag value` or `--flag=value` arguments. */
 export function readFlagValue(args, name) {
   for (let index = 0; index < args.length; index += 1) {

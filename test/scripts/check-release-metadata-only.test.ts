@@ -25,4 +25,17 @@ describe("check-release-metadata-only", () => {
     expect(() => parseArgs(["--head"])).toThrow("Expected --head <ref>.");
     expect(() => parseArgs(["--base", ""])).toThrow("Expected --base <ref>.");
   });
+
+  it("rejects unknown options before treating args as paths", () => {
+    expect(() => parseArgs(["--stgaed"])).toThrow("Unknown option: --stgaed");
+  });
+
+  it("preserves option-shaped paths after the separator", () => {
+    expect(parseArgs(["--staged", "--", "--head"])).toEqual({
+      staged: true,
+      base: "origin/main",
+      head: "HEAD",
+      paths: ["--head"],
+    });
+  });
 });

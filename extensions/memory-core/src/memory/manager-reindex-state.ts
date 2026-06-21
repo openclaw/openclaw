@@ -159,7 +159,7 @@ export function resolveMemoryIndexIdentityState(params: {
   if (!meta) {
     return { status: "missing", reason: "index metadata is missing" };
   }
-  const expectedModel = params.provider ? params.provider.model : "fts-only";
+  const expectedModel = params.provider?.model?.trim() || "fts-only";
   const matchingModelIdentities = [
     { model: expectedModel, providerKey: params.providerKey },
     ...(params.providerAliases ?? []),

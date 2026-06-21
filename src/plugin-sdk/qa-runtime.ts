@@ -249,7 +249,11 @@ export type QaDockerRunCommand = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 /** Minimal fetch-like health probe used by QA Docker runtime helpers. */
-export type QaDockerFetchLike = (input: string) => Promise<{ ok: boolean }>;
+export type QaDockerFetchResponse = {
+  ok: boolean;
+  body?: { cancel?: () => unknown } | null;
+};
+export type QaDockerFetchLike = (input: string) => Promise<QaDockerFetchResponse>;
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
 
@@ -395,7 +399,7 @@ async function findFreeQaDockerPort() {
   return await new Promise<number>((resolve, reject) => {
     const server = createServer();
     server.once("error", reject);
-    server.listen(0, () => {
+    server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
         server.close();
@@ -458,6 +462,10 @@ function normalizeDockerServiceStatus(row?: { Health?: string; State?: string })
   return "unknown";
 }
 
+function firstDockerOutputLine(stdout: string) {
+  return normalizeStringEntries(stdout.split("\n"))[0] ?? "";
+}
+
 function parseDockerComposePsRows(stdout: string) {
   const trimmed = stdout.trim();
   if (!trimmed) {
@@ -480,12 +488,21 @@ function parseDockerComposePsRows(stdout: string) {
 }
 
 async function isQaDockerHealthy(url: string, fetchImpl: QaDockerFetchLike) {
+  let response: QaDockerFetchResponse | undefined;
   try {
-    const response = await fetchImpl(url);
+    response = await fetchImpl(url);
     return response.ok;
   } catch {
     return false;
+  } finally {
+    await releaseQaDockerFetchResponse(response);
   }
+}
+
+async function releaseQaDockerFetchResponse(response: QaDockerFetchResponse | undefined) {
+  try {
+    await response?.body?.cancel?.();
+  } catch {}
 }
 
 /** Create Docker command, health-check, and compose helpers for QA harnesses. */
@@ -544,14 +561,17 @@ export function createQaDockerRuntime(params: {
     let lastError: unknown = null;
 
     while (Date.now() < deadline) {
+      let response: QaDockerFetchResponse | undefined;
       try {
-        const response = await deps.fetchImpl(url);
+        response = await deps.fetchImpl(url);
         if (response.ok) {
           return;
         }
         lastError = new Error(`Health check returned non-OK for ${url}`);
       } catch (error) {
         lastError = error;
+      } finally {
+        await releaseQaDockerFetchResponse(response);
       }
       await deps.sleepImpl(pollMs);
     }
@@ -620,7 +640,7 @@ export function createQaDockerRuntime(params: {
       ["compose", "-f", composeFile, "ps", "-q", service],
       repoRoot,
     );
-    const containerId = containerStdout.trim();
+    const containerId = firstDockerOutputLine(containerStdout);
     if (!containerId) {
       return null;
     }
@@ -629,12 +649,12 @@ export function createQaDockerRuntime(params: {
       [
         "inspect",
         "--format",
-        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+        "{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}",
         containerId,
       ],
       repoRoot,
     );
-    const ip = ipStdout.trim();
+    const ip = firstDockerOutputLine(ipStdout);
     if (!ip) {
       return null;
     }
