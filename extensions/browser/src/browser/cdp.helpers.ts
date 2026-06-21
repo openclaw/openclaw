@@ -23,6 +23,7 @@ import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
+import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 
 export { isLoopbackHost };
 export { parseBrowserHttpUrl, redactCdpUrl };
@@ -143,6 +144,16 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
     if (parsed.username || parsed.password) {
       const auth = Buffer.from(`${parsed.username}:${parsed.password}`).toString("base64");
       return { ...mergedHeaders, Authorization: `Basic ${auth}` };
+    }
+    // Present the node-local extension-bridge token (registered per loopback
+    // port in the bridge-auth registry) so the bridge can authenticate its CDP
+    // face, not just the extension relay. Non-bridge ports have no entry.
+    const bridgePort = Number(parsed.port);
+    if (bridgePort) {
+      const bridgeAuth = getBridgeAuthForPort(bridgePort);
+      if (bridgeAuth && bridgeAuth.token) {
+        return { ...mergedHeaders, Authorization: "Bearer " + bridgeAuth.token };
+      }
     }
   } catch {
     // ignore

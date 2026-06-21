@@ -26,7 +26,9 @@
 
 import http from "node:http";
 import os from "node:os";
+import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
+import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 
 const BROWSER_GUID = "openclaw-bridge-browser";
 // Playwright calls Target.attachToBrowserTarget for a dedicated browser-level
@@ -269,13 +271,36 @@ export function startExtensionBridgeServer(opts: {
   });
 
   // ---- WebSocket routing ----------------------------------------------------
+  // Authenticate the loopback CDP face the same way the relay is gated: when a
+  // token is configured, the node's Playwright client must present the bridge
+  // token (Authorization: Bearer, set by getHeadersWithAuth from the bridge-auth
+  // registry) so a stray local process can't drive the user's real browser over
+  // the loopback /devtools endpoint. With no token, the bridge stays trusted-local.
+  function isAuthorizedPwUpgrade(req: http.IncomingMessage): boolean {
+    if (!opts.authToken) {
+      return true;
+    }
+    const provided = (req.headers["authorization"] as string | undefined) ?? "";
+    const expected = "Bearer " + opts.authToken;
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
+
   const wss = new WebSocketServer({ noServer: true });
   server.on("upgrade", (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       const url = req.url || "";
       if (url === "/extension" || url.startsWith("/extension?")) validateAndHandleExtension(ws, url);
-      else if (url.startsWith("/devtools/browser/")) handlePwBrowser(ws as PwSocket);
-      else ws.close();
+      else if (url.startsWith("/devtools/browser/")) {
+        if (isAuthorizedPwUpgrade(req)) {
+          handlePwBrowser(ws as PwSocket);
+        } else {
+          ws.close(1008, "unauthorized");
+        }
+      } else {
+        ws.close();
+      }
     });
   });
 
@@ -539,6 +564,9 @@ export function startExtensionBridgeServer(opts: {
     server.once("error", reject);
     server.listen(port, host, () => {
       server.off("error", reject);
+      if (opts.authToken) {
+        setBridgeAuthForPort(port, { token: opts.authToken });
+      }
       log(`extension bridge listening http://${host}:${port}`);
       resolve({
         cdpUrl: `http://${host}:${port}`,
@@ -558,6 +586,7 @@ export function startExtensionBridgeServer(opts: {
                 /* ignore */
               }
             }
+            deleteBridgeAuthForPort(port);
             wss.close();
             server.close(() => res());
           }),
