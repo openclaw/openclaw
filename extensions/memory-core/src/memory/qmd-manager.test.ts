@@ -5292,6 +5292,52 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+  it("rebuilds session-export markdown after same-size transcript rewrites", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    const firstTranscript = '{"type":"message","message":{"role":"user","content":"hello"}}\n';
+    const rewrittenTranscript = '{"type":"message","message":{"role":"user","content":"hullo"}}\n';
+    expect(rewrittenTranscript.length).toBe(firstTranscript.length);
+    await fs.writeFile(sessionFile, firstTranscript, "utf-8");
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      expect(await fs.readFile(exportFile, "utf-8")).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    const originalStat = await fs.stat(sessionFile);
+    await fs.writeFile(sessionFile, rewrittenTranscript, "utf-8");
+    await fs.utimes(sessionFile, originalStat.atime, originalStat.mtime);
+
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      const rebuilt = await fs.readFile(exportFile, "utf-8");
+      expect(rebuilt).toContain("hullo");
+      expect(rebuilt).not.toContain("hello");
+    } finally {
+      await second.manager.close();
+    }
+  });
+
   it("ignores stale cache entries scoped to a previous exportDir", async () => {
     const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });

@@ -91,7 +91,7 @@ describe("openclaw agent database", () => {
     expect(registered).toMatchObject({
       agentId: "worker-1",
       path: database.path,
-      schemaVersion: 2,
+      schemaVersion: 1,
     });
     expect(registered?.sizeBytes).toBeGreaterThan(0);
   });
@@ -329,7 +329,7 @@ describe("openclaw agent database", () => {
     expect(readSqliteNumberPragma(database.db, "busy_timeout")).toBe(30_000);
     expect(readSqliteNumberPragma(database.db, "foreign_keys")).toBe(1);
     expect(readSqliteNumberPragma(database.db, "synchronous")).toBe(1);
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(2);
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(1);
     expect(readSqliteNumberPragma(database.db, "wal_autocheckpoint")).toBe(1000);
     const journalMode = database.db.prepare("PRAGMA journal_mode").get() as
       | { journal_mode?: string }
@@ -352,7 +352,7 @@ describe("openclaw agent database", () => {
       ),
     ).toEqual({
       role: "agent",
-      schema_version: 2,
+      schema_version: 1,
       agent_id: "worker-1",
     });
   });

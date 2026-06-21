@@ -93,32 +93,12 @@ const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 // written to <qmdDir>/sessions/*.md. The persistent export-state cache uses
 // this to invalidate stale entries cleanly across deploys.
 const SESSION_EXPORT_RENDER_VERSION = 1;
-// Number of bytes read from the start and end of a JSONL file to produce a
-// lightweight content fingerprint. Sized to span a typical last-line append
-// while staying well under a single read syscall's worth of IO.
-const QMD_EXPORT_FINGERPRINT_EDGE_BYTES = 512;
-
-// Compute a cheap content fingerprint from the first and last N bytes of a
-// JSONL file. This is NOT a full-file hash; it hardens the stat fast path
-// against common append/truncate/edge rewrites without paying the IO cost of
-// reading the entire file.
+// Compute a full content fingerprint before taking the export fast path. Stat
+// fields keep this to likely-unchanged files, while the hash prevents stale QMD
+// markdown when a transcript is rewritten without changing size or mtime.
 async function computeContentFingerprint(filePath: string): Promise<string> {
-  const fd = await fs.open(filePath, "r");
-  try {
-    const stat = await fd.stat();
-    const size = stat.size;
-    const edgeBytes = QMD_EXPORT_FINGERPRINT_EDGE_BYTES;
-    const headBuf = Buffer.alloc(Math.min(edgeBytes, size));
-    await fd.read(headBuf, 0, headBuf.length, 0);
-    let tailBuf = headBuf;
-    if (size > edgeBytes) {
-      tailBuf = Buffer.alloc(Math.min(edgeBytes, size - edgeBytes));
-      await fd.read(tailBuf, 0, tailBuf.length, Math.max(0, size - tailBuf.length));
-    }
-    return crypto.createHash("sha1").update(headBuf).update(tailBuf).digest("hex");
-  } finally {
-    await fd.close();
-  }
+  const content = await fs.readFile(filePath);
+  return crypto.createHash("sha1").update(content).digest("hex");
 }
 
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
@@ -2585,8 +2565,8 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (cutoff && stat.mtimeMs < cutoff) {
           continue;
         }
-        // Verify a cheap edge fingerprint over first+last 512 bytes. It catches
-        // common append/truncate/edge rewrites without full-file hashing.
+        // Verify a full content hash so same-size rewrites with preserved mtime
+        // still invalidate the cache before we skip rebuild/render/write.
         const fingerprint = await computeContentFingerprint(sessionFile);
         if (fingerprint === cached.contentFingerprint) {
           // Verify the cached export target still exists on disk. If it was
