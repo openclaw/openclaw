@@ -3407,6 +3407,22 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(repoSourceReads.length).toBeLessThan(100);
   });
 
+  it("routes prompt snapshot generator helper edits to the owner test", () => {
+    for (const target of [
+      "scripts/generate-prompt-snapshots.ts",
+      "scripts/prompt-snapshot-files.ts",
+      "scripts/sync-codex-model-prompt-fixture.ts",
+      "test/helpers/agents/happy-path-prompt-snapshots.ts",
+      "test/fixtures/agents/prompt-snapshots/codex-model-catalog/gpt-5.5.pragmatic.source.json",
+      "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+    ]) {
+      expect(resolveChangedTestTargetPlan([target])).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/prompt-snapshots.test.ts"],
+      });
+    }
+  });
+
   it.each([
     "test/vitest/vitest.agents-core.config.ts",
     "test/vitest/vitest.agents-embedded-agent.config.ts",

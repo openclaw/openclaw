@@ -40,6 +40,10 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
 ];
 const SHRINKWRAP_POLICY_PATH_RE =
   /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
+const PROMPT_SNAPSHOT_CHECK_PATH_RE =
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
+const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const TARGETED_CORE_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
@@ -173,6 +177,14 @@ export function shouldRunShrinkwrapGuard(paths) {
   return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
 }
 
+export function shouldRunPromptSnapshotCheck(paths) {
+  return paths.some((changedPath) => PROMPT_SNAPSHOT_CHECK_PATH_RE.test(changedPath));
+}
+
+export function shouldRunPromptSnapshotOwnerTest(paths) {
+  return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
+}
+
 export function shouldRunTestTempCreationReport(paths) {
   return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
 }
@@ -258,6 +270,12 @@ export function createChangedCheckPlan(result, options = {}) {
       shrinkwrapGuardCommand.args,
       baseEnv,
     );
+  }
+  if (shouldRunPromptSnapshotCheck(result.paths)) {
+    add("prompt snapshot drift", ["prompt:snapshots:check"]);
+  }
+  if (shouldRunPromptSnapshotOwnerTest(result.paths)) {
+    add("prompt snapshot owner test", ["test:serial", "test/scripts/prompt-snapshots.test.ts"]);
   }
   add("package patch guard", ["deps:patches:check"]);
 
