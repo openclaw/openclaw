@@ -1365,6 +1365,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+      if (
+        hasVisibleStreamParts(state, {
+          includeCurrent: false,
+          isHiddenStreamText: isHiddenAssistantStreamText,
+        })
+      ) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          includeCurrent: false,
+        });
+        clearToolStreamSegments(state);
+      }
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
