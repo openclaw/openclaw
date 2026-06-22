@@ -19,21 +19,6 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { setLastActiveSessionKey } from "../../ui/app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "../../ui/app-scroll.ts";
 import { resetToolStream } from "../../ui/app-tool-stream.ts";
-import {
-  handleChatDraftChange,
-  handleChatInputHistoryKey,
-  navigateChatInputHistory,
-  recordNonTranscriptInputHistory,
-  resetChatInputHistoryNavigation,
-  type ChatInputHistoryKeyInput,
-  type ChatInputHistoryKeyResult,
-  type ChatInputHistoryState,
-} from "../../ui/chat/input-history.ts";
-import { reconcileChatRunLifecycle } from "../../ui/chat/run-lifecycle.ts";
-import {
-  clearChatMessagesFromCache,
-  type ChatMessageCache,
-} from "../../ui/chat/session-message-cache.ts";
 import { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
 import {
   applyRemoteSlashCommandsResult,
@@ -95,6 +80,18 @@ import {
   type ChatState,
   isGatewayMethodAdvertised,
 } from "./gateway.ts";
+import {
+  handleChatDraftChange,
+  handleChatInputHistoryKey,
+  navigateChatInputHistory,
+  recordNonTranscriptInputHistory,
+  resetChatInputHistoryNavigation,
+  type ChatInputHistoryKeyInput,
+  type ChatInputHistoryKeyResult,
+  type ChatInputHistoryState,
+} from "./input-history.ts";
+import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import { clearChatMessagesFromCache, type ChatMessageCache } from "./session-message-cache.ts";
 import type { ChatSideResult } from "./side-result.ts";
 import type {
   ChatAttachment,

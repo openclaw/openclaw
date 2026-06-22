@@ -1,8 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import { extractText } from "../../pages/chat/message-extract.ts";
-import { trimAccumulatedStreamPrefix } from "../../pages/chat/stream-text.ts";
 // Control UI chat module implements stream reconciliation behavior.
-import { resetToolStream } from "../app-tool-stream.ts";
+import { resetToolStream } from "../../ui/app-tool-stream.ts";
+import { extractText } from "./message-extract.ts";
+import { trimAccumulatedStreamPrefix } from "./stream-text.ts";
 import { extractToolMessageRefs } from "./tool-message-refs.ts";
 
 export type StreamReconciliationState = {

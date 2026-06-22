@@ -1,8 +1,12 @@
 import { uiSessionRowMatchesSelectedChat } from "../../lib/session-key.ts";
 // Control UI chat module implements run lifecycle behavior.
-import { resetToolStream, type CompactionStatus, type FallbackStatus } from "../app-tool-stream.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
-import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../types.ts";
+import {
+  resetToolStream,
+  type CompactionStatus,
+  type FallbackStatus,
+} from "../../ui/app-tool-stream.ts";
+import { isSessionRunActive } from "../../ui/session-run-state.ts";
+import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../ui/types.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 

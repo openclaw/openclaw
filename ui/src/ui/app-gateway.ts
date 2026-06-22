@@ -43,6 +43,7 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "../pages/chat/gateway.ts";
+import { reconcileChatRunLifecycle } from "../pages/chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "../pages/chat/side-result.ts";
 import type { ChatQueueItem, ChatSessionRefreshTarget } from "../pages/chat/types.ts";
 import { loadDevices, type DevicesState } from "../pages/nodes/devices.ts";
@@ -63,7 +64,6 @@ import {
   type AgentEventPayload,
   type SessionOperationEventPayload,
 } from "./app-tool-stream.ts";
-import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   recordControlUiConnectTiming,

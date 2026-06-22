@@ -5,7 +5,7 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import { normalizeRoleForGrouping } from "../../pages/chat/role-normalizer.ts";
+import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 
 const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
 type ToolNameField = (typeof TOOL_NAME_FIELDS)[number];

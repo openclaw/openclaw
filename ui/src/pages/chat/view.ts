@@ -7,19 +7,9 @@ import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
-import {
-  CHAT_ATTACHMENT_ACCEPT,
-  isSupportedChatAttachmentFile,
-} from "../../ui/chat/attachment-support.ts";
 import { copyToClipboard } from "../../ui/chat/clipboard.ts";
 import { exportChatMarkdown } from "../../ui/chat/export.ts";
-import type {
-  ChatInputHistoryKeyInput,
-  ChatInputHistoryKeyResult,
-} from "../../ui/chat/input-history.ts";
 import { getPinnedMessageSummary } from "../../ui/chat/pinned-summary.ts";
-import type { ChatRunUiStatus } from "../../ui/chat/run-lifecycle.ts";
-import { getOrCreateSessionCacheValue } from "../../ui/chat/session-cache.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
@@ -44,6 +34,7 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import { CHAT_ATTACHMENT_ACCEPT, isSupportedChatAttachmentFile } from "./attachment-support.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 import { renderChatQueue } from "./chat-queue.ts";
 import { buildRawSidebarContent } from "./chat-sidebar-raw.ts";
@@ -57,6 +48,7 @@ import {
   renderStreamingGroup,
 } from "./grouped-render.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
+import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import { PinnedMessages } from "./pinned-messages.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
@@ -67,6 +59,8 @@ import {
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import { renderChatRunControls } from "./run-controls.ts";
+import type { ChatRunUiStatus } from "./run-lifecycle.ts";
+import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { renderSideResult } from "./side-result-render.ts";
 import type { ChatSideResult } from "./side-result.ts";
 import {

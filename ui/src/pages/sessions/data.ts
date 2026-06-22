@@ -8,12 +8,6 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/session-key.ts";
-// Control UI controller manages sessions gateway state.
-import {
-  reconcileChatRunFromCurrentSessionRow,
-  reconcileChatRunFromSessionRow,
-  type ChatRunUiStatus,
-} from "../../ui/chat/run-lifecycle.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -29,6 +23,12 @@ import type {
   SessionsCompactionRestoreResult,
   SessionsListResult,
 } from "../../ui/types.ts";
+// Control UI controller manages sessions gateway state.
+import {
+  reconcileChatRunFromCurrentSessionRow,
+  reconcileChatRunFromSessionRow,
+  type ChatRunUiStatus,
+} from "../chat/run-lifecycle.ts";
 
 type SessionsChatRunState = {
   sessionKey?: string;
