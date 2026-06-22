@@ -81,4 +81,17 @@ describe("extension bridge CDP face auth", () => {
     expect(await fetchJson(39533, "/json/version")).toBe(200);
     expect(await fetchJson(39533, "/json/list")).toBe(200);
   });
+
+  async function fetchCorsOrigin(port: number, origin: string): Promise<string | null> {
+    const res = await fetch("http://127.0.0.1:" + port + "/whoami", { headers: { Origin: origin } });
+    return res.headers.get("access-control-allow-origin");
+  }
+
+  it("reflects CORS only for a chrome-extension origin, never arbitrary websites", async () => {
+    handle = await startExtensionBridgeServer({ port: 39534 });
+    expect(await fetchCorsOrigin(39534, "chrome-extension://abcdefghijklmnopabcdefghijklmnop")).toBe(
+      "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    );
+    expect(await fetchCorsOrigin(39534, "https://evil.example.com")).toBeNull();
+  });
 });

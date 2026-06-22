@@ -219,10 +219,20 @@ export function startExtensionBridgeServer(opts: {
     // discovery probe (the fetch hangs) and the relay never connects. Node-side
     // callers (Playwright connectOverCDP, curl) are not subject to PNA, so this
     // only bites the extension path.
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "*");
-    res.setHeader("Access-Control-Allow-Private-Network", "true");
+    // Only the bundled extension's own browser origins may read this loopback
+    // intake cross-origin: reflect a chrome-extension:// Origin (its service
+    // worker / side panel), but do NOT grant wildcard CORS to arbitrary http(s)
+    // websites, which would otherwise read /whoami's host + node identity over
+    // Private Network Access. Node-side callers (Playwright, curl) send no Origin
+    // and are unaffected (CORS is browser-enforced only).
+    const corsOrigin = req.headers.origin;
+    if (corsOrigin && corsOrigin.startsWith("chrome-extension://")) {
+      res.setHeader("Access-Control-Allow-Origin", corsOrigin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+      res.setHeader("Access-Control-Allow-Private-Network", "true");
+    }
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       return res.end();
