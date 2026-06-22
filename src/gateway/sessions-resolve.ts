@@ -261,7 +261,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     });
   }
   if (matches.length > 1) {
-    const keys = matches.map(([key]) => key).join(", ");
+    const keys = matches.map(([matchKey]) => matchKey).join(", ");
     return {
       ok: false,
       error: errorShape(
