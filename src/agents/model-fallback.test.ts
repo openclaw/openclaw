@@ -2775,6 +2775,53 @@ describe("runWithModelFallback", () => {
     expect(classifyResult).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back on provider transport AbortError with 'This operation was aborted' (#94998)", async () => {
+    // Provider transport timeouts (e.g. 365s AbortSignal.timeout via AbortSignal.any)
+    // can surface AbortError with the DOM-standard message "This operation was aborted".
+    // The shared timeout pattern /\boperation was aborted\b/i in failover-matches.ts
+    // classifies this as a timeout via hasTimeoutHint(), so shouldRethrowAbort returns
+    // false and the fallback loop continues to the next model.
+    const cfg = makeProviderFallbackCfg("openai");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("This operation was aborted"), { name: "AbortError" }),
+      )
+      .mockResolvedValueOnce("fallback-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "m1",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back on provider transport TimeoutError from AbortSignal.timeout (#94998)", async () => {
+    // When AbortSignal.timeout fires, Node.js fetch throws a TimeoutError DOMException
+    // with message "The operation was aborted due to timeout". This is NOT an AbortError,
+    // so isFallbackAbortError returns false and the fallback loop continues.
+    const cfg = makeProviderFallbackCfg("openai");
+    const timeoutErr = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(timeoutErr)
+      .mockResolvedValueOnce("fallback-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "m1",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("appends the configured primary as a last fallback", async () => {
     const cfg = makeCfg({
       agents: {

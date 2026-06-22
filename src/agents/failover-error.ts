@@ -18,7 +18,7 @@ import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
-const ABORT_TIMEOUT_RE = /request was aborted|request aborted|this operation was aborted/i;
+const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
 
 /** Structured error used to carry model fallback/failover metadata across layers. */

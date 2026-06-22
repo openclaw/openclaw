@@ -928,19 +928,34 @@ describe("failover-error", () => {
     expect(isTimeoutError(err)).toBe(true);
   });
 
-  it("treats AbortError with 'This operation was aborted' message as timeout (#94998)", () => {
+  it("classifies AbortError with 'This operation was aborted' as timeout via hasTimeoutHint (#94998)", () => {
     // Provider transport timeouts (e.g. 365s AbortSignal.timeout) can surface
     // AbortError with the DOM-standard message "This operation was aborted".
-    // This must be classified as a timeout so model fallback is triggered.
+    // This is classified as a timeout via hasTimeoutHint() → isTimeoutErrorMessage(),
+    // which matches the shared timeout pattern /\boperation was aborted\b/i in
+    // failover-matches.ts. The ABORT_TIMEOUT_RE regex is NOT the matching path.
     const err = Object.assign(new Error("This operation was aborted"), {
       name: "AbortError",
     });
     expect(isTimeoutError(err)).toBe(true);
+    // Verify the error is coerced to a FailoverError with reason "timeout"
+    // so the model fallback loop continues instead of re-throwing.
+    expect(coerceToFailoverError(err)?.reason).toBe("timeout");
+  });
+
+  it("classifies DOMException AbortError with 'This operation was aborted' as timeout (#94998)", () => {
+    // watchClientDisconnect and AbortController.abort() can produce
+    // DOMException(name="AbortError", message="This operation was aborted").
+    // The shared timeout matcher in failover-matches.ts matches this message,
+    // so hasTimeoutHint returns true and isTimeoutError classifies it as timeout.
+    const err = new DOMException("This operation was aborted", "AbortError");
+    expect(isTimeoutError(err)).toBe(true);
+    expect(coerceToFailoverError(err)?.reason).toBe("timeout");
   });
 
   it("does not treat session-write-lock AbortError with 'This operation was aborted' as timeout (#94998)", () => {
-    // Even when the message matches, session write lock contention must not be
-    // misclassified as a provider timeout.
+    // Even when the message matches the timeout pattern, session write lock
+    // contention must not be misclassified as a provider timeout.
     const lockError = new SessionWriteLockTimeoutError({
       timeoutMs: 10_000,
       owner: "pid=37121",
