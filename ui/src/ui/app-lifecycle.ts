@@ -1,10 +1,11 @@
 import { appRouter, type ApplicationContext, startAppRouter } from "../app-routes.ts";
 import { createBrowserHistory } from "../app/browser.ts";
+import { stopDebugPolling } from "../pages/debug/polling.ts";
 import { stopLogsPolling } from "../pages/logs/polling.ts";
 import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "../pages/workboard/data.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
-import { stopNodesPolling, stopDebugPolling } from "./app-polling.ts";
+import { stopNodesPolling } from "./app-polling.ts";
 import { observeTopbar } from "./app-scroll.ts";
 import {
   applySettingsFromUrl,

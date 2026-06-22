@@ -51,8 +51,6 @@ vi.mock("./app-settings.ts", () => ({
 
 vi.mock("./app-polling.ts", () => ({
   stopNodesPolling: vi.fn(),
-  startDebugPolling: vi.fn(),
-  stopDebugPolling: vi.fn(),
 }));
 
 vi.mock("./app-scroll.ts", () => ({

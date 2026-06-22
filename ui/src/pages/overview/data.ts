@@ -9,13 +9,13 @@ import {
 } from "../../ui/control-ui-performance.ts";
 import { loadChannels } from "../../ui/controllers/channels.ts";
 import { loadCronJobsPage, loadCronStatus } from "../../ui/controllers/cron.ts";
-import { loadDebug } from "../../ui/controllers/debug.ts";
 import { loadModelAuthStatusState } from "../../ui/controllers/model-auth-status.ts";
 import { loadPresence } from "../../ui/controllers/presence.ts";
 import { loadSkills } from "../../ui/controllers/skills.ts";
 import { loadUsage } from "../../ui/controllers/usage.ts";
 import { resolveCronJobLastRunStatus } from "../../ui/cron-status.ts";
 import { isMonitoredAuthProvider } from "../../ui/model-auth-helpers.ts";
+import { loadDebug } from "../debug/data.ts";
 import { loadSessions } from "../sessions/data.ts";
 
 export async function loadOverview(

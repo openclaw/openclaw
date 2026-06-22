@@ -3,7 +3,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { renderDebug, type DebugProps } from "./debug.ts";
+import { renderDebug, type DebugProps } from "./view.ts";
 
 function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
   return {
