@@ -379,9 +379,8 @@ function convertAnthropicMessages(
   const allowReasoningContentReplay = options?.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options?.replayThinkingEnabled !== false;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
-  const activeToolTurnAssistantIndex = replayThinkingEnabled
-    ? -1
-    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
+  const activeToolTurnAssistantIndex =
+    findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
     if (msg.role === "user") {
@@ -447,7 +446,12 @@ function convertAnthropicMessages(
         if (block.type === "thinking") {
           const thinkingSignature = block.thinkingSignature?.trim();
           const isReasoningContent = thinkingSignature === "reasoning_content";
-          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex && !isReasoningContent) {
+          // Strip thinking blocks from completed prior assistant turns.
+          // Only the active tool-use cycle needs preserved thinking signatures
+          // for tool-result continuity. Completed turns without pending tool
+          // calls do not need signatures, and re-emitting stale signatures
+          // can cause 400 "Invalid signature in thinking block" (#94228).
+          if (i !== activeToolTurnAssistantIndex && !isReasoningContent) {
             omittedThinking = true;
             continue;
           }

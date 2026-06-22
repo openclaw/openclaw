@@ -1712,17 +1712,10 @@ describe("anthropic transport stream", () => {
       latestAnthropicRequest().payload.messages,
       (record) => record.role === "assistant",
     );
+    // Thinking blocks from completed turns (no active tool-use cycle) are
+    // stripped to prevent stale signatures from bricking long threads (#94228).
     expect(assistantMessage.content).toEqual([
-      {
-        type: "thinking",
-        thinking: signedThinking,
-        signature: "sig_1",
-      },
-      {
-        type: "thinking",
-        thinking: "",
-        signature: "sig_omitted",
-      },
+      { type: "text", text: "[assistant reasoning omitted]" },
     ]);
   });
 
