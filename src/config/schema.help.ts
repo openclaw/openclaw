@@ -1512,6 +1512,10 @@ export const FIELD_HELP: Record<string, string> = {
     "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
   "agents.defaults.compaction.memoryFlush.systemPrompt":
     "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
+  "agents.defaults.compaction.preflight":
+    "Preflight (budget-triggered) compaction gate. Disable to skip the pre-turn threshold check entirely and let every turn fall through to overflow recovery (which honors `compaction.timeoutSeconds`).",
+  "agents.defaults.compaction.preflight.enabled":
+    "Enable preflight (budget-triggered) compaction. Default: true. Set false to skip preflight compaction; subsequent turns then rely on overflow recovery, which has its own 15-minute budget and is the only path that honors `compaction.timeoutSeconds` without being capped by the ~60s reply lifecycle.",
   "agents.defaults.runRetries":
     "Outer run loop retry iteration boundaries for the embedded OpenClaw runner to prevent infinite execution loops during failure recovery.",
   "agents.defaults.runRetries.base":

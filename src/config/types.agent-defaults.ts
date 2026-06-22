@@ -569,6 +569,18 @@ export type AgentCompactionConfig = {
    * Default: false (silent by default).
    */
   notifyUser?: boolean;
+  /**
+   * Preflight (budget-triggered) compaction gate. When disabled, the pre-turn
+   * threshold check in `runPreflightCompactionIfNeeded` short-circuits to the
+   * existing session entry; subsequent turns fall through to overflow recovery
+   * (which already honors `compaction.timeoutSeconds`).
+   */
+  preflight?: AgentCompactionPreflightConfig;
+};
+
+export type AgentCompactionPreflightConfig = {
+  /** Enable preflight (budget-triggered) compaction. Default: true. */
+  enabled?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
