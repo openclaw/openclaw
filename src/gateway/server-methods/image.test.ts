@@ -1,12 +1,14 @@
 /**
  * Tests for image.providers gateway handler.
+ * Includes regression tests for auth-profile-only and empty-config cases.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { imageHandlers } from "./image.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   listImageGenerationProviders: vi.fn(() => []),
+  readFileSync: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -19,7 +21,17 @@ vi.mock("../../image-generation/provider-registry.js", () => ({
     mocks.listImageGenerationProviders as typeof import("../../image-generation/provider-registry.js").listImageGenerationProviders,
 }));
 
+vi.mock("node:fs", () => ({
+  default: {
+    readFileSync: mocks.readFileSync,
+  },
+}));
+
 describe("imageHandlers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   // Test 1: no active provider - imageGenerationModel not configured
   it("returns null active when imageGenerationModel not configured", async () => {
     const mockRespond = vi.fn();
@@ -172,6 +184,229 @@ describe("imageHandlers", () => {
               }),
             }),
           }),
+        ]),
+      }),
+    );
+  });
+
+  // ========== Regression Tests (per ClawSweeper P2 requirement) ==========
+
+  // Test 5: lazy provider (no isConfigured) - uses fallback config check
+  it("marks lazy provider as configured when has model config (no isConfigured implemented)", async () => {
+    const mockRespond = vi.fn();
+    const mockProvider = {
+      id: "google",
+      label: "Google",
+      defaultModel: "gemini-2.0-flash",
+      models: ["gemini-2.0-flash"],
+      capabilities: { generate: { enabled: true }, edit: { enabled: false } },
+      // Provider does NOT implement isConfigured - relies on fallback
+      isConfigured: undefined,
+    };
+    const mockContext = {
+      getRuntimeConfig: () => ({
+        models: {
+          providers: {
+            google: { model: "gemini-2.0-flash" },
+          },
+        },
+        plugins: { entries: {} },
+        auth: { profiles: {} },
+        agents: { defaults: {} },
+      }),
+    };
+
+    mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
+    mocks.readFileSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    await imageHandlers["image.providers"]({
+      respond: mockRespond,
+      context: mockContext as never,
+    });
+
+    expect(mockRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: "google", configured: true }),
+        ]),
+      }),
+    );
+  });
+
+  // Test 6: empty provider config entry - configured: false when no auth, no model, no plugin config
+  it("marks provider as not configured when empty config (empty-config case)", async () => {
+    const mockRespond = vi.fn();
+    const mockProvider = {
+      id: "openai",
+      label: "OpenAI",
+      defaultModel: "dall-e-3",
+      models: ["dall-e-3"],
+      capabilities: { generate: { enabled: true } },
+      isConfigured: undefined,
+    };
+    const mockContext = {
+      getRuntimeConfig: () => ({
+        models: { providers: {} },
+        plugins: { entries: {} },
+        auth: { profiles: {} },
+        agents: { defaults: {} },
+      }),
+    };
+
+    mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
+    // Simulate no auth profiles (file read returns empty)
+    mocks.readFileSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    await imageHandlers["image.providers"]({
+      respond: mockRespond,
+      context: mockContext as never,
+    });
+
+    expect(mockRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: "openai", configured: false }),
+        ]),
+      }),
+    );
+  });
+
+  // Test 7: model config provider - configured when has model config
+  it("marks provider as configured when has model config", async () => {
+    const mockRespond = vi.fn();
+    const mockProvider = {
+      id: "openai",
+      label: "OpenAI",
+      defaultModel: "dall-e-3",
+      models: ["dall-e-3"],
+      capabilities: { generate: { enabled: true } },
+      isConfigured: undefined,
+    };
+    const mockContext = {
+      getRuntimeConfig: () => ({
+        models: {
+          providers: {
+            openai: { model: "dall-e-3" },
+          },
+        },
+        plugins: { entries: {} },
+        auth: { profiles: {} },
+        agents: { defaults: {} },
+      }),
+    };
+
+    mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
+    mocks.readFileSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    await imageHandlers["image.providers"]({
+      respond: mockRespond,
+      context: mockContext as never,
+    });
+
+    expect(mockRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: "openai", configured: true }),
+        ]),
+      }),
+    );
+  });
+
+  // Test 8: plugin config provider - configured when has plugin config
+  it("marks provider as configured when has plugin config", async () => {
+    const mockRespond = vi.fn();
+    const mockProvider = {
+      id: "comfy",
+      label: "ComfyUI",
+      defaultModel: "workflow",
+      models: ["workflow"],
+      capabilities: { generate: { enabled: true } },
+      isConfigured: undefined,
+    };
+    const mockContext = {
+      getRuntimeConfig: () => ({
+        models: { providers: {} },
+        plugins: {
+          entries: {
+            comfy: { config: { endpoint: "http://localhost:8188" } },
+          },
+        },
+        auth: { profiles: {} },
+        agents: { defaults: {} },
+      }),
+    };
+
+    mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
+    mocks.readFileSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    await imageHandlers["image.providers"]({
+      respond: mockRespond,
+      context: mockContext as never,
+    });
+
+    expect(mockRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: "comfy", configured: true }),
+        ]),
+      }),
+    );
+  });
+
+  // Test 9: TTS provider config - configured when has TTS provider config
+  it("marks provider as configured when has TTS provider config", async () => {
+    const mockRespond = vi.fn();
+    const mockProvider = {
+      id: "openai",
+      label: "OpenAI",
+      defaultModel: "dall-e-3",
+      models: ["dall-e-3"],
+      capabilities: { generate: { enabled: true } },
+      isConfigured: undefined,
+    };
+    const mockContext = {
+      getRuntimeConfig: () => ({
+        models: { providers: {} },
+        plugins: { entries: {} },
+        auth: { profiles: {} },
+        agents: { defaults: {} },
+        messages: {
+          tts: {
+            providers: {
+              openai: { voice: "alloy" },
+            },
+          },
+        },
+      }),
+    };
+
+    mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
+    mocks.readFileSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    await imageHandlers["image.providers"]({
+      respond: mockRespond,
+      context: mockContext as never,
+    });
+
+    expect(mockRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: "openai", configured: true }),
         ]),
       }),
     );
