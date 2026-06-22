@@ -34,7 +34,10 @@ import {
 } from "../../infra/outbound/channel-target-prefix.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
@@ -111,6 +114,9 @@ async function assertConfiguredAnnounceChannel(params: {
 
   if (configuredChannels.length === 0) {
     if (!hasExplicitChannelConfigEntry(params.cfg)) {
+      if (!isDeliverableMessageChannel(normalizedChannel)) {
+        throw new Error(`${params.field} is not a known channel: ${normalizedChannel}`);
+      }
       return;
     }
     throw new Error(`${params.field} is not configured: ${normalizedChannel}`);
