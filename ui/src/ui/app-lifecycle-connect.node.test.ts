@@ -25,12 +25,6 @@ vi.mock("../app-routes.ts", () => ({
     start: appRouterStartMock,
     stop: vi.fn(),
   },
-  createApplicationContext: (host: unknown) => ({
-    routeLoadContext: host,
-    navigate: vi.fn(),
-    preload: vi.fn(),
-    notifyStateChange: vi.fn(),
-  }),
 }));
 
 vi.mock("./app-gateway.ts", () => ({
@@ -112,6 +106,16 @@ function createHost() {
   };
 }
 
+function createApplication(host: unknown) {
+  return {
+    routeLoadContext: host,
+    navigate: vi.fn(),
+    preload: vi.fn(),
+    notifyStateChange: vi.fn(),
+    dispose: vi.fn(),
+  };
+}
+
 describe("handleConnected", () => {
   beforeEach(() => {
     applySettingsFromUrlMock.mockReset();
@@ -132,7 +136,7 @@ describe("handleConnected", () => {
     connectGatewayMock.mockReset();
     const host = createHost();
 
-    handleConnected(host as never);
+    handleConnected(host as never, createApplication(host));
     expect(connectGatewayMock).toHaveBeenCalledTimes(1);
 
     bootstrap.resolve();
@@ -146,7 +150,7 @@ describe("handleConnected", () => {
     connectGatewayMock.mockReset();
     const host = createHost();
 
-    handleConnected(host as never);
+    handleConnected(host as never, createApplication(host));
     expect(connectGatewayMock).toHaveBeenCalledTimes(1);
 
     host.connectGeneration += 1;
@@ -161,7 +165,7 @@ describe("handleConnected", () => {
     loadBootstrapMock.mockReturnValueOnce(bootstrap);
     const host = createHost();
 
-    handleConnected(host as never);
+    handleConnected(host as never, createApplication(host));
 
     expect(applySettingsFromUrlMock).toHaveBeenCalledTimes(1);
     expect(loadBootstrapMock).toHaveBeenCalledTimes(1);
@@ -187,7 +191,7 @@ describe("handleConnected", () => {
     });
     const host = createHost();
 
-    handleConnected(host as never);
+    handleConnected(host as never, createApplication(host));
 
     expect(restoreComposerMock).toHaveBeenCalledWith(host, { preserveCurrent: true });
     expect(restoreComposerMock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -207,7 +211,7 @@ describe("handleConnected", () => {
     });
     const host = createHost();
 
-    handleConnected(host as never);
+    handleConnected(host as never, createApplication(host));
 
     expect(restoreComposerMock).not.toHaveBeenCalled();
     expect(host.chatComposerProvisionalRestore).toBeNull();
@@ -218,7 +222,7 @@ describe("handleConnected", () => {
     loadBootstrapMock.mockResolvedValue(undefined);
     const chatHost = createHost();
 
-    handleConnected(chatHost as never);
+    handleConnected(chatHost as never, createApplication(chatHost));
     expect(appRouterStartMock).toHaveBeenCalledWith(
       expect.anything(),
       chatHost.basePath,
@@ -227,11 +231,11 @@ describe("handleConnected", () => {
     );
 
     const nodesHost = createHost();
-    handleConnected(nodesHost as never);
+    handleConnected(nodesHost as never, createApplication(nodesHost));
     expect(appRouterStartMock).toHaveBeenCalledTimes(2);
 
     const logsHost = createHost();
-    handleConnected(logsHost as never);
+    handleConnected(logsHost as never, createApplication(logsHost));
     expect(appRouterStartMock).toHaveBeenCalledTimes(3);
   });
 });

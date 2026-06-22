@@ -1,9 +1,4 @@
-import {
-  appRouter,
-  type ApplicationContext,
-  createApplicationContext,
-  startAppRouter,
-} from "../app-routes.ts";
+import { appRouter, type ApplicationContext, startAppRouter } from "../app-routes.ts";
 import { createBrowserHistory } from "../app/browser.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
@@ -88,12 +83,7 @@ type LifecycleHost = {
   requestUpdate?: () => void;
 };
 
-export function handleConnected(
-  host: LifecycleHost,
-  application = createApplicationContext(
-    host as unknown as Parameters<typeof createApplicationContext>[0],
-  ),
-) {
+export function handleConnected(host: LifecycleHost, application: ApplicationContext) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   const history = createBrowserHistory();
@@ -231,9 +221,7 @@ export function handleDisconnected(host: LifecycleHost) {
 export function handleUpdated(
   host: LifecycleHost,
   changed: Map<PropertyKey, unknown>,
-  application = createApplicationContext(
-    host as unknown as Parameters<typeof createApplicationContext>[0],
-  ),
+  application: ApplicationContext,
 ) {
   if (changed.has("connected") && host.connected) {
     void appRouter.revalidate(application.routeLoadContext).catch(() => undefined);

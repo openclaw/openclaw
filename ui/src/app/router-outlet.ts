@@ -63,6 +63,7 @@ export function createRouterOutletSnapshot<TRouteId extends string, TModule, TDa
 ): RouterOutletSnapshotStore<TRouteId, TModule, TData> {
   let selection = selectRouterOutletState(router.getState());
   const listeners = new Set<(next: RouterOutletSelection<TRouteId, TModule, TData>) => void>();
+  let disposed = false;
   const unsubscribe = router.subscribeSelector(
     selectRouterOutletState,
     (next) => {
@@ -76,12 +77,19 @@ export function createRouterOutletSnapshot<TRouteId extends string, TModule, TDa
   return {
     get: () => selection,
     subscribe: (listener) => {
+      if (disposed) {
+        return () => undefined;
+      }
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
       };
     },
     dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
       listeners.clear();
       unsubscribe();
     },

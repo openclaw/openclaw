@@ -44,6 +44,16 @@ function createComposerPersistHost(): ComposerPersistHost {
   return createHost() as ComposerPersistHost;
 }
 
+function createApplication(host: unknown) {
+  return {
+    routeLoadContext: host,
+    navigate: vi.fn(),
+    preload: vi.fn(),
+    notifyStateChange: vi.fn(),
+    dispose: vi.fn(),
+  };
+}
+
 describe("handleDisconnected", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -144,6 +154,7 @@ describe("handleUpdated", () => {
     handleUpdated(
       host as unknown as Parameters<typeof handleUpdated>[0],
       new Map<PropertyKey, unknown>([["chatMessage", ""]]),
+      createApplication(host),
     );
 
     expect(loadChatComposerSnapshot(host, "main")).toBeNull();
@@ -170,6 +181,7 @@ describe("handleUpdated", () => {
     handleUpdated(
       host as unknown as Parameters<typeof handleUpdated>[0],
       new Map<PropertyKey, unknown>([["chatMessage", ""]]),
+      createApplication(host),
     );
     handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
 
@@ -193,11 +205,13 @@ describe("handleUpdated", () => {
     handleUpdated(
       host as unknown as Parameters<typeof handleUpdated>[0],
       new Map<PropertyKey, unknown>([["chatMessage", ""]]),
+      createApplication(host),
     );
     host.chatQueue = [{ id: "queued-1", text: "next prompt", createdAt: 1 }];
     handleUpdated(
       host as unknown as Parameters<typeof handleUpdated>[0],
       new Map<PropertyKey, unknown>([["chatQueue", []]]),
+      createApplication(host),
     );
 
     expect(host.chatComposerPersistTimer).toBeNull();
@@ -216,6 +230,7 @@ describe("handleUpdated", () => {
     handleUpdated(
       host as unknown as Parameters<typeof handleUpdated>[0],
       new Map<PropertyKey, unknown>([["chatMessage", ""]]),
+      createApplication(host),
     );
     host.sessionKey = "agent:main:new-session";
     host.chatMessage = "draft restored into new chat";
@@ -225,6 +240,7 @@ describe("handleUpdated", () => {
         ["sessionKey", "main"],
         ["chatMessage", ""],
       ]),
+      createApplication(host),
     );
 
     expect(host.chatComposerPersistTimer).toBeNull();
@@ -247,11 +263,13 @@ describe("handleUpdated", () => {
     handleUpdated(
       host as unknown as Parameters<typeof handleUpdated>[0],
       new Map<PropertyKey, unknown>([["chatMessage", ""]]),
+      createApplication(host),
     );
     host.sessionKey = "agent:main:other";
     handleUpdated(
       host as unknown as Parameters<typeof handleUpdated>[0],
       new Map<PropertyKey, unknown>([["sessionKey", "main"]]),
+      createApplication(host),
     );
 
     expect(host.chatComposerPersistTimer).toBeNull();
@@ -281,6 +299,7 @@ describe("handleUpdated", () => {
         ["chatMessage", ""],
         ["chatQueue", []],
       ]),
+      createApplication(host),
     );
 
     expect(loadChatComposerSnapshot(host, "main")).toEqual({

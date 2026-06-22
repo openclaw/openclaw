@@ -212,10 +212,11 @@ function resolveOnboardingMode(): boolean {
 
 export class OpenClawApp extends LitElement {
   readonly i18nController = new I18nController(this);
-  readonly applicationContext: ApplicationContext = createApplicationContext(
+  applicationContext: ApplicationContext = createApplicationContext(
     this as unknown as Parameters<typeof createApplicationContext>[0],
     createRouterOutletSnapshot(appRouter),
   );
+  private applicationContextDisposed = false;
   clientInstanceId = generateUUID();
   connectGeneration = 0;
 
@@ -881,6 +882,13 @@ export class OpenClawApp extends LitElement {
     this.addEventListener("pointerout", this.nativeTitleTooltipPointerOutHandler);
     this.addEventListener("focusin", this.nativeTitleTooltipFocusInHandler);
     this.addEventListener("focusout", this.nativeTitleTooltipFocusOutHandler);
+    if (this.applicationContextDisposed) {
+      this.applicationContext = createApplicationContext(
+        this as unknown as Parameters<typeof createApplicationContext>[0],
+        createRouterOutletSnapshot(appRouter),
+      );
+      this.applicationContextDisposed = false;
+    }
     handleConnected(
       this as unknown as Parameters<typeof handleConnected>[0],
       this.applicationContext,
@@ -918,6 +926,8 @@ export class OpenClawApp extends LitElement {
     }
     this.chatMobileControlsTrigger = null;
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
+    this.applicationContext.dispose();
+    this.applicationContextDisposed = true;
     super.disconnectedCallback();
   }
 

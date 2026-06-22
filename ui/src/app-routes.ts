@@ -43,6 +43,7 @@ export type ApplicationContext = {
   navigate: (routeId: RouteId) => void;
   preload: (routeId: RouteId) => Promise<void>;
   notifyStateChange: (state: AppViewState, changed: ReadonlyMap<PropertyKey, unknown>) => void;
+  dispose: () => void;
 };
 
 export type RouteRenderContext = {
@@ -96,7 +97,7 @@ export const appRouter = createRouter<RouteId, RouteLoadContext, AppRouteModule>
 
 export function createApplicationContext(
   host: SettingsHost,
-  routeSnapshot?: RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>,
+  routeSnapshot: RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>,
 ): ApplicationContext {
   const applicationHost = host as ApplicationHost;
   const loadContext = routeLoadContext(host);
@@ -124,18 +125,7 @@ export function createApplicationContext(
   };
   return {
     routeLoadContext: loadContext,
-    routeSnapshot:
-      routeSnapshot ??
-      ({
-        get: () => ({
-          status: "idle",
-          active: undefined,
-          pending: undefined,
-          showPending: false,
-        }),
-        subscribe: () => () => undefined,
-        dispose: () => undefined,
-      } as RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>),
+    routeSnapshot,
     navigate,
     preload: (routeId) => appRouter.preloadRoute(routeId, loadContext),
     notifyStateChange: (state, changed) => {
@@ -143,6 +133,9 @@ export function createApplicationContext(
       if (active && "onStateChange" in active && typeof active.onStateChange === "function") {
         active.onStateChange({ state, navigate }, changed);
       }
+    },
+    dispose: () => {
+      routeSnapshot.dispose();
     },
   };
 }
