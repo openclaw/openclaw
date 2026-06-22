@@ -4002,17 +4002,28 @@ function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>
   }
 }
 
-function sanitizeReasoningContentReplayFields(record: Record<string, unknown>): void {
+function sanitizeReasoningContentReplayFields(
+  record: Record<string, unknown>,
+  modelId: string,
+): void {
   if ("reasoning_content" in record && typeof record.reasoning_content !== "string") {
     delete record.reasoning_content;
   }
-  const reasoningDetails = record.reasoning_details;
-  if (typeof reasoningDetails === "string") {
-    if (reasoningDetails.length > 0 && typeof record.reasoning !== "string") {
-      record.reasoning = reasoningDetails;
+  // MiniMax M3 sends reasoning_details as a plain-text string that must be
+  // converted to `reasoning` for replay pass-back. Other reasoning_content
+  // providers (Z.AI, DeepSeek, Kimi, Mimo) treat reasoning_details as a
+  // non-native field and expect it to be stripped.
+  if (shouldPreserveReasoningDetails(modelId)) {
+    const reasoningDetails = record.reasoning_details;
+    if (typeof reasoningDetails === "string") {
+      if (reasoningDetails.length > 0 && typeof record.reasoning !== "string") {
+        record.reasoning = reasoningDetails;
+      }
+      delete record.reasoning_details;
+    } else if (reasoningDetails !== undefined && !Array.isArray(reasoningDetails)) {
+      delete record.reasoning_details;
     }
-    delete record.reasoning_details;
-  } else if (reasoningDetails !== undefined && !Array.isArray(reasoningDetails)) {
+  } else {
     delete record.reasoning_details;
   }
   if ("reasoning" in record && typeof record.reasoning !== "string") {
@@ -4037,6 +4048,19 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2.6-pro",
   "minimax-m3",
 ]);
+
+// MiniMax M3 returns reasoning_details as a plain-text string that the
+// OpenRouter transport surfaces verbatim. Other reasoning_content providers
+// (Z.AI, DeepSeek, Kimi, Mimo) do not use reasoning_details as a replay
+// field; it must be stripped for them to avoid leaking non-native fields
+// into follow-up requests.
+const MINIMAX_REASONING_DETAILS_MODEL_IDS = new Set(["minimax-m3"]);
+
+function shouldPreserveReasoningDetails(modelId: string): boolean {
+  return getReasoningContentReplayModelIdCandidates(modelId).some((id) =>
+    MINIMAX_REASONING_DETAILS_MODEL_IDS.has(id),
+  );
+}
 
 // Tier/access suffixes that some providers append to otherwise identical model
 // ids (OpenCode Zen exposes `deepseek-v4-flash-free`, OpenRouter exposes
@@ -4126,7 +4150,11 @@ function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): bool
 // strip them for stock OpenAI before a follow-up request hits the wire.
 function sanitizeCompletionsReasoningReplayFields(
   messages: unknown,
-  options: { preserveOpenRouterReasoning: boolean; preserveReasoningContent: boolean },
+  options: {
+    preserveOpenRouterReasoning: boolean;
+    preserveReasoningContent: boolean;
+    modelId: string;
+  },
 ): void {
   if (!Array.isArray(messages)) {
     return;
@@ -4142,7 +4170,7 @@ function sanitizeCompletionsReasoningReplayFields(
     if (options.preserveOpenRouterReasoning) {
       sanitizeOpenRouterReasoningReplayFields(record);
     } else if (options.preserveReasoningContent) {
-      sanitizeReasoningContentReplayFields(record);
+      sanitizeReasoningContentReplayFields(record, options.modelId);
     } else {
       stripCompletionsReasoningReplayFields(record);
     }
@@ -4168,6 +4196,7 @@ export function buildOpenAICompletionsParams(
     preserveOpenRouterReasoning:
       compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model),
     preserveReasoningContent: shouldPreserveReasoningContentReplay(model, compat),
+    modelId: model.id,
   });
   if (compat.strictMessageKeys) {
     messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
