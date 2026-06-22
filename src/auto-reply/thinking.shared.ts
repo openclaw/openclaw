@@ -23,9 +23,8 @@ export type VerboseLevel = "off" | "on" | "full";
 export type TraceLevel = "off" | "on" | "raw";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
-export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
-export type UsageDisplayLevel = "off" | "tokens" | "full";
+type UsageDisplayLevel = "off" | "tokens" | "full";
 /** Minimal model catalog entry needed to choose thinking defaults. */
 export type ThinkingCatalogEntry = {
   provider: string;
@@ -100,11 +99,6 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
   return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
 }
 
-/** Human-readable hint for xhigh support in command menus and errors. */
-export function formatXHighModelHint(): string {
-  return "provider models that advertise xhigh reasoning";
-}
-
 /** Chooses the default thinking level for one provider/model catalog entry. */
 export function resolveThinkingDefaultForModel(params: {
   provider: string;
@@ -162,11 +156,6 @@ export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined
   return undefined;
 }
 
-/** Normalizes notice visibility values. */
-export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
-  return normalizeOnOffFullLevel(raw);
-}
-
 /** Normalizes response usage display values. */
 export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
   if (!raw) {
@@ -212,17 +201,6 @@ export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | und
     return "on";
   }
   return undefined;
-}
-
-/** Collapses elevated levels into runtime execution mode. */
-export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode {
-  if (!level || level === "off") {
-    return "off";
-  }
-  if (level === "full") {
-    return "full";
-  }
-  return "ask";
 }
 
 /** Normalizes reasoning visibility values. */

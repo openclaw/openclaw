@@ -34,7 +34,10 @@ import {
 } from "../../infra/outbound/channel-target-prefix.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
@@ -67,6 +70,22 @@ async function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): Promise<st
   return await listConfiguredMessageChannels(cfg);
 }
 
+function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return false;
+  }
+  return Object.entries(channels).some(([channelId, entry]) => {
+    if (channelId === "defaults" || channelId === "modelByChannel") {
+      return false;
+    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    return Object.keys(entry).length > 0;
+  });
+}
+
 async function assertConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
@@ -90,6 +109,12 @@ async function assertConfiguredAnnounceChannel(params: {
   }
 
   if (configuredChannels.length === 0) {
+    if (!hasExplicitChannelConfigEntry(params.cfg)) {
+      if (!isDeliverableMessageChannel(normalizedChannel)) {
+        throw new Error(`${params.field} is not a known channel: ${normalizedChannel}`);
+      }
+      return;
+    }
     throw new Error(`${params.field} is not configured: ${normalizedChannel}`);
   }
 

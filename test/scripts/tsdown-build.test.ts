@@ -54,7 +54,9 @@ function isProcessAlive(pid: number): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
@@ -245,6 +247,56 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6400");
+  });
+
+  it("honors OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB over platform and memory defaults", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "3072" },
+      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=3072");
+  });
+
+  it("keeps memory detection when OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB is blank", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "  " },
+      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+  });
+
+  it("uses OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB to normalize inherited NODE_OPTIONS", () => {
+    const result = resolveTsdownBuildInvocation({
+      platform: "win32",
+      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+      npmExecPath: "C:\\repo\\pnpm.cjs",
+      env: {
+        NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288",
+        OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "4096",
+      },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=4096");
+  });
+
+  it("rejects malformed OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB values", () => {
+    for (const value of ["0", "-1", "1.5", "1e3", "4096mb", "9007199254740992"]) {
+      expect(() =>
+        resolveTsdownBuildInvocation({
+          nodeExecPath: "/usr/bin/node",
+          npmExecPath: "/tmp/pnpm.cjs",
+          env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: value },
+          ...NO_MEMORY_LIMIT,
+        }),
+      ).toThrow("OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB must be");
+    }
   });
 
   it("falls back to proc meminfo when the cgroup memory limit is unbounded", () => {
@@ -727,7 +779,7 @@ describe("runTsdownBuildInvocation", () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-");
       const childPidPath = path.join(rootDir, "child.pid");
       const timeoutMs = 1_000;
-      let childPid = 0;
+      let childPid: number | undefined;
       const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
       const parentScript = [
         "const { spawn } = require('node:child_process');",
@@ -769,7 +821,7 @@ describe("runTsdownBuildInvocation", () => {
         expect(result.timedOut).toBe(true);
         await waitForDead(childPid, 2_000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
       }
