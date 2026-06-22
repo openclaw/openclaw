@@ -4,7 +4,7 @@
 
 ## Tech Stack
 
-- **Runtime**: Node 22+ (Bun also supported for dev/scripts)
+- **Runtime**: Node 22.19+; Node 24 recommended (Bun also supported for dev/scripts)
 - **Language**: TypeScript (ESM, strict mode)
 - **Package Manager**: pnpm (keep `pnpm-lock.yaml` in sync)
 - **Lint/Format**: Oxlint, Oxfmt (`pnpm check`)
@@ -22,7 +22,7 @@
 
 ### Formatting Utilities (`src/infra/`)
 
-- **Time formatting**: `src\infra\format-time`
+- **Time formatting**: `src/infra/format-time`
 
 **NEVER create local `formatAge`, `formatDuration`, `formatElapsedTime` functions - import from centralized modules.**
 
@@ -41,15 +41,21 @@
 ## Import Conventions
 
 - Use `.js` extension for cross-package imports (ESM)
+- Prefer existing `@openclaw/*` and `openclaw/*` path aliases over long relative imports across package/module boundaries
 - Direct imports only - no re-export wrapper files
 - Types: `import type { X }` for type-only imports
+
+## State and Storage
+
+- OpenClaw-owned runtime state, caches, queues, registries, cursors, checkpoints, and plugin scratch data belong in SQLite, not JSON/JSONL/TXT sidecars.
+- Use existing Kysely helpers for SQLite runtime access. If you change database schemas, run `pnpm db:kysely:gen` and keep generated types in sync.
 
 ## Code Quality
 
 - TypeScript (ESM), strict typing, avoid `any`
 - Keep files under ~700 LOC - extract helpers when larger
 - Colocated tests: `*.test.ts` next to source files
-- Run `pnpm check` before commits (production type check + lint + format)
+- Prefer `pnpm check:changed` for pre-handoff proof in a normal checkout; use `pnpm check` for a full local check when appropriate
 - Run `pnpm check:test-types` when you need test type coverage, or `pnpm tsgo:all` for a full production plus test type sweep
 
 ## Stack & Commands
@@ -57,8 +63,9 @@
 - **Package manager**: pnpm (`pnpm install`)
 - **Dev**: `pnpm openclaw ...` or `pnpm dev`
 - **Type-check**: `pnpm tsgo` (core production), `pnpm tsgo:prod` (core + extension production), `pnpm check:test-types` (tests)
-- **Lint/format**: `pnpm check`
+- **Changed check**: `pnpm check:changed` (delegates to Crabbox/Testbox)
+- **Full lint/format/check**: `pnpm check`
 - **Tests**: `pnpm test`
 - **Build**: `pnpm build`
 
-If you are coding together with a human, do NOT use scripts/committer, but git directly and run the above commands manually to ensure quality.
+When the user asks for a commit, follow the repo Git workflow in `AGENTS.md`; otherwise do not commit automatically.
