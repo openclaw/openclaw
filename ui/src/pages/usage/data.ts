@@ -1,13 +1,17 @@
 // Control UI controller manages usage gateway state.
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
-import type { SessionLogEntry } from "../views/usage.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
-} from "./scope-errors.ts";
+} from "../../ui/controllers/scope-errors.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
+import type {
+  SessionsUsageResult,
+  CostUsageSummary,
+  SessionUsageTimeSeries,
+} from "../../ui/types.ts";
+import type { SessionLogEntry } from "./view.ts";
 
 export type UsageState = {
   client: GatewayBrowserClient | null;

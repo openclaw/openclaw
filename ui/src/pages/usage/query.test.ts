@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildSessionsCsv } from "./usage-query.ts";
-import type { UsageSessionEntry } from "./usageTypes.ts";
+import { buildSessionsCsv } from "./query.ts";
+import type { UsageSessionEntry } from "./types.ts";
 
 describe("usage query CSV export", () => {
   it("omits invalid session updated timestamps instead of throwing", () => {

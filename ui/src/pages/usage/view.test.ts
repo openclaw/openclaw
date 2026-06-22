@@ -2,8 +2,8 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderUsage } from "./usage.ts";
-import type { UsageProps } from "./usageTypes.ts";
+import type { UsageProps } from "./types.ts";
+import { renderUsage } from "./view.ts";
 
 const noop = vi.fn();
 

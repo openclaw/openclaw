@@ -2,17 +2,12 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
 import {
   renderDailyChartCompact,
   renderSessionsCard,
   renderUsageInsights,
-} from "./usage-render-overview.ts";
-import type {
-  CostDailyEntry,
-  UsageAggregates,
-  UsageSessionEntry,
-  UsageTotals,
-} from "./usageTypes.ts";
+} from "./view-overview.ts";
 
 const totals: UsageTotals = {
   input: 100,

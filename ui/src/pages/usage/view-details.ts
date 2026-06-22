@@ -2,17 +2,17 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDateTimeMs, formatMs, formatTimeMs } from "../format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import { parseToolSummary } from "../usage-helpers.ts";
-import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
-import { renderInsightList } from "./usage-render-overview.ts";
+import { formatDateTimeMs, formatMs, formatTimeMs } from "../../ui/format.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
+import { parseToolSummary } from "./helpers.ts";
+import { charsToTokens, formatCost, formatTokens } from "./metrics.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,
   UsageSessionEntry,
-} from "./usageTypes.ts";
+} from "./types.ts";
+import { renderInsightList } from "./view-overview.ts";
 
 // Chart constants
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)

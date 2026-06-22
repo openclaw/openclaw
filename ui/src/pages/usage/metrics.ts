@@ -6,8 +6,8 @@ import {
   mergeUsageLatency,
 } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
+import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
 const CHARS_PER_TOKEN = 4;
 
