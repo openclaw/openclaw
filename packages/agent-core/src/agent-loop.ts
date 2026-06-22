@@ -267,6 +267,7 @@ async function runLoop(
   let currentContext = initialContext;
   let config = initialConfig;
   let firstTurn = true;
+  let turnOpen = true;
   // Check for steering messages at start (user may have typed while waiting)
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
   const stopIfAborted = async (): Promise<boolean> => {
@@ -283,7 +284,10 @@ async function runLoop(
     newMessages.push(abortedMessage);
     await emit({ type: "message_start", message: abortedMessage });
     await emit({ type: "message_end", message: abortedMessage });
-    await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });
+    if (turnOpen) {
+      await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });
+      turnOpen = false;
+    }
     await emit({ type: "agent_end", messages: newMessages });
     return true;
   };
@@ -300,6 +304,7 @@ async function runLoop(
 
       if (!firstTurn) {
         await emit({ type: "turn_start" });
+        turnOpen = true;
       } else {
         firstTurn = false;
       }
@@ -358,6 +363,7 @@ async function runLoop(
       }
 
       await emit({ type: "turn_end", message, toolResults });
+      turnOpen = false;
       if (await stopIfAborted()) {
         return;
       }
