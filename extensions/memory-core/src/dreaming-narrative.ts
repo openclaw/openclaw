@@ -151,14 +151,8 @@ function formatFallbackWriteFailure(err: unknown): string {
   return "unknown error";
 }
 
-// Raw snippets and promotions are pre-processing memory staging fragments
-// (session metadata, conversation summaries, operational logs). They must never
-// be persisted to the human-readable dream diary. When narrative generation
-// fails, always fall back to a generic placeholder so no staging content leaks
-// into DREAMS.md.
-function buildRequestScopedFallbackNarrative(_data: NarrativePhaseData): string {
-  return "A memory trace surfaced, but details were unavailable in this run.";
-}
+const REQUEST_SCOPED_FALLBACK_NARRATIVE =
+  "A memory trace surfaced, but details were unavailable in this run.";
 
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
@@ -171,7 +165,9 @@ export async function appendFallbackNarrativeEntry(params: {
   try {
     await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
-      narrative: buildRequestScopedFallbackNarrative(params.data),
+      // Raw snippets and promotions are pre-processing memory staging fragments.
+      // Keep fallback diary text generic so DREAMS.md never leaks staging content.
+      narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });

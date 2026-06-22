@@ -49,7 +49,7 @@ function readNonEmptyEnv(name) {
 
 function readRequiredPathOption(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a path`);
   }
   return value;
@@ -386,7 +386,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     runStartupMemoryCheck();
   } catch (error) {
-    console.error(error instanceof Error ? error.stack : String(error));
+    console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }

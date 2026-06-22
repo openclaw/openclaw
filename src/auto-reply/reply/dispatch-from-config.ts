@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
+  isFastModeAutoProgressPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
@@ -15,7 +16,26 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
+  resolveSubagentToolPolicyForSession,
+} from "../../agents/agent-tools.policy.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { selectAgentHarness } from "../../agents/harness/selection.js";
+import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+  type ModelAliasIndex,
+} from "../../agents/model-selection.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../../agents/subagent-capabilities.js";
+import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -1939,6 +1959,12 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       shouldEmitVerboseProgress() &&
       shouldSendVerboseProgressMessages();
+    const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
+      suppressAutomaticSourceDelivery &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      ctx.InboundEventKind !== "room_event" &&
+      !sendPolicyDenied &&
+      params.replyOptions?.forceToolResultProgress === true;
     let finalReplyDeliveryStarted = false;
     const hasExecApprovalPayload = (payload: ReplyPayload) => {
       const execApproval =
@@ -2402,6 +2428,9 @@ export async function dispatchReplyFromConfig(
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
+      if (isFastModeAutoProgressPayload(payload)) {
+        return payload;
+      }
       // Group/native flows intentionally suppress tool summary text, but media-only
       // tool results (for example TTS audio) must still be delivered.
       const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
@@ -2458,6 +2487,25 @@ export async function dispatchReplyFromConfig(
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+    const isChannelOwnedToolResultProgressPayload = (payload: ReplyPayload) => {
+      const text = normalizeOptionalString(payload.text);
+      return Boolean(text?.startsWith("🛠️") || text?.startsWith("🔧"));
+    };
+    const shouldForwardToolResultProgressCallback = (
+      payload: ReplyPayload,
+      isFastModeAutoProgress: boolean,
+    ) => {
+      if (isFastModeAutoProgress) {
+        return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
+      }
+      if (
+        allowSuppressedSourceProgressCallbacks &&
+        isChannelOwnedToolResultProgressPayload(payload)
+      ) {
+        return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
+      }
+      return shouldSendToolSummaries() && shouldForwardProgressCallback();
+    };
     const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
       allowWhenToolSummariesHidden?: boolean;
       requiresToolSummaryVisibility?: boolean;
@@ -2659,16 +2707,39 @@ export async function dispatchReplyFromConfig(
                 markInboundDedupeReplayUnsafe();
                 // Buffered commentary preceded this tool; land it before the summary.
                 await flushPendingCommentaryProgress();
-                if (!suppressAutomaticSourceDelivery && shouldSendToolSummaries()) {
+                const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
+                const isForcedToolProgress =
+                  shouldDeliverForcedToolProgressDespiteSourceSuppression();
+                const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
+                  payload,
+                  isFastModeAutoProgress,
+                );
+                if (progressCallbackForwarded) {
                   await onToolResultFromReplyOptions?.(payload);
                 }
                 if (isDispatchOperationAborted()) {
                   return;
                 }
-                if (shouldSuppressProgressDelivery()) {
+                if (
+                  isFastModeAutoProgress &&
+                  progressCallbackForwarded &&
+                  onToolResultFromReplyOptions
+                ) {
                   return;
                 }
-                const visibleToolPayload = resolveToolDeliveryPayload(payload);
+                if (sendPolicyDenied) {
+                  return;
+                }
+                if (
+                  shouldSuppressProgressDelivery() &&
+                  !isFastModeAutoProgress &&
+                  !isForcedToolProgress
+                ) {
+                  return;
+                }
+                const visibleToolPayload = isForcedToolProgress
+                  ? payload
+                  : resolveToolDeliveryPayload(payload);
                 if (!visibleToolPayload) {
                   return;
                 }
@@ -2683,20 +2754,30 @@ export async function dispatchReplyFromConfig(
                   accountId: replyRoute.accountId,
                 });
                 const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-                const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
+                const deliveryPayload = isForcedToolProgress
+                  ? normalizedPayload
+                  : resolveToolDeliveryPayload(normalizedPayload);
                 if (!deliveryPayload) {
                   return;
                 }
                 if (isDispatchOperationAborted()) {
                   return;
                 }
-                if (shouldSuppressLateTextOnlyToolProgress(deliveryPayload)) {
+                if (
+                  shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
+                  !isFastModeAutoProgressPayload(deliveryPayload) &&
+                  !isForcedToolProgress
+                ) {
                   return;
                 }
                 if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
                   return;
                 }
-                if (shouldSuppressDefaultToolProgressMessages()) {
+                if (
+                  shouldSuppressDefaultToolProgressMessages() &&
+                  !isFastModeAutoProgressPayload(deliveryPayload) &&
+                  !isForcedToolProgress
+                ) {
                   const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
                   if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
                     return;

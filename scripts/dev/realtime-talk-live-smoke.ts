@@ -26,6 +26,10 @@ const GOOGLE_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_GOOGLE_VOICE?.trim()
 const GOOGLE_LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
+type RealtimeSmokeCliOptions = {
+  help: boolean;
+};
+
 type SmokeResult = {
   name: string;
   ok: boolean;
@@ -52,6 +56,33 @@ type OpenAIRealtimeBrowserResponseReader = (
 type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
   openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
 };
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
+
+function usage(): string {
+  return [
+    "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts [options]",
+    "",
+    "Options:",
+    "  -h, --help    Show this help",
+    "",
+    "Environment:",
+    "  OPENAI_API_KEY",
+    "  GEMINI_API_KEY or GOOGLE_API_KEY",
+  ].join("\n");
+}
+
+function parseRealtimeSmokeArgs(argv = process.argv.slice(2)): RealtimeSmokeCliOptions {
+  for (const arg of argv) {
+    if (arg === "--help" || arg === "-h") {
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
+  return { help: argv.includes("--help") || argv.includes("-h") };
+}
 
 function getEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -729,7 +760,12 @@ try {
   }
 }
 
-async function main(): Promise<void> {
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const cli = parseRealtimeSmokeArgs(argv);
+  if (cli.help) {
+    console.log(usage());
+    return;
+  }
   const openAIKey = getEnv("OPENAI_API_KEY");
   const googleKey = getEnv("GEMINI_API_KEY") ?? getEnv("GOOGLE_API_KEY");
   const browser = await chromium.launch({
@@ -781,7 +817,7 @@ async function main(): Promise<void> {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   await main().catch((error: unknown) => {
-    console.error(shortError(error));
+    console.error(error instanceof CliArgumentError ? error.message : shortError(error));
     process.exitCode = 1;
   });
 }
@@ -789,9 +825,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 export const testing = {
   OPENAI_HTTP_RESPONSE_MAX_BYTES,
   createOpenAIClientSecret,
+  parseRealtimeSmokeArgs,
   readOpenAIRealtimeBrowserResponseText,
   readBoundedText,
   resolveOpenAIHttpTimeoutMs,
+  usage,
 };
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {

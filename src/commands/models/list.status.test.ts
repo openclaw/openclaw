@@ -89,15 +89,6 @@ const mocks = vi.hoisted(() => {
       }
       return null;
     }),
-    resolveProviderEnvApiKeyCandidates: vi.fn().mockReturnValue({
-      anthropic: ["ANTHROPIC_API_KEY"],
-      google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-      minimax: ["MINIMAX_API_KEY"],
-      "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
-      openai: ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"],
-      fal: ["FAL_KEY"],
-    }),
-    resolveProviderEnvAuthEvidence: vi.fn().mockReturnValue({}),
     resolveProviderEnvAuthLookupMaps: vi.fn().mockReturnValue({
       aliasMap: { "codex-cli": "openai" },
       envCandidateMap: {
@@ -224,8 +215,6 @@ vi.mock("../../agents/model-auth.js", () => ({
 }));
 vi.mock("../../agents/model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: mocks.listProviderEnvAuthLookupKeys,
-  resolveProviderEnvApiKeyCandidates: mocks.resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence: mocks.resolveProviderEnvAuthEvidence,
   resolveProviderEnvAuthLookupMaps: mocks.resolveProviderEnvAuthLookupMaps,
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
@@ -2024,18 +2013,22 @@ describe("modelsStatusCommand auth overview", () => {
   it("includes auth-evidence-only providers in the auth overview", async () => {
     const localRuntime = createRuntime();
     const originalKeysImpl = mocks.listProviderEnvAuthLookupKeys.getMockImplementation();
-    const originalEvidenceImpl = mocks.resolveProviderEnvAuthEvidence.getMockImplementation();
+    const originalLookupImpl = mocks.resolveProviderEnvAuthLookupMaps.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
 
     mocks.listProviderEnvAuthLookupKeys.mockReturnValue(["workspace-cloud"]);
-    mocks.resolveProviderEnvAuthEvidence.mockReturnValue({
-      "workspace-cloud": [
-        {
-          type: "local-file-with-env",
-          credentialMarker: "workspace-cloud-local-credentials",
-          source: "workspace cloud credentials",
-        },
-      ],
+    mocks.resolveProviderEnvAuthLookupMaps.mockReturnValue({
+      aliasMap: { "codex-cli": "openai" },
+      envCandidateMap: {},
+      authEvidenceMap: {
+        "workspace-cloud": [
+          {
+            type: "local-file-with-env",
+            credentialMarker: "workspace-cloud-local-credentials",
+            source: "workspace cloud credentials",
+          },
+        ],
+      },
     });
     mocks.resolveEnvApiKey.mockImplementation(
       (provider: string, _env?: NodeJS.ProcessEnv, options?: { workspaceDir?: string }) =>
@@ -2061,8 +2054,8 @@ describe("modelsStatusCommand auth overview", () => {
       if (originalKeysImpl) {
         mocks.listProviderEnvAuthLookupKeys.mockImplementation(originalKeysImpl);
       }
-      if (originalEvidenceImpl) {
-        mocks.resolveProviderEnvAuthEvidence.mockImplementation(originalEvidenceImpl);
+      if (originalLookupImpl) {
+        mocks.resolveProviderEnvAuthLookupMaps.mockImplementation(originalLookupImpl);
       }
       if (originalEnvImpl) {
         mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);

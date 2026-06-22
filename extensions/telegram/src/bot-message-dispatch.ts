@@ -32,6 +32,7 @@ import {
   type ChannelProgressDraftCompositorLine,
   createChannelProgressDraftCompositor,
   resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type {
@@ -44,6 +45,7 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
+  isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -1109,6 +1111,7 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const streamToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
   let activeAnswerBlockAssistantMessageIndex: number | undefined;
@@ -1170,16 +1173,18 @@ export const dispatchTelegramMessage = async ({
   // commentary lines so they render once. Tool/plan status lines keep the
   // draft: they have no durable counterpart in streamed runs.
   let verboseProgressActive: () => boolean = () => false;
+  const canPushStreamToolProgress = () =>
+    Boolean(
+      answerLane.stream &&
+      !answerLane.finalized &&
+      !finalAnswerDeliveryStarted &&
+      !finalAnswerDelivered,
+    );
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
     options?: { toolName?: string; startImmediately?: boolean },
   ) => {
-    if (
-      !answerLane.stream ||
-      answerLane.finalized ||
-      finalAnswerDeliveryStarted ||
-      finalAnswerDelivered
-    ) {
+    if (!canPushStreamToolProgress()) {
       return false;
     }
     return await progressDraft.pushToolProgress(line, options);
@@ -2203,12 +2208,33 @@ export const dispatchTelegramMessage = async ({
                           }
                           continue;
                         }
-                        if (streamMode === "progress" && answerLane.stream) {
-                          // Progress-mode streams render tool status in the
-                          // live draft. Do not also emit text-only tool output
-                          // as answer text, or simple commands duplicate and
-                          // restart the progress draft.
-                          continue;
+                        const canRepresentAsTransientProgress =
+                          !reply.hasMedia &&
+                          telegramButtons === undefined &&
+                          !hasExecApprovalPayload(effectivePayload);
+                        const isFastModeProgressPayload =
+                          isFastModeAutoProgressPayload(effectivePayload);
+                        if (streamMode === "progress") {
+                          if (
+                            canRepresentAsTransientProgress &&
+                            answerLane.stream &&
+                            !isFastModeProgressPayload
+                          ) {
+                            // Progress-mode streams render tool status in the
+                            // live draft. Do not also emit text-only tool output
+                            // as answer text, or simple commands duplicate and
+                            // restart the progress draft.
+                            continue;
+                          }
+                          if (
+                            (canRepresentAsTransientProgress || isFastModeProgressPayload) &&
+                            (await pushStreamToolProgress(segment.update.text, {
+                              startImmediately: true,
+                            }))
+                          ) {
+                            blockDelivered = true;
+                            continue;
+                          }
                         }
                         await prepareAnswerLaneForToolProgress();
                       }
@@ -2318,6 +2344,12 @@ export const dispatchTelegramMessage = async ({
                     if (split.suppressedReasoningOnly) {
                       let delivered = false;
                       if (reply.hasMedia) {
+                        if (info.kind === "final") {
+                          await rotateAnswerLaneAfterToolProgress();
+                          await answerLane.stream?.stop();
+                          await reasoningLane.stream?.stop();
+                          reasoningStepState.resetForNextStep();
+                        }
                         const payloadWithoutSuppressedReasoning =
                           typeof effectivePayload.text === "string"
                             ? { ...effectivePayload, text: "" }
@@ -2483,6 +2515,7 @@ export const dispatchTelegramMessage = async ({
                     : undefined,
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
+                  forceToolResultProgress: streamMode === "progress" && streamToolProgressEnabled,
                   allowProgressCallbacksWhenSourceDeliverySuppressed:
                     !isRoomEvent && Boolean(answerLane.stream),
                   onVerboseProgressVisibility: (isActive) => {
@@ -2566,6 +2599,22 @@ export const dispatchTelegramMessage = async ({
                         message: payload.message,
                       }),
                     );
+                  },
+                  onToolResult: async (payload) => {
+                    const text = payload.text?.trim();
+                    if (!text) {
+                      return;
+                    }
+                    const updatedDraft = await pushStreamToolProgress(text, {
+                      startImmediately: true,
+                    });
+                    if (
+                      !updatedDraft &&
+                      isFastModeAutoProgressPayload(payload) &&
+                      !canPushStreamToolProgress()
+                    ) {
+                      await sendPayload(payload);
+                    }
                   },
                   onCommandOutput: async (payload) => {
                     if (payload.phase !== "end") {

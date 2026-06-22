@@ -1465,6 +1465,9 @@ importers:
       typebox:
         specifier: 1.1.39
         version: 1.1.39
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1802,15 +1805,9 @@ importers:
       '@openclaw/llm-core':
         specifier: workspace:*
         version: link:../llm-core
-      ignore:
-        specifier: 7.0.5
-        version: 7.0.5
       typebox:
         specifier: 1.1.39
         version: 1.1.39
-      yaml:
-        specifier: 2.9.0
-        version: 2.9.0
 
   packages/gateway-client:
     dependencies:

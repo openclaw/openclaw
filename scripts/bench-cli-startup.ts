@@ -105,8 +105,26 @@ type CliOptions = {
 const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
+const TIMEOUT_KILL_GRACE_MS = 1_000;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--compare-baseline",
+  "--compare-candidate",
+  "--cpu-prof-dir",
+  "--entry",
+  "--entry-primary",
+  "--entry-secondary",
+  "--heap-prof-dir",
+  "--output",
+  "--preset",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+const BOOLEAN_FLAGS = new Set(["--help", "--json"]);
 
 const COMMAND_CASES: readonly CommandCase[] = [
   {
@@ -431,7 +449,7 @@ function parseFlagValue(flag: string): string | undefined {
     return undefined;
   }
   const value = process.argv[idx + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
@@ -444,11 +462,30 @@ function hasFlag(flag: string): boolean {
 function parseRepeatableFlag(flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < process.argv.length; i += 1) {
-    if (process.argv[i] === flag && process.argv[i + 1]) {
+    const value = process.argv[i + 1];
+    if (process.argv[i] === flag && value && !value.startsWith("-")) {
       values.push(process.argv[i + 1]);
     }
   }
   return values;
+}
+
+function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (VALUE_FLAGS.has(arg)) {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error(`${arg} requires a value`);
+      }
+      index += 1;
+      continue;
+    }
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
@@ -674,12 +711,16 @@ async function runSample(params: {
   let stderr = "";
   let settled = false;
   let timedOut = false;
+  let forceKillAt: number | null = null;
+  let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
   const maxOutputLength = 32 * 1024 * 1024;
 
   try {
     return await new Promise<Sample>((resolve) => {
+      const useProcessGroup = process.platform !== "win32";
       const proc = spawn(process.execPath, nodeArgs, {
         cwd: process.cwd(),
+        detached: useProcessGroup,
         env: {
           ...process.env,
           HOME: runRoot,
@@ -699,6 +740,10 @@ async function runSample(params: {
           return;
         }
         settled = true;
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = null;
+        }
         const ms = Number(process.hrtime.bigint() - started) / 1e6;
         resolve({
           ms,
@@ -717,18 +762,11 @@ async function runSample(params: {
 
       const timeout = setTimeout(() => {
         timedOut = true;
-        try {
-          proc.kill("SIGTERM");
-        } catch {
-          // Best-effort timeout cleanup.
-        }
-        setTimeout(() => {
-          try {
-            proc.kill("SIGKILL");
-          } catch {
-            // Best-effort timeout cleanup.
-          }
-        }, 1_000).unref?.();
+        signalSampleProcess(proc, "SIGTERM", useProcessGroup);
+        forceKillAt = Date.now() + TIMEOUT_KILL_GRACE_MS;
+        forceKillTimer = setTimeout(() => {
+          signalSampleProcess(proc, "SIGKILL", useProcessGroup);
+        }, TIMEOUT_KILL_GRACE_MS).unref?.();
       }, params.timeoutMs);
       timeout.unref?.();
 
@@ -756,21 +794,106 @@ async function runSample(params: {
       });
       proc.once("close", (code, signal) => {
         clearTimeout(timeout);
-        finish({
-          exitCode: code,
-          signal,
-          ...(code === 0 && signal == null
-            ? {}
-            : {
-                stdoutTail: tailLines(stdout, 20),
-                stderrTail: tailLines(stderr, 20),
-              }),
-        });
+        const complete = () =>
+          finish({
+            exitCode: code,
+            signal,
+            ...(code === 0 && signal == null
+              ? {}
+              : {
+                  stdoutTail: tailLines(stdout, 20),
+                  stderrTail: tailLines(stderr, 20),
+                }),
+          });
+        if (timedOut && isSampleProcessGroupAlive(proc, useProcessGroup)) {
+          void finishAfterTimeoutCleanup({
+            complete,
+            forceKillAt,
+            proc,
+            useProcessGroup,
+          });
+          return;
+        }
+        complete();
       });
     });
   } finally {
     rmSync(runRoot, { recursive: true, force: true });
   }
+}
+
+async function finishAfterTimeoutCleanup(params: {
+  complete: () => void;
+  forceKillAt: number | null;
+  proc: ReturnType<typeof spawn>;
+  useProcessGroup: boolean;
+}): Promise<void> {
+  const graceRemainingMs =
+    params.forceKillAt === null
+      ? TIMEOUT_KILL_GRACE_MS
+      : Math.max(0, params.forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForSampleProcessGroupExit(params.proc, params.useProcessGroup, graceRemainingMs);
+  }
+  if (isSampleProcessGroupAlive(params.proc, params.useProcessGroup)) {
+    signalSampleProcess(params.proc, "SIGKILL", params.useProcessGroup);
+  }
+  await waitForSampleProcessGroupExit(params.proc, params.useProcessGroup, TIMEOUT_KILL_GRACE_MS);
+  params.complete();
+}
+
+function signalSampleProcess(
+  proc: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+  useProcessGroup: boolean,
+): void {
+  if (!proc.pid) {
+    return;
+  }
+  try {
+    if (useProcessGroup) {
+      process.kill(-proc.pid, signal);
+    } else {
+      proc.kill(signal);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== "ESRCH" && code !== "EPERM") {
+      throw error;
+    }
+  }
+}
+
+function isSampleProcessGroupAlive(
+  proc: ReturnType<typeof spawn>,
+  useProcessGroup: boolean,
+): boolean {
+  if (!useProcessGroup || !proc.pid) {
+    return false;
+  }
+  try {
+    process.kill(-proc.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException | undefined)?.code === "EPERM";
+  }
+}
+
+async function waitForSampleProcessGroupExit(
+  proc: ReturnType<typeof spawn>,
+  useProcessGroup: boolean,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isSampleProcessGroupAlive(proc, useProcessGroup)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+    });
+  }
+  return !isSampleProcessGroupAlive(proc, useProcessGroup);
 }
 
 async function runCase(params: {
@@ -1039,6 +1162,7 @@ function readBenchmarkComparisonForTesting(
 }
 
 async function main(): Promise<void> {
+  validateCliArgs();
   if (hasFlag("--help")) {
     printUsage();
     return;
@@ -1148,12 +1272,13 @@ export const testing = {
   parseNonNegativeInt,
   parsePositiveInt,
   readBenchmarkComparison: readBenchmarkComparisonForTesting,
+  validateCliArgs,
   writeJsonOutput,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   await main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.stack : String(error));
+    console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
 }
