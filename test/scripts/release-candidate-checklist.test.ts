@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildFullValidationDispatchFields,
+  buildMacosValidationHandoff,
   buildNpmPreflightDispatchFields,
   buildPublishCommand,
   candidateParallelsArgs,
@@ -11,7 +12,9 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   resolveArtifactName,
+  requireExactRunArtifact,
   requireRunIdFromDispatchOutput,
+  requireSingleVerifierArtifactFile,
   validateFullManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
@@ -34,7 +37,224 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
   }
 }
 
+const MACOS_RELEASE_SHA = "b".repeat(40);
+const MACOS_SOURCE_SHA = "c".repeat(40);
+
+function tagPreflightPayload(): Record<string, any> {
+  return {
+    schemaVersion: 1,
+    ok: true,
+    operation: "tag-preflight",
+    releaseVersion: "2026.7.1-beta.2",
+    releaseClass: "beta",
+    releaseSelector: "beta",
+    policyMode: "strict",
+    policySource: {
+      sha: "d".repeat(40),
+      blobs: {
+        releaseVersionPolicySha256: "e".repeat(64),
+        stableReleaseLinesModuleSha256: "f".repeat(64),
+        verifyReleaseOperationSha256: "a".repeat(64),
+        stableLinesSha256: null,
+      },
+    },
+    execution: {
+      event: "workflow_dispatch",
+      workflowPath: ".github/workflows/openclaw-npm-release.yml",
+      executionRef: "refs/heads/release/2026.7.1",
+      runHeadSha: MACOS_SOURCE_SHA,
+      runId: "123",
+      runAttempt: "2",
+    },
+    target: {
+      targetRef: "refs/tags/v2026.7.1-beta.2",
+      targetSha: MACOS_RELEASE_SHA,
+      releaseTag: "v2026.7.1-beta.2",
+      authorizedSourceRef: "refs/heads/release/2026.7.1",
+      authorizedSourceTipSha: MACOS_SOURCE_SHA,
+      targetReachableFromAuthorizedSource: true,
+    },
+  };
+}
+
+function npmPreflightRun() {
+  return {
+    databaseId: 123,
+    runAttempt: 2,
+    path: ".github/workflows/openclaw-npm-release.yml",
+    event: "workflow_dispatch",
+    status: "completed",
+    conclusion: "success",
+    headBranch: "release/2026.7.1",
+    headSha: MACOS_SOURCE_SHA,
+  };
+}
+
+function buildMacosHandoff(payload = tagPreflightPayload(), run = npmPreflightRun()) {
+  return buildMacosValidationHandoff({
+    repo: "openclaw/openclaw",
+    tag: "v2026.7.1-beta.2",
+    targetSha: MACOS_RELEASE_SHA,
+    npmPreflightRunId: "123",
+    npmPreflightRun: run,
+    verifierPayloadBytes: Buffer.from(`${JSON.stringify(payload)}\n`),
+  });
+}
+
 describe("release candidate checklist", () => {
+  it("emits the complete authenticated public macOS validation handoff", () => {
+    const handoff = buildMacosHandoff();
+
+    expect(handoff).toMatchObject({
+      releaseSha: MACOS_RELEASE_SHA,
+      publicReleaseBranch: "release/2026.7.1",
+      verifierRunId: "123",
+      verifierRunAttempt: "2",
+      verifierArtifactName: "release-operation-verifier-v1-tag-preflight-2026.7.1-beta.2-123-2",
+    });
+    expect(handoff.verifierPayloadSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(handoff.command).toContain(
+      "'workflow' 'run' 'macos-release.yml' '--repo' 'openclaw/openclaw' '--ref' 'main'",
+    );
+    for (const field of [
+      "tag=v2026.7.1-beta.2",
+      "preflight_only=true",
+      "public_release_branch=release/2026.7.1",
+      `release_sha=${MACOS_RELEASE_SHA}`,
+      "verifier_run_id=123",
+      "verifier_run_attempt=2",
+      "verifier_artifact_name=release-operation-verifier-v1-tag-preflight-2026.7.1-beta.2-123-2",
+      `verifier_payload_sha256=${handoff.verifierPayloadSha256}`,
+    ]) {
+      expect(handoff.command).toContain(`'-f' '${field}'`);
+    }
+  });
+
+  it("rejects malformed or mismatched npm tag-preflight handoff evidence", () => {
+    const cases: Array<[string, (payload: Record<string, any>) => void, RegExp]> = [
+      ["unknown payload field", (payload) => void (payload.extra = true), /unknown field/u],
+      [
+        "wrong operation",
+        (payload) => void (payload.operation = "postpublish"),
+        /provenance does not match/u,
+      ],
+      [
+        "wrong producer attempt",
+        (payload) => void (payload.execution.runAttempt = "3"),
+        /provenance does not match/u,
+      ],
+      [
+        "wrong target SHA",
+        (payload) => void (payload.target.targetSha = "9".repeat(40)),
+        /provenance does not match/u,
+      ],
+      [
+        "wrong target ref",
+        (payload) => void (payload.target.targetRef = "refs/tags/v2026.7.1-beta.3"),
+        /provenance does not match/u,
+      ],
+      [
+        "inconsistent selector",
+        (payload) => void (payload.releaseSelector = "daily"),
+        /release policy is inconsistent/u,
+      ],
+      [
+        "unsupported source branch",
+        (payload) => {
+          payload.execution.executionRef = "refs/heads/feature/untrusted";
+          payload.target.authorizedSourceRef = "refs/heads/feature/untrusted";
+        },
+        /live producer branch does not match verifier source/u,
+      ],
+    ];
+
+    for (const [label, mutate, expected] of cases) {
+      const payload = tagPreflightPayload();
+      mutate(payload);
+      expect(() => buildMacosHandoff(payload), label).toThrow(expected);
+    }
+    expect(() =>
+      buildMacosValidationHandoff({
+        repo: "openclaw/openclaw",
+        tag: "v2026.7.1-beta.2",
+        targetSha: MACOS_RELEASE_SHA,
+        npmPreflightRunId: "123",
+        verifierPayloadBytes: Buffer.from("not json"),
+        npmPreflightRun: npmPreflightRun(),
+      }),
+    ).toThrow("npm tag-preflight verifier payload must be valid JSON");
+  });
+
+  it("binds the handoff to live npm producer metadata", () => {
+    const cases: Array<[string, (run: ReturnType<typeof npmPreflightRun>) => void]> = [
+      ["run id", (run) => void (run.databaseId = 124)],
+      ["run attempt", (run) => void (run.runAttempt = 3)],
+      ["workflow path", (run) => void (run.path = ".github/workflows/other.yml")],
+      ["event", (run) => void (run.event = "push")],
+      ["head SHA", (run) => void (run.headSha = "9".repeat(40))],
+    ];
+    for (const [label, mutate] of cases) {
+      const run = npmPreflightRun();
+      mutate(run);
+      expect(() => buildMacosHandoff(tagPreflightPayload(), run), label).toThrow(
+        /live producer run identity is invalid|provenance does not match/u,
+      );
+    }
+  });
+
+  it("accepts the exact canonical strict alpha branch", () => {
+    const payload = tagPreflightPayload();
+    payload.releaseVersion = "2026.7.1-alpha.2";
+    payload.releaseClass = "alpha";
+    payload.releaseSelector = "alpha";
+    payload.execution.executionRef = "refs/heads/tideclaw/alpha/2026-06-21-1945Z";
+    payload.target.targetRef = "refs/tags/v2026.7.1-alpha.2";
+    payload.target.releaseTag = "v2026.7.1-alpha.2";
+    payload.target.authorizedSourceRef = "refs/heads/tideclaw/alpha/2026-06-21-1945Z";
+    const run = npmPreflightRun();
+    run.headBranch = "tideclaw/alpha/2026-06-21-1945Z";
+    const handoff = buildMacosValidationHandoff({
+      repo: "openclaw/openclaw",
+      tag: "v2026.7.1-alpha.2",
+      targetSha: MACOS_RELEASE_SHA,
+      npmPreflightRunId: "123",
+      npmPreflightRun: run,
+      verifierPayloadBytes: Buffer.from(`${JSON.stringify(payload)}\n`),
+    });
+
+    expect(handoff.publicReleaseBranch).toBe("tideclaw/alpha/2026-06-21-1945Z");
+    expect(handoff.command).toContain(
+      "'-f' 'public_release_branch=tideclaw/alpha/2026-06-21-1945Z'",
+    );
+  });
+
+  it("rejects an unsupported source even when live producer identity matches it", () => {
+    const payload = tagPreflightPayload();
+    payload.execution.executionRef = "refs/heads/feature/untrusted";
+    payload.target.authorizedSourceRef = "refs/heads/feature/untrusted";
+    const run = npmPreflightRun();
+    run.headBranch = "feature/untrusted";
+
+    expect(() => buildMacosHandoff(payload, run)).toThrow("is not supported by macOS validation");
+  });
+
+  it("requires a closed single-file npm tag-preflight verifier artifact", () => {
+    const expected = "/tmp/verifier/release-operation-verifier-v1.json";
+    expect(requireSingleVerifierArtifactFile([expected], expected)).toBe(expected);
+    expect(() => requireSingleVerifierArtifactFile([], expected)).toThrow(
+      "must contain exactly one release-operation-verifier-v1.json",
+    );
+    expect(() =>
+      requireSingleVerifierArtifactFile([expected, "/tmp/verifier/extra.json"], expected),
+    ).toThrow("must contain exactly one release-operation-verifier-v1.json");
+    expect(() =>
+      requireSingleVerifierArtifactFile(
+        ["/tmp/verifier/nested/release-operation-verifier-v1.json"],
+        expected,
+      ),
+    ).toThrow("must contain exactly one release-operation-verifier-v1.json");
+  });
+
   it("preserves legacy defaults and keeps release validation depth independent", () => {
     const options = parseArgs([
       "--tag",
@@ -688,6 +908,32 @@ describe("release candidate checklist", () => {
         "openclaw-npm-preflight-",
       ),
     ).toBe("openclaw-npm-preflight-dba00");
+  });
+
+  it("requires exactly one unexpired attempt-qualified verifier artifact", () => {
+    const name = "release-operation-verifier-v1-tag-preflight-2026.7.1-beta.2-123-2";
+    expect(requireExactRunArtifact([{ name, expired: false }], name)).toBe(name);
+    expect(() => requireExactRunArtifact([{ name, expired: true }], name)).toThrow(
+      "expected exactly one unexpired artifact",
+    );
+    expect(() => requireExactRunArtifact([{ name }], name)).toThrow(
+      "expected exactly one unexpired artifact",
+    );
+    expect(() =>
+      requireExactRunArtifact(
+        [
+          { name, expired: false },
+          { name, expired: false },
+        ],
+        name,
+      ),
+    ).toThrow("found 2");
+    expect(() =>
+      requireExactRunArtifact(
+        [{ name: "release-operation-verifier-v1-tag-preflight-other", expired: false }],
+        name,
+      ),
+    ).toThrow("found 0");
   });
 
   it("bounds GitHub API requests with a timeout signal", async () => {
