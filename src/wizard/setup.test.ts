@@ -761,7 +761,7 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps authenticated non-loopback Gateway policies out of assisted setup", async () => {
+  it("keeps no-auth non-loopback Gateway policies out of assisted setup", async () => {
     resolveControlUiLinks.mockReturnValueOnce({
       httpUrl: "http://192.168.1.10:18789",
       wsUrl: "ws://192.168.1.10:18789",
@@ -777,7 +777,7 @@ describe("runSetupWizard", () => {
         gateway: {
           bind: "lan",
           auth: {
-            mode: "token",
+            mode: "none",
           },
         },
       },
@@ -805,7 +805,7 @@ describe("runSetupWizard", () => {
       expect.objectContaining({
         quickstartGateway: expect.objectContaining({
           bind: "lan",
-          authMode: "token",
+          authMode: "none",
         }),
       }),
     );

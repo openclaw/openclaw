@@ -80,17 +80,15 @@ function canUseAgentAssistedGatewayPolicy(
 ): boolean {
   const auth = config.gateway?.auth;
   const authMode = resolveQuickstartGatewayAuthMode(config);
-  if (authMode !== "none") {
-    if (auth?.rateLimit?.exemptLoopback === false) {
+  if (authMode !== "none" && auth?.rateLimit?.exemptLoopback === false) {
+    return false;
+  }
+  try {
+    if (!isLoopbackAddress(new URL(resolveGatewayProbeUrl()).hostname)) {
       return false;
     }
-    try {
-      if (!isLoopbackAddress(new URL(resolveGatewayProbeUrl()).hostname)) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
+  } catch {
+    return false;
   }
   if (authMode !== "trusted-proxy") {
     return true;
