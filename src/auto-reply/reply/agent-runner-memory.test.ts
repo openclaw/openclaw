@@ -2395,3 +2395,66 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
   });
 });
+
+describe("runPreflightCompactionIfNeeded with compaction.preflight.enabled", () => {
+  function makeSessionEntry(): SessionEntry {
+    return {
+      sessionId: "session-preflight",
+      sessionFile: path.join(os.tmpdir(), "openclaw-preflight-disabled-session.jsonl"),
+      updatedAt: Date.now(),
+      totalTokens: 180_500,
+      totalTokensFresh: true,
+    };
+  }
+
+  beforeEach(() => {
+    runWithModelFallbackMock.mockReset().mockImplementation(async ({ provider, model, run }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }));
+    runEmbeddedAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
+    compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 42 },
+    });
+    incrementCompactionCountMock.mockReset();
+    refreshQueuedFollowupSessionMock.mockReset();
+  });
+
+  it("skips preflight compaction when cfg.agents.defaults.compaction.preflight.enabled === false", async () => {
+    const sessionEntry = makeSessionEntry();
+    const replyOperation = createReplyOperation();
+
+    const result = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              preflight: { enabled: false },
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: sessionEntry.sessionId,
+        sessionFile: sessionEntry.sessionFile,
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(os.tmpdir(), "openclaw-preflight-disabled-sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(result).toBe(sessionEntry);
+  });
+});
