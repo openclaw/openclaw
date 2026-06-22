@@ -3,8 +3,19 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import {
   discoverVercelAiGatewayModels,
   getStaticVercelAiGatewayModelCatalog,
+  resolveVercelAiGatewayDynamicModel,
   VERCEL_AI_GATEWAY_BASE_URL,
+  VERCEL_AI_GATEWAY_PROVIDER_ID,
 } from "./models.js";
+
+export function resolveVercelAiGatewayModel(modelId: string) {
+  return {
+    ...resolveVercelAiGatewayDynamicModel(modelId),
+    api: "anthropic-messages" as const,
+    provider: VERCEL_AI_GATEWAY_PROVIDER_ID,
+    baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
+  };
+}
 
 export function buildStaticVercelAiGatewayProvider(): ModelProviderConfig {
   return {

@@ -20,9 +20,11 @@ import {
   VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
   VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
 } from "./api.js";
+import { resolveVercelAiGatewayDynamicModel } from "./models.js";
 import {
   buildStaticVercelAiGatewayProvider,
   buildVercelAiGatewayProvider,
+  resolveVercelAiGatewayModel,
 } from "./provider-catalog.js";
 
 const STATIC_MODEL_IDS = [
@@ -80,6 +82,32 @@ describe("vercel ai gateway provider catalog", () => {
       baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
       api: "anthropic-messages",
       models: getStaticVercelAiGatewayModelCatalog(),
+    });
+  });
+
+  it("builds runtime metadata for live-only model ids", () => {
+    expect(resolveVercelAiGatewayDynamicModel("custom/provider-model")).toEqual({
+      id: "custom/provider-model",
+      name: "custom/provider-model",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    });
+  });
+
+  it("adds transport metadata for runtime model resolution", () => {
+    expect(resolveVercelAiGatewayModel("custom/provider-model")).toMatchObject({
+      id: "custom/provider-model",
+      provider: "vercel-ai-gateway",
+      api: "anthropic-messages",
+      baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
     });
   });
 
