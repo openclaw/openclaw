@@ -38,8 +38,8 @@ import {
   resolveCollapsedToolDetail,
 } from "../../pages/chat/tool-cards.ts";
 import { renderCopyAsMarkdownButton } from "../../ui/chat/copy-as-markdown.ts";
-import { formatCompactTokenCount } from "../../ui/chat/token-format.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
+import { formatCompactTokenCount } from "./token-format.ts";
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
