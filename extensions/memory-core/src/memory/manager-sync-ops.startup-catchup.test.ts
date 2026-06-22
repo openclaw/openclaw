@@ -15,7 +15,6 @@ import type {
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { emitInternalSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
@@ -34,6 +33,25 @@ type SyncParams = {
   sessionFiles?: string[];
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
+
+type MemorySessionTranscriptUpdate = {
+  agentId?: string;
+  sessionFile?: string;
+  sessionKey?: string;
+  target?: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+  };
+};
+
+type MemoryTranscriptUpdateSubscriber = (
+  listener: (update: MemorySessionTranscriptUpdate) => void,
+) => () => void;
+
+const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
+  "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
+);
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
 
@@ -377,20 +395,45 @@ describe("session startup catch-up", () => {
   it("queues transcript update identity without requiring a session file", async () => {
     vi.useFakeTimers();
     const harness = new SessionStartupCatchupHarness([]);
+    const originalSubscriber = (globalThis as Record<symbol, unknown>)[
+      MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
+    ];
+    let transcriptListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
+    (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] = ((
+      listener,
+    ) => {
+      transcriptListener = listener;
+      return () => {
+        if (transcriptListener === listener) {
+          transcriptListener = undefined;
+        }
+      };
+    }) satisfies MemoryTranscriptUpdateSubscriber;
     harness.startTranscriptListener();
 
-    emitInternalSessionTranscriptUpdate({
-      target: {
-        agentId: "main",
-        sessionId: "thread",
-        sessionKey: "agent:main:thread",
-      },
-    });
+    try {
+      transcriptListener?.({
+        target: {
+          agentId: "main",
+          sessionId: "thread",
+          sessionKey: "agent:main:thread",
+        },
+      });
 
-    expect(harness.getPendingSessionTargets()).toEqual([
-      { agentId: "main", sessionId: "thread", sessionKey: "agent:main:thread" },
-    ]);
-    harness.stopTranscriptListener();
+      expect(harness.getPendingSessionTargets()).toEqual([
+        { agentId: "main", sessionId: "thread", sessionKey: "agent:main:thread" },
+      ]);
+    } finally {
+      harness.stopTranscriptListener();
+      if (originalSubscriber === undefined) {
+        delete (globalThis as Record<symbol, unknown>)[
+          MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
+        ];
+      } else {
+        (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] =
+          originalSubscriber;
+      }
+    }
   });
 
   it("keeps canonical path transcript update compatibility", async () => {
