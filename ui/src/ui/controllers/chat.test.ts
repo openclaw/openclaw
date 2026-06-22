@@ -12,6 +12,8 @@ import {
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
   sendChatMessage,
+  sendDetachedChatMessage,
+  sendSteerChatMessage,
   type ChatEventPayload,
   type ChatState,
 } from "./chat.ts";
@@ -67,6 +69,15 @@ function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
     throw new Error("Expected client request call");
   }
   return call;
+}
+
+function createStartedChatSendAck(params: unknown) {
+  const requestParams = requireRecord(params);
+  const runId = requestParams.idempotencyKey;
+  if (typeof runId !== "string") {
+    throw new Error("Expected chat.send idempotencyKey");
+  }
+  return { runId, status: "started" as const };
 }
 
 function expectTextChatMessage(message: unknown, role: string, text: string): void {
@@ -1875,7 +1886,9 @@ describe("sendChatMessage", () => {
         sessionId: "session-before-reconnect",
         messages: [],
       })
-      .mockResolvedValueOnce({ runId: "run-1", status: "started" });
+      .mockImplementationOnce((_method: string, params?: unknown) =>
+        createStartedChatSendAck(params),
+      );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2060,8 +2073,88 @@ describe("sendChatMessage", () => {
     });
   });
 
+  it("clears the local run and rejects acceptance when the send acks a terminal timeout", async () => {
+    const request = vi.fn((_method: string, params: { idempotencyKey: string }) =>
+      Promise.resolve({ runId: params.idempotencyKey, status: "timeout" }),
+    );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "aborted before dispatch");
+
+    expect(result).toBeNull();
+    expect(state.chatMessages).toStrictEqual([]);
+    expect(state.lastError).toBe("The run ended before the message was accepted.");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    const runState = state as ChatState & {
+      chatRunStatus?: unknown;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(runState.chatRunStatus).toMatchObject({
+      phase: "interrupted",
+      runId: expect.stringMatching(UUID_V4_RE),
+      sessionKey: "main",
+    });
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "interrupted",
+      runId: expect.stringMatching(UUID_V4_RE),
+      sessionKey: "main",
+      sessionStatus: "killed",
+    });
+  });
+
+  it("preserves terminal timeout acks from Skill Workshop revision sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-revision", status: "timeout" });
+    const state = createState({
+      sessionKey: "global",
+      currentSessionId: "session-visible",
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await requestSkillWorkshopRevisionChatSend(state, {
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "Make the support files 5",
+      runId: "run-revision",
+    });
+
+    expect(result).toEqual({ runId: "run-revision", status: "timeout" });
+  });
+
+  it("preserves terminal failure acks from generated-run sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-detached", status: "error" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await expect(sendDetachedChatMessage(state, "/btw summarize this")).resolves.toEqual({
+      runId: "run-detached",
+      status: "error",
+    });
+  });
+
+  it("preserves terminal ok acks from generated-run steer sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-steer-ok", status: "ok" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await expect(sendSteerChatMessage(state, "tighten the plan")).resolves.toEqual({
+      runId: "run-steer-ok",
+      status: "ok",
+    });
+  });
+
   it("serializes non-image chat attachments as files", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const request = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2106,7 +2199,9 @@ describe("sendChatMessage", () => {
   });
 
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const request = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2160,7 +2255,9 @@ describe("sendChatMessage", () => {
   });
 
   it("sends inline image payloads without copying data URLs into optimistic chat state", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const request = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2200,7 +2297,9 @@ describe("sendChatMessage", () => {
     ]);
     expect(JSON.stringify(state.chatMessages)).not.toContain("data:image/png;base64");
 
-    const captionedRequest = vi.fn().mockResolvedValue({ runId: "run-2", status: "started" });
+    const captionedRequest = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const captionedState = createState({
       connected: true,
       client: { request: captionedRequest } as unknown as ChatState["client"],

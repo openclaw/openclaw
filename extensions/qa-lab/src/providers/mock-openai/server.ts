@@ -1254,9 +1254,10 @@ function buildAssistantText(
       ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
       : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
+  const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
-    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -1316,11 +1317,20 @@ function buildAssistantText(
   if (whatsAppStickerMarker) {
     return whatsAppStickerMarker;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return exactReplyDirective;
+  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
+    return promptExactMarkerDirective;
+  }
+  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
+    return promptExactReplyDirective;
+  }
+  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
+    return promptExactReplyDirective;
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return exactMarkerDirective;
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return exactReplyDirective;
   }
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
@@ -1937,10 +1947,11 @@ async function buildResponsesPayload(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
-  const exactReplyDirective =
-    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const promptExactReplyDirective = extractExactReplyDirective(prompt);
+  const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
+  const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
-    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -2304,11 +2315,11 @@ async function buildResponsesPayload(
   if (whatsAppStickerMarker) {
     return buildAssistantEvents(whatsAppStickerMarker);
   }
-  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
-    return buildAssistantEvents(exactReplyDirective);
+  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
+    return buildAssistantEvents(promptExactMarkerDirective);
   }
-  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
-    return buildAssistantEvents(exactMarkerDirective);
+  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
+    return buildAssistantEvents(promptExactReplyDirective);
   }
   const isTelegramCurrentSessionStatusTurn =
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
@@ -2324,11 +2335,14 @@ async function buildResponsesPayload(
         : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
     );
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return buildAssistantEvents(exactReplyDirective);
+  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
+    return buildAssistantEvents(promptExactReplyDirective);
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return buildAssistantEvents(exactMarkerDirective);
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(

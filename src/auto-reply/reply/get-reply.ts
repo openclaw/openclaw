@@ -587,6 +587,14 @@ export async function getReplyFromConfig(
           sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
         groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
+        directUserIds: [
+          sessionEntry.origin?.nativeDirectUserId,
+          sessionEntry.origin?.from,
+          sessionEntry.origin?.to,
+          finalized.OriginatingTo,
+          finalized.From,
+          finalized.SenderId,
+        ],
       })
     : null;
   const resolvedChannelModelOverride =

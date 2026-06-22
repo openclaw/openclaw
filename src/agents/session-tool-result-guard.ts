@@ -563,8 +563,6 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolea
   return isTranscriptOnlyOpenClawAssistantModel(provider, model);
 }
 
-export { getRawSessionAppendMessage };
-
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {

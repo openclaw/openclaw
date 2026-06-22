@@ -174,10 +174,20 @@ export function parseInlineDirectives(
     hasDirective: hasQueueDirective,
     hasOptions: hasQueueOptions,
   } = extractQueueDirective(modelCleaned);
-
+  const hasAnyDirective =
+    hasThinkDirective ||
+    hasVerboseDirective ||
+    hasTraceDirective ||
+    hasFastDirective ||
+    hasReasoningDirective ||
+    hasElevatedDirective ||
+    hasExecDirective ||
+    hasStatusDirective ||
+    hasModelDirective ||
+    hasQueueDirective;
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
-    cleaned: queueCleaned,
+    cleaned: hasAnyDirective ? queueCleaned : body.trim(),
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,

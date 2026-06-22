@@ -523,7 +523,11 @@ Legacy aliases still normalize to the canonical bundled ids:
       `agents.defaults.models["xai/<model>"].params.tool_stream` to `false` to
       disable it.
     - The bundled xAI wrapper strips unsupported strict tool-schema flags and
-      reasoning payload keys before sending native xAI requests.
+      reasoning *effort* payload keys before sending native xAI requests. Only
+      `grok-4.3` / `grok-4.3-*` advertise configurable reasoning effort; all
+      other reasoning-capable xAI models still request
+      `include: ["reasoning.encrypted_content"]` so prior encrypted reasoning
+      can be replayed on follow-up turns.
     - `web_search`, `x_search`, and `code_execution` are exposed as OpenClaw
       tools. OpenClaw enables the specific xAI built-in it needs inside each tool
       request instead of attaching all native tools to every chat turn.

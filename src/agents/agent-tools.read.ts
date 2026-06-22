@@ -8,6 +8,7 @@ import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
+import { toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -737,7 +738,7 @@ async function assertSandboxPathWithinAnyRoot(params: {
       firstRootEscapeError ??= error;
     }
   }
-  throw toLintErrorObject(
+  throw toErrorObject(
     firstRootEscapeError ?? new Error("Path guard has no configured roots."),
     "Non-Error thrown",
   );
@@ -1125,19 +1126,5 @@ async function toCanonicalRelativeWorkspacePath(
 function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
   const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
   error.code = code;
-  return error;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
   return error;
 }

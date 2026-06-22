@@ -39,7 +39,11 @@ import {
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
-import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultId,
+  sanitizeToolCallIdsForCloudCodeAssist,
+} from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import {
   providerRequiresSignedThinking,
@@ -588,6 +592,78 @@ function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): bool
   );
 }
 
+function formatOpenAIResponsesReplayInvariantError(params: {
+  reason: "dangling_tool_call" | "orphan_tool_result";
+  toolCallId?: string;
+  messageIndex: number;
+}): Error {
+  const toolCallId = params.toolCallId ? ` toolCallId=${params.toolCallId}` : "";
+  return new Error(
+    `invalid_replay_transcript: OpenAI Responses replay contains ${params.reason}${toolCallId} at message index ${params.messageIndex}`,
+  );
+}
+
+function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): AgentMessage[] {
+  const pending = new Map<string, { messageIndex: number }>();
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    const role = (message as { role?: unknown } | undefined)?.role;
+
+    if (pending.size > 0 && role !== "toolResult") {
+      const [toolCallId, meta] = pending.entries().next().value as [
+        string,
+        { messageIndex: number },
+      ];
+      throw formatOpenAIResponsesReplayInvariantError({
+        reason: "dangling_tool_call",
+        toolCallId,
+        messageIndex: meta.messageIndex,
+      });
+    }
+
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+
+    if (role === "toolResult") {
+      const toolCallId = extractToolResultId(
+        message as Extract<AgentMessage, { role: "toolResult" }>,
+      );
+      if (!toolCallId || !pending.has(toolCallId)) {
+        throw formatOpenAIResponsesReplayInvariantError({
+          reason: "orphan_tool_result",
+          ...(toolCallId ? { toolCallId } : {}),
+          messageIndex: i,
+        });
+      }
+      pending.delete(toolCallId);
+      continue;
+    }
+
+    if (role !== "assistant") {
+      continue;
+    }
+
+    for (const toolCall of extractToolCallsFromAssistant(
+      message as Extract<AgentMessage, { role: "assistant" }>,
+    )) {
+      pending.set(toolCall.id, { messageIndex: i });
+    }
+  }
+
+  if (pending.size > 0) {
+    const [toolCallId, meta] = pending.entries().next().value as [string, { messageIndex: number }];
+    throw formatOpenAIResponsesReplayInvariantError({
+      reason: "dangling_tool_call",
+      toolCallId,
+      messageIndex: meta.messageIndex,
+    });
+  }
+
+  return messages;
+}
+
 /**
  * Applies the generic replay-history cleanup pipeline before provider-owned
  * replay hooks run.
@@ -749,6 +825,9 @@ export async function sanitizeSessionHistory(params: {
     providerSanitized = providerResult ?? undefined;
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
+  const responsesInvariantChecked = isOpenAIResponsesApi
+    ? assertOpenAIResponsesToolUseResultInvariant(sanitizedWithProvider)
+    : sanitizedWithProvider;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -760,7 +839,7 @@ export async function sanitizeSessionHistory(params: {
   }
 
   if (!policy.applyGoogleTurnOrdering) {
-    return sanitizedWithProvider;
+    return responsesInvariantChecked;
   }
 
   // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
@@ -769,7 +848,10 @@ export async function sanitizeSessionHistory(params: {
   // provider-owned ordering rewrite above; keep this generic fallback for the
   // strict OpenAI-compatible path and for any provider that leaves assistant-
   // first repair to core. See #38962.
-  return sanitizeGoogleTurnOrdering(sanitizedWithProvider);
+  const googleOrdered = sanitizeGoogleTurnOrdering(responsesInvariantChecked);
+  return isOpenAIResponsesApi
+    ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
+    : googleOrdered;
 }
 
 /**

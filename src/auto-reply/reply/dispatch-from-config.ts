@@ -557,6 +557,14 @@ function resolveChannelModelCandidate(params: {
     groupChannel: params.entry?.groupChannel ?? params.ctx.GroupChannel,
     groupSubject: params.entry?.subject ?? params.ctx.GroupSubject,
     parentSessionKey: params.parentSessionKey,
+    directUserIds: [
+      params.entry?.origin?.nativeDirectUserId,
+      params.entry?.origin?.from,
+      params.entry?.origin?.to,
+      params.ctx.OriginatingTo,
+      params.ctx.From,
+      params.ctx.SenderId,
+    ],
   });
   if (!channelModelOverride) {
     return undefined;

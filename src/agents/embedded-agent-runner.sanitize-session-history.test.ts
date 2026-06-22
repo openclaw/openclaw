@@ -741,7 +741,78 @@ describe("sanitizeSessionHistory", () => {
     expect(JSON.stringify(result)).not.toContain("missing tool result");
   });
 
-  it("synthesizes Codex-style aborted tool results for openai-chatgpt-responses", async () => {
+  it("repairs a message-tool delivery-mirror poisoned OpenAI Responses replay", async () => {
+    const messages: AgentMessage[] = [
+      makeUserMessage("start"),
+      makeAssistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "call_message|fc_message",
+            name: "message",
+            arguments: { action: "send", message: "visible reply" },
+          },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      castAgentMessage({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        api: "openai-responses",
+        content: [{ type: "text", text: "visible reply" }],
+        stopReason: "stop",
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    const result = await sanitizeOpenAIHistory(messages);
+
+    expect(result.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+    expect(
+      result.some((message) => (message as { model?: string }).model === "delivery-mirror"),
+    ).toBe(false);
+    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("callmessage");
+    expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "aborted" },
+    ]);
+  });
+
+  it("rejects dangling OpenAI Responses tool calls before provider replay when repair is disabled", async () => {
+    const messages: AgentMessage[] = [
+      makeUserMessage("start"),
+      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], {
+        stopReason: "toolUse",
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    await expect(
+      sanitizeOpenAIHistory(messages, {
+        policy: {
+          sanitizeMode: "images-only",
+          sanitizeToolCallIds: false,
+          preserveNativeAnthropicToolUseIds: false,
+          repairToolUseResultPairing: false,
+          preserveSignatures: false,
+          sanitizeThinkingSignatures: false,
+          dropThinkingBlocks: false,
+          dropReasoningFromHistory: false,
+          applyGoogleTurnOrdering: false,
+          validateGeminiTurns: false,
+          validateAnthropicTurns: false,
+          allowSyntheticToolResults: false,
+        },
+      }),
+    ).rejects.toThrow(/invalid_replay_transcript.*dangling_tool_call.*call_1/);
+  });
+
+  it("synthesizes Codex-style aborted tool results for openai-codex-responses", async () => {
     const messages: AgentMessage[] = [
       makeAssistantMessage(
         [
