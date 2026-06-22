@@ -45,7 +45,11 @@ async function createStorePath(): Promise<string> {
 function buildDeleteParams(
   commandBodyNormalized: string,
   storePath: string,
-  overrides: { isAuthorizedSender?: boolean; sessionKey?: string } = {},
+  overrides: {
+    gatewayClientScopes?: string[];
+    isAuthorizedSender?: boolean;
+    sessionKey?: string;
+  } = {},
 ): HandleCommandsParams {
   const activeSessionKey = overrides.sessionKey ?? sessionKey;
   return {
@@ -54,6 +58,7 @@ function buildDeleteParams(
       Provider: "web",
       Surface: "web",
       CommandSource: "text",
+      GatewayClientScopes: overrides.gatewayClientScopes,
     },
     command: {
       commandBodyNormalized,
@@ -151,6 +156,29 @@ describe("delete session command", () => {
     );
   });
 
+  it("does not delete another agent main session", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:work:main",
+      entry: {
+        sessionId: "work-main-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    });
+    const params = buildDeleteParams("/delete", storePath, { sessionKey: "agent:work:main" });
+
+    const result = await handleDeleteSessionCommand(params, true);
+
+    expect(result?.reply?.text).toContain("main session cannot be deleted");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(getSessionEntry({ storePath, sessionKey: "agent:work:main" })?.sessionId).toBe(
+      "work-main-session",
+    );
+  });
+
   it("does not delete for an unauthorized sender", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry({
@@ -163,6 +191,24 @@ describe("delete session command", () => {
     const result = await handleDeleteSessionCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(getSessionEntry({ storePath, sessionKey })?.sessionId).toBe("delete-me");
+  });
+
+  it("requires operator.admin for internal gateway clients", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "delete-me", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    });
+    const params = buildDeleteParams("/close", storePath, {
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    const result = await handleDeleteSessionCommand(params, true);
+
+    expect(result?.reply?.text).toContain("operator.admin");
     expect(callGatewayMock).not.toHaveBeenCalled();
     expect(getSessionEntry({ storePath, sessionKey })?.sessionId).toBe("delete-me");
   });

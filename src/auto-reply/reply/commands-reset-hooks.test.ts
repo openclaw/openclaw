@@ -583,6 +583,24 @@ describe("handleCommands reset hooks", () => {
     expect(result).toBeNull();
   });
 
+  it("keeps model alias /new tails available for the existing fallthrough path", async () => {
+    const params = buildResetParams("/new opus", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-20250514": { alias: "opus" },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
   it("uses native structured /new title args for multi-word session names", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry({
@@ -623,6 +641,44 @@ describe("handleCommands reset hooks", () => {
     expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
       "Planning notes",
     );
+  });
+
+  it("keeps native model-like /new title args available for model fallthrough", async () => {
+    const params = buildResetParams(
+      "/new gpt-5.5",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.invalid",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 16_000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "gpt-5.5" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
   });
 
   it("keeps reset tails falling through so the model receives the user input", async () => {

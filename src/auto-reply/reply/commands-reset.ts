@@ -1,6 +1,8 @@
 /** Handles /new and /reset command flows, including soft reset and ACP-bound sessions. */
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
@@ -28,14 +30,6 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   mutableCtx.BodyStripped = resetTail;
   // Mark the context so ACP dispatch continues with the post-reset tail, not the reset command.
   mutableCtx.AcpDispatchTailAfterReset = true;
-}
-
-function getNativeCommandTitle(params: HandleCommandsParams): string | undefined {
-  if ((params.ctx.CommandSource ?? "text") === "text") {
-    return undefined;
-  }
-  const title = params.ctx.CommandArgs?.values?.title;
-  return typeof title === "string" && title.trim() ? title.trim() : undefined;
 }
 
 function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
@@ -67,10 +61,19 @@ function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
   return refs;
 }
 
-function looksLikeModelRef(params: HandleCommandsParams, tail: string): boolean {
+function isModelRefTail(params: HandleCommandsParams, tail: string): boolean {
   const normalized = tail.trim().toLowerCase();
   if (!normalized) {
     return false;
+  }
+  if (
+    !normalized.includes("/") &&
+    buildModelAliasIndex({
+      cfg: params.cfg,
+      defaultProvider: params.provider || DEFAULT_PROVIDER,
+    }).byAlias.has(normalized)
+  ) {
+    return true;
   }
   if (collectConfiguredModelRefs(params).has(normalized)) {
     return true;
@@ -81,6 +84,18 @@ function looksLikeModelRef(params: HandleCommandsParams, tail: string): boolean 
   return /^(?:gpt|o[134]|claude|gemini|llama|mistral|mixtral|codestral|qwen|deepseek|grok|kimi|command-r|sonar|phi)(?:[-_:./]|\d|$)/i.test(
     normalized,
   );
+}
+
+function getNativeCommandTitle(params: HandleCommandsParams): string | undefined {
+  if ((params.ctx.CommandSource ?? "text") === "text") {
+    return undefined;
+  }
+  const title = params.ctx.CommandArgs?.values?.title;
+  if (typeof title !== "string" || !title.trim()) {
+    return undefined;
+  }
+  const trimmed = title.trim();
+  return isModelRefTail(params, trimmed) ? undefined : trimmed;
 }
 
 function parseNamedNewSessionTail(
@@ -110,7 +125,7 @@ function parseNamedNewSessionTail(
   if (quotedMatch?.[1] || quotedMatch?.[2]) {
     return (quotedMatch[1] ?? quotedMatch[2] ?? "").trim();
   }
-  if (!tail.startsWith("-") && !/\s/.test(tail) && !looksLikeModelRef(params, tail)) {
+  if (!tail.startsWith("-") && !/\s/.test(tail) && !isModelRefTail(params, tail)) {
     return tail;
   }
   return undefined;

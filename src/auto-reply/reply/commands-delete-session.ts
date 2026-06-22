@@ -1,6 +1,7 @@
 import { resolveMainSessionKey, resolveSessionStoreEntry } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { rejectUnauthorizedCommand, requireGatewayClientScope } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
   CommandHandler,
@@ -25,6 +26,10 @@ function deleteSessionReply(text: string): CommandHandlerResult {
   return { shouldContinue: false, reply: { text } };
 }
 
+function isAgentMainSessionKey(sessionKey: string): boolean {
+  return parseAgentSessionKey(sessionKey)?.rest === "main";
+}
+
 export const handleDeleteSessionCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -37,11 +42,23 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   if (unauthorized) {
     return unauthorized;
   }
+  const missingAdminScope = requireGatewayClientScope(params, {
+    label: parsed.command,
+    allowedScopes: ["operator.admin"],
+    missingText: "You need operator.admin scope to delete sessions.",
+  });
+  if (missingAdminScope) {
+    return missingAdminScope;
+  }
 
   if (!params.storePath || !params.sessionKey) {
     return deleteSessionReply("Session deletion is not available for this session.");
   }
-  if (params.sessionKey === resolveMainSessionKey(params.cfg) || params.sessionKey === "global") {
+  if (
+    params.sessionKey === resolveMainSessionKey(params.cfg) ||
+    params.sessionKey === "global" ||
+    isAgentMainSessionKey(params.sessionKey)
+  ) {
     return deleteSessionReply("The main session cannot be deleted from chat. Use /reset instead.");
   }
 
