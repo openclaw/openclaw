@@ -8,38 +8,51 @@ read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
-OpenClaw CI runs on every push to `main` and every pull request. The `preflight` job classifies the diff and turns expensive lanes off when only unrelated areas changed. Manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out the full graph for release candidates and broad validation. Android lanes stay opt-in through `include_android`. Release-only plugin coverage lives in the separate [`Plugin Prerelease`](#plugin-prerelease) workflow and only runs from [`Full Release Validation`](#full-release-validation) or an explicit manual dispatch.
+OpenClaw CI runs on every push to `main` and every pull request. Canonical
+`main` pushes first pass through a 90-second hosted-runner admission window.
+The existing `CI` concurrency group cancels that waiting run when a newer
+commit lands, so sequential merges do not each register a full Blacksmith
+matrix. Pull requests and manual dispatches skip the wait. The `preflight` job
+then classifies the diff and turns expensive lanes off when only unrelated
+areas changed. Manual `workflow_dispatch` runs intentionally bypass smart
+scoping and fan out the full graph for release candidates and broad
+validation. Android lanes stay opt-in through `include_android`. Release-only
+plugin coverage lives in the separate [`Plugin Prerelease`](#plugin-prerelease)
+workflow and only runs from [`Full Release Validation`](#full-release-validation)
+or an explicit manual dispatch.
 
 ## Pipeline overview
 
-| Job                                | Purpose                                                                                                   | When it runs                       |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `preflight`                        | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                   | Always on non-draft pushes and PRs |
-| `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs |
-| `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes              |
-| `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, embedded built-artifact checks, and reusable artifacts | Node-relevant changes              |
-| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, and CI-routing checks                             | Node-relevant changes              |
-| `checks-fast-contracts-plugins-*`  | Two sharded plugin contract checks                                                                        | Node-relevant changes              |
-| `checks-fast-contracts-channels-*` | Two sharded channel contract checks                                                                       | Node-relevant changes              |
-| `checks-node-core-*`               | Core Node test shards, excluding channel, bundled, contract, and extension lanes                          | Node-relevant changes              |
-| `check-*`                          | Sharded main local gate equivalent: prod types, lint, guards, test types, and strict smoke                | Node-relevant changes              |
-| `check-additional-*`               | Architecture, sharded boundary/prompt drift, extension guards, package boundary, and runtime topology     | Node-relevant changes              |
-| `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                | Manual CI dispatch for releases    |
-| `check-docs`                       | Docs formatting, lint, and broken-link checks                                                             | Docs changed                       |
-| `skills-python`                    | Ruff + pytest for Python-backed skills                                                                    | Python-skill-relevant changes      |
-| `checks-windows`                   | Windows-specific process/path tests plus shared runtime import specifier regressions                      | Windows-relevant changes           |
-| `macos-node`                       | macOS TypeScript test lane using the shared built artifacts                                               | macOS-relevant changes             |
-| `macos-swift`                      | Swift lint, build, and tests for the macOS app                                                            | macOS-relevant changes             |
-| `android`                          | Android unit tests for both flavors plus one debug APK build                                              | Android-relevant changes           |
-| `test-performance-agent`           | Daily Codex slow-test optimization after trusted activity                                                 | Main CI success or manual dispatch |
-| `openclaw-performance`             | Daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.5 live lanes | Scheduled and manual dispatch      |
+| Job                                | Purpose                                                                                                   | When it runs                                        |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `preflight`                        | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                   | Always on non-draft pushes and PRs                  |
+| `runner-admission`                 | Hosted 90-second debounce for canonical `main` pushes before Blacksmith work is registered                | Every CI run; sleep only on canonical `main` pushes |
+| `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs                  |
+| `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes                               |
+| `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, embedded built-artifact checks, and reusable artifacts | Node-relevant changes                               |
+| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, and CI-routing checks                             | Node-relevant changes                               |
+| `checks-fast-contracts-plugins-*`  | Two sharded plugin contract checks                                                                        | Node-relevant changes                               |
+| `checks-fast-contracts-channels-*` | Two sharded channel contract checks                                                                       | Node-relevant changes                               |
+| `checks-node-core-*`               | Core Node test shards, excluding channel, bundled, contract, and extension lanes                          | Node-relevant changes                               |
+| `check-*`                          | Sharded main local gate equivalent: prod types, lint, guards, test types, and strict smoke                | Node-relevant changes                               |
+| `check-additional-*`               | Architecture, sharded boundary/prompt drift, extension guards, package boundary, and runtime topology     | Node-relevant changes                               |
+| `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                | Manual CI dispatch for releases                     |
+| `check-docs`                       | Docs formatting, lint, and broken-link checks                                                             | Docs changed                                        |
+| `skills-python`                    | Ruff + pytest for Python-backed skills                                                                    | Python-skill-relevant changes                       |
+| `checks-windows`                   | Windows-specific process/path tests plus shared runtime import specifier regressions                      | Windows-relevant changes                            |
+| `macos-node`                       | macOS TypeScript test lane using the shared built artifacts                                               | macOS-relevant changes                              |
+| `macos-swift`                      | Swift lint, build, and tests for the macOS app                                                            | macOS-relevant changes                              |
+| `android`                          | Android unit tests for both flavors plus one debug APK build                                              | Android-relevant changes                            |
+| `test-performance-agent`           | Daily Codex slow-test optimization after trusted activity                                                 | Main CI success or manual dispatch                  |
+| `openclaw-performance`             | Daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.5 live lanes | Scheduled and manual dispatch                       |
 
 ## Fail-fast order
 
-1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs.
-2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
-3. `build-artifacts` overlaps with the fast Linux lanes so downstream consumers can start as soon as the shared build is ready.
-4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
+1. `runner-admission` waits only for canonical `main` pushes; a newer push cancels the run before Blacksmith registration.
+2. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs.
+3. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
+4. `build-artifacts` overlaps with the fast Linux lanes so downstream consumers can start as soon as the shared build is ready.
+5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.
 

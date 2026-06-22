@@ -118,6 +118,22 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
 
+  it("debounces canonical main pushes before Blacksmith admission", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const admission = workflow.jobs["runner-admission"];
+
+    expect(admission["runs-on"]).toBe("ubuntu-24.04");
+    expect(admission.steps[0].if).toContain("github.ref == 'refs/heads/main'");
+    expect(admission.steps[0].run).toContain('sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"');
+    expect(admission.env.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBe("90");
+    expect(workflow.jobs.preflight.needs).toContain("runner-admission");
+    expect(workflow.jobs["security-fast"].needs).toContain("runner-admission");
+    expect(source).toContain(
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}",
+    );
+  });
+
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
