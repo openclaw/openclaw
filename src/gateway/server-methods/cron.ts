@@ -82,11 +82,7 @@ function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       return false;
     }
-    const record = entry as { enabled?: unknown };
-    if (record.enabled === false) {
-      return false;
-    }
-    return record.enabled === true || Object.keys(entry).some((key) => key !== "enabled");
+    return Object.keys(entry).length > 0;
   });
 }
 
