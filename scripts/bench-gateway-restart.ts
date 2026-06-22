@@ -2,14 +2,20 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { request } from "node:http";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { writeGatewayRestartIntentSync } from "../src/infra/restart.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
+import {
+  getFreePort,
+  parseProcessRssKb,
+  readProcessRssMb,
+  readProcessTreeCpuMs,
+  requestProbeStatus,
+} from "./lib/gateway-bench-probes.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -171,7 +177,21 @@ const DEFAULT_RESTARTS = 5;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POST_READY_DELAY_MS = 250;
 const DEFAULT_ENTRY = "dist/entry.js";
-const RESTART_INTENT_FILENAME = "gateway-restart-intent.json";
+const BOOLEAN_FLAGS = new Set(["--allow-failures", "--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--entry",
+  "--output",
+  "--post-ready-delay-ms",
+  "--restarts",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 const BASE_CONFIG = {
   browser: { enabled: false },
@@ -227,9 +247,24 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
 function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1];
   if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
+    throw new CliArgumentError(`${flag} requires a value`);
   }
   return value;
+}
+
+function validateCliArgs(argv: string[]): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      readRequiredFlagValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
 }
 
 function parseFlagValue(argv: string[], flag: string): string | undefined {
@@ -313,6 +348,7 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 }
 
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
+  validateCliArgs(argv);
   return {
     allowFailures: hasFlag(argv, "--allow-failures"),
     cases: resolveCases(parseRepeatableFlag(argv, "--case")),
@@ -562,22 +598,6 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSampl
   };
 }
 
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("failed to allocate port")));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 async function waitForProbeReady(params: {
   deadlineAt: number;
   isDone?: () => boolean;
@@ -727,59 +747,6 @@ async function waitForRestartProbe(params: {
   };
 }
 
-async function requestProbeStatus(
-  port: number,
-  pathname: string,
-): Promise<{ errorKind: string | null; status: number | null }> {
-  try {
-    const status = await requestStatus(port, pathname);
-    return {
-      errorKind: status === 200 ? null : `http-${status}`,
-      status,
-    };
-  } catch (error) {
-    return {
-      errorKind: classifyProbeErrorKind(error),
-      status: null,
-    };
-  }
-}
-
-function classifyProbeErrorKind(error: unknown): string {
-  if (typeof error === "object" && error !== null) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === "string" && code.trim()) {
-      return code.trim().toLowerCase();
-    }
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message.toLowerCase().includes("probe timeout")) {
-      return "timeout";
-    }
-    const name = (error as { name?: unknown }).name;
-    if (typeof name === "string" && name.trim()) {
-      return name.trim().toLowerCase();
-    }
-  }
-  return "error";
-}
-
-function requestStatus(port: number, pathname: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const req = request(
-      { host: "127.0.0.1", method: "GET", path: pathname, port, timeout: 100 },
-      (res) => {
-        res.resume();
-        res.on("end", () => resolve(res.statusCode ?? 0));
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy(new Error("probe timeout"));
-    });
-    req.end();
-  });
-}
-
 function writePluginFixtures(
   root: string,
   count: number,
@@ -865,51 +832,7 @@ function sanitizedEnv(
 }
 
 function writeRestartIntent(env: NodeJS.ProcessEnv, targetPid: number, reason: string): boolean {
-  const stateDir = env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    return false;
-  }
-  try {
-    mkdirSync(stateDir, { recursive: true });
-    const intentPath = path.join(stateDir, RESTART_INTENT_FILENAME);
-    writeFileSync(
-      intentPath,
-      `${JSON.stringify({
-        kind: "gateway-restart",
-        pid: targetPid,
-        createdAt: Date.now(),
-        reason,
-      })}\n`,
-      { mode: 0o600 },
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function readProcessRssMb(pid: number | undefined): number | null {
-  if (!pid || process.platform === "win32") {
-    return null;
-  }
-  const result = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  const rssKb = parseProcessRssKb(result.stdout);
-  return rssKb === null ? null : rssKb / 1024;
-}
-
-function parseProcessRssKb(raw: string): number | null {
-  const value = raw.trim();
-  if (!/^[1-9][0-9]*$/u.test(value)) {
-    return null;
-  }
-  const rssKb = Number(value);
-  return Number.isSafeInteger(rssKb) ? rssKb : null;
+  return writeGatewayRestartIntentSync({ env, reason, targetPid });
 }
 
 function readProcessFdCount(pid: number | undefined): number | null {
@@ -946,71 +869,6 @@ function countLsofFileDescriptors(raw: string): number | null {
     }
   }
   return count;
-}
-
-function parsePsCpuTimeMs(raw: string): number | null {
-  const parts = raw.trim().split(":").map(Number);
-  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
-    return null;
-  }
-  if (parts.length === 2) {
-    return Math.round((parts[0] * 60 + parts[1]) * 1000);
-  }
-  if (parts.length === 3) {
-    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
-  }
-  return null;
-}
-
-function readProcessTreeCpuMs(rootPid: number | undefined): number | null {
-  if (!rootPid || process.platform === "win32") {
-    return null;
-  }
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-
-  const childrenByParent = new Map<number, number[]>();
-  const cpuByPid = new Map<number, number>();
-  for (const line of result.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
-    if (!match) {
-      continue;
-    }
-    const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const cpuMs = parsePsCpuTimeMs(match[3]);
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
-      continue;
-    }
-    cpuByPid.set(pid, cpuMs);
-    const children = childrenByParent.get(ppid) ?? [];
-    children.push(pid);
-    childrenByParent.set(ppid, children);
-  }
-  if (!cpuByPid.has(rootPid)) {
-    return null;
-  }
-
-  let totalCpuMs = 0;
-  const seen = new Set<number>();
-  const stack = [rootPid];
-  while (stack.length > 0) {
-    const pid = stack.pop();
-    if (!pid || seen.has(pid)) {
-      continue;
-    }
-    seen.add(pid);
-    totalCpuMs += cpuByPid.get(pid) ?? 0;
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      stack.push(childPid);
-    }
-  }
-  return totalCpuMs;
 }
 
 function snapshotResources(
@@ -1776,7 +1634,6 @@ async function main() {
 
 export const testing = {
   classifyGatewayReadyLog,
-  classifyProbeErrorKind,
   collectOutputLines,
   collectTraceLine,
   countLsofFileDescriptors,
@@ -1801,6 +1658,7 @@ export const testing = {
   shouldFailBenchmark,
   stopChild,
   summarizeCase,
+  validateCliArgs,
   waitForRestartProbe,
   writeConfig,
   writeRestartIntent,
@@ -1808,6 +1666,11 @@ export const testing = {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
     console.error(err instanceof Error ? err.stack : String(err));
     process.exitCode = 1;
   });

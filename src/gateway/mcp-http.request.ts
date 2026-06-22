@@ -108,6 +108,20 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   }).ok;
 }
 
+function resolveMcpSender(params: {
+  req: IncomingMessage;
+  ownerToken: string;
+  nonOwnerToken: string;
+}): { senderIsOwner: boolean } | undefined {
+  const authHeader = getHeader(params.req, "authorization") ?? "";
+  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+  if (!ownerTokenMatched && !nonOwnerTokenMatched) {
+    return undefined;
+  }
+  return { senderIsOwner: ownerTokenMatched };
+}
+
 export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -151,10 +165,8 @@ export function validateMcpLoopbackRequest(params: {
       params.res.end(JSON.stringify({ error: "forbidden" }));
       return null;
     }
-    const authHeader = getHeader(params.req, "authorization") ?? "";
-    const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-    const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-    if (!ownerTokenMatched && !nonOwnerTokenMatched) {
+    const sender = resolveMcpSender(params);
+    if (!sender) {
       params.res.writeHead(401, { "Content-Type": "application/json" });
       params.res.end(JSON.stringify({ error: "unauthorized" }));
       return null;
@@ -186,10 +198,8 @@ export function validateMcpLoopbackRequest(params: {
       params.res.end(JSON.stringify({ error: "forbidden" }));
       return null;
     }
-    const authHeader = getHeader(params.req, "authorization") ?? "";
-    const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-    const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-    if (!ownerTokenMatched && !nonOwnerTokenMatched) {
+    const sender = resolveMcpSender(params);
+    if (!sender) {
       params.res.writeHead(401, { "Content-Type": "application/json" });
       params.res.end(JSON.stringify({ error: "unauthorized" }));
       return null;
@@ -222,15 +232,12 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  const authHeader = getHeader(params.req, "authorization") ?? "";
-  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-  const senderIsOwner = ownerTokenMatched ? true : nonOwnerTokenMatched ? false : null;
-  if (senderIsOwner === null) {
+  const sender = resolveMcpSender(params);
+  if (!sender) {
     logMcpLoopbackHttp("reject", {
       reason: "unauthorized",
       method: params.req.method ?? "",
-      hasAuthorization: authHeader.length > 0,
+      hasAuthorization: (getHeader(params.req, "authorization") ?? "").length > 0,
     });
     params.res.writeHead(401, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unauthorized" }));
@@ -249,7 +256,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner };
+  return { senderIsOwner: sender.senderIsOwner };
 }
 
 export async function readMcpHttpBody(

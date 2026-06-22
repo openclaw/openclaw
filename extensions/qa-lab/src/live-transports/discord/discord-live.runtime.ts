@@ -17,6 +17,7 @@ import { chromium } from "playwright-core";
 import { z } from "zod";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
+import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
   defaultQaModelForMode,
@@ -33,6 +34,7 @@ import {
   redactQaLiveLaneIssues,
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
+import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
@@ -380,11 +382,6 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof DISCORD_QA_ENV_KEY
     throw new Error(`Missing ${key}.`);
   }
   return value;
-}
-
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function resolveDiscordQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): DiscordQaRuntimeEnv {
@@ -1480,22 +1477,6 @@ function matchesDiscordScenarioReply(params: {
     params.message.senderId === params.sutBotId &&
     Boolean(params.matchText && params.message.text.includes(params.matchText))
   );
-}
-
-function assertDiscordScenarioReply(params: {
-  expectedTextIncludes?: string[];
-  message: DiscordObservedMessage;
-}) {
-  if (!params.message.text.trim()) {
-    throw new Error(`reply message ${params.message.messageId} was empty`);
-  }
-  for (const expected of params.expectedTextIncludes ?? []) {
-    if (!params.message.text.includes(expected)) {
-      throw new Error(
-        `reply message ${params.message.messageId} missing expected text: ${expected}`,
-      );
-    }
-  }
 }
 
 async function assertDiscordApplicationCommandsRegistered(params: {

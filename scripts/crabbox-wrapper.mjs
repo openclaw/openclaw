@@ -19,7 +19,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
+import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
@@ -118,8 +118,15 @@ function isExecutableFile(path, platform) {
 function spawnInvocation(command, commandArgs, env, platform) {
   const extension = extname(command).toLowerCase();
   if (platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
+    const nodeShim = resolveNodeCmdShim(command, platform);
+    if (nodeShim) {
+      return {
+        command: nodeShim.node,
+        args: [...nodeShim.args, ...commandArgs],
+      };
+    }
     return {
-      command: env.ComSpec ?? "cmd.exe",
+      command: resolveWindowsCmdExePath(env),
       args: ["/d", "/s", "/c", buildBatchCommandLine(command, commandArgs)],
       windowsVerbatimArguments: true,
     };
@@ -127,9 +134,78 @@ function spawnInvocation(command, commandArgs, env, platform) {
   return { command, args: commandArgs };
 }
 
+function resolveNodeCmdShim(command, platform) {
+  let content;
+  try {
+    content = readFileSync(command, "utf8");
+  } catch {
+    return null;
+  }
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    const match = /^"([^"]+node(?:\.exe)?)"\s+"%~dp0([^"]+)"\s+%\*$/iu.exec(line);
+    if (!match) {
+      continue;
+    }
+    const script = resolve(dirname(command), match[2]);
+    if (!isExecutableFile(script, platform)) {
+      continue;
+    }
+    return { node: match[1], args: [script] };
+  }
+  const npmCmdShim = resolveNpmNodeCmdShim(command, content, platform);
+  if (npmCmdShim) {
+    return npmCmdShim;
+  }
+  return null;
+}
+
+function resolveNpmNodeCmdShim(command, content, platform) {
+  const lines = content.split(/\r?\n/u).map((line) => line.trim());
+  if (
+    !lines.some((line) => /^IF EXIST "%dp0%\\node\.exe" \($/iu.test(line)) ||
+    !lines.some((line) => /^SET "_prog=node(?:\.exe)?"$/iu.test(line))
+  ) {
+    return null;
+  }
+  const invocation = lines.find((line) => line.includes('"%_prog%"') && line.endsWith("%*"));
+  if (!invocation) {
+    return null;
+  }
+  const match = /(?:^|&)\s*"%_prog%"\s+(.*?)"(%dp0%\\[^"]+)"\s+%\*$/iu.exec(invocation);
+  if (!match || match[1].trim()) {
+    return null;
+  }
+  const script = resolve(dirname(command), match[2].replace(/^%dp0%\\/iu, ""));
+  if (!isExecutableFile(script, platform)) {
+    return null;
+  }
+  const localNode = resolve(dirname(command), "node.exe");
+  return { node: isExecutableFile(localNode, platform) ? localNode : "node", args: [script] };
+}
+
 const cmdMetaCharactersRe = /([()\][%!^"`<>&|;, *?])/g;
-const jsRuntimeEntrypoints = new Set(["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"]);
+const jsRuntimeEntrypoints = new Set([
+  "pnpm",
+  "npm",
+  "npx",
+  "corepack",
+  "node",
+  "yarn",
+  "bun",
+  "bunx",
+]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
+const awsMacosBunEntrypoints = new Set(["bun", "bunx"]);
+const awsMacosBunVersion = "1.3.14";
+const awsMacosSwiftEntrypoints = new Set(["swift", "xcodebuild"]);
+const awsMacosSwiftScriptTargets = new Set([
+  "mac:package",
+  "mac:restart",
+  "scripts/build-and-run-mac.sh",
+  "scripts/package-mac-app.sh",
+  "scripts/restart-mac.sh",
+]);
 const minimumBlacksmithCrabboxVersion = [0, 22, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
@@ -155,6 +231,102 @@ const shellInlineCommandOptionsWithNextValue = new Set([
   "-o",
   "--init-file",
   "--rcfile",
+]);
+const nodeOptionsWithNextValueBeforeScript = new Set([
+  "--allow-fs-read",
+  "--allow-fs-write",
+  "--conditions",
+  "--cpu-prof-dir",
+  "--cpu-prof-interval",
+  "--cpu-prof-name",
+  "--debug-port",
+  "--diagnostic-dir",
+  "--disable-proto",
+  "--disable-warning",
+  "--dns-result-order",
+  "--env-file",
+  "--env-file-if-exists",
+  "--experimental-config-file",
+  "--experimental-loader",
+  "--experimental-test-isolation",
+  "--heap-prof-dir",
+  "--heap-prof-interval",
+  "--heap-prof-name",
+  "--heapsnapshot-near-heap-limit",
+  "--heapsnapshot-signal",
+  "--icu-data-dir",
+  "--import",
+  "--inspect-port",
+  "--inspect-publish-uid",
+  "--initial-old-space-size",
+  "--localstorage-file",
+  "--loader",
+  "--max-http-header-size",
+  "--max-old-space-size",
+  "--max-old-space-size-percentage",
+  "--max-semi-space-size",
+  "--network-family-autoselection-attempt-timeout",
+  "--openssl-config",
+  "--redirect-warnings",
+  "--report-dir",
+  "--report-directory",
+  "--report-filename",
+  "--report-signal",
+  "--require",
+  "--secure-heap",
+  "--secure-heap-min",
+  "--snapshot-blob",
+  "--test-concurrency",
+  "--test-coverage-branches",
+  "--test-coverage-exclude",
+  "--test-coverage-functions",
+  "--test-coverage-include",
+  "--test-coverage-lines",
+  "--test-global-setup",
+  "--test-isolation",
+  "--test-name-pattern",
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-rerun-failures",
+  "--test-shard",
+  "--test-skip-pattern",
+  "--test-timeout",
+  "--title",
+  "--tls-cipher-list",
+  "--tls-keylog",
+  "--trace-event-categories",
+  "--trace-event-file-pattern",
+  "--trace-require-module",
+  "--unhandled-rejections",
+  "--use-largepages",
+  "--v8-pool-size",
+  "--watch-kill-signal",
+  "--watch-path",
+  "-C",
+  "-r",
+]);
+const nodeOptionsWithoutScript = new Set([
+  "--build-sea",
+  "--build-snapshot",
+  "--build-snapshot-config",
+  "--check",
+  "--completion-bash",
+  "--eval",
+  "--experimental-sea-config",
+  "--help",
+  "--input-type",
+  "--interactive",
+  "--print",
+  "--prof-process",
+  "--run",
+  "--v8-options",
+  "--version",
+  "-c",
+  "-e",
+  "-h",
+  "-i",
+  "-p",
+  "-v",
 ]);
 
 function escapeBatchCommand(command) {
@@ -668,6 +840,56 @@ function pathExists(path) {
   }
 }
 
+function crabboxConfigDir() {
+  if (process.platform === "darwin") {
+    return resolve(homedir(), "Library", "Application Support", "crabbox");
+  }
+  if (process.platform === "win32") {
+    return resolve(process.env.APPDATA || resolve(homedir(), "AppData", "Roaming"), "crabbox");
+  }
+  return resolve(process.env.XDG_CONFIG_HOME || resolve(homedir(), ".config"), "crabbox");
+}
+
+function userDisplayPath(path) {
+  const home = homedir();
+  const rel = relative(home, path);
+  if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
+    return `~/${rel}`;
+  }
+  return path;
+}
+
+function blacksmithTestboxPrivateKeyPath(id) {
+  return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
+}
+
+function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
+  if (commandArgs[0] !== "run") {
+    return;
+  }
+  const id = optionValue(commandArgs, "--id");
+  if (!id) {
+    return;
+  }
+  if (!id.startsWith("tbx_")) {
+    return;
+  }
+
+  const keyPath = blacksmithTestboxPrivateKeyPath(id);
+  if (pathExists(keyPath)) {
+    return;
+  }
+
+  console.error(
+    [
+      `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
+      "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+      "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
 function preserveTemporaryCrabboxRuns() {
   if (childCwd === repoRoot) {
     return;
@@ -781,21 +1003,56 @@ function commandWordsRuntimeEntrypoint(wordsInput) {
   return "";
 }
 
+function commandWordsShellEntrypoint(wordsInput) {
+  const words = normalizeExecutableWords(wordsInput);
+  const first = shellWordBasename(words[0]);
+  return shellInlineCommandInterpreters.has(first) ? first : "";
+}
+
 function commandNeedsAwsMacosPackageManager(commandArgs) {
   if (isChangedGateCommand(commandArgs)) {
     return true;
   }
-  if (commandArgs.length === 1) {
-    return shellCommandWordCandidates(commandArgs[0]).some(commandWordsNeedAwsMacosPackageManager);
-  }
-  return commandWordsNeedAwsMacosPackageManager(normalizedCommandWords(commandArgs));
+  return commandNeedsEntrypoint(commandArgs, awsMacosCorepackEntrypoints);
 }
 
-function commandWordsNeedAwsMacosPackageManager(wordsInput) {
+function commandNeedsAwsMacosBun(commandArgs) {
+  return commandNeedsEntrypoint(commandArgs, awsMacosBunEntrypoints);
+}
+
+function commandNeedsAwsMacosSwiftToolchain(commandArgs) {
+  if (commandArgs.length === 1) {
+    return shellCommandWordCandidates(commandArgs[0]).some(commandWordsNeedAwsMacosSwiftToolchain);
+  }
+  return commandWordsNeedAwsMacosSwiftToolchain(normalizedCommandWords(commandArgs));
+}
+
+function commandWordsNeedAwsMacosSwiftToolchain(wordsInput) {
   let words = wordsInput;
   words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
-  if (awsMacosCorepackEntrypoints.has(first)) {
+  if (isSupportedSystemEnvCommand(first)) {
+    const targetWords = [...words];
+    if (stripEnvCommandOptions(targetWords, { canShimIgnoreEnvironment: true })) {
+      return commandWordsNeedAwsMacosSwiftToolchain(targetWords);
+    }
+  }
+  if (awsMacosSwiftEntrypoints.has(first)) {
+    return true;
+  }
+
+  if (first === "pnpm") {
+    const scriptName = words[1] === "run" ? words[2] : words[1];
+    if (awsMacosSwiftScriptTargets.has(scriptName)) {
+      return true;
+    }
+  }
+
+  if (isAwsMacosSwiftScriptTarget(words[0])) {
+    return true;
+  }
+
+  if (commandWordsRunAwsMacosSwiftScript(words)) {
     return true;
   }
 
@@ -803,7 +1060,73 @@ function commandWordsNeedAwsMacosPackageManager(wordsInput) {
   if (!inlineCommand) {
     return false;
   }
-  return shellCommandWordCandidates(inlineCommand).some(commandWordsNeedAwsMacosPackageManager);
+  return shellCommandWordCandidates(inlineCommand).some(commandWordsNeedAwsMacosSwiftToolchain);
+}
+
+function isAwsMacosSwiftScriptTarget(word) {
+  if (!word) {
+    return false;
+  }
+  const normalized = word.replace(/^\.\//u, "");
+  return (
+    awsMacosSwiftScriptTargets.has(normalized) ||
+    awsMacosSwiftScriptTargets.has(normalized.split("/").pop() ?? "")
+  );
+}
+
+function commandWordsRunAwsMacosSwiftScript(words) {
+  const first = (words[0] ?? "").split("/").pop();
+  if (!shellInlineCommandInterpreters.has(first)) {
+    return false;
+  }
+
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (!word) {
+      return false;
+    }
+    if (word === "--") {
+      continue;
+    }
+    if (word === "-c" || /^-[^-]*c/u.test(word)) {
+      return false;
+    }
+    if (shellInlineCommandOptionConsumesNextValue(word)) {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("-") || word.startsWith("+")) {
+      continue;
+    }
+    return isAwsMacosSwiftScriptTarget(word);
+  }
+  return false;
+}
+
+function commandNeedsEntrypoint(commandArgs, entrypoints) {
+  if (commandArgs.length === 1) {
+    return shellCommandWordCandidates(commandArgs[0]).some((words) =>
+      commandWordsNeedEntrypoint(words, entrypoints),
+    );
+  }
+  return commandWordsNeedEntrypoint(normalizedCommandWords(commandArgs), entrypoints);
+}
+
+function commandWordsNeedEntrypoint(wordsInput, entrypoints) {
+  let words = wordsInput;
+  words = normalizeExecutableWords(words);
+  const first = (words[0] ?? "").split("/").pop();
+  if (entrypoints.has(first)) {
+    return true;
+  }
+
+  const inlineCommand = shellInlineCommand(words);
+  if (!inlineCommand) {
+    return false;
+  }
+  return shellCommandWordCandidates(inlineCommand).some((candidateWords) =>
+    commandWordsNeedEntrypoint(candidateWords, entrypoints),
+  );
 }
 
 function isChangedGateCommand(commandArgs) {
@@ -840,8 +1163,54 @@ function isChangedGateWords(wordsInput) {
   return (
     (words[0] === "pnpm" && words[1] === "check:changed") ||
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
-    (words[0] === "node" && (words[1] ?? "").endsWith("scripts/check-changed.mjs"))
+    nodeScriptWord(words)?.endsWith("scripts/check-changed.mjs")
   );
+}
+
+function nodeScriptWord(words) {
+  if (shellWordBasename(words[0]) !== "node") {
+    return "";
+  }
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (!word) {
+      return "";
+    }
+    if (word === "--") {
+      return words[index + 1] ?? "";
+    }
+    if (nodeOptionsWithoutScript.has(word) || nodeOptionsWithoutScriptPrefix(word)) {
+      return "";
+    }
+    const valueMode = nodeOptionValueModeBeforeScript(word);
+    if (valueMode === "next") {
+      index += 1;
+      continue;
+    }
+    if (valueMode === "inline") {
+      continue;
+    }
+    if (word.startsWith("-") && word !== "-") {
+      continue;
+    }
+    return word;
+  }
+  return "";
+}
+
+function nodeOptionsWithoutScriptPrefix(word) {
+  return word.startsWith("--eval=") || word.startsWith("--print=");
+}
+
+function nodeOptionValueModeBeforeScript(word) {
+  if (nodeOptionsWithNextValueBeforeScript.has(word)) {
+    return "next";
+  }
+  const equalsIndex = word.indexOf("=");
+  if (equalsIndex > 0 && nodeOptionsWithNextValueBeforeScript.has(word.slice(0, equalsIndex))) {
+    return "inline";
+  }
+  return "";
 }
 
 function shellInlineCommand(words) {
@@ -1478,11 +1847,14 @@ function mergeBaseForChangedGate() {
 function remoteGitBootstrapForChangedGate(changedGateBase) {
   const quotedBase = shellQuote(changedGateBase);
   return [
-    "if ! git status --short >/dev/null 2>&1; then",
+    "openclaw_changed_gate_base=${OPENCLAW_CHANGED_GATE_BASE:-" + quotedBase + "};",
+    'if ! command -v git >/dev/null 2>&1; then echo "git is required for OpenClaw remote changed-gate sync" >&2; exit 2; fi;',
+    'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)";',
+    'if ! git status --short >/dev/null 2>&1 || [ "$openclaw_changed_gate_remote_base" != "$openclaw_changed_gate_base" ]; then',
     "rm -rf .git;",
     "git init -q;",
     "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git;",
-    `git fetch -q --depth=1 origin ${quotedBase}:refs/remotes/origin/main;`,
+    'git fetch -q --depth=1 origin "$openclaw_changed_gate_base:refs/remotes/origin/main";',
     "git reset --mixed --quiet refs/remotes/origin/main;",
     "git add -A;",
     "if ! git diff --cached --quiet; then git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit -q --no-gpg-sign -m remote-changed-gate-tree; fi;",
@@ -1515,11 +1887,7 @@ function injectRemoteChangedGateEnvironment(commandArgs) {
 }
 
 function markShellChangedGateAsRemoteChild(command) {
-  const missingEnv = remoteChangedGateEnv.filter((assignment) => !command.includes(assignment));
-  if (missingEnv.length === 0) {
-    return command;
-  }
-  return `export ${missingEnv.join(" ")}; ${command}`;
+  return `export ${remoteChangedGateEnv.join(" ")}; ${command}`;
 }
 
 function markDirectChangedGateAsRemoteChild(commandArgs) {
@@ -1668,7 +2036,7 @@ function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
   return normalizedArgs;
 }
 
-function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
+function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {}) {
   const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.15.0";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_macos_js() {",
@@ -1708,8 +2076,8 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
     'tmp_dir="$(mktemp -d)" || { release_install_lock; return 1; };',
     'pkg="node-v${node_version}-darwin-${node_arch}.tar.gz";',
     'base_url="https://nodejs.org/dist/v${node_version}";',
-    'curl -fsSLo "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
-    'curl -fsSLo "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSL --connect-timeout 10 --max-time 300 --retry 2 --retry-delay 2 -o "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 2 -o "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     '(cd "$tmp_dir" && grep " $pkg$" SHASUMS256.txt | shasum -a 256 -c -) || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     'rm -rf "$node_dir" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     'tar -xzf "$tmp_dir/$pkg" -C "$tool_root" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
@@ -1750,6 +2118,42 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
       "pnpm --version >&2;",
     );
   }
+  // Raw AWS macOS boxes skip setup-node-env, so Bun needs its own user-local pin.
+  if (bun) {
+    bootstrap.push(
+      `bun_version=${shellQuote(awsMacosBunVersion)};`,
+      'bun_root="$tool_root/bun-v${bun_version}";',
+      'bun_ready_marker="$bun_root/.openclaw-crabbox-bun-ready";',
+      'export PATH="$bun_root/bin:$PATH";',
+      'if [ ! -x "$bun_root/bin/bun" ] || [ ! -f "$bun_ready_marker" ]; then',
+      'mkdir -p "$tool_root" || { status=$?; return "$status"; };',
+      'bun_install_lock="$tool_root/.bun-${bun_version}.lock";',
+      "bun_lock_acquired=0;",
+      "bun_lock_deadline=$((SECONDS + 300));",
+      "while true; do",
+      'if mkdir "$bun_install_lock" 2>/dev/null; then bun_lock_acquired=1; printf "%s\\n" "$$" >"$bun_install_lock/pid" || { status=$?; rm -rf "$bun_install_lock"; return "$status"; }; break; fi;',
+      'if [ -x "$bun_root/bin/bun" ] && [ -f "$bun_ready_marker" ]; then break; fi;',
+      'if [ "$SECONDS" -ge "$bun_lock_deadline" ]; then',
+      'bun_lock_pid="$(cat "$bun_install_lock/pid" 2>/dev/null || true)";',
+      'if [ -n "$bun_lock_pid" ] && kill -0 "$bun_lock_pid" 2>/dev/null; then echo "timed out waiting for active macOS Bun install lock: $bun_install_lock pid=$bun_lock_pid" >&2; return 1; fi;',
+      'echo "reclaiming stale macOS Bun install lock: $bun_install_lock" >&2;',
+      'rm -rf "$bun_install_lock" || return 1;',
+      "bun_lock_deadline=$((SECONDS + 300));",
+      "fi;",
+      "sleep 1;",
+      "done;",
+      'release_bun_install_lock() { if [ "$bun_lock_acquired" = "1" ]; then rm -rf "$bun_install_lock" 2>/dev/null || true; fi; };',
+      'if [ ! -x "$bun_root/bin/bun" ] || [ ! -f "$bun_ready_marker" ]; then',
+      'rm -rf "$bun_root" || { status=$?; release_bun_install_lock; return "$status"; };',
+      'mkdir -p "$bun_root" || { status=$?; release_bun_install_lock; return "$status"; };',
+      'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}" || { status=$?; release_bun_install_lock; return "$status"; };',
+      'touch "$bun_ready_marker" || { status=$?; release_bun_install_lock; return "$status"; };',
+      "fi;",
+      "release_bun_install_lock;",
+      "fi;",
+      "bun --version >&2 || return 1;",
+    );
+  }
   bootstrap.push("};", "openclaw_crabbox_bootstrap_macos_js");
   return bootstrap.join(" ");
 }
@@ -1775,6 +2179,7 @@ function scopedAwsMacosEnvCommand(commandArgs) {
   return {
     runtimeEntrypoint: targetEntrypoint,
     packageManager: awsMacosCorepackEntrypoints.has(targetEntrypoint),
+    bun: awsMacosBunEntrypoints.has(targetEntrypoint),
     shellCommand: `openclaw_crabbox_env ${shellJoin(commandArgs.slice(1))}`,
   };
 }
@@ -1805,7 +2210,64 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
   const shellCommand = `${remoteAwsMacosJsBootstrap({
     packageManager:
       directScopedEnvCommand?.packageManager || commandNeedsAwsMacosPackageManager(runArgs),
+    bun: directScopedEnvCommand?.bun || commandNeedsAwsMacosBun(runArgs),
   })} && { ${originalShellCommand}\n}`;
+
+  if (!hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs.splice(optionEnd, 0, "--shell");
+  }
+
+  const updatedBounds = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(
+    updatedBounds.start,
+    normalizedArgs.length - updatedBounds.start,
+    shellCommand,
+  );
+  return normalizedArgs;
+}
+
+function remoteAwsMacosSwiftBootstrap() {
+  return [
+    "openclaw_crabbox_require_macos_swift_62() {",
+    'openclaw_xcode="";',
+    'for openclaw_candidate in /Applications/Xcode_26.1.app /Applications/Xcode_26*.app /Applications/Xcode-26*.app; do if [ -d "$openclaw_candidate" ]; then openclaw_xcode="$openclaw_candidate"; fi; done;',
+    'if [ -n "$openclaw_xcode" ]; then openclaw_developer="$openclaw_xcode/Contents/Developer"; if [ ! -d "$openclaw_developer" ]; then openclaw_developer="$openclaw_xcode"; fi; sudo xcode-select -s "$openclaw_developer" || return 1; fi;',
+    'openclaw_swift_version="$(swift --version 2>&1)" || { status=$?; printf "%s\\n" "$openclaw_swift_version" >&2; return "$status"; };',
+    'printf "%s\\n" "$openclaw_swift_version" >&2;',
+    'openclaw_swift_major_minor="$(printf "%s\\n" "$openclaw_swift_version" | sed -nE "s/.*Apple Swift version ([0-9]+)\\.([0-9]+).*/\\1 \\2/p" | head -n 1)";',
+    'if [ -z "$openclaw_swift_major_minor" ]; then echo "[crabbox] OpenClaw macOS app proof requires Swift tools 6.2+; unable to parse swift --version." >&2; return 2; fi;',
+    "set -- $openclaw_swift_major_minor;",
+    'if [ "$1" -lt 6 ] || { [ "$1" -eq 6 ] && [ "$2" -lt 2 ]; }; then',
+    'echo "[crabbox] OpenClaw macOS app proof requires Swift tools 6.2+ (Xcode 26.x)." >&2;',
+    'echo "[crabbox] current Swift is $1.$2; select/install Xcode 26.x or use a Blacksmith macOS runner with Xcode_26.1.app." >&2;',
+    "return 2;",
+    "fi;",
+    "};",
+    "openclaw_crabbox_require_macos_swift_62",
+  ].join(" ");
+}
+
+function injectRemoteAwsMacosSwiftBootstrap(commandArgs, providerName, force = false) {
+  const runArgs = runCommandArgs(commandArgs);
+  if (
+    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
+    (!force && !commandNeedsAwsMacosSwiftToolchain(runArgs))
+  ) {
+    return commandArgs;
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const remoteCommand = normalizedArgs.slice(start);
+  const originalShellCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : shellJoin(remoteCommand);
+  const shellCommand = `${remoteAwsMacosSwiftBootstrap()} && { ${originalShellCommand}\n}`;
 
   if (!hasOption(normalizedArgs, "--shell")) {
     normalizedArgs.splice(optionEnd, 0, "--shell");
@@ -1876,13 +2338,13 @@ function prepareAwsMacosScriptStdinBootstrap(commandArgs, providerName) {
 }
 
 function createAwsMacosScriptStdinWrapper(script) {
-  const packageManager = scriptNeedsAwsMacosPackageManager(script);
+  const requirements = awsMacosScriptBootstrapRequirements(script);
   if (!script.startsWith("#!")) {
-    return `${remoteAwsMacosJsBootstrap({ packageManager })} || exit $?\n${script}`;
+    return `${remoteAwsMacosScriptBootstrap(requirements)} || exit $?\n${script}`;
   }
   const delimiterValue = uniqueHereDocDelimiter(script);
   return [
-    `${remoteAwsMacosJsBootstrap({ packageManager })} || exit $?`,
+    `${remoteAwsMacosScriptBootstrap(requirements)} || exit $?`,
     'tmp_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-crabbox-script.XXXXXX")" || exit $?',
     'cleanup_openclaw_crabbox_script() { rm -f "$tmp_script"; }',
     "trap cleanup_openclaw_crabbox_script EXIT",
@@ -1895,21 +2357,34 @@ function createAwsMacosScriptStdinWrapper(script) {
   ].join("\n");
 }
 
-function scriptNeedsAwsMacosPackageManager(script) {
+function remoteAwsMacosScriptBootstrap(requirements) {
+  const bootstraps = [remoteAwsMacosJsBootstrap(requirements)];
+  if (requirements.swift) {
+    bootstraps.push(remoteAwsMacosSwiftBootstrap());
+  }
+  return bootstraps.join(" && ");
+}
+
+function awsMacosScriptBootstrapRequirements(script) {
+  const requirements = { packageManager: false, bun: false, swift: false };
   const firstLine = script.match(/^[^\r\n]*/u)?.[0] ?? "";
   if (firstLine.startsWith("#!")) {
-    let words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
-    if ((words[0] ?? "").split("/").pop() === "env") {
-      words = words.slice(1);
-      while ((words[0] ?? "").startsWith("-")) {
-        words = words.slice(1);
-      }
+    const words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
+    requirements.packageManager = commandWordsNeedEntrypoint(words, awsMacosCorepackEntrypoints);
+    requirements.bun = commandWordsNeedEntrypoint(words, awsMacosBunEntrypoints);
+    requirements.swift = commandWordsNeedAwsMacosSwiftToolchain(words);
+    if (commandWordsShellEntrypoint(words)) {
+      const body = script.slice(firstLine.length).replace(/^\r?\n/u, "");
+      requirements.packageManager ||= commandNeedsAwsMacosPackageManager([body]);
+      requirements.bun ||= commandNeedsAwsMacosBun([body]);
+      requirements.swift ||= commandNeedsAwsMacosSwiftToolchain([body]);
     }
-    if (commandWordsNeedAwsMacosPackageManager(words)) {
-      return true;
-    }
+    return requirements;
   }
-  return commandNeedsAwsMacosPackageManager([script]);
+  requirements.packageManager = commandNeedsAwsMacosPackageManager([script]);
+  requirements.bun = commandNeedsAwsMacosBun([script]);
+  requirements.swift = commandNeedsAwsMacosSwiftToolchain([script]);
+  return requirements;
 }
 
 function uniqueHereDocDelimiter(script) {
@@ -2287,6 +2762,16 @@ if (provider && !isProviderAdvertised(provider, providers)) {
 }
 
 if (canonicalProvider === "blacksmith-testbox") {
+  if (isWindowsRemoteTarget(normalizedArgs)) {
+    console.error(
+      [
+        "[crabbox] provider=blacksmith-testbox supports Linux Testbox proof only; it cannot run Windows or WSL2 targets.",
+        "[crabbox] use provider=azure or provider=aws for brokered Crabbox Windows/WSL2 proof, provider=parallels for local Windows, or dispatch .github/workflows/windows-testbox-probe.yml for Blacksmith Windows runner probes.",
+      ].join("\n"),
+    );
+    process.exit(2);
+  }
+
   if (!satisfiesMinimumCrabboxVersion(version.text, minimumBlacksmithCrabboxVersion)) {
     console.error(
       [
@@ -2316,6 +2801,7 @@ if (canonicalProvider === "blacksmith-testbox") {
   console.error(
     `[crabbox] provider=blacksmith-testbox ${source}; if Testbox is queued or down, ${fallback}`,
   );
+  enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
 let childCwd = repoRoot;
@@ -2369,7 +2855,7 @@ if (
 ) {
   if (isAwsMacosRemoteTarget(normalizedArgs, provider)) {
     console.error(
-      `[crabbox] provider=aws macOS raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint || "--script-stdin"}; bootstrapping a pinned user-local Node toolchain before the command`,
+      `[crabbox] provider=aws macOS raw boxes may lack Node/Corepack/pnpm/Bun for ${runtimeEntrypoint || "--script-stdin"}; bootstrapping pinned user-local JavaScript tooling before the command`,
     );
   } else {
     const id = optionValue(normalizedArgs, "--id");
@@ -2377,7 +2863,7 @@ if (
       ? `pnpm crabbox:hydrate -- --id ${id}`
       : "pnpm crabbox:warmup, then pnpm crabbox:hydrate -- --id <id>";
     console.error(
-      `[crabbox] warning: provider=aws raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint}; hydrate first (${hydrate}) or pass --provider blacksmith-testbox for OpenClaw CI-like proof; not switching providers automatically`,
+      `[crabbox] warning: provider=aws raw boxes may lack Node/Corepack/pnpm/Bun for ${runtimeEntrypoint}; hydrate first (${hydrate}) or pass --provider blacksmith-testbox for OpenClaw CI-like proof; not switching providers automatically`,
     );
   }
 }
@@ -2406,15 +2892,26 @@ if (
 }
 
 const remoteMarkedArgs = injectRemoteChangedGateEnvironment(normalizedArgs);
+const remoteMarkedNeedsAwsMacosSwift =
+  isAwsMacosRemoteTarget(remoteMarkedArgs, provider) &&
+  commandNeedsAwsMacosSwiftToolchain(runCommandArgs(remoteMarkedArgs));
 const childArgs =
   childCwd === repoRoot
     ? injectRemoteWindowsHydratedNodeModulesBootstrap(
-        injectRemoteAwsMacosJsBootstrap(remoteMarkedArgs, provider),
+        injectRemoteAwsMacosSwiftBootstrap(
+          injectRemoteAwsMacosJsBootstrap(remoteMarkedArgs, provider),
+          provider,
+          remoteMarkedNeedsAwsMacosSwift,
+        ),
         provider,
       )
     : injectRemoteChangedGateGitBootstrap(
         injectRemoteWindowsHydratedNodeModulesBootstrap(
-          injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(remoteMarkedArgs), provider),
+          injectRemoteAwsMacosSwiftBootstrap(
+            injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(remoteMarkedArgs), provider),
+            provider,
+            remoteMarkedNeedsAwsMacosSwift,
+          ),
           provider,
         ),
         remoteChangedGateBase,
@@ -2432,23 +2929,23 @@ const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.pla
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
   stdio: "inherit",
+  detached: process.platform !== "win32",
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
+const childKillGraceMs = 5_000;
+let childForceKillTimer;
+let childTreeShutdownStarted = false;
 if (fullCheckout) {
   try {
     stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout, {
       intervalMs: fullCheckoutKeepaliveIntervalMsValue,
       onMissing: () => {
-        if (!child.killed) {
-          child.kill("SIGTERM");
-        }
+        void exitAfterChildTreeTermination(child, "SIGTERM", 1);
       },
     });
   } catch (error) {
-    if (!child.killed) {
-      child.kill("SIGTERM");
-    }
+    signalChildProcessTree(child, "SIGTERM");
     cleanupOnce();
     throw error;
   }
@@ -2460,17 +2957,17 @@ const signalExitCodes = new Map([
   ["SIGTERM", 143],
 ]);
 for (const signal of signalExitCodes.keys()) {
-  process.once(signal, () => {
-    if (!child.killed) {
-      child.kill(signal);
-    }
-    cleanupOnce();
-    process.exit(signalExitCodes.get(signal) ?? 1);
+  process.on(signal, () => {
+    void exitAfterChildTreeTermination(child, signal, signalExitCodes.get(signal) ?? 1);
   });
 }
 process.once("exit", cleanupOnce);
 
 child.on("exit", (code, signal) => {
+  clearChildForceKillTimer();
+  if (childTreeShutdownStarted) {
+    return;
+  }
   let fullCheckoutAvailable = true;
   if (fullCheckout) {
     fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
@@ -2484,6 +2981,10 @@ child.on("exit", (code, signal) => {
 });
 
 child.on("error", (error) => {
+  clearChildForceKillTimer();
+  if (childTreeShutdownStarted) {
+    return;
+  }
   if (fullCheckout) {
     assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
   }
@@ -2491,3 +2992,81 @@ child.on("error", (error) => {
   console.error(`[crabbox] failed to execute ${displayBinary}: ${error.message}`);
   process.exit(2);
 });
+
+async function exitAfterChildTreeTermination(childProcess, signal, exitCode) {
+  if (childTreeShutdownStarted) {
+    signalChildProcessTree(childProcess, "SIGKILL");
+    return;
+  }
+  childTreeShutdownStarted = true;
+  signalChildProcessTree(childProcess, signal);
+  await waitForChildTreeExit(childProcess, childKillGraceMs);
+  if (childProcessTreeIsAlive(childProcess)) {
+    signalChildProcessTree(childProcess, "SIGKILL");
+  }
+  await waitForChildTreeExit(childProcess, childKillGraceMs);
+  cleanupOnce();
+  process.exit(exitCode);
+}
+
+function signalChildProcessTree(childProcess, signal) {
+  if (
+    process.platform === "win32" &&
+    (childProcess.exitCode !== null || childProcess.signalCode !== null)
+  ) {
+    return;
+  }
+  try {
+    if (process.platform !== "win32" && typeof childProcess.pid === "number") {
+      process.kill(-childProcess.pid, signal);
+    } else {
+      childProcess.kill(signal);
+    }
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      try {
+        childProcess.kill(signal);
+      } catch {}
+    }
+  }
+  if (signal !== "SIGKILL" && !childForceKillTimer) {
+    childForceKillTimer = setTimeout(() => {
+      childForceKillTimer = undefined;
+      signalChildProcessTree(childProcess, "SIGKILL");
+    }, childKillGraceMs);
+    childForceKillTimer.unref?.();
+  }
+}
+
+function clearChildForceKillTimer() {
+  if (childForceKillTimer) {
+    clearTimeout(childForceKillTimer);
+    childForceKillTimer = undefined;
+  }
+}
+
+function childProcessTreeIsAlive(childProcess) {
+  if (process.platform === "win32" || typeof childProcess.pid !== "number") {
+    return childProcess.exitCode === null && childProcess.signalCode === null;
+  }
+  try {
+    process.kill(-childProcess.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForChildTreeExit(childProcess, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!childProcessTreeIsAlive(childProcess)) {
+      clearChildForceKillTimer();
+      return true;
+    }
+    await new Promise((done) => {
+      setTimeout(done, 50);
+    });
+  }
+  return !childProcessTreeIsAlive(childProcess);
+}

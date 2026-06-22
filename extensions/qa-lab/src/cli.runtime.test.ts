@@ -1208,6 +1208,7 @@ describe("qa cli runtime", () => {
 
     expectFields(mockFirstObjectArg(runQaSuite), {
       scenarioIds: [
+        "runtime-long-context-cache-stability",
         "runtime-soak-100-turn",
         "runtime-tool-image-generate",
         "runtime-tool-memory-add",

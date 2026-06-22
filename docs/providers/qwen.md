@@ -1,13 +1,13 @@
 ---
-summary: "Use Qwen Cloud via OpenClaw's bundled qwen provider"
+summary: "Use Qwen Cloud through its OpenClaw plugin"
 read_when:
   - You want to use Qwen with OpenClaw
   - You previously used Qwen OAuth
 title: "Qwen"
 ---
 
-OpenClaw now treats Qwen as a first-class bundled provider with canonical id
-`qwen`. The bundled provider targets the Qwen Cloud / Alibaba DashScope and
+OpenClaw now treats Qwen as a first-class provider plugin with canonical id
+`qwen`. The provider plugin targets the Qwen Cloud / Alibaba DashScope and
 Coding Plan endpoints, keeps legacy `modelstudio` ids working as a compatibility
 alias, and also exposes the Qwen Portal token flow as provider `qwen-oauth`.
 
@@ -21,6 +21,15 @@ alias, and also exposes the Qwen Portal token flow as provider `qwen-oauth`.
 If you want `qwen3.6-plus`, prefer the **Standard (pay-as-you-go)** endpoint.
 Coding Plan support can lag behind the public catalog.
 </Tip>
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/qwen-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -185,7 +194,7 @@ You can override with a custom `baseUrl` in config.
 
 ## Built-in catalog
 
-OpenClaw currently ships this bundled Qwen catalog. The configured catalog is
+OpenClaw currently ships this Qwen static catalog. The configured catalog is
 endpoint-aware: Coding Plan configs omit models that are only known to work on
 the Standard endpoint.
 
@@ -204,12 +213,12 @@ the Standard endpoint.
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is
-present in the bundled catalog.
+present in the static catalog.
 </Note>
 
 ## Thinking Controls
 
-For reasoning-enabled Qwen Cloud models, the bundled provider maps OpenClaw
+For reasoning-enabled Qwen Cloud models, the provider maps OpenClaw
 thinking levels to DashScope's top-level `enable_thinking` request flag. Disabled
 thinking sends `enable_thinking: false`; other thinking levels send
 `enable_thinking: true`.
@@ -242,7 +251,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 <AccordionGroup>
   <Accordion title="Image and video understanding">
-    The bundled Qwen plugin registers media understanding for images and video
+    The Qwen plugin registers media understanding for images and video
     on the **Standard** DashScope endpoints (not the Coding Plan endpoints).
 
     | Property      | Value                 |
@@ -267,7 +276,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
     `qwen3.6-plus`, switch to Standard (pay-as-you-go) instead of the Coding Plan
     endpoint/key pair.
 
-    OpenClaw's bundled Qwen catalog does not advertise `qwen3.6-plus` on Coding
+    OpenClaw's Qwen static catalog does not advertise `qwen3.6-plus` on Coding
     Plan endpoints, but explicitly configured `qwen/qwen3.6-plus` entries under
     `models.providers.qwen.models` are honored on Coding Plan baseUrls so you
     can opt that model in if Aliyun enables it on your subscription. The
@@ -279,13 +288,13 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
     The `qwen` plugin is being positioned as the vendor home for the full Qwen
     Cloud surface, not just coding/text models.
 
-    - **Text/chat models:** bundled now
+    - **Text/chat models:** available through the plugin
     - **Tool calling, structured output, thinking:** inherited from the OpenAI-compatible transport
     - **Image generation:** planned at the provider-plugin layer
-    - **Image/video understanding:** bundled now on the Standard endpoint
+    - **Image/video understanding:** available through the plugin on the Standard endpoint
     - **Speech/audio:** planned at the provider-plugin layer
     - **Memory embeddings/reranking:** planned through the embedding adapter surface
-    - **Video generation:** bundled now through the shared video-generation capability
+    - **Video generation:** available through the plugin through the shared video-generation capability
 
   </Accordion>
 
@@ -300,7 +309,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
     Coding Plan or Standard Qwen hosts still keeps video generation on the correct
     regional DashScope video endpoint.
 
-    Current bundled Qwen video-generation limits:
+    Current Qwen video-generation limits:
 
     - Up to **1** output video per request
     - Up to **1** input image

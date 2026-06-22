@@ -4,7 +4,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveDefaultPluginNpmDir, validatePluginId } from "./install-paths.js";
 import {
@@ -13,6 +12,7 @@ import {
   setInstalledPluginIndexInstallRecordsCache,
 } from "./installed-plugin-index-record-cache.js";
 import {
+  resolveInstalledPluginIndexStateDatabaseOptions,
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
@@ -246,26 +246,6 @@ type InstalledPluginIndexRecordRow = {
   plugins_json: string;
 };
 
-function resolveStateDatabaseOptions(
-  options: InstalledPluginIndexStoreOptions = {},
-): OpenClawStateDatabaseOptions {
-  if (options.filePath) {
-    return {
-      ...(options.env ? { env: options.env } : {}),
-      path: options.filePath,
-    };
-  }
-  if (options.stateDir) {
-    return {
-      env: {
-        ...(options.env ?? process.env),
-        OPENCLAW_STATE_DIR: options.stateDir,
-      },
-    };
-  }
-  return options.env ? { env: options.env } : {};
-}
-
 function parseJsonColumn(value: string): unknown {
   try {
     return JSON.parse(value) as unknown;
@@ -285,7 +265,9 @@ function readPersistedInstalledPluginIndexForRecords(
     return tryReadJsonSync(options.filePath);
   }
   try {
-    const database = openOpenClawStateDatabase(resolveStateDatabaseOptions(options));
+    const database = openOpenClawStateDatabase(
+      resolveInstalledPluginIndexStateDatabaseOptions(options),
+    );
     const row = database.db
       .prepare(
         `

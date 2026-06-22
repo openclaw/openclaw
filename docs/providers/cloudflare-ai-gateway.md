@@ -24,6 +24,15 @@ assistant prefill turns before sending the payload through Cloudflare AI Gateway
 Anthropic rejects response prefilling with extended thinking, while ordinary
 non-thinking prefill remains available.
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/cloudflare-ai-gateway-provider
+openclaw gateway restart
+```
+
 ## Getting started
 
 <Steps>

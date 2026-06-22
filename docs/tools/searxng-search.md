@@ -20,6 +20,11 @@ Advantages:
 ## Setup
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/searxng-plugin
+    ```
+  </Step>
   <Step title="Run a SearXNG instance">
     ```bash
     docker run -d -p 8888:8080 searxng/searxng

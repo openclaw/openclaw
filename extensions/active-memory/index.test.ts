@@ -844,6 +844,79 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("does not run for dreaming-narrative cron session keys", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:dreaming-narrative-light-abc123",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not run when a session id resolves to a dreaming-narrative cron session key", async () => {
+    hoisted.sessionStore["agent:main:dreaming-narrative-light-abc123"] = {
+      sessionId: "dreaming-session",
+      updatedAt: 1,
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionId: "dreaming-session",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("allows non-canonical session keys that merely contain the dreaming-narrative substring", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:webchat:dreaming-narrative-room",
+        messageProvider: "webchat",
+      },
+    );
+
+    // Real session keys that happen to contain "dreaming-narrative" in a
+    // non-canonical way (not {light|rem|deep} phase suffix) must remain eligible.
+    // The session key "agent:main:webchat:dreaming-narrative-room" is a real chat
+    // whose topic happens to contain the string — not a dreaming cron key.
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeUndefined();
+  });
+
+  it("allows real webchat session keys whose peer id starts with a phased dreaming-narrative prefix", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:webchat:dreaming-narrative-light-room",
+        messageProvider: "webchat",
+      },
+    );
+
+    // A real webchat session key whose peer id begins with a phased dreaming-narrative
+    // phrase must not be excluded. Only the canonical bare or agent-prefixed key
+    // shape (dreaming-narrative-<phase>-<hash> directly after agentId or bare) should
+    // be rejected — not the same phrase appearing deeper in the key as a peer id.
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeUndefined();
+  });
+
   it("defaults to direct-style sessions only", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should we order?", messages: [] },

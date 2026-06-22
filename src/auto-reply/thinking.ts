@@ -9,28 +9,24 @@ import {
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
-  formatXHighModelHint,
   isSessionDefaultDirectiveValue,
   normalizeElevatedLevel,
   normalizeFastMode,
-  normalizeNoticeLevel,
   normalizeReasoningLevel,
   normalizeTraceLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
   resolveResponseUsageMode,
-  resolveElevatedMode,
 } from "./thinking.shared.js";
 export type {
   ElevatedLevel,
-  ElevatedMode,
+  FastMode,
   NoticeLevel,
   ReasoningLevel,
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
-  UsageDisplayLevel,
   VerboseLevel,
 } from "./thinking.shared.js";
 import {
@@ -257,12 +253,6 @@ export function resolveThinkingProfile(params: {
   return profile;
 }
 
-/** Return whether provider/model exposes only off/on thinking controls. */
-export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
-  const profile = resolveThinkingProfile({ provider, model });
-  return profile.levels.length === 2 && profile.levels.some((level) => level.label === "on");
-}
-
 function supportsThinkingLevel(
   provider: string | null | undefined,
   model: string | null | undefined,
@@ -272,11 +262,6 @@ function supportsThinkingLevel(
   return resolveThinkingProfile({ provider, model, catalog }).levels.some(
     (entry) => entry.id === level,
   );
-}
-
-/** Return whether provider/model supports the xhigh thinking level. */
-export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  return supportsThinkingLevel(provider, model, "xhigh");
 }
 
 /** List thinking level ids supported by provider/model. */

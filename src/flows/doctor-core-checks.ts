@@ -13,7 +13,10 @@ import {
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
-import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
+import {
+  disableUnavailableSkillsInConfig,
+  formatMissingSkillSummary,
+} from "../commands/doctor-skills-core.js";
 import {
   detectUiProtocolFreshnessIssues,
   uiProtocolFreshnessIssueToHealthFinding,
@@ -681,33 +684,6 @@ const browserCheck: HealthCheck = {
   },
 };
 
-const workspaceStatusCheck: HealthCheck = {
-  id: "core/doctor/workspace-status",
-  kind: "core",
-  description: "Workspace directory exists and has no legacy duplicates.",
-  source: "doctor",
-  async detect(ctx) {
-    const { detectLegacyWorkspaceDirs } = await loadDoctorWorkspaceModule();
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-    const legacy = detectLegacyWorkspaceDirs({ workspaceDir });
-    if (legacy.legacyDirs.length === 0) {
-      return [];
-    }
-    return [
-      {
-        checkId: "core/doctor/workspace-status",
-        severity: "info",
-        message: `Detected ${legacy.legacyDirs.length} legacy workspace director${
-          legacy.legacyDirs.length === 1 ? "y" : "ies"
-        } alongside the active workspace.`,
-        path: workspaceDir,
-        fixHint:
-          "Inspect the legacy directories and migrate or remove them; see `openclaw doctor` for the detailed migration prompt.",
-      },
-    ];
-  },
-};
-
 function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
   return {
     id: "core/doctor/skills-readiness",
@@ -964,6 +940,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
 
 let registered = false;
 
+/** @deprecated Core doctor flows use ordered doctor contributions; keep this only for SDK compatibility. */
 export function registerCoreHealthChecks(): void {
   if (registered) {
     return;
@@ -985,7 +962,6 @@ export function createCoreHealthChecks(
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
-    workspaceStatusCheck,
     createSkillsReadinessCheck(deps),
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
@@ -993,23 +969,3 @@ export function createCoreHealthChecks(
 }
 
 export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
-
-function formatMissingSkillSummary(skill: SkillStatusEntry): string {
-  const missing: string[] = [];
-  if (skill.missing.bins.length > 0) {
-    missing.push(`bins: ${skill.missing.bins.join(", ")}`);
-  }
-  if (skill.missing.anyBins.length > 0) {
-    missing.push(`any bins: ${skill.missing.anyBins.join(", ")}`);
-  }
-  if (skill.missing.env.length > 0) {
-    missing.push(`env: ${skill.missing.env.join(", ")}`);
-  }
-  if (skill.missing.config.length > 0) {
-    missing.push(`config: ${skill.missing.config.join(", ")}`);
-  }
-  if (skill.missing.os.length > 0) {
-    missing.push(`os: ${skill.missing.os.join(", ")}`);
-  }
-  return missing.join("; ") || "unknown requirement";
-}

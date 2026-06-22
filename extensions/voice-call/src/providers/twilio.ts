@@ -156,10 +156,6 @@ export class TwilioProvider implements VoiceCallProvider {
     this.currentPublicUrl = url;
   }
 
-  getPublicUrl(): string | null {
-    return this.currentPublicUrl;
-  }
-
   setTTSProvider(provider: TelephonyTtsProvider): void {
     this.ttsProvider = provider;
   }

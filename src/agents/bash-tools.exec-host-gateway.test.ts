@@ -1495,6 +1495,138 @@ EOF`,
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["telegram"],
+    ["slack"],
+    ["discord"],
+    ["signal"],
+    ["whatsapp"],
+    ["imessage"],
+    ["matrix"],
+    ["googlechat"],
+    ["qqbot"],
+  ])(
+    "waits inline for native chat approval (%s) so the exec tool returns real output (issue #93918)",
+    async (turnSourceChannel) => {
+      resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+      createExecApprovalDecisionStateMock.mockReturnValue({
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+      });
+
+      const result = await runGatewayAllowlist({
+        command: "find . -maxdepth 1",
+        turnSourceChannel,
+      });
+
+      expect(result.pendingResult).toBeUndefined();
+      expect(result.deniedResult).toBeUndefined();
+      expect(result.allowWithoutEnforcedCommand).toBe(true);
+      expect(runExecProcessMock).not.toHaveBeenCalled();
+      expect(buildExecApprovalFollowupTargetMock).not.toHaveBeenCalled();
+      expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["telegram"],
+    ["slack"],
+    ["discord"],
+    ["signal"],
+    ["whatsapp"],
+    ["imessage"],
+    ["matrix"],
+    ["googlechat"],
+    ["qqbot"],
+  ])(
+    "returns native chat approval denials (%s) as the foreground tool result (issue #93918)",
+    async (turnSourceChannel) => {
+      resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
+      createExecApprovalDecisionStateMock.mockReturnValue({
+        baseDecision: { timedOut: false },
+        approvedByAsk: false,
+        deniedReason: "user-denied",
+      });
+
+      const result = await runGatewayAllowlist({
+        command: "find . -maxdepth 1",
+        turnSourceChannel,
+      });
+
+      expect(result.pendingResult).toBeUndefined();
+      expect(result.deniedResult?.details.status).toBe("failed");
+      expect(result.deniedResult?.content[0]).toEqual(
+        expect.objectContaining({
+          text: "Exec denied (gateway id=req-1, user-denied): find . -maxdepth 1",
+        }),
+      );
+      expect(runExecProcessMock).not.toHaveBeenCalled();
+      expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the fire-and-forget path for channels without native approval clients", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        aggregated: "done",
+      }),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
+    expect(runExecProcessMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the fire-and-forget path for headless cron approval followups", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        aggregated: "done",
+      }),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "telegram",
+      approvalFollowupMode: "agent",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
+    expect(requireBuildFollowupTargetInput(0).direct).toBe(false);
+  });
+
   it("returns webchat approval denials as the foreground tool result", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
     createExecApprovalDecisionStateMock.mockReturnValue({

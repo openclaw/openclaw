@@ -919,5 +919,3 @@ export function closePluginStateDatabase(): void {
   cachedDatabase = null;
   closeOpenClawStateDatabase();
 }
-
-export const closePluginStateSqliteStore = closePluginStateDatabase;

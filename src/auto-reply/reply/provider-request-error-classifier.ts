@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 /** Provider request error classes that get a specialized user-facing reply. */
 export type ProviderRequestErrorCode =
   | "provider_conversation_state_error"
+  | "provider_internal_error"
   | "provider_rate_limit_or_quota_error";
 
 /** Structured provider error classification for reply failure handling. */
@@ -20,6 +21,9 @@ export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
 
 export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
+
+export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
+  "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 
 /** Classifies provider request failures that are actionable for users. */
 export function classifyProviderRequestError(
@@ -40,6 +44,13 @@ export function classifyProviderRequestError(
     return {
       code: "provider_conversation_state_error",
       userMessage: PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+      technicalMessage,
+    };
+  }
+  if (isProviderInternalErrorMessage(technicalMessage)) {
+    return {
+      code: "provider_internal_error",
+      userMessage: PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
       technicalMessage,
     };
   }
@@ -66,6 +77,16 @@ function isGenericProviderRuntimeErrorMessage(message: string): boolean {
   return (
     lower.includes("an error occurred while processing your request") ||
     lower.includes("something went wrong while processing your request")
+  );
+}
+
+function isProviderInternalErrorMessage(message: string): boolean {
+  const lower = normalizeLowercaseStringOrEmpty(message);
+  return (
+    lower.includes("the ai service returned an internal error") ||
+    lower.includes("provider returned an internal error") ||
+    (isGenericProviderRuntimeErrorMessage(message) &&
+      (lower.includes("server_error") || lower.includes("internal error")))
   );
 }
 

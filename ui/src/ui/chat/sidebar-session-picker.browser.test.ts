@@ -1,6 +1,6 @@
 // Control UI tests cover sidebar session picker layering and interaction.
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -12,7 +12,7 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
-let browser: Browser;
+const pageBrowsers = new WeakMap<Page, Browser>();
 
 function readUiCss(): string {
   const files = [
@@ -251,11 +251,37 @@ async function openSidebarSessionPickerFixture(
   height: number,
   opts: { sidebarOpen?: boolean; workspaceRail?: boolean } = {},
 ): Promise<Page> {
-  const page = await browser.newPage({ viewport: { width, height } });
-  await page.setContent(
-    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sidebarSessionPickerHtml(opts)}</body></html>`,
-  );
-  return page;
+  const page = await openBrowserPage(width, height);
+  try {
+    await page.setContent(
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sidebarSessionPickerHtml(opts)}</body></html>`,
+    );
+    return page;
+  } catch (error) {
+    await closeBrowserPage(page);
+    throw error;
+  }
+}
+
+async function openBrowserPage(width: number, height: number): Promise<Page> {
+  const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  let page: Page | undefined;
+  try {
+    page = await browser.newPage({ viewport: { width, height } });
+    pageBrowsers.set(page, browser);
+    return page;
+  } catch (error) {
+    await page?.close().catch(() => {});
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function closeBrowserPage(page: Page): Promise<void> {
+  const browser = pageBrowsers.get(page);
+  pageBrowsers.delete(page);
+  await page.close().catch(() => {});
+  await browser?.close().catch(() => {});
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -267,14 +293,6 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(metrics.html).toBeLessThanOrEqual(metrics.viewport + 1);
   expect(metrics.body).toBeLessThanOrEqual(metrics.viewport + 1);
 }
-
-beforeAll(async () => {
-  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-});
-
-afterAll(async () => {
-  await browser.close();
-});
 
 describeBrowserLayout("sidebar session picker browser layout", () => {
   it("keeps the collapsed sidebar session picker interactive above the desktop workbench when the workspace rail is visible", async () => {
@@ -329,7 +347,7 @@ describeBrowserLayout("sidebar session picker browser layout", () => {
         .poll(() => page.evaluate(() => document.body.dataset.clickedSession ?? ""))
         .toBe("dashboard-session-12");
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -368,7 +386,7 @@ describeBrowserLayout("sidebar session picker browser layout", () => {
       expect(boxes.sidebar.left).toBeGreaterThanOrEqual(boxes.main.left - 1);
       expect(boxes.sidebar.width).toBeGreaterThanOrEqual(300);
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 });
