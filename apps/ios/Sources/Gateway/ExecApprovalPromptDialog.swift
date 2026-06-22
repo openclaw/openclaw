@@ -2,11 +2,14 @@ import SwiftUI
 
 private struct ExecApprovalPromptDialogModifier: ViewModifier {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
+    let suppressedApprovalID: String?
 
     func body(content: Content) -> some View {
         content
             .overlay {
-                if let prompt = self.appModel.pendingExecApprovalPrompt {
+                if let prompt = self.appModel.pendingExecApprovalPrompt,
+                   prompt.id != self.suppressedApprovalID
+                {
                     ZStack {
                         Color.black.opacity(0.38)
                             .ignoresSafeArea()
@@ -188,7 +191,7 @@ private struct ExecApprovalPromptMetadataRow: View {
 }
 
 extension View {
-    func execApprovalPromptDialog() -> some View {
-        self.modifier(ExecApprovalPromptDialogModifier())
+    func execApprovalPromptDialog(suppressedApprovalID: String? = nil) -> some View {
+        self.modifier(ExecApprovalPromptDialogModifier(suppressedApprovalID: suppressedApprovalID))
     }
 }
