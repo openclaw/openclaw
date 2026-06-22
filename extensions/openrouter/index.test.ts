@@ -1251,28 +1251,25 @@ describe("openrouter provider hooks", () => {
     ]);
   });
 
-  it("truncates OpenRouter models array to max 4 entries (primary + 3 fallbacks)", async () => {
+  it("passes through all models without client-side truncation", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const patch = provider.extraParamsForTransport?.({
-      provider: "openrouter",
-      modelId: "openrouter/auto",
-      extraParams: {
-        models: [
-          "openrouter/auto",
-          "anthropic/claude-sonnet-4",
-          "google/gemini-2.5-flash",
-          "deepseek/deepseek-v4-pro",
-          "meta-llama/llama-4-maverick",
-        ],
-      },
-    } as never)?.patch;
-
-    expect(patch?.models).toEqual([
+    const fiveModels = [
       "openrouter/auto",
       "anthropic/claude-sonnet-4",
       "google/gemini-2.5-flash",
       "deepseek/deepseek-v4-pro",
-    ]);
+      "meta-llama/llama-4-maverick",
+    ];
+    const patch = provider.extraParamsForTransport?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {
+        models: fiveModels,
+      },
+    } as never)?.patch;
+
+    // No client-side truncation — OpenRouter enforces limits server-side
+    expect(patch?.models).toEqual(fiveModels);
   });
 
   it("prefers extraParams models over provider config models", async () => {
@@ -1337,6 +1334,76 @@ describe("openrouter provider hooks", () => {
       "openrouter/auto",
       "anthropic/claude-sonnet-4",
     ]);
+  });
+
+  it("does not forward non-array models from extraParams into the patch", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {
+        models: "single-string-model",
+        someOtherParam: "preserved",
+      },
+    } as never)?.patch;
+
+    expect(patch?.models).toBeUndefined();
+    expect(patch?.someOtherParam).toBe("single-string-model");
+  });
+
+  it("does not forward null models from extraParams into the patch", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {
+        models: null,
+        someOtherParam: "preserved",
+      },
+    } as never)?.patch;
+
+    expect(patch?.models).toBeUndefined();
+    expect(patch?.someOtherParam).toBe("preserved");
+  });
+
+  it("does not forward object models from extraParams into the patch", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {
+        models: { foo: "bar" },
+      },
+    } as never)?.patch;
+
+    expect(patch?.models).toBeUndefined();
+  });
+
+  it("prefers modelParams.models over providerParams.models", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      config: {
+        models: {
+          providers: {
+            openrouter: {
+              params: {
+                models: ["google/gemini-2.5-flash"],
+              },
+            },
+          },
+        },
+      },
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      model: {
+        params: {
+          models: ["xiaomi/mimo-v2.5", "deepseek/deepseek-v4-pro"],
+        },
+      },
+      extraParams: {},
+    } as never)?.patch;
+
+    expect(patch?.models).toEqual(["xiaomi/mimo-v2.5", "deepseek/deepseek-v4-pro"]);
   });
 
   it("keeps OpenRouter Anthropic prefill when reasoning is disabled or the route is custom", async () => {

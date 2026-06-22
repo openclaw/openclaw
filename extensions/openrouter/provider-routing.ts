@@ -19,9 +19,6 @@ type OpenRouterExtraParamsContext = {
 
 const BLOCKED_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
-/** Maximum number of fallback models allowed by OpenRouter's models array. */
-const OPENROUTER_MAX_FALLBACK_MODELS = 3;
-
 function sanitizeJsonLikeValue(value: unknown): unknown {
   if (value === undefined) {
     return undefined;
@@ -96,8 +93,10 @@ function resolveOpenRouterModelsArray(params: {
     return undefined;
   }
 
-  // OpenRouter allows at most 3 fallback entries (primary + up to 3 fallbacks).
-  return models.slice(0, OPENROUTER_MAX_FALLBACK_MODELS + 1);
+  // Pass through all valid models — OpenRouter applies its own limits
+  // server-side; adding a client-side cap silently drops configured
+  // fallback candidates without a documented contract.
+  return models;
 }
 
 export function resolveOpenRouterExtraParamsForTransport(
@@ -118,13 +117,24 @@ export function resolveOpenRouterExtraParamsForTransport(
   if (!providerConfigParams && !modelParams && !providerRouting && !modelsArray) {
     return undefined;
   }
-  return {
-    patch: {
-      ...providerConfigParams,
-      ...modelParams,
-      ...ctx.extraParams,
-      ...(providerRouting ? { provider: providerRouting } : {}),
-      ...(modelsArray ? { models: modelsArray } : {}),
-    },
+  // Start with merged params. Strip raw `models` from extraParams to prevent
+  // non-array values (null, object, string, etc.) from leaking into the patch.
+  const patch: Record<string, unknown> = {
+    ...providerConfigParams,
+    ...modelParams,
+    ...Object.fromEntries(
+      Object.entries(ctx.extraParams).filter(([k]) => k !== "models"),
+    ),
+    ...(providerRouting ? { provider: providerRouting } : {}),
   };
+  // When a valid models array was resolved, inject it as the sole source of
+  // truth. Otherwise explicitly remove any raw `models` that leaked through
+  // from providerConfigParams or modelParams — invalid values must not be
+  // forwarded to OpenRouter.
+  if (modelsArray) {
+    patch.models = modelsArray;
+  } else {
+    delete patch.models;
+  }
+  return { patch };
 }
