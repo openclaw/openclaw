@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
+import { resolveLocalUserName } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
 import { resolveUiHourCycleOptions } from "../../lib/format.ts";
@@ -12,7 +13,6 @@ import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import { openExternalUrlSafe } from "../../ui/open-external-url.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import { resolveToolDisplay } from "../../ui/tool-display.ts";
-import { resolveLocalUserName } from "../../ui/user-identity.ts";
 import type {
   MessageContentItem,
   MessageGroup,

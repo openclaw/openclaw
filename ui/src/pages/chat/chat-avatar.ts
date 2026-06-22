@@ -1,12 +1,12 @@
 // Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
-import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
-import type { AssistantIdentity } from "../../ui/assistant-identity.ts";
 import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
-} from "../../ui/user-identity.ts";
+} from "../../app/user-identity.ts";
+import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
+import type { AssistantIdentity } from "../../ui/assistant-identity.ts";
 import {
   assistantAvatarFallbackUrl,
   resolveAssistantTextAvatar,

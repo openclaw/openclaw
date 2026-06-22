@@ -11,8 +11,8 @@ import {
 } from "../app/settings.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "../app/theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "../app/theme.ts";
+import { normalizeLocalUserIdentity } from "../app/user-identity.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import { normalizeLocalUserIdentity } from "./user-identity.ts";
 
 type LocalUserIdentityHost = {
   userName?: string | null;
