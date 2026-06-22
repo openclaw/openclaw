@@ -1542,8 +1542,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
 export async function resolveSessionTranscriptRuntimeReadTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
-  const { agentId, sessionEntry, sessionKey, sessionStore } =
-    resolveSessionTranscriptRuntimeContext(scope);
+  const { agentId, sessionEntry, sessionKey } = resolveSessionTranscriptRuntimeContext(scope);
   if (scope.sessionFile?.trim()) {
     return {
       agentId,
