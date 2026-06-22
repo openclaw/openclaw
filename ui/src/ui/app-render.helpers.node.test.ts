@@ -51,6 +51,21 @@ vi.mock("./app-chat.ts", () => ({
     const [, agentId] = sessionKey.split(":");
     return sessionKey.startsWith("agent:") && agentId ? { agentId } : { agentId: "main" };
   },
+  sidebarRecentSessionsListParamsForSession: (state: unknown, sessionKey: string) => {
+    if ((state as { sidebarRecentSessionsAllAgents?: boolean }).sidebarRecentSessionsAllAgents) {
+      return {};
+    }
+    if (sessionKey === "global") {
+      return {
+        agentId: (state as { assistantAgentId?: string | null }).assistantAgentId ?? "main",
+      };
+    }
+    if (sessionKey === "unknown") {
+      return {};
+    }
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : { agentId: "main" };
+  },
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
   flushChatQueueAfterIdleSessionReconciliation: flushChatQueueAfterIdleSessionReconciliationMock,

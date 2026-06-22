@@ -6,6 +6,7 @@ import {
   flushChatQueueAfterIdleSessionReconciliation,
   refreshChat,
   refreshChatAvatar,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   sidebarRecentSessionsListParamsForSession,
 } from "./app-chat.ts";

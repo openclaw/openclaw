@@ -38,6 +38,34 @@ vi.mock("./app-chat.ts", () => ({
     const [, agentId] = target.sessionKey.split(":");
     return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
   },
+  sidebarRecentSessionsListParamsForSession: (
+    host: { assistantAgentId?: string | null; sidebarRecentSessionsAllAgents?: boolean },
+    sessionKey: string,
+  ) => {
+    if (host.sidebarRecentSessionsAllAgents === true) {
+      return {};
+    }
+    const [, agentId] = sessionKey.split(":");
+    if (sessionKey.startsWith("agent:") && agentId) {
+      return { agentId };
+    }
+    return sessionKey === "global" && host.assistantAgentId
+      ? { agentId: host.assistantAgentId }
+      : {};
+  },
+  sidebarRecentSessionsListParamsForRefreshTarget: (
+    host: { sidebarRecentSessionsAllAgents?: boolean },
+    target: { sessionKey: string; agentId?: string },
+  ) => {
+    if (host.sidebarRecentSessionsAllAgents === true) {
+      return {};
+    }
+    if (target.agentId) {
+      return { agentId: target.agentId };
+    }
+    const [, agentId] = target.sessionKey.split(":");
+    return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
   recordFirstAssistantChatTiming: recordFirstAssistantChatTimingMock,
