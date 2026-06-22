@@ -12,6 +12,7 @@ import {
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
+  isReplyRunAwaitingUserInputForSessionId,
   queueReplyRunMessage,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
@@ -473,6 +474,28 @@ describe("reply run registry", () => {
 
     expect(queueReplyRunMessage("session-running", "hello")).toBe(true);
     expect(queueMessage).toHaveBeenCalledWith("hello");
+  });
+
+  it("reports pending user input only for the active running backend", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-input",
+      resetTriggered: false,
+    });
+
+    operation.attachBackend({
+      kind: "cli",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      isAwaitingUserInput: () => true,
+    });
+
+    expect(isReplyRunAwaitingUserInputForSessionId("session-input")).toBe(false);
+
+    operation.setPhase("running");
+
+    expect(isReplyRunAwaitingUserInputForSessionId("session-input")).toBe(true);
+    expect(isReplyRunAwaitingUserInputForSessionId("session-missing")).toBe(false);
   });
 
   it("aborts compacting runs through the registry compatibility helper", () => {

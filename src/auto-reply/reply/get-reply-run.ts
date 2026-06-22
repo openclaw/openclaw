@@ -91,6 +91,7 @@ import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   abortReplyRunBySessionId,
   isReplyRunActiveForSessionId,
+  isReplyRunAwaitingUserInputForSessionId,
   isReplyRunStreamingForSessionId,
   resolveActiveReplyRunThreadId,
   resolveActiveReplyRunSessionId,
@@ -1123,12 +1124,14 @@ export async function runPreparedReply(
   const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const isHeartbeatRun = opts?.isHeartbeat === true;
+  const activeReplyRunAwaitsUserInput =
+    activeSessionId != null && isReplyRunAwaitingUserInputForSessionId(activeSessionId);
   const shouldSteer =
     !isRoomEvent &&
     activeRunAcceptsCurrentThread &&
     !isHeartbeatRun &&
     !effectiveResetTriggered &&
-    resolvedQueue.mode === "steer";
+    (resolvedQueue.mode === "steer" || activeReplyRunAwaitsUserInput);
   const shouldFollowup =
     !effectiveResetTriggered &&
     ((isRoomEvent && isActive) ||

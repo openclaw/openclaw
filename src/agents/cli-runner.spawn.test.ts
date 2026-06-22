@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing as replyRunTesting,
   createReplyOperation,
+  queueReplyRunMessage,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
 import {
@@ -102,6 +103,7 @@ function buildPreparedCliRunContext(params: {
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
   workspaceDir?: string;
   timeoutMs?: number;
+  onUserInputPrompt?: PreparedCliRunContext["params"]["onUserInputPrompt"];
 }): PreparedCliRunContext {
   // Produces a prepared context without invoking prepare.runtime, keeping spawn
   // assertions focused on execute/runtime behavior.
@@ -173,6 +175,7 @@ function buildPreparedCliRunContext(params: {
       timeoutMs: params.timeoutMs ?? 1_000,
       runId: params.runId,
       skillsSnapshot: params.skillsSnapshot,
+      onUserInputPrompt: params.onUserInputPrompt,
     },
     started: Date.now(),
     workspaceDir,
@@ -1969,6 +1972,222 @@ ${JSON.stringify({
     expect(parsed.response.request_id).toBe("req-allow");
     expect(parsed.response.response.behavior).toBe("allow");
     expect(parsed.response.response.toolUseID).toBe("tool-allow-1");
+  });
+
+  it("bridges Claude AskUserQuestion prompts through reply-run queued messages", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "control_request",
+              request_id: "req-ask",
+              request: {
+                subtype: "can_use_tool",
+                tool_name: "AskUserQuestion",
+                tool_use_id: "tool-ask-1",
+                input: {
+                  questions: [
+                    {
+                      header: "Thread",
+                      question: "Which thread is this?",
+                      options: [
+                        { label: "Realtime Talk", description: "Finish the speaker path" },
+                        { label: "All", description: "Drive all live threads" },
+                      ],
+                      multiSelect: false,
+                    },
+                    {
+                      header: "Modes",
+                      question: "Which modes?",
+                      options: [{ label: "Plan" }, { label: "Build" }],
+                      multiSelect: true,
+                    },
+                  ],
+                },
+              },
+            })}\n`,
+          );
+        } else if (data.includes('"control_response"')) {
+          stdoutListener?.(
+            [
+              JSON.stringify({
+                type: "system",
+                subtype: "init",
+                session_id: "live-ask-user-question",
+              }),
+              JSON.stringify({
+                type: "result",
+                session_id: "live-ask-user-question",
+                result: "ok",
+              }),
+            ].join("\n") + "\n",
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-ask",
+        pid: 3002,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "live-session-ask",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    const onUserInputPrompt = vi.fn(async (payload: { text: string }) => {
+      expect(payload.text).toContain("Claude needs input before continuing.");
+      expect(payload.text).toContain("Which thread is this?");
+      expect(payload.text).toContain("1. Realtime Talk");
+      expect(payload.text).toContain("2. All");
+      expect(payload.text).toContain("Which modes?");
+      expect(queueReplyRunMessage("live-session-ask", "1: 2\n2: 1, 2")).toBe(true);
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-ask-user-question",
+      sessionId: "live-session-ask",
+      sessionKey: "agent:main:main",
+      prompt: "hello",
+      backend: { liveSession: "claude-stdio" },
+      onUserInputPrompt,
+    });
+
+    const result = await executePreparedCliRun({
+      ...context,
+      params: {
+        ...context.params,
+        replyOperation: operation,
+      },
+    });
+
+    expect(result.text).toBe("ok");
+    expect(onUserInputPrompt).toHaveBeenCalledTimes(1);
+    const controlResponse = writes.find((entry) => entry.includes('"control_response"'));
+    expect(controlResponse, "control_response written to stdin").toBeDefined();
+    const parsed = JSON.parse((controlResponse ?? "").trim()) as {
+      response: {
+        request_id: string;
+        response: {
+          behavior: string;
+          toolUseID?: string;
+          updatedInput?: {
+            answers?: Record<string, string>;
+          };
+        };
+      };
+    };
+    expect(parsed.response.request_id).toBe("req-ask");
+    expect(parsed.response.response.behavior).toBe("allow");
+    expect(parsed.response.response.toolUseID).toBe("tool-ask-1");
+    expect(parsed.response.response.updatedInput?.answers?.["Which thread is this?"]).toBe("All");
+    expect(parsed.response.response.updatedInput?.answers?.["Which modes?"]).toBe("Plan, Build");
+    operation.complete();
+  });
+
+  it("denies Claude AskUserQuestion prompts when no reply surface can collect answers", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "control_request",
+              request_id: "req-ask-no-surface",
+              request: {
+                subtype: "can_use_tool",
+                tool_name: "AskUserQuestion",
+                tool_use_id: "tool-ask-no-surface",
+                input: {
+                  questions: [
+                    {
+                      question: "Which mode?",
+                      options: [{ label: "Plan" }, { label: "Build" }],
+                      multiSelect: false,
+                    },
+                  ],
+                },
+              },
+            })}\n`,
+          );
+        } else if (data.includes('"control_response"')) {
+          stdoutListener?.(
+            [
+              JSON.stringify({
+                type: "system",
+                subtype: "init",
+                session_id: "live-ask-no-surface",
+              }),
+              JSON.stringify({
+                type: "result",
+                session_id: "live-ask-no-surface",
+                result: "ok",
+              }),
+            ].join("\n") + "\n",
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-ask-no-surface",
+        pid: 3003,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-ask-no-surface",
+        prompt: "hello",
+        backend: { liveSession: "claude-stdio" },
+      }),
+    );
+
+    expect(result.text).toBe("ok");
+    const controlResponse = writes.find((entry) => entry.includes('"control_response"'));
+    expect(controlResponse, "control_response written to stdin").toBeDefined();
+    const parsed = JSON.parse((controlResponse ?? "").trim()) as {
+      response: {
+        request_id: string;
+        response: {
+          behavior: string;
+          decisionClassification: string;
+          message: string;
+        };
+      };
+    };
+    expect(parsed.response.request_id).toBe("req-ask-no-surface");
+    expect(parsed.response.response.behavior).toBe("deny");
+    expect(parsed.response.response.decisionClassification).toBe("user_reject");
+    expect(parsed.response.response.message).toContain("AskUserQuestion");
+    expect(parsed.response.response.message).toContain("plain text");
   });
 
   it("reports Claude live stream progress and keeps native tools fresh while they are running", async () => {

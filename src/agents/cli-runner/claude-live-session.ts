@@ -56,6 +56,8 @@ type ClaudeLiveTurn = {
   activeTools: Map<string, ClaudeLiveActiveTool>;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
   execPermission: ClaudeLiveExecPermission;
+  onUserInputPrompt?: PreparedCliRunContext["params"]["onUserInputPrompt"];
+  pendingUserInput: ClaudeLivePendingUserInput | null;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
 };
@@ -104,6 +106,28 @@ type ClaudeLiveToolUse = {
   toolName: string;
   toolCallId: string;
   paramsSummary?: DiagnosticToolParamsSummary;
+};
+type ClaudeLivePendingUserInput = {
+  resolve: (text: string) => void;
+  reject: (error: unknown) => void;
+};
+type ClaudeLiveAskUserQuestionOption = {
+  raw: Record<string, unknown>;
+  label: string;
+  description?: string;
+  preview?: string;
+};
+type ClaudeLiveAskUserQuestion = {
+  raw: Record<string, unknown>;
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: ClaudeLiveAskUserQuestionOption[];
+};
+type ClaudeLiveAskUserQuestionUpdatedInput = {
+  questions: Record<string, unknown>[];
+  answers?: Record<string, string>;
+  response?: string;
 };
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -381,6 +405,42 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
   }
 }
 
+function pauseClaudeLiveNoOutputTimer(turn: ClaudeLiveTurn): void {
+  if (!turn.noOutputTimer) {
+    return;
+  }
+  clearTimeout(turn.noOutputTimer);
+  turn.noOutputTimer = null;
+}
+
+function createPendingClaudeLiveUserInput(turn: ClaudeLiveTurn): Promise<string> {
+  if (turn.pendingUserInput) {
+    return Promise.reject(new Error("Claude CLI is already waiting for user input."));
+  }
+  return new Promise<string>((resolve, reject) => {
+    turn.pendingUserInput = { resolve, reject };
+  });
+}
+
+function answerPendingClaudeLiveUserInput(turn: ClaudeLiveTurn, text: string): boolean {
+  const pending = turn.pendingUserInput;
+  if (!pending) {
+    return false;
+  }
+  turn.pendingUserInput = null;
+  pending.resolve(text);
+  return true;
+}
+
+function rejectPendingClaudeLiveUserInput(turn: ClaudeLiveTurn, error: unknown): void {
+  const pending = turn.pendingUserInput;
+  if (!pending) {
+    return;
+  }
+  turn.pendingUserInput = null;
+  pending.reject(error);
+}
+
 function clearDrainTimer(session: ClaudeLiveSession): void {
   if (session.drainTimer) {
     clearTimeout(session.drainTimer);
@@ -397,6 +457,10 @@ function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
     `claude live session turn: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} rawLines=${turn.rawLines.length} ${formatCliBackendOutputDigest(output.text)}`,
   );
   completeActiveClaudeLiveTools(turn);
+  rejectPendingClaudeLiveUserInput(
+    turn,
+    new Error("Claude CLI completed before user input was answered."),
+  );
   clearTurnTimers(turn);
   turn.streamingParser.finish();
   session.currentTurn = null;
@@ -414,6 +478,7 @@ function failTurn(session: ClaudeLiveSession, error: unknown): void {
     `claude live session turn failed: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${errorKind}`,
   );
   failActiveClaudeLiveTools(turn, error);
+  rejectPendingClaudeLiveUserInput(turn, error);
   clearTurnTimers(turn);
   turn.streamingParser.finish();
   session.currentTurn = null;
@@ -735,6 +800,212 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function readTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function readClaudeLiveControlToolName(request: Record<string, unknown>): string | undefined {
+  return readTrimmedString(request.tool_name) ?? readTrimmedString(request.toolName);
+}
+
+function readClaudeLiveControlToolUseId(request: Record<string, unknown>): string | undefined {
+  return readTrimmedString(request.tool_use_id) ?? readTrimmedString(request.toolUseID);
+}
+
+function readClaudeAskUserQuestionOptions(value: unknown): ClaudeLiveAskUserQuestionOption[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const options: ClaudeLiveAskUserQuestionOption[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const label = readTrimmedString(entry.label);
+    if (!label) {
+      continue;
+    }
+    const description = readTrimmedString(entry.description);
+    const preview = readTrimmedString(entry.preview);
+    options.push({
+      raw: entry,
+      label,
+      ...(description ? { description } : {}),
+      ...(preview ? { preview } : {}),
+    });
+  }
+  return options;
+}
+
+function readClaudeAskUserQuestions(input: unknown): ClaudeLiveAskUserQuestion[] {
+  if (!isRecord(input) || !Array.isArray(input.questions)) {
+    return [];
+  }
+  const questions: ClaudeLiveAskUserQuestion[] = [];
+  for (const entry of input.questions) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const question = readTrimmedString(entry.question);
+    const options = readClaudeAskUserQuestionOptions(entry.options);
+    if (!question || options.length === 0) {
+      continue;
+    }
+    const header = readTrimmedString(entry.header);
+    questions.push({
+      raw: entry,
+      question,
+      ...(header ? { header } : {}),
+      multiSelect: entry.multiSelect === true,
+      options,
+    });
+  }
+  return questions;
+}
+
+function formatClaudePromptLine(value: string): string {
+  return value.replace(/\r\n?/g, "\n").trim();
+}
+
+function formatClaudeAskUserQuestionPrompt(questions: ClaudeLiveAskUserQuestion[]): string {
+  const lines = ["Claude needs input before continuing."];
+  if (questions.length > 1) {
+    lines.push("", "Reply one line per question, for example `1: 2` or `Format: Detailed`.");
+  }
+  for (const [questionIndex, question] of questions.entries()) {
+    const questionLabel =
+      questions.length > 1
+        ? `${questionIndex + 1}. `
+        : question.header
+          ? `${question.header}: `
+          : "";
+    const multiQuestionHeader =
+      questions.length > 1 && question.header ? `${question.header}: ` : "";
+    lines.push(
+      "",
+      `${questionLabel}${multiQuestionHeader}${formatClaudePromptLine(question.question)}`,
+    );
+    for (const [optionIndex, option] of question.options.entries()) {
+      const description = option.description
+        ? ` - ${formatClaudePromptLine(option.description)}`
+        : "";
+      lines.push(`  ${optionIndex + 1}. ${formatClaudePromptLine(option.label)}${description}`);
+      if (option.preview) {
+        lines.push(`     Preview: ${formatClaudePromptLine(option.preview)}`);
+      }
+    }
+    lines.push(
+      question.multiSelect
+        ? "  Reply with option numbers or labels separated by commas, or type a custom answer."
+        : "  Reply with an option number or label, or type a custom answer.",
+    );
+  }
+  return lines.join("\n");
+}
+
+function selectClaudeAskUserQuestionOptionLabel(
+  question: ClaudeLiveAskUserQuestion,
+  token: string,
+): string | undefined {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const numeric = /^(\d+)[.)]?$/.exec(trimmed);
+  if (numeric) {
+    const index = Number.parseInt(numeric[1] ?? "", 10) - 1;
+    return question.options[index]?.label;
+  }
+  const normalized = trimmed.toLowerCase();
+  return question.options.find((option) => option.label.toLowerCase() === normalized)?.label;
+}
+
+function answerClaudeAskUserQuestion(
+  question: ClaudeLiveAskUserQuestion,
+  answerText: string,
+): string {
+  const trimmed = answerText.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (!question.multiSelect) {
+    return selectClaudeAskUserQuestionOptionLabel(question, trimmed) ?? trimmed;
+  }
+  const selectedLabels = trimmed
+    .split(",")
+    .map((token) => selectClaudeAskUserQuestionOptionLabel(question, token))
+    .filter((label): label is string => Boolean(label));
+  if (selectedLabels.length > 0) {
+    return selectedLabels.join(", ");
+  }
+  return trimmed;
+}
+
+function readExplicitClaudeAskUserAnswer(
+  question: ClaudeLiveAskUserQuestion,
+  questionIndex: number,
+  answerText: string,
+): string | undefined {
+  for (const rawLine of answerText.split(/\r?\n/g)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    const indexed = /^(\d+)\s*[:.)-]\s*(.+)$/.exec(line);
+    if (indexed && Number.parseInt(indexed[1] ?? "", 10) === questionIndex + 1) {
+      return indexed[2]?.trim() || undefined;
+    }
+    for (const candidatePrefix of [question.header, question.question]) {
+      const prefix = candidatePrefix?.trim();
+      if (!prefix) {
+        continue;
+      }
+      const normalizedPrefix = prefix.toLowerCase();
+      const normalizedLine = line.toLowerCase();
+      if (
+        normalizedLine.startsWith(`${normalizedPrefix}:`) ||
+        normalizedLine.startsWith(`${normalizedPrefix}=`)
+      ) {
+        return line.slice(prefix.length + 1).trim() || undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+function buildClaudeAskUserQuestionUpdatedInput(
+  questions: ClaudeLiveAskUserQuestion[],
+  answerText: string,
+): ClaudeLiveAskUserQuestionUpdatedInput {
+  const rawQuestions = questions.map((question) => question.raw);
+  const trimmed = answerText.trim();
+  if (questions.length === 1) {
+    const question = questions[0];
+    return {
+      questions: rawQuestions,
+      answers: {
+        [question.question]: answerClaudeAskUserQuestion(question, trimmed),
+      },
+    };
+  }
+  const answers: Record<string, string> = {};
+  for (const [index, question] of questions.entries()) {
+    const answer = readExplicitClaudeAskUserAnswer(question, index, trimmed);
+    if (!answer) {
+      return { questions: rawQuestions, response: trimmed };
+    }
+    answers[question.question] = answerClaudeAskUserQuestion(question, answer);
+  }
+  return {
+    questions: rawQuestions,
+    answers,
+  };
+}
+
 function normalizePositiveInt(
   value: number | undefined,
   fallback: number,
@@ -852,6 +1123,88 @@ function writeClaudeLiveControlResponse(session: ClaudeLiveSession, response: un
   stdin.write(`${JSON.stringify(response)}\n`);
 }
 
+function writeClaudeLiveControlDeny(
+  session: ClaudeLiveSession,
+  requestId: string,
+  message: string,
+): void {
+  writeClaudeLiveControlResponse(session, {
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: requestId,
+      response: {
+        behavior: "deny",
+        decisionClassification: "user_reject",
+        message,
+      },
+    },
+  });
+}
+
+async function handleClaudeLiveAskUserQuestionControlRequest(params: {
+  session: ClaudeLiveSession;
+  turn: ClaudeLiveTurn;
+  request: Record<string, unknown>;
+  requestId: string;
+}): Promise<void> {
+  const { session, turn, request, requestId } = params;
+  const toolUseId = readClaudeLiveControlToolUseId(request);
+  const questions = readClaudeAskUserQuestions(request.input);
+  if (questions.length === 0) {
+    writeClaudeLiveControlDeny(
+      session,
+      requestId,
+      "OpenClaw could not read Claude's question payload. Ask the user directly in plain text.",
+    );
+    return;
+  }
+  const onUserInputPrompt = turn.onUserInputPrompt;
+  if (!onUserInputPrompt) {
+    writeClaudeLiveControlDeny(
+      session,
+      requestId,
+      "OpenClaw cannot render Claude AskUserQuestion prompts on this surface. Ask the user directly in plain text and wait for their reply.",
+    );
+    return;
+  }
+  let answerPromise: Promise<string> | undefined;
+  try {
+    pauseClaudeLiveNoOutputTimer(turn);
+    answerPromise = createPendingClaudeLiveUserInput(turn);
+    await onUserInputPrompt({ text: formatClaudeAskUserQuestionPrompt(questions) });
+    const answerText = await answerPromise;
+    if (session.currentTurn !== turn || session.closing) {
+      return;
+    }
+    writeClaudeLiveControlResponse(session, {
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: requestId,
+        response: {
+          behavior: "allow",
+          ...(toolUseId ? { toolUseID: toolUseId } : {}),
+          updatedInput: buildClaudeAskUserQuestionUpdatedInput(questions, answerText),
+        },
+      },
+    });
+    resetNoOutputTimer(session);
+  } catch (error) {
+    answerPromise?.catch(() => undefined);
+    rejectPendingClaudeLiveUserInput(turn, error);
+    if (session.currentTurn !== turn || session.closing) {
+      return;
+    }
+    writeClaudeLiveControlDeny(
+      session,
+      requestId,
+      "OpenClaw could not collect an answer for Claude's question. Ask the user directly in plain text.",
+    );
+    resetNoOutputTimer(session);
+  }
+}
+
 function handleClaudeLiveControlRequest(
   session: ClaudeLiveSession,
   turn: ClaudeLiveTurn,
@@ -868,7 +1221,12 @@ function handleClaudeLiveControlRequest(
   if (!requestId) {
     return;
   }
-  const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
+  const toolName = readClaudeLiveControlToolName(request);
+  if (toolName === "AskUserQuestion") {
+    void handleClaudeLiveAskUserQuestionControlRequest({ session, turn, request, requestId });
+    return;
+  }
+  const toolUseId = readClaudeLiveControlToolUseId(request);
   const allowed = turn.execPermission.security === "full" && turn.execPermission.ask === "off";
   writeClaudeLiveControlResponse(session, {
     type: "control_response",
@@ -1179,6 +1537,8 @@ function createTurn(params: {
       onCommentaryText: params.onCommentaryText,
     }),
     execPermission: params.execPermission,
+    onUserInputPrompt: params.context.params.onUserInputPrompt,
+    pendingUserInput: null,
     resolve: params.resolve,
     reject: params.reject,
   };
@@ -1384,6 +1744,18 @@ export async function runClaudeLiveSessionTurn(params: {
         kind: "cli",
         cancel: abort,
         isStreaming: () => !replyBackendCompleted,
+        isAwaitingUserInput: () => liveSession.currentTurn?.pendingUserInput != null,
+        queueMessage: async (text) => {
+          const turn = liveSession.currentTurn;
+          if (turn && answerPendingClaudeLiveUserInput(turn, text)) {
+            return;
+          }
+          try {
+            await writeTurnInput(liveSession, text);
+          } catch (error) {
+            closeLiveSession(liveSession, "abort", error);
+          }
+        },
       }
     : undefined;
   params.context.params.abortSignal?.addEventListener("abort", abort, { once: true });
