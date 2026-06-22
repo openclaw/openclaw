@@ -96,9 +96,15 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
       )
     : [currentSessionId];
   const targets: SessionTranscriptReadTarget[] = [];
+  const ancestorTargets: SessionTranscriptReadTarget[] = [];
+  const currentTargets: SessionTranscriptReadTarget[] = [];
   const seenFiles = new Set<string>();
-  const pushTarget = (target: SessionTranscriptReadTarget, limit: number): boolean => {
-    if (targets.length >= limit) {
+  const pushTarget = (
+    collection: SessionTranscriptReadTarget[],
+    target: SessionTranscriptReadTarget,
+    limit: number,
+  ): boolean => {
+    if (collection.length >= limit) {
       return false;
     }
     const resolved = target.sessionFile ? path.resolve(target.sessionFile) : undefined;
@@ -108,33 +114,37 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
     if (resolved) {
       seenFiles.add(resolved);
     }
-    targets.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
-    return targets.length < limit;
+    collection.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
+    return collection.length < limit;
   };
 
   for (const familySessionId of sessionIds) {
+    const isCurrentSession = familySessionId === currentSessionId;
+    const targetCollection = params.includeFamily
+      ? isCurrentSession
+        ? currentTargets
+        : ancestorTargets
+      : targets;
     const targetLimit =
-      params.includeFamily && familySessionId !== currentSessionId
-        ? MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS - 2
-        : MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS;
-    if (targets.length >= targetLimit && familySessionId !== currentSessionId) {
-      continue;
-    }
+      params.includeFamily && !isCurrentSession
+        ? Number.MAX_SAFE_INTEGER
+        : params.includeFamily
+          ? RESERVED_CURRENT_SESSION_FAMILY_TARGETS
+          : MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS;
     const archivedFiles = params.includeFamily
       ? await resolveSessionTranscriptResetArchiveCandidatesAsync(
           familySessionId,
           params.storePath,
-          familySessionId === currentSessionId ? params.entry?.sessionFile : undefined,
+          isCurrentSession ? params.entry?.sessionFile : undefined,
           params.agentId,
         )
       : [];
     const activeFile =
-      params.includeFamily || familySessionId !== currentSessionId
+      params.includeFamily || !isCurrentSession
         ? resolveFirstExistingTranscriptCandidate({
             sessionId: familySessionId,
             storePath: params.storePath,
-            sessionFile:
-              familySessionId === currentSessionId ? params.entry?.sessionFile : undefined,
+            sessionFile: isCurrentSession ? params.entry?.sessionFile : undefined,
             agentId: params.agentId,
           })
         : await resolveSessionHistoryTranscriptPathAsync(
@@ -147,8 +157,9 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
             },
           );
 
-    if (!params.includeFamily && familySessionId === currentSessionId && !activeFile) {
+    if (!params.includeFamily && isCurrentSession && !activeFile) {
       pushTarget(
+        targetCollection,
         {
           sessionId: familySessionId,
           ...(params.entry?.sessionFile ? { sessionFile: params.entry.sessionFile } : {}),
@@ -162,12 +173,13 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
     }
 
     const archiveTargetLimit =
-      params.includeFamily && familySessionId === currentSessionId && activeFile
+      params.includeFamily && isCurrentSession && activeFile
         ? Math.max(0, targetLimit - 1)
         : targetLimit;
     for (const file of archivedFiles) {
       if (
         !pushTarget(
+          targetCollection,
           {
             sessionId: familySessionId,
             sessionFile: file,
@@ -181,17 +193,26 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
     }
     if (activeFile) {
       pushTarget(
+        targetCollection,
         {
           sessionId: familySessionId,
           sessionFile: activeFile,
-          applySessionStartedAtFilter: familySessionId === currentSessionId,
-          ...(familySessionId === currentSessionId ? { isCurrentActive: true } : {}),
+          applySessionStartedAtFilter: isCurrentSession,
+          ...(isCurrentSession ? { isCurrentActive: true } : {}),
         },
         targetLimit,
       );
     }
   }
-  return params.includeFamily
-    ? orderFamilyReadTargetsForOutput(targets, currentSessionId)
-    : targets;
+  if (params.includeFamily) {
+    const ancestorTargetLimit = Math.max(
+      0,
+      MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS - RESERVED_CURRENT_SESSION_FAMILY_TARGETS,
+    );
+    return orderFamilyReadTargetsForOutput(
+      [...ancestorTargets.slice(-ancestorTargetLimit), ...currentTargets],
+      currentSessionId,
+    );
+  }
+  return targets;
 }

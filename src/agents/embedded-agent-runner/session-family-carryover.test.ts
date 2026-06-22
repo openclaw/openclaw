@@ -301,6 +301,90 @@ describe("session family carryover", () => {
     });
   });
 
+  it("keeps newer ancestors when older retained ancestors have multiple archives", async () => {
+    const dir = makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const currentSessionId = "current-multi-archive-carryover";
+    const activeSessionFile = path.join(dir, currentSessionId + ".jsonl");
+    const ancestorSessionIds = Array.from(
+      { length: 35 },
+      (_, index) => `ancestor-multi-archive-${String(index).padStart(2, "0")}`,
+    );
+    for (const [index, sessionId] of ancestorSessionIds.entries()) {
+      writeTranscript(path.join(dir, sessionId + ".jsonl"), [
+        {
+          type: "compaction",
+          id: `carryover-${index}`,
+          parentId: null,
+          timestamp: `2026-06-04T00:${String(index).padStart(2, "0")}:00.000Z`,
+          summary: `Multi archive carryover ${index}`,
+          firstKeptEntryId: `msg-${index}`,
+          tokensBefore: 2_000 + index,
+        },
+      ]);
+    }
+
+    const archiveHeavyAncestorId = ancestorSessionIds[5]!;
+    for (let index = 0; index < 35; index += 1) {
+      writeTranscript(
+        path.join(
+          dir,
+          `${archiveHeavyAncestorId}-topic-${String(index).padStart(
+            2,
+            "0",
+          )}.jsonl.reset.2026-06-04T00-${String(index).padStart(2, "0")}-00.000Z`,
+        ),
+        [
+          {
+            type: "session",
+            version: 1,
+            id: archiveHeavyAncestorId,
+            timestamp: "2026-06-04T00:00:00.000Z",
+            cwd: dir,
+          },
+          {
+            type: "compaction",
+            id: `archive-heavy-carryover-${index}`,
+            parentId: null,
+            timestamp: `2026-06-04T00:${String(index).padStart(2, "0")}:30.000Z`,
+            summary: `Old archive-heavy carryover ${index}`,
+            firstKeptEntryId: `archive-msg-${index}`,
+            tokensBefore: 3_000 + index,
+          },
+        ],
+      );
+    }
+    writeTranscript(activeSessionFile, [
+      {
+        type: "compaction",
+        id: "active-carryover",
+        parentId: null,
+        timestamp: "2026-06-04T01:00:00.000Z",
+        summary: "Active current summary should be skipped.",
+        tokensBefore: 9_999,
+      },
+    ]);
+
+    const entry = {
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      usageFamilySessionIds: [...ancestorSessionIds, currentSessionId],
+    } as SessionEntry;
+
+    const carryover = await resolveSessionFamilyCarryoverSummary({
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      storePath,
+      entry,
+    });
+
+    expect(carryover).toMatchObject({
+      role: "compactionSummary",
+      summary: "Multi archive carryover 34",
+      tokensBefore: 2_034,
+    });
+  });
+
   it("ignores newer compaction summaries from off-branch reset ancestors", async () => {
     const dir = makeTempDir();
     const storePath = path.join(dir, "sessions.json");
