@@ -7039,6 +7039,24 @@ public struct DevicePairRemoveParams: Codable, Sendable {
     }
 }
 
+public struct DevicePairRenameParams: Codable, Sendable {
+    public let deviceid: String
+    public let displayname: String
+
+    public init(
+        deviceid: String,
+        displayname: String)
+    {
+        self.deviceid = deviceid
+        self.displayname = displayname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
+        case displayname = "displayName"
+    }
+}
+
 public struct DeviceTokenRotateParams: Codable, Sendable {
     public let deviceid: String
     public let role: String

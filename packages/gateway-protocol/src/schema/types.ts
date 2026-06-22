@@ -281,6 +281,7 @@ export type DevicePairListParams = SchemaType<"DevicePairListParams">;
 export type DevicePairApproveParams = SchemaType<"DevicePairApproveParams">;
 export type DevicePairRejectParams = SchemaType<"DevicePairRejectParams">;
 export type DevicePairRemoveParams = SchemaType<"DevicePairRemoveParams">;
+export type DevicePairRenameParams = SchemaType<"DevicePairRenameParams">;
 export type DeviceTokenRotateParams = SchemaType<"DeviceTokenRotateParams">;
 export type DeviceTokenRevokeParams = SchemaType<"DeviceTokenRevokeParams">;
 export type ChatAbortParams = SchemaType<"ChatAbortParams">;
