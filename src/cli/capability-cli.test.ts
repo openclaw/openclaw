@@ -1628,6 +1628,49 @@ describe("capability cli", () => {
     });
   });
 
+  it("passes input files through to image generation runtime", async () => {
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from(pngBase64, "base64"),
+          mimeType: "image/png",
+          fileName: "provider-output.png",
+        },
+      ],
+    });
+    const tempInput = path.join(os.tmpdir(), `openclaw-image-generate-input-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(pngBase64, "base64"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--file",
+        tempInput,
+        "--prompt",
+        "use this reference image",
+        "--model",
+        "openai/gpt-image-2",
+        "--json",
+      ],
+    });
+
+    const generationCall = firstImageGenerationCall();
+    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
+    expect(generationCall?.prompt).toBe("use this reference image");
+    expect(generationCall?.modelOverride).toBe("openai/gpt-image-2");
+    expect(inputImages).toHaveLength(1);
+    expect(inputImages[0]?.fileName).toBe(path.basename(tempInput));
+    expect(inputImages[0]?.mimeType).toBe("image/png");
+  });
+
   it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
     mocks.generateImage.mockResolvedValue({
       provider: "openai",
@@ -1876,6 +1919,7 @@ describe("capability cli", () => {
 
     expect(firstJsonOutput()?.id).toBe("image.generate");
     expect(firstJsonOutput()?.flags).toEqual([
+      "--file",
       "--prompt",
       "--model",
       "--count",
