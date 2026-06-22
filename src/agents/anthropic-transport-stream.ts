@@ -498,7 +498,14 @@ function convertAnthropicMessages(
         if (block.type === "toolCall") {
           blocks.push({
             type: "tool_use",
-            id: block.id,
+            // Wire-charset guard: Anthropic 400s any tool_use.id outside
+            // ^[a-zA-Z0-9_-]+$. The transform pass only rewrites ids it treats
+            // as cross-model, so a failover-introduced foreign id (e.g. the
+            // openai-responses `call_…|fc_…` composite) can survive to here and
+            // brick the session (#95623). normalizeToolCallId is idempotent and
+            // a no-op for native ids, and deterministic so the paired
+            // tool_result id below scrubs identically.
+            id: normalizeToolCallId(block.id),
             name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
             input: coerceTransportToolCallArguments(block.arguments),
           });
@@ -527,7 +534,9 @@ function convertAnthropicMessages(
       const toolResults: Array<Record<string, unknown>> = [
         {
           type: "tool_result",
-          tool_use_id: toolResult.toolCallId,
+          // Paired with the tool_use.id guard above; same deterministic scrub
+          // keeps a failover composite id matched across the pair (#95623).
+          tool_use_id: normalizeToolCallId(toolResult.toolCallId),
           content: convertContentBlocks(toolResult.content),
           is_error: toolResult.isError,
         },
@@ -540,7 +549,7 @@ function convertAnthropicMessages(
         >;
         toolResults.push({
           type: "tool_result",
-          tool_use_id: nextMsg.toolCallId,
+          tool_use_id: normalizeToolCallId(nextMsg.toolCallId),
           content: convertContentBlocks(nextMsg.content),
           is_error: nextMsg.isError,
         });

@@ -1681,6 +1681,64 @@ describe("anthropic transport stream", () => {
     expect(toolUse.input).toEqual({});
   });
 
+  it("scrubs a failover-introduced composite tool-call id before the Anthropic wire (#95623)", async () => {
+    // A turn served by an openai-responses fallback writes a composite
+    // `call_…|fc_…` id into history. When its recorded provenance looks
+    // same-model as the Anthropic target, the cross-model transform skips
+    // normalization, so the boundary guard at serialization must still scrub
+    // the `|` (which Anthropic 400s) and keep the paired tool_result matched.
+    const compositeId = "call_AbCdEf0123456789|fc_01a7beefc0ffee";
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [
+          { role: "user", content: "look it up" },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: compositeId, name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: compositeId,
+            toolName: "lookup",
+            content: [{ type: "text", text: "42" }],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    const assistantMessage = findRecord(payload.messages, (record) => record.role === "assistant");
+    const toolUse = findRecord(
+      assistantMessage.content,
+      (record) => record.type === "tool_use" && record.name === "lookup",
+    );
+    const wireId = toolUse.id;
+    expect(typeof wireId).toBe("string");
+    expect(wireId as string).not.toContain("|");
+    expect(wireId as string).toMatch(/^[a-zA-Z0-9_-]+$/);
+
+    const userMessage = findRecord(
+      payload.messages,
+      (record) =>
+        record.role === "user" &&
+        Array.isArray(record.content) &&
+        record.content.some((block) => (block as Record<string, unknown>).type === "tool_result"),
+    );
+    const toolResult = findRecord(userMessage.content, (record) => record.type === "tool_result");
+    // Pairing must survive the scrub or Anthropic rejects the unmatched result.
+    expect(toolResult.tool_use_id).toBe(wireId);
+  });
+
   it("replays reasoning_content from compatible Anthropic thinking blocks", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     await runTransportStream(
