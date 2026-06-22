@@ -42,6 +42,7 @@ describe("parseArgs", () => {
   it("rejects missing markdown artifact paths", () => {
     expect(() => parseArgs(["--markdown"])).toThrow("--markdown requires a value");
     expect(() => parseArgs(["--markdown", "--json"])).toThrow("--markdown requires a value");
+    expect(() => parseArgs(["--markdown", "-h"])).toThrow("--markdown requires a value");
     expect(() => parseArgs(["--markdown", ""])).toThrow("--markdown requires a value");
   });
 
@@ -54,6 +55,7 @@ describe("parseArgs", () => {
       asJson: true,
       jsonPath: "report.json",
     });
+    expect(() => parseArgs(["--json", "-h"])).toThrow("Unsupported argument: -h");
   });
 });
 

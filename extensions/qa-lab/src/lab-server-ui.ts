@@ -90,9 +90,12 @@ function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
   return files;
 }
 
-export function resolveUiAssetVersion(overrideDir?: string | null): string | null {
+export function resolveUiAssetVersion(
+  overrideDir?: string | null,
+  repoRoot = process.cwd(),
+): string | null {
   try {
-    const distDir = resolveUiDistDir(overrideDir);
+    const distDir = resolveUiDistDir(overrideDir, repoRoot);
     const indexPath = path.join(distDir, "index.html");
     if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
       return null;

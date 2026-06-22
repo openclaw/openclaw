@@ -27,7 +27,7 @@ function readRestartIntentRow(env: NodeJS.ProcessEnv) {
     db,
     stateDb
       .selectFrom("gateway_restart_intent")
-      .select(["kind", "pid", "reason"])
+      .select(["intent_key", "kind", "pid", "reason"])
       .where("intent_key", "=", "gateway-restart"),
   );
 }
@@ -696,7 +696,10 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
 
       expect(testing.writeRestartIntent(env, 12345, "gateway-restart-bench")).toBe(true);
-      expect(readRestartIntentRow(env)).toMatchObject({
+      const row = readRestartIntentRow(env);
+
+      expect(row).toMatchObject({
+        intent_key: "gateway-restart",
         kind: "gateway-restart",
         pid: 12345,
         reason: "gateway-restart-bench",

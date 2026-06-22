@@ -1904,6 +1904,45 @@ describe("gateway session utils", () => {
   });
 
   test("listAgentsForGateway reports per-agent thinking defaults from the agent model", () => {
+    const resolveDeepSeekThinkingProfile = vi.fn(() => ({
+      levels: [
+        { id: "off" as const },
+        { id: "minimal" as const },
+        { id: "low" as const },
+        { id: "medium" as const },
+        { id: "high" as const },
+        { id: "xhigh" as const },
+      ],
+      defaultLevel: "medium" as const,
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push(
+      {
+        pluginId: "test-minimax",
+        source: "test",
+        provider: {
+          id: "minimax",
+          label: "MiniMax",
+          auth: [],
+          resolveThinkingProfile: () => ({
+            levels: [{ id: "off" }],
+            defaultLevel: "off",
+          }),
+        },
+      },
+      {
+        pluginId: "test-deepseek",
+        source: "test",
+        provider: {
+          id: "deepseek",
+          label: "DeepSeek",
+          auth: [],
+          resolveThinkingProfile: resolveDeepSeekThinkingProfile,
+        },
+      },
+    );
+    setActivePluginRegistry(registry);
+
     const cfg = {
       session: { mainKey: "main" },
       agents: {
@@ -1926,6 +1965,12 @@ describe("gateway session utils", () => {
     const agent = result.agents.find((row) => row.id === "investment-master");
 
     expect(agent?.model).toEqual({ primary: "deepseek/deepseek-v4-flash" });
+    expect(resolveDeepSeekThinkingProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+      }),
+    );
     expect(agent?.thinkingDefault).toBe("xhigh");
     expect(agent?.thinkingLevels?.map((level) => level.id)).toEqual(
       expect.arrayContaining(["off", "minimal", "low", "medium", "high", "xhigh"]),

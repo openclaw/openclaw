@@ -476,6 +476,59 @@ postgres Created
     }
   });
 
+  posixIt("clamps oversized shell command timers before scheduling", async () => {
+    const result = await runShellCommand({
+      command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        "setTimeout(() => process.exit(0), 25);",
+      )}`,
+      env: process.env,
+      label: "oversized-command-timeout",
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result).toMatchObject({
+      noOutputTimedOut: false,
+      status: 0,
+      timedOut: false,
+    });
+  });
+
+  posixIt("clamps oversized shell command no-output timers before scheduling", async () => {
+    const result = await runShellCommand({
+      command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        "setTimeout(() => process.exit(0), 25);",
+      )}`,
+      env: process.env,
+      label: "oversized-no-output-timeout",
+      noOutputTimeoutMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: 5_000,
+    });
+
+    expect(result).toMatchObject({
+      noOutputTimedOut: false,
+      status: 0,
+      timedOut: false,
+    });
+  });
+
+  posixIt("clamps oversized shell capture timers before scheduling", async () => {
+    const result = await runShellCaptureCommand({
+      command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        "setTimeout(() => process.exit(0), 25);",
+      )}`,
+      env: process.env,
+      label: "oversized-capture-timeout",
+        timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result).toMatchObject({
+      status: 0,
+      timedOut: false,
+    });
+  });
+
   posixIt("kills timed-out shell command groups when the leader exits first", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-docker-all-timeout-"));
     const scriptPath = path.join(root, "leader-exits.mjs");
@@ -523,6 +576,44 @@ setInterval(() => {}, 1000);
       }
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  posixIt("clamps oversized shell command kill grace before scheduling", async () => {
+    const root = createTempDir("openclaw-docker-all-oversized-grace-");
+    const scriptPath = path.join(root, "leader-exits.mjs");
+    const donePath = path.join(root, "done");
+    const readyPath = path.join(root, "ready");
+    const childScript = [
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+      "process.on('SIGTERM', () => {",
+      `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
+      "});",
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+
+    writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+
+spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: "ignore" });
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const result = await runShellCommand({
+      command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
+      env: process.env,
+      label: "oversized-timeout-grace",
+        timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: 500,
+    });
+
+    expect(result).toMatchObject({ timedOut: true });
+    expect(readFileSync(donePath, "utf8")).toBe("done");
   });
 
   posixIt("lets timed-out shell command descendants exit during kill grace", async () => {
