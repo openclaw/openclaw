@@ -9,6 +9,7 @@ import {
   hasAbortableSessionRun,
   refreshChat,
   refreshChatCommands,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
@@ -3849,7 +3850,10 @@ export function renderApp(state: AppViewState) {
                   onOpenSessionCheckpoints: () => {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;
                     state.setTab("sessions" as import("./navigation.ts").Tab);
-                    void loadSessions(state, createSidebarRecentSessionsLoadOverrides(state));
+                    void loadSessions(state, {
+                      ...createChatSessionsLoadOverrides(state),
+                      ...scopedAgentListParamsForSession(state, state.sessionKey),
+                    });
                   },
                   onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
                   onToggleRealtimeTalkOptions: () => {

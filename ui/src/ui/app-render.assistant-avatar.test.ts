@@ -664,6 +664,66 @@ describe("renderApp assistant avatar routing", () => {
     expect(labels).toEqual(["Subagent: Planner", "Main"]);
   });
 
+  it("keeps opening checkpoints scoped when sidebar all-agents mode is active", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: 1,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:review:chat",
+              kind: "direct",
+              label: "Review chat",
+              updatedAt: 1,
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const setTab = vi.fn();
+    const state = createState({
+      tab: "chat",
+      sessionKey: "agent:review:chat",
+      sidebarRecentSessionsAllAgents: true,
+      client: { request } as unknown as AppViewState["client"],
+      setTab,
+      sessionsLoading: false,
+      sessionsError: null,
+      sessionsIncludeGlobal: true,
+      sessionsIncludeUnknown: true,
+      sessionsShowArchived: false,
+      sessionsFilterActive: "0",
+      sessionsFilterLimit: "50",
+      sessionsPage: 0,
+      sessionsPageSize: 25,
+      sessionsSelectedKeys: new Set(),
+      sessionsExpandedCheckpointKey: null,
+      sessionsCheckpointItemsByKey: { "agent:review:chat": [] },
+      sessionsCheckpointLoadingKey: null,
+      sessionsCheckpointBusyKey: null,
+    });
+
+    renderApp(state);
+    chatProps.current?.onOpenSessionCheckpoints?.();
+
+    expect(state.sessionsExpandedCheckpointKey).toBe("agent:review:chat");
+    expect(setTab).toHaveBeenCalledWith("sessions");
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("sessions.list", {
+        includeGlobal: true,
+        includeUnknown: true,
+        configuredAgentsOnly: true,
+        agentId: "review",
+        limit: 50,
+      });
+    });
+    expect(state.sessionsResultAgentId).toBe("review");
+  });
+
   it("keeps legacy main sessions tied to the default agent when identity is stale", () => {
     const container = document.createElement("div");
 
