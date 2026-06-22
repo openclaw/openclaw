@@ -1987,6 +1987,10 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
   );
 }
 
+function isHydratedNativeWindowsProvider(providerName) {
+  return providerName === "aws" || providerName === "azure";
+}
+
 function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
     "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
@@ -2004,7 +2008,7 @@ function injectRemoteWindowsHydratedNodeModulesBootstrap(commandArgs, providerNa
   const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(commandArgs));
   if (
     commandArgs[0] !== "run" ||
-    providerName !== "aws" ||
+    !isHydratedNativeWindowsProvider(providerName) ||
     !isNativeWindowsRemoteTarget(commandArgs) ||
     !hasOption(commandArgs, "--id") ||
     !runtimeEntrypoint
