@@ -418,7 +418,7 @@ describe("MatrixCryptoBootstrapper", () => {
         allowSecretStorageRecreateWithoutRecoveryKey: true,
       }),
     ).rejects.toThrow(
-      "Forced cross-signing reset requires the active Matrix recovery key; provide it with --recovery-key-stdin before retrying",
+      "Forced cross-signing reset requires the active Matrix recovery key; supply it before retrying",
     );
 
     expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();

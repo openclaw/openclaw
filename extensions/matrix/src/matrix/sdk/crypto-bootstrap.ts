@@ -56,7 +56,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     const deferSecretStorageBootstrapUntilAfterCrossSigning = forceReset;
     if (forceReset && !(await this.deps.canUnlockSecretStorage())) {
       throw new Error(
-        "Forced cross-signing reset requires the active Matrix recovery key; provide it with --recovery-key-stdin before retrying",
+        "Forced cross-signing reset requires the active Matrix recovery key; supply it before retrying",
       );
     }
     // Register verification listeners before expensive bootstrap work so incoming requests
