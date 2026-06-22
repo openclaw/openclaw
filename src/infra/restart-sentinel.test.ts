@@ -196,7 +196,7 @@ describe("restart sentinel", () => {
 
   it("keeps old config restart sentinels readable without restart-required stats", async () => {
     await withRestartSentinelStateDir(async () => {
-      const filePath = resolveRestartSentinelPath();
+      const filePath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "restart-sentinel.json");
       const payload = {
         kind: "config-patch" as const,
         status: "ok" as const,
