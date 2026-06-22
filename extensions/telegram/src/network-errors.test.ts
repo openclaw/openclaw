@@ -387,4 +387,13 @@ describe("isTelegramRichMessageUnsupportedError", () => {
     expect(isTelegramRichMessageUnsupportedError(unsupported)).toBe(true);
     expect(isTelegramRichMessageUnsupportedError(parseErr)).toBe(false);
   });
+
+  it("rejects bare UNSUPPORTED without message context (#pr-94405)", () => {
+    expect(
+      isTelegramRichMessageUnsupportedError(new Error("400: Bad Request: UNSUPPORTED_MEDIA_TYPE")),
+    ).toBe(false);
+    expect(
+      isTelegramRichMessageUnsupportedError(new Error("400: Bad Request: UNSUPPORTED_PARAM")),
+    ).toBe(false);
+  });
 });
