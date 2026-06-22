@@ -29,8 +29,21 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.presentationCapabilities?.limits?.text?.markdownDialect).toBe(
       "markdown",
     );
-    expect(telegramOutbound.sanitizeText).toBeUndefined();
     expect(telegramOutbound.pollMaxOptions).toBe(10);
+  });
+
+  it("strips assistant-visible tool traces before outbound delivery", () => {
+    clearTelegramRuntime();
+    const text = 'Done.\n⚠️ 🛠️ `search "Pipeline" in ~/.openclaw/workspace-* (agent)` failed';
+
+    expect(telegramOutbound.sanitizeText?.({ text })).toBe("Done.");
+  });
+
+  it("preserves ordinary outbound text while sanitizing", () => {
+    clearTelegramRuntime();
+    const text = "The pipeline has 3 deals.";
+
+    expect(telegramOutbound.sanitizeText?.({ text })).toBe(text);
   });
 
   it("preserves explicit HTML parse mode before chunking", () => {
