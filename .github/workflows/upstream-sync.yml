@@ -105,22 +105,22 @@ jobs:
           git checkout HEAD -- .github/workflows
           git add .github/workflows
 
-          # 4) Railway is config-driven; prefer upstream gateway source.
-          for f in src/gateway/startup-control-ui-origins.ts \
-                   src/gateway/startup-control-ui-origins.test.ts \
-                   src/gateway/server.impl.ts; do
-            git checkout --theirs -- "$f" 2>/dev/null && git add "$f" || true
+          # 4) We never customize upstream source. Any remaining conflict is in
+          #    a file we don't own, so take upstream's version (rm if deleted).
+          for f in $(git ls-files -u | awk '{print $4}' | sort -u); do
+            git checkout --theirs -- "$f" 2>/dev/null \
+              || git rm -f "$f" 2>/dev/null || true
+            git add "$f" 2>/dev/null || true
           done
 
           # 5) Append the Railway PaaS config + entrypoint (idempotent).
           bash scripts/railway-patch-dockerfile.sh
           git add Dockerfile
 
-          # 6) Only NOW check for genuine unresolved conflicts.
+          # 6) Safety net: nothing should still be unmerged. If so, flag it.
           if git ls-files -u | grep -q .; then
             echo "conflicts=true" >> "$GITHUB_OUTPUT"
-            echo "Unresolved conflicts in:"
-            git ls-files -u | awk '{print $4}' | sort -u
+            echo "Still-unmerged:"; git ls-files -u | awk '{print $4}' | sort -u
             git merge --abort || true
             exit 0
           fi
@@ -140,9 +140,9 @@ jobs:
           gh issue create \
             --repo "$GITHUB_REPOSITORY" \
             --title "Upstream sync ${REF} needs manual merge" \
-            --body "Automated sync to upstream ${REF} hit code conflicts \
-          that need a human. main and Railway are untouched. Run the sync \
-          locally, resolve, and push." \
+            --body "Automated sync to upstream ${REF} hit conflicts that need \
+          a human. main and Railway are untouched. Run the sync locally, \
+          resolve, and push." \
             || true
       - name: Build gate — prove the image builds (what Railway will do)
         if: >
