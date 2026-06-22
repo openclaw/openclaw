@@ -135,6 +135,11 @@ const MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES =
 const MAX_BENIGN_SESSION_FENCE_CTIME_DIGEST_BYTES = 32 * 1024 * 1024;
 const MAX_SAFE_FILE_OFFSET = BigInt(Number.MAX_SAFE_INTEGER);
 
+// How long dispose waits for retained-lock users to become idle before
+// force-releasing the physical lock. Prevents indefinite hangs when a stuck
+// operation never releases its retained use (#95833).
+const DISPOSE_RETAINED_LOCK_IDLE_TIMEOUT_MS = 5_000;
+
 type SessionFileFenceSnapshot = {
   fingerprint: SessionFileFingerprint;
   digest?: string;
@@ -1321,6 +1326,34 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     return true;
   }
 
+  /**
+   * Bounded variant of {@link waitForRetainedLockIdle} for use in
+   * {@link disposeHeldLockAfterRetainedIdle}. Returns `false` when the caller
+   * is inside an active write-lock scope (same as the unbounded version) AND
+   * when retained-lock users do not become idle within the timeout. The
+   * timeout prevents dispose from hanging indefinitely when a stuck operation
+   * never releases its retained lock (#95833).
+   */
+  async function waitForRetainedLockIdleWithTimeout(): Promise<boolean> {
+    if (retainedLockUseCount === 0) {
+      return true;
+    }
+    if (activeWriteLock.getStore()?.scope.active === true) {
+      return false;
+    }
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        retainedLockIdleWaiters.delete(waiterResolve);
+        resolve(false);
+      }, DISPOSE_RETAINED_LOCK_IDLE_TIMEOUT_MS);
+      const waiterResolve = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      retainedLockIdleWaiters.add(waiterResolve);
+    });
+  }
+
   async function acquireWriteLock(): Promise<{
     lock: SessionLock;
     owned: boolean;
@@ -1659,7 +1692,16 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
     const drainOwner = await beginHeldLockDrain();
     try {
-      if (!(await waitForRetainedLockIdle())) {
+      const idle = await waitForRetainedLockIdleWithTimeout();
+      if (!idle && heldLock) {
+        // Dispose is the final cleanup path for the attempt. If retained-lock
+        // users did not become idle (caller inside an active write-lock scope,
+        // or the wait timed out because a stuck operation never released),
+        // force-release so the physical .jsonl.lock does not persist and
+        // permanently block the session (#95833).
+        const lock = heldLock;
+        heldLock = undefined;
+        await lock.release();
         return;
       }
       if (!heldLock) {

@@ -237,6 +237,39 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releases).toEqual(["held"]);
   });
 
+  it("force-releases on dispose when retained-lock user is stuck (#95833)", async () => {
+    // When a stuck subagent holds a retained lock and never releases, dispose
+    // must force-release the physical .jsonl.lock after a timeout instead of
+    // hanging indefinitely.
+    const release = vi.fn(async () => {});
+    const acquireLock = vi.fn(async () => ({ release }));
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireLock,
+      lockOptions,
+    });
+
+    // Start a write that will never complete — simulates a stuck operation
+    // that holds a retained lock.
+    const neverResolves = new Promise<void>(() => {});
+    const writePromise = controller.withSessionWriteLock(async () => {
+      await neverResolves;
+    });
+
+    // Give the write time to acquire the retained lock.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Dispose while the write is stuck. The bounded wait should time out
+    // and force-release rather than hanging.
+    await controller.dispose();
+
+    expect(release).toHaveBeenCalledTimes(1);
+
+    // Clean up: the stuck write will reject when the lock is released
+    // and the controller is disposed, but we don't care about that.
+    writePromise.catch(() => {});
+  });
+
   it("releases the eagerly-held lock when the fence read throws during prompt release", async () => {
     // A filesystem error can occur after the controller clears its in-memory
     // lock reference; the underlying lease still must be released.
