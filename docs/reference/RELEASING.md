@@ -108,7 +108,10 @@ the maintainer-only release runbook.
    the full release validation and npm preflight evidence, runs Parallels
    fresh/update proof against the exact prepared tarball plus Telegram package
    proof, records plugin npm and ClawHub plans, and prints the exact
-   `OpenClaw Release Publish` command only after the evidence bundle is green.
+   `OpenClaw Release Publish` and public `macOS Release` validation commands
+   only after the evidence bundle is green. The macOS command carries the
+   release SHA and exact attempt-qualified npm tag-preflight verifier artifact
+   identity; do not select the newest run or guess these values manually.
    `OpenClaw Release Publish` dispatches the selected or all-publishable plugin
    packages to npm and the same set to ClawHub in parallel, and then promotes the
    prepared OpenClaw npm preflight artifact with the matching dist-tag as soon as
@@ -398,11 +401,102 @@ Validation` or from the `main`/release workflow ref so workflow logic and
     OIDC-only publish
   - public `macOS Release` is validation-only; when a tag lives only on a
     release branch but the workflow is dispatched from `main`, set
-    `public_release_branch=release/YYYY.M.PATCH`
+    `public_release_branch=release/YYYY.M.PATCH`; strict alpha evidence uses
+    the exact `tideclaw/alpha/YYYY-MM-DD-HHMMZ` producer branch
+  - `pnpm release:candidate` prints the complete `macOS Release` dispatch,
+    including `release_sha`, `verifier_run_id`, `verifier_run_attempt`,
+    `verifier_artifact_name`, and `verifier_payload_sha256`
   - real macOS publish must pass successful macOS `preflight_run_id` and
     `validate_run_id`
   - the real publish paths promote prepared artifacts instead of rebuilding
     them again
+
+If the candidate helper output is unavailable, reconstruct the public macOS
+validation handoff from the exact successful npm preflight attempt. The
+verifier payload supplies the release SHA and authorized source branch; its
+exact bytes supply the digest:
+
+```bash
+REPO=openclaw/openclaw
+TAG=vYYYY.M.PATCH-beta.N
+NPM_PREFLIGHT_RUN_ID=<successful-openclaw-npm-release-run-id>
+EVIDENCE_DIR="$(mktemp -d)"
+RUN_JSON="$EVIDENCE_DIR/npm-preflight-run.json"
+gh api "repos/$REPO/actions/runs/$NPM_PREFLIGHT_RUN_ID" > "$RUN_JSON"
+jq -e --arg run_id "$NPM_PREFLIGHT_RUN_ID" '
+  (.id | tostring) == $run_id and
+  .path == ".github/workflows/openclaw-npm-release.yml" and
+  .event == "workflow_dispatch" and
+  .status == "completed" and
+  .conclusion == "success"
+' "$RUN_JSON" >/dev/null
+NPM_PREFLIGHT_RUN_ATTEMPT="$(
+  jq -r '.run_attempt' "$RUN_JSON"
+)"
+RUN_HEAD_SHA="$(jq -r '.head_sha' "$RUN_JSON")"
+RUN_HEAD_BRANCH="$(jq -r '.head_branch' "$RUN_JSON")"
+VERIFIER_ARTIFACT_NAME="release-operation-verifier-v1-tag-preflight-${TAG#v}-${NPM_PREFLIGHT_RUN_ID}-${NPM_PREFLIGHT_RUN_ATTEMPT}"
+ARTIFACTS_JSON="$EVIDENCE_DIR/npm-preflight-artifacts.json"
+gh api "repos/$REPO/actions/runs/$NPM_PREFLIGHT_RUN_ID/artifacts?per_page=100" > "$ARTIFACTS_JSON"
+test "$(
+  jq --arg name "$VERIFIER_ARTIFACT_NAME" \
+    '[.artifacts[] | select(.name == $name and .expired == false)] | length' \
+    "$ARTIFACTS_JSON"
+)" = 1
+PAYLOAD_DIR="$EVIDENCE_DIR/verifier-payload"
+mkdir -p "$PAYLOAD_DIR"
+gh run download "$NPM_PREFLIGHT_RUN_ID" \
+  --repo "$REPO" \
+  --name "$VERIFIER_ARTIFACT_NAME" \
+  --dir "$PAYLOAD_DIR"
+VERIFIER_PAYLOAD="$PAYLOAD_DIR/release-operation-verifier-v1.json"
+test "$(find "$PAYLOAD_DIR" -type f | wc -l | tr -d ' ')" = 1
+test -f "$VERIFIER_PAYLOAD"
+VERIFIER_PAYLOAD_SHA256="$(shasum -a 256 "$VERIFIER_PAYLOAD" | awk '{print $1}')"
+jq -e \
+  --arg run_id "$NPM_PREFLIGHT_RUN_ID" \
+  --arg run_attempt "$NPM_PREFLIGHT_RUN_ATTEMPT" \
+  --arg run_head_sha "$RUN_HEAD_SHA" \
+  --arg run_head_branch "$RUN_HEAD_BRANCH" \
+  --arg tag "$TAG" '
+    .schemaVersion == 1 and
+    .ok == true and
+    .operation == "tag-preflight" and
+    .releaseVersion == ($tag | ltrimstr("v")) and
+    .execution.workflowPath == ".github/workflows/openclaw-npm-release.yml" and
+    .execution.event == "workflow_dispatch" and
+    .execution.runId == $run_id and
+    .execution.runAttempt == $run_attempt and
+    .execution.runHeadSha == $run_head_sha and
+    .execution.executionRef == ("refs/heads/" + $run_head_branch) and
+    .target.targetRef == ("refs/tags/" + $tag) and
+    .target.releaseTag == $tag and
+    .target.authorizedSourceRef == .execution.executionRef and
+    .target.authorizedSourceTipSha == $run_head_sha and
+    .target.targetReachableFromAuthorizedSource == true
+  ' "$VERIFIER_PAYLOAD" >/dev/null
+RELEASE_SHA="$(jq -r '.target.targetSha' "$VERIFIER_PAYLOAD")"
+PUBLIC_RELEASE_BRANCH="$(
+  jq -r '.target.authorizedSourceRef | sub("^refs/heads/"; "")' "$VERIFIER_PAYLOAD"
+)"
+
+gh workflow run macos-release.yml \
+  --repo "$REPO" \
+  --ref main \
+  -f tag="$TAG" \
+  -f preflight_only=true \
+  -f public_release_branch="$PUBLIC_RELEASE_BRANCH" \
+  -f release_sha="$RELEASE_SHA" \
+  -f verifier_run_id="$NPM_PREFLIGHT_RUN_ID" \
+  -f verifier_run_attempt="$NPM_PREFLIGHT_RUN_ATTEMPT" \
+  -f verifier_artifact_name="$VERIFIER_ARTIFACT_NAME" \
+  -f verifier_payload_sha256="$VERIFIER_PAYLOAD_SHA256"
+```
+
+`macOS Release` re-authenticates the completed producer run, exact artifact
+contents, payload digest, target tag/SHA, and authorized source branch before
+checking out or building release code.
+
 - For stable correction releases like `YYYY.M.PATCH-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.PATCH` to `YYYY.M.PATCH-N`
   so release corrections cannot silently leave older global installs on the

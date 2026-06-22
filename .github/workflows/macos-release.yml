@@ -13,7 +13,7 @@ on:
         default: true
         type: boolean
       public_release_branch:
-        description: Public branch that contains the release tag commit, usually main or release/YYYY.M.PATCH
+        description: Public branch that contains the release tag commit; main, release/YYYY.M.PATCH, stable/YYYY.M.33, or tideclaw/alpha/YYYY-MM-DD-HHMMZ
         required: false
         default: main
         type: string
@@ -77,8 +77,8 @@ jobs:
             echo "Verifier payload digest must be 64 lowercase hexadecimal characters." >&2
             exit 1
           fi
-          if [[ "$PUBLIC_RELEASE_BRANCH" != "main" && ! "$PUBLIC_RELEASE_BRANCH" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && ! "$PUBLIC_RELEASE_BRANCH" =~ ^stable/[0-9]{4}\.[1-9][0-9]*\.33$ ]]; then
-            echo "public_release_branch must be main, release/YYYY.M.PATCH, or stable/YYYY.M.33, got ${PUBLIC_RELEASE_BRANCH}." >&2
+          if [[ "$PUBLIC_RELEASE_BRANCH" != "main" && ! "$PUBLIC_RELEASE_BRANCH" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && ! "$PUBLIC_RELEASE_BRANCH" =~ ^stable/[0-9]{4}\.[1-9][0-9]*\.33$ && ! "$PUBLIC_RELEASE_BRANCH" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            echo "public_release_branch must be main, release/YYYY.M.PATCH, stable/YYYY.M.33, or tideclaw/alpha/YYYY-MM-DD-HHMMZ, got ${PUBLIC_RELEASE_BRANCH}." >&2
             exit 1
           fi
 
@@ -209,8 +209,8 @@ jobs:
           PUBLIC_RELEASE_BRANCH: ${{ inputs.public_release_branch }}
         run: |
           set -euo pipefail
-          if [[ "${PUBLIC_RELEASE_BRANCH}" != "main" && ! "${PUBLIC_RELEASE_BRANCH}" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && ! "${PUBLIC_RELEASE_BRANCH}" =~ ^stable/[0-9]{4}\.[1-9][0-9]*\.33$ ]]; then
-            echo "public_release_branch must be main, release/YYYY.M.PATCH, or stable/YYYY.M.33, got ${PUBLIC_RELEASE_BRANCH}." >&2
+          if [[ "${PUBLIC_RELEASE_BRANCH}" != "main" && ! "${PUBLIC_RELEASE_BRANCH}" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && ! "${PUBLIC_RELEASE_BRANCH}" =~ ^stable/[0-9]{4}\.[1-9][0-9]*\.33$ && ! "${PUBLIC_RELEASE_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            echo "public_release_branch must be main, release/YYYY.M.PATCH, stable/YYYY.M.33, or tideclaw/alpha/YYYY-MM-DD-HHMMZ, got ${PUBLIC_RELEASE_BRANCH}." >&2
             exit 1
           fi
           RELEASE_SHA=$(git rev-parse HEAD)

@@ -206,6 +206,8 @@ describe("release verifier evidence consumers", () => {
     expect(consumer.run).toContain("payload.target.authorizedSourceRef !== expectedSourceRef");
     expect(consumer.run).toContain("^stable/[0-9]{4}\\.[1-9][0-9]*\\.33$");
     expect(consumer.run).not.toContain("^stable/[0-9]{4}\\.[1-9][0-9]*\\.[1-9][0-9]*$");
+    expect(consumer.run).toContain("^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$");
+    expect(consumer.run).not.toContain("^tideclaw/alpha/.*$");
     expect(consumer.run).toContain("Verifier payload digest mismatch");
     expect(text(MACOS_RELEASE)).not.toContain("verify-release-operation.mjs");
 
