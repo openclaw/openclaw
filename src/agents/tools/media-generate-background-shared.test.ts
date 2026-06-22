@@ -1,10 +1,13 @@
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
   deliverSubagentAnnouncement: vi.fn(),
-  loadRequesterSessionEntry: vi.fn(() => ({ entry: undefined })),
+  loadRequesterSessionEntry: vi.fn<() => { entry: SessionEntry | undefined }>(() => ({
+    entry: undefined,
+  })),
 }));
 const detachedTaskRuntimeMocks = vi.hoisted(() => ({
   completeTaskRunByRunId: vi.fn(),
