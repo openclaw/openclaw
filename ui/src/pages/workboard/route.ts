@@ -1,10 +1,10 @@
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { definePage } from "../../router/index.ts";
 import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
 import { loadAgents } from "../agents/data.ts";
 import { loadConfig } from "../config/data.ts";
 import { loadSessions } from "../sessions/data.ts";
