@@ -65,6 +65,10 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
+import {
+  ANTHROPIC_OMITTED_REASONING_TEXT,
+  findActiveAnthropicToolTurnAssistantIndex,
+} from "./thinking-replay.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
@@ -206,9 +210,20 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         thinking !== null &&
         typeof thinking === "object" &&
         (thinking as { type?: unknown }).type === "adaptive";
+      const sendsEnabledThinking =
+        thinking !== null &&
+        typeof thinking === "object" &&
+        (thinking as { type?: unknown }).type === "enabled";
+      // Mirror the native Anthropic provider (src/llm/providers/anthropic.ts):
+      // replay every signed thinking block only when the current request keeps
+      // thinking on, or when the model always replays reasoning (Fable 5).
+      // Otherwise signed thinking from already-completed turns accumulates across
+      // a long session and Bedrock rejects the whole request with
+      // "Invalid signature in thinking block", bricking the session on every retry.
+      const replayThinkingEnabled = fable5 || sendsAdaptiveThinking || sendsEnabledThinking;
       let commandInput = {
         modelId: model.id,
-        messages: convertMessages(context, model, cacheRetention),
+        messages: convertMessages(context, model, cacheRetention, replayThinkingEnabled),
         system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
@@ -731,9 +746,17 @@ function convertMessages(
   context: Context,
   model: Model<"bedrock-converse-stream">,
   cacheRetention: CacheRetention,
+  replayThinkingEnabled = true,
 ): Message[] {
   const result: Message[] = [];
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  // Anthropic tool results continue the preceding assistant turn, so that turn's
+  // signed thinking must be replayed even when new thinking is disabled. Every
+  // other completed turn drops its stale signed thinking to avoid invalid-signature
+  // rejections. When replay is enabled this guard is inert (index resolves to -1).
+  const activeToolTurnAssistantIndex = replayThinkingEnabled
+    ? -1
+    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const m = transformedMessages[i];
@@ -773,6 +796,7 @@ function convertMessages(
           continue;
         }
         const contentBlocks: ContentBlock[] = [];
+        let omittedThinking = false;
         for (const c of m.content) {
           switch (c.type) {
             case "text":
@@ -788,6 +812,12 @@ function convertMessages(
               });
               break;
             case "thinking": {
+              // Drop signed thinking from completed turns when new thinking is
+              // disabled; only the active tool turn keeps its replayed reasoning.
+              if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex) {
+                omittedThinking = true;
+                continue;
+              }
               const thinkingSignature = c.thinkingSignature;
               const normalizedThinkingSignature = thinkingSignature?.trim();
               const supportsSignature = supportsThinkingSignature(model);
@@ -828,6 +858,11 @@ function convertMessages(
             default:
               continue;
           }
+        }
+        // Preserve turn ordering when every block was a dropped thinking block,
+        // matching the native Anthropic provider's omitted-reasoning placeholder.
+        if (contentBlocks.length === 0 && omittedThinking) {
+          contentBlocks.push({ text: ANTHROPIC_OMITTED_REASONING_TEXT });
         }
         // Skip if all content blocks were filtered out
         if (contentBlocks.length === 0) {

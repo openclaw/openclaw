@@ -3,6 +3,7 @@ import { BedrockRuntimeClient, ConversationRole } from "@aws-sdk/client-bedrock-
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamBedrock, streamSimpleBedrock, testing } from "./stream.runtime.js";
+import { ANTHROPIC_OMITTED_REASONING_TEXT } from "./thinking-replay.js";
 
 function bedrockModel(overrides: Record<string, unknown>) {
   return {
@@ -148,6 +149,111 @@ describe("Bedrock reasoning replay", () => {
     );
 
     expect(messages).toEqual([]);
+  });
+});
+
+describe("Bedrock stale thinking-signature stripping", () => {
+  const claudeId = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+  const claude = () => bedrockModel({ id: claudeId, name: "Claude Sonnet" });
+
+  it("drops signed thinking from completed turns when replay is disabled", () => {
+    const context = {
+      messages: [
+        {
+          role: "assistant",
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          model: claudeId,
+          content: [
+            { type: "thinking", thinking: "stale reasoning", thinkingSignature: "sig-old" },
+            { type: "text", text: "earlier answer" },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "next question" }] },
+      ],
+    } as never;
+
+    const messages = testing.convertMessages(context, claude(), "none", false);
+
+    expect(messages[0]?.content).toEqual([{ text: "earlier answer" }]);
+    expect(messages[1]?.content).toEqual([{ text: "next question" }]);
+  });
+
+  it("keeps signed thinking for the active tool turn when replay is disabled", () => {
+    const context = {
+      messages: [
+        {
+          role: "assistant",
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          model: claudeId,
+          content: [
+            { type: "thinking", thinking: "current reasoning", thinkingSignature: "sig-live" },
+            { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          isError: false,
+          content: [{ type: "text", text: "tool output" }],
+        },
+      ],
+    } as never;
+
+    const messages = testing.convertMessages(context, claude(), "none", false);
+
+    expect(messages[0]?.content).toEqual([
+      {
+        reasoningContent: { reasoningText: { text: "current reasoning", signature: "sig-live" } },
+      },
+      { toolUse: { toolUseId: "call_1", name: "lookup", input: {} } },
+    ]);
+  });
+
+  it("replaces a dropped thinking-only turn with the omitted-reasoning placeholder", () => {
+    const context = {
+      messages: [
+        {
+          role: "assistant",
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          model: claudeId,
+          content: [{ type: "thinking", thinking: "only reasoning", thinkingSignature: "sig-old" }],
+        },
+        { role: "user", content: [{ type: "text", text: "continue" }] },
+      ],
+    } as never;
+
+    const messages = testing.convertMessages(context, claude(), "none", false);
+
+    expect(messages[0]?.content).toEqual([{ text: ANTHROPIC_OMITTED_REASONING_TEXT }]);
+    expect(messages[1]?.content).toEqual([{ text: "continue" }]);
+  });
+
+  it("replays signed thinking across completed turns when replay stays enabled", () => {
+    const context = {
+      messages: [
+        {
+          role: "assistant",
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          model: claudeId,
+          content: [
+            { type: "thinking", thinking: "kept reasoning", thinkingSignature: "sig-keep" },
+            { type: "text", text: "earlier answer" },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "next question" }] },
+      ],
+    } as never;
+
+    const messages = testing.convertMessages(context, claude(), "none", true);
+
+    expect(messages[0]?.content).toEqual([
+      { reasoningContent: { reasoningText: { text: "kept reasoning", signature: "sig-keep" } } },
+      { text: "earlier answer" },
+    ]);
   });
 });
 
