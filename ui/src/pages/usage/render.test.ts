@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderUsageTab } from "./app-render-usage-tab.ts";
-import type { AppViewState } from "./app-view-state.ts";
-import type { UsageProps } from "./views/usageTypes.ts";
+import type { AppViewState } from "../../ui/app-view-state.ts";
+import { renderUsageTab } from "./render.ts";
+import type { UsageProps } from "./types.ts";
 
 const renderUsageMock = vi.hoisted(() => vi.fn((_props: UsageProps) => null));
 
-type UsageViewModule = typeof import("./views/usage.ts");
+type UsageViewModule = typeof import("./view.ts");
 
 function createUsageView(): UsageViewModule {
   return { renderUsage: renderUsageMock } as unknown as UsageViewModule;

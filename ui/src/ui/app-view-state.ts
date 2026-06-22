@@ -13,6 +13,7 @@ import type {
   ClawHubSkillDetail,
   SkillMessage,
 } from "../pages/skills/data.ts";
+import type { SessionLogEntry } from "../pages/usage/view.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
@@ -53,7 +54,6 @@ import type {
   ToolsCatalogResult,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
-import type { SessionLogEntry } from "./views/usage.ts";
 
 export type AppViewState = {
   settings: UiSettings;

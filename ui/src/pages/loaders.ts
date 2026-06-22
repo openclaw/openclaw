@@ -7,12 +7,12 @@ import {
   loadWikiMemoryPalace,
 } from "../ui/controllers/dreaming.ts";
 import { loadModelAuthStatusState } from "../ui/controllers/model-auth-status.ts";
-import { loadUsage } from "../ui/controllers/usage.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../ui/session-key.ts";
 import { loadAgents } from "./agents/data.ts";
 import { refreshChat } from "./chat/data.ts";
 import { loadConfig, loadConfigSchema } from "./config/data.ts";
 import { loadSessions } from "./sessions/data.ts";
+import { loadUsage } from "./usage/data.ts";
 
 export async function loadSettingsPage(host: SettingsHost, app: SettingsAppHost) {
   const primaryRefresh = loadConfig(app);

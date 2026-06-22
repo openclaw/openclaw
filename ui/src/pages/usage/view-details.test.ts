@@ -1,13 +1,13 @@
 // Control UI tests cover usage render details behavior.
 import { render } from "lit";
 import { describe, it, expect } from "vitest";
+import type { TimeSeriesPoint, UsageSessionEntry } from "./types.ts";
 import {
   computeFilteredUsage,
   CHART_BAR_WIDTH_RATIO,
   CHART_MAX_BAR_WIDTH,
   renderTimeSeriesCompact,
-} from "./usage-render-details.ts";
-import type { TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
+} from "./view-details.ts";
 
 function makePoint(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
   return {

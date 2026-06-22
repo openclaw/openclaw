@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./usage-helpers.ts";
+import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./helpers.ts";
 
 function requireFirstTool(tools: Array<[string, number]>): [string, number] {
   const tool = tools[0];

@@ -1,8 +1,8 @@
 // Control UI view renders usage screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { getUsageCacheRefreshTitle } from "../usage-cache-status.ts";
-import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
+import { getUsageCacheRefreshTitle } from "./cache-status.ts";
+import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
 import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
@@ -12,7 +12,7 @@ import {
   formatTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
-} from "./usage-metrics.ts";
+} from "./metrics.ts";
 import {
   addQueryToken,
   applySuggestionToQuery,
@@ -23,15 +23,7 @@ import {
   normalizeQueryText,
   removeQueryToken,
   setQueryTokensForKey,
-} from "./usage-query.ts";
-import { renderSessionDetailPanel } from "./usage-render-details.ts";
-import {
-  renderCostBreakdownCompact,
-  renderDailyChartCompact,
-  renderFilterChips,
-  renderSessionsCard,
-  renderUsageInsights,
-} from "./usage-render-overview.ts";
+} from "./query.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
@@ -40,7 +32,15 @@ import type {
   UsageProps,
   UsageSessionEntry,
   UsageTotals,
-} from "./usageTypes.ts";
+} from "./types.ts";
+import { renderSessionDetailPanel } from "./view-details.ts";
+import {
+  renderCostBreakdownCompact,
+  renderDailyChartCompact,
+  renderFilterChips,
+  renderSessionsCard,
+  renderUsageInsights,
+} from "./view-overview.ts";
 
 export type { UsageColumnId, SessionLogEntry, SessionLogRole };
 

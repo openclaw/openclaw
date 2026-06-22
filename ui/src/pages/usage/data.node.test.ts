@@ -6,7 +6,7 @@ import {
   loadSessionTimeSeries,
   loadUsage,
   type UsageState,
-} from "./usage.ts";
+} from "./data.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 

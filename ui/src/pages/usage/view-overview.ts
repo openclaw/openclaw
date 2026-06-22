@@ -2,16 +2,16 @@
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import { formatCost, formatDayLabel, formatFullDate, formatTokens } from "./usage-metrics.ts";
-import type { UsageInsightStats } from "./usage-metrics.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
+import { formatCost, formatDayLabel, formatFullDate, formatTokens } from "./metrics.ts";
+import type { UsageInsightStats } from "./metrics.ts";
 import type {
   UsageAggregates,
   UsageColumnId,
   UsageSessionEntry,
   UsageTotals,
   CostDailyEntry,
-} from "./usageTypes.ts";
+} from "./types.ts";
 
 function pct(part: number, total: number): number {
   if (total === 0) {

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { getUsageCacheRefreshTitle } from "./usage-cache-status.ts";
+import { getUsageCacheRefreshTitle } from "./cache-status.ts";
 
 describe("getUsageCacheRefreshTitle", () => {
   it("formats non-fresh cache states for the Usage loading badge", () => {

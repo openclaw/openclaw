@@ -6,8 +6,8 @@ import {
   formatTokens,
   getHourAndWeekdayForUtcQuarterBucket,
   sessionTouchesSelectedHours,
-} from "./usage-metrics.ts";
-import type { UsageSessionEntry } from "./usageTypes.ts";
+} from "./metrics.ts";
+import type { UsageSessionEntry } from "./types.ts";
 
 /**
  * Helper: build a minimal UsageSessionEntry with utcQuarterHourMessageCounts

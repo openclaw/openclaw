@@ -576,7 +576,7 @@ export type {
   SessionsUsageTotals,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
-} from "./usage-types.ts";
+} from "../pages/usage/data-types.ts";
 
 export type CronRunStatus = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";

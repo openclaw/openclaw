@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { formatDayLabel, formatFullDate } from "./usage-metrics.ts";
+import { formatDayLabel, formatFullDate } from "./metrics.ts";
 
 describe("usage metrics date labels", () => {
   it("formats YYYY-MM-DD values as stable calendar dates in negative UTC offsets", async () => {

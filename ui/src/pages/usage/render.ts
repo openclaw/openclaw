@@ -1,10 +1,10 @@
 // Control UI module implements app render usage tab behavior.
-import type { AppViewState } from "./app-view-state.ts";
-import type { UsageState } from "./controllers/usage.ts";
-import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
-import type { UsageColumnId } from "./views/usageTypes.ts";
+import type { AppViewState } from "../../ui/app-view-state.ts";
+import type { UsageState } from "./data.ts";
+import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./data.ts";
+import type { UsageColumnId } from "./types.ts";
 
-type UsageViewModule = typeof import("./views/usage.ts");
+type UsageViewModule = typeof import("./view.ts");
 
 type UsageCacheStatus = NonNullable<NonNullable<UsageState["usageResult"]>["cacheStatus"]>;
 
