@@ -16,6 +16,7 @@ vi.mock("../infra/ports-probe.js", () => ({
 }));
 
 import { execFileSync } from "node:child_process";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import {
   forceFreePort,
   forceFreePortAndWait,
@@ -301,6 +302,11 @@ describe("gateway --force helpers (Windows netstat path)", () => {
   it("parses PIDs from netstat output correctly", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
     expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
+    expect(execFileSync).toHaveBeenCalledWith(
+      getWindowsSystem32ExePath("netstat.exe"),
+      ["-ano", "-p", "TCP"],
+      { encoding: "utf-8" },
+    );
   });
 
   it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {

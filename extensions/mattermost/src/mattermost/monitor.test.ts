@@ -17,8 +17,6 @@ import {
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
-  shouldFinalizeMattermostPreviewAfterDispatch,
-  shouldClearMattermostDraftPreview,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
   type MattermostMentionGateInput,
@@ -369,35 +367,6 @@ describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
   });
 });
 
-describe("shouldClearMattermostDraftPreview", () => {
-  it("deletes the preview after successful normal final delivery", () => {
-    expect(
-      shouldClearMattermostDraftPreview({
-        finalizedViaPreviewPost: false,
-        finalReplyDelivered: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps the preview when final delivery failed", () => {
-    expect(
-      shouldClearMattermostDraftPreview({
-        finalizedViaPreviewPost: false,
-        finalReplyDelivered: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps the preview when it already became the final reply", () => {
-    expect(
-      shouldClearMattermostDraftPreview({
-        finalizedViaPreviewPost: true,
-        finalReplyDelivered: true,
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("deliverMattermostReplyWithDraftPreview", () => {
   it("suppresses reasoning-prefixed finals before preview finalization", async () => {
     const draftStream = createDraftStreamMock();
@@ -729,35 +698,6 @@ describe("formatMattermostFinalDeliveryOutcomeLog", () => {
         agentId: "agent-1",
       }),
     ).toBeUndefined();
-  });
-});
-
-describe("shouldFinalizeMattermostPreviewAfterDispatch", () => {
-  it("reuses the preview only for a single eligible final payload", () => {
-    expect(
-      shouldFinalizeMattermostPreviewAfterDispatch({
-        finalCount: 1,
-        canFinalizeInPlace: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("falls back to normal sends for multi-payload finals", () => {
-    expect(
-      shouldFinalizeMattermostPreviewAfterDispatch({
-        finalCount: 2,
-        canFinalizeInPlace: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("falls back to normal sends when the final cannot be edited into the preview", () => {
-    expect(
-      shouldFinalizeMattermostPreviewAfterDispatch({
-        finalCount: 1,
-        canFinalizeInPlace: false,
-      }),
-    ).toBe(false);
   });
 });
 

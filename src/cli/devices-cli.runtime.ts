@@ -38,7 +38,7 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
-import { formatCliCommand } from "./command-format.js";
+import { formatCliCommand, quoteCliArg } from "./command-format.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
@@ -633,13 +633,6 @@ function lookupPairedDevice(
     return undefined;
   }
   return paired;
-}
-
-function quoteCliArg(value: string): string {
-  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
-    return value;
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function buildExplicitApproveCommand(opts: DevicesRpcOpts, requestId: string): string {

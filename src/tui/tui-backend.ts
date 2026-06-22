@@ -6,6 +6,7 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
 // Transport-agnostic backend contract consumed by the TUI runtime.
@@ -62,6 +63,7 @@ export type TuiSessionList = {
       | "inputTokens"
       | "outputTokens"
       | "totalTokens"
+      | "totalTokensFresh"
       | "goal"
       | "modelProvider"
       | "displayName"
@@ -69,7 +71,7 @@ export type TuiSessionList = {
       key: string;
       sessionId?: string;
       updatedAt?: number | null;
-      fastMode?: boolean;
+      fastMode?: FastMode;
       sendPolicy?: string;
       responseUsage?: ResponseUsageMode;
       label?: string;

@@ -187,6 +187,60 @@ describe("provider local service", () => {
     await waitForProbeFailure(healthUrl);
   });
 
+  it("cancels local service health probe response bodies", async () => {
+    let socketClosed = false;
+    const sockets = new Set<net.Socket>();
+    const server = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on("error", () => undefined);
+      socket.on("close", () => {
+        sockets.delete(socket);
+        socketClosed = true;
+      });
+      socket.write(
+        ["HTTP/1.1 200 OK", "Content-Type: application/json", "", '{"ok":true}'].join("\r\n"),
+      );
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server port");
+    }
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-body-cleanup",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: ["--version"],
+        healthUrl: `http://127.0.0.1:${address.port}/v1/models`,
+        readyTimeoutMs: 1_000,
+        idleStopMs: 1,
+      },
+    );
+
+    try {
+      await expect(ensureModelProviderLocalService(model)).resolves.toBeUndefined();
+      await expect.poll(() => socketClosed, { timeout: 1000, interval: 20 }).toBe(true);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("serializes concurrent cold starts for the same local service", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -59,7 +60,6 @@ export type ClawHubPackageArtifactSummary = {
   tarballUrl?: string | null;
   legacyDownloadUrl?: string | null;
 };
-export type ClawHubArtifactKind = "legacy-zip" | "npm-pack";
 export type ClawHubArtifactScanState =
   | "pending"
   | "clean"
@@ -68,14 +68,6 @@ export type ClawHubArtifactScanState =
   | "not-run"
   | (string & {});
 export type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | (string & {});
-export type ClawHubPackageSecurityState =
-  | "pending"
-  | "approved"
-  | "limited"
-  | "quarantined"
-  | "rejected"
-  | "revoked"
-  | (string & {});
 export type ClawHubResolvedArtifact =
   | {
       source: "clawhub";
@@ -121,17 +113,6 @@ export type ClawHubPackageArtifactResolverResponse = {
     | null;
   artifact?: ClawHubResolvedArtifact | null;
 };
-export type ClawHubPackageSecurityResponse = {
-  packageId?: string | null;
-  releaseId?: string | null;
-  state: ClawHubPackageSecurityState;
-  reasonCode?: string | null;
-  moderatorNote?: string | null;
-  actorId?: string | null;
-  createdAt?: number | null;
-  scanState?: ClawHubArtifactScanState | null;
-  moderationState?: ClawHubArtifactModerationState | null;
-};
 export type ClawHubPackageClawPackSummary = {
   available: boolean;
   specVersion?: number | null;
@@ -148,33 +129,6 @@ export type ClawHubPackageClawPackSummary = {
   hostTargets?: ClawHubPackageHostTarget[];
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
-};
-export type ClawHubPackageReadinessPhase =
-  | "planned"
-  | "published"
-  | "clawpack-ready"
-  | "legacy-zip-only"
-  | "metadata-ready"
-  | "blocked"
-  | "ready-for-openclaw"
-  | (string & {});
-export type ClawHubPackageReadiness = {
-  ready?: boolean | null;
-  readyForOpenClaw?: boolean | null;
-  installReady?: boolean | null;
-  phase?: ClawHubPackageReadinessPhase | null;
-  status?: ClawHubPackageReadinessPhase | null;
-  package?: {
-    name?: string | null;
-    family?: ClawHubPackageFamily | (string & {}) | null;
-    channel?: ClawHubPackageChannel | (string & {}) | null;
-    isOfficial?: boolean | null;
-  } | null;
-  packageName?: string | null;
-  artifactKind?: ClawHubArtifactKind | (string & {}) | null;
-  blockers?: string[];
-  scanState?: ClawHubArtifactScanState | null;
-  moderationState?: ClawHubArtifactModerationState | null;
 };
 export type ClawHubPackageListItem = {
   name: string;
@@ -428,6 +382,10 @@ type ClawHubConfigLike = {
   credentials?: ClawHubConfigLike | null;
   user?: ClawHubConfigLike | null;
 };
+
+function resolveClawHubRequestTimeoutMs(timeoutMs: unknown): number {
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
+}
 
 export class ClawHubRequestError extends Error {
   readonly status: number;
@@ -684,15 +642,14 @@ async function clawhubRequest(
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
+  const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
       controller.abort(
-        new Error(
-          `ClawHub request timed out after ${params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS}ms`,
-        ),
+        new Error(`ClawHub request timed out after ${timeoutMs}ms`),
       ),
-    params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+    timeoutMs,
   );
   try {
     const headers = {
@@ -776,7 +733,7 @@ async function readClawHubResponseBytes(params: {
   timeoutMs?: number;
   resourceLabel: string;
 }): Promise<Uint8Array> {
-  const timeoutMs = params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   return await readResponseWithLimit(params.response, params.maxBytes ?? Number.MAX_SAFE_INTEGER, {
     chunkTimeoutMs: timeoutMs,
     onOverflow: ({ size, maxBytes }) =>
@@ -941,41 +898,6 @@ export async function fetchClawHubPackageArtifact(params: {
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
     )}/artifact`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-  });
-}
-
-export async function fetchClawHubPackageSecurity(params: {
-  name: string;
-  version: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-}): Promise<ClawHubPackageSecurityResponse> {
-  return await fetchJson<ClawHubPackageSecurityResponse>({
-    baseUrl: params.baseUrl,
-    path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
-      params.version,
-    )}/security`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-  });
-}
-
-export async function fetchClawHubPackageReadiness(params: {
-  name: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-}): Promise<ClawHubPackageReadiness> {
-  return await fetchJson<ClawHubPackageReadiness>({
-    baseUrl: params.baseUrl,
-    path: `/api/v1/packages/${encodeURIComponent(params.name)}/readiness`,
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,

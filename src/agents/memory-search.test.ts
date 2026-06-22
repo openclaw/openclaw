@@ -6,6 +6,7 @@ import {
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
 
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
@@ -204,6 +205,7 @@ describe("memory search config", () => {
     expect(resolved?.provider).toBe("openai");
     expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.fallback).toBe("none");
+    expect(resolved?.store.databasePath).toBe(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
   });
 
   it("normalizes legacy auto provider config to openai", () => {

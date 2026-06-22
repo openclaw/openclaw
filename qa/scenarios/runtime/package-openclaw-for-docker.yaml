@@ -5,9 +5,9 @@ scenario:
   surface: docker-podman-hosting
   coverage:
     primary:
-      - docker-e2e-package-artifact-generation
+      - docker.package-artifact-generation
     secondary:
-      - package-manager-installs
+      - cli.package-manager-installs
       - runtime.package-update
   objective: Exercise bounded OpenClaw package artifact generation through QA Lab evidence.
   successCriteria:

@@ -185,6 +185,17 @@ field; OpenClaw does not infer it from assistant prose. The helper intentionally
 leaves prompt errors, in-flight turns, and intentional silent replies such as
 `NO_REPLY` unclassified.
 
+### Agent-end side effects
+
+Native harnesses must call `runAgentEndSideEffects(...)` from
+`openclaw/plugin-sdk/agent-harness-runtime` after they finalize an attempt. It
+dispatches the portable `agent_end` hook and OpenClaw's research capture without
+delaying interactive replies. Use `awaitAgentEndSideEffects(...)` for local,
+non-interactive runs where the attempt must not resolve until those side effects
+finish. Both helpers accept the same `{ event, ctx }` payload as
+`runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
+attempt result.
+
 ### Native Codex harness mode
 
 The bundled `codex` harness is the native Codex mode for embedded OpenClaw

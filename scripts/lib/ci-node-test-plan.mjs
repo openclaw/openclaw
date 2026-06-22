@@ -12,6 +12,26 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
+const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
+const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
+// Commands and cron run non-isolated, so keep their split shards as separate
+// processes. Combining their include lists can retain test state across groups.
+const BUNDLEABLE_NODE_TEST_CONFIGS = new Set(["test/vitest/vitest.infra.config.ts"]);
+const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
+  "agentic-agents-core-auth",
+  "agentic-agents-core-models",
+  "agentic-agents-core-runtime",
+  "agentic-agents-core-subagents",
+  "agentic-agents-embedded",
+  "agentic-agents-support",
+  "agentic-agents-core-runner",
+  "agentic-agents-core-tools",
+  "agentic-gateway-core",
+  "agentic-gateway-methods",
+  "auto-reply-reply-dispatch",
+  "core-runtime-media-ui",
+  "core-unit-fast",
+]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
   return listTrackedTestFiles(rootDir);
@@ -935,4 +955,96 @@ export function createNodeTestShards(options = {}) {
       },
     ];
   });
+}
+
+function resolveCiNodeTestRunner(shard) {
+  if (shard.runner !== DEFAULT_NODE_TEST_RUNNER) {
+    return shard.runner;
+  }
+  return KEEP_LARGE_NODE_TEST_RUNNER.has(shard.shardName)
+    ? DEFAULT_NODE_TEST_RUNNER
+    : BUNDLED_NODE_TEST_RUNNER;
+}
+
+function bundleNameForConfigs(configs) {
+  const config = configs[0] ?? "node";
+  return config
+    .replace(/^test\/vitest\/vitest\./u, "")
+    .replace(/\.config\.ts$/u, "")
+    .replace(/[^a-z0-9-]+/giu, "-");
+}
+
+/**
+ * Collapse split include-pattern shards into bounded jobs for normal CI.
+ * The base plan remains unchanged for release and coverage consumers.
+ */
+export function createNodeTestShardBundles(options = {}) {
+  const shards = createNodeTestShards(options);
+  const unbundled = [];
+  const groups = new Map();
+
+  for (const shard of shards) {
+    const runner = resolveCiNodeTestRunner(shard);
+    if (
+      shard.requiresDist ||
+      shard.configs.length !== 1 ||
+      !BUNDLEABLE_NODE_TEST_CONFIGS.has(shard.configs[0]) ||
+      !Array.isArray(shard.includePatterns) ||
+      shard.includePatterns.length === 0
+    ) {
+      unbundled.push({ ...shard, runner });
+      continue;
+    }
+
+    const key = JSON.stringify([shard.configs, shard.requiresDist, runner]);
+    const group = groups.get(key) ?? {
+      configs: shard.configs,
+      requiresDist: shard.requiresDist,
+      runner,
+      shards: [],
+    };
+    group.shards.push(shard);
+    groups.set(key, group);
+  }
+
+  const bundled = [];
+  for (const group of groups.values()) {
+    const bins = [];
+    const sortedShards = group.shards.toSorted(
+      (a, b) =>
+        (b.includePatterns?.length ?? 0) - (a.includePatterns?.length ?? 0) ||
+        a.shardName.localeCompare(b.shardName),
+    );
+    for (const shard of sortedShards) {
+      const patterns = shard.includePatterns ?? [];
+      for (let offset = 0; offset < patterns.length; offset += MAX_BUNDLED_NODE_TEST_PATTERNS) {
+        const chunk = patterns.slice(offset, offset + MAX_BUNDLED_NODE_TEST_PATTERNS);
+        const bin = bins.find(
+          (candidate) =>
+            candidate.includePatterns.length + chunk.length <= MAX_BUNDLED_NODE_TEST_PATTERNS,
+        );
+        if (bin) {
+          bin.includePatterns.push(...chunk);
+        } else {
+          bins.push({ includePatterns: [...chunk] });
+        }
+      }
+    }
+
+    const runnerClass = group.runner.includes("-8vcpu-") ? "large" : "small";
+    const bundleName = `${bundleNameForConfigs(group.configs)}-${runnerClass}`;
+    for (const [index, bin] of bins.entries()) {
+      const shardName = `bundle-${bundleName}-${index + 1}`;
+      bundled.push({
+        checkName: formatNodeTestShardCheckName(shardName),
+        shardName,
+        configs: group.configs,
+        includePatterns: bin.includePatterns.toSorted((a, b) => a.localeCompare(b)),
+        runner: group.runner,
+        requiresDist: group.requiresDist,
+      });
+    }
+  }
+
+  return [...unbundled, ...bundled].toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }

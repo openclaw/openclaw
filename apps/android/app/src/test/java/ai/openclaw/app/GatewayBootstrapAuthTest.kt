@@ -377,6 +377,25 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun restoredManualMicWithoutRecordAudioClearsStalePreference() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    prefs.setVoiceMicEnabled(true)
+
+    val runtime = NodeRuntime(app, prefs)
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(prefs.voiceMicEnabled.value)
+    assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+  }
+
+  @Test
   fun talkPttStart_cleansPreparedCaptureWhenBeginFails() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()

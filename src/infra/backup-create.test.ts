@@ -802,10 +802,15 @@ describe("createBackupArchive", () => {
           state.statePath("memory", "main.sqlite.reindex-lock.sqlite"),
           state.statePath("memory", "main.sqlite.tmp-11111111-2222-3333-4444-555555555555"),
           state.statePath("memory", "main.sqlite.backup-66666666-7777-8888-9999-aaaaaaaaaaaa"),
+          state.statePath(
+            "agents",
+            "main",
+            "agent.sqlite.memory-reindex-bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+          ),
         ];
-        await fs.mkdir(path.dirname(transientPaths[0]), { recursive: true });
         await fs.mkdir(outputDir, { recursive: true });
         for (const transientPath of transientPaths) {
+          await fs.mkdir(path.dirname(transientPath), { recursive: true });
           for (const suffix of ["", "-wal", "-shm", "-journal"]) {
             await fs.writeFile(`${transientPath}${suffix}`, "transient reindex database");
           }
@@ -818,12 +823,14 @@ describe("createBackupArchive", () => {
         });
         const entries = await listArchiveEntries(result.archivePath);
         for (const transientPath of transientPaths) {
+          const relativeTransientPath = path
+            .relative(state.stateDir, transientPath)
+            .split(path.sep)
+            .join("/");
           for (const suffix of ["", "-wal", "-shm", "-journal"]) {
             expect(
-              entries.some((entry) =>
-                entry.endsWith(`/state/memory/${path.basename(transientPath)}${suffix}`),
-              ),
-              `${path.basename(transientPath)}${suffix}`,
+              entries.some((entry) => entry.endsWith(`/state/${relativeTransientPath}${suffix}`)),
+              `${relativeTransientPath}${suffix}`,
             ).toBe(false);
           }
         }

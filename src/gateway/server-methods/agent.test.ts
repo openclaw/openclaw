@@ -25,13 +25,14 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -402,6 +403,10 @@ function resetTimeConfig() {
   vi.useRealTimers();
 }
 
+function useTestStateDir(root: string): void {
+  setTestEnvValue("OPENCLAW_STATE_DIR", root);
+}
+
 async function expectResetCall(expectedMessage: string) {
   const call = await waitForAgentCommandCall();
   expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
@@ -562,11 +567,7 @@ async function invokeAgentIdentityGet(
 
 describe("gateway agent handler", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    envSnapshot.restore();
     resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
     resetSubagentRegistryForTests({ persist: false });
@@ -2233,6 +2234,44 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("forwards admin caller ownership to ingress agent runs", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "owner tool check",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-admin-sender-owner",
+      },
+      {
+        reqId: "admin-sender-owner",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(true);
+
+    mocks.agentCommand.mockClear();
+    await invokeAgent(
+      {
+        message: "non-owner tool check",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-write-sender-owner",
+      },
+      {
+        reqId: "write-sender-owner",
+        client: backendGatewayClient(),
+      },
+    );
+
+    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(
+      false,
+    );
+  });
+
   it("rejects public transcriptMessage overrides", async () => {
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
     mocks.agentCommand.mockClear();
@@ -3181,7 +3220,7 @@ describe("gateway agent handler", () => {
 
   it("terminalizes successful async gateway agent runs in the shared task registry", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
 
@@ -3207,7 +3246,7 @@ describe("gateway agent handler", () => {
 
   it("tracks plugin SDK subagent agent runs through the subagent registry only", async () => {
     await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       resetSubagentRegistryForTests({ persist: false });
       const runId = "plugin-subagent-task-run";
@@ -3327,7 +3366,7 @@ describe("gateway agent handler", () => {
     await withTempDir(
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
       async (root) => {
-        process.env.OPENCLAW_STATE_DIR = root;
+        useTestStateDir(root);
         resetTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
         subagentRegistryTesting.setDepsForTest({
@@ -3406,7 +3445,7 @@ describe("gateway agent handler", () => {
 
   it("terminalizes failed async gateway agent runs in the shared task registry", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-error-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockRejectedValueOnce(new Error("agent unavailable"));
@@ -3433,7 +3472,7 @@ describe("gateway agent handler", () => {
 
   it("preserves aborted async gateway agent runs as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockResolvedValueOnce({
@@ -3469,7 +3508,7 @@ describe("gateway agent handler", () => {
 
   it("classifies aborted async gateway agent rejections as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       const abortError = new Error("This operation was aborted");
@@ -3512,7 +3551,7 @@ describe("gateway agent handler", () => {
 
   it("preserves restart ownership for aborted async gateway agent rejections", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-restart-abort-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       const abortError = createAgentRunRestartAbortError();
@@ -3549,7 +3588,7 @@ describe("gateway agent handler", () => {
 
   it("classifies timeout async gateway agent rejections as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-timeout-error-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       const timeoutError = new Error("chat run timed out");
@@ -3594,7 +3633,7 @@ describe("gateway agent handler", () => {
     await withTempDir(
       { prefix: "openclaw-gateway-agent-task-wrapped-timeout-error-" },
       async (root) => {
-        process.env.OPENCLAW_STATE_DIR = root;
+        useTestStateDir(root);
         resetTaskRegistryForTests();
         primeMainAgentRun();
         const timeoutReason = new Error("chat run timed out");
@@ -3643,7 +3682,7 @@ describe("gateway agent handler", () => {
 
   it("does not hide provider timeout async gateway agent rejections", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-provider-timeout-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       const providerError = new Error("provider request timed out");
@@ -3684,7 +3723,7 @@ describe("gateway agent handler", () => {
 
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       let resolveRun: (value: {
@@ -4578,7 +4617,7 @@ describe("gateway agent handler", () => {
 
   it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-seam-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
 
@@ -4637,7 +4676,7 @@ describe("gateway agent handler", () => {
 
   it("logs a swallowed finalize error without blocking the background run", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-finalize-throw-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
 
@@ -5608,11 +5647,7 @@ describe("gateway agent handler", () => {
 
 describe("gateway agent handler chat.abort integration", () => {
   function resetIntegrationState() {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    envSnapshot.restore();
     resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
     mocks.agentCommand.mockReset();

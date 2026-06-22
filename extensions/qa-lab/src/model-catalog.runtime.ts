@@ -24,6 +24,7 @@ import {
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
 } from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
+import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 type ModelRow = {
   key: string;
@@ -120,10 +121,14 @@ function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
   }
   try {
     if (process.platform === "win32") {
-      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
+      const killer = spawn(
+        resolveQaWindowsSystem32ExePath("taskkill.exe"),
+        ["/pid", String(pid), "/t", "/f"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
       killer.once("error", () => {
         try {
           process.kill(pid, signal);
@@ -207,6 +212,7 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
     await new Promise<void>((resolve, reject) => {
       let aborted = params.signal?.aborted === true;
       let forceKillTimer: NodeJS.Timeout | undefined;
+      let forceKillAt: number | undefined;
       const child = spawn(nodeExecPath, ["dist/index.js", "models", "list", "--all", "--json"], {
         cwd: params.repoRoot,
         env: {
@@ -232,18 +238,32 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
         }
       };
       const finishAbortedCatalogLoad = async () => {
-        cleanup();
+        cleanupAbortListener();
+        const graceRemainingMs =
+          forceKillAt === undefined
+            ? CATALOG_ABORT_KILL_GRACE_MS
+            : Math.max(0, forceKillAt - Date.now());
+        if (graceRemainingMs > 0) {
+          await waitForProcessTreeExit(child.pid, graceRemainingMs);
+        }
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = undefined;
+        }
         if (processTreeIsAlive(child.pid)) {
           killProcessTree(child.pid, "SIGKILL");
           await waitForProcessTreeExit(child.pid, CATALOG_ABORT_KILL_GRACE_MS);
         }
+        forceKillAt = undefined;
       };
       const abortCatalogLoad = () => {
         aborted = true;
         killProcessTree(child.pid, "SIGTERM");
+        forceKillAt = Date.now() + CATALOG_ABORT_KILL_GRACE_MS;
         forceKillTimer ??= setTimeout(() => {
+          forceKillAt = undefined;
           killProcessTree(child.pid, "SIGKILL");
-        }, 1_000);
+        }, CATALOG_ABORT_KILL_GRACE_MS);
         forceKillTimer.unref();
       };
       if (aborted) {

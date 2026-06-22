@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { writeGatewayRestartIntentSync } from "../src/infra/restart.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 import {
-  classifyProbeErrorKind,
   getFreePort,
   parseProcessRssKb,
   readProcessRssMb,
@@ -177,7 +177,21 @@ const DEFAULT_RESTARTS = 5;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POST_READY_DELAY_MS = 250;
 const DEFAULT_ENTRY = "dist/entry.js";
-const RESTART_INTENT_FILENAME = "gateway-restart-intent.json";
+const BOOLEAN_FLAGS = new Set(["--allow-failures", "--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--entry",
+  "--output",
+  "--post-ready-delay-ms",
+  "--restarts",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 const BASE_CONFIG = {
   browser: { enabled: false },
@@ -233,9 +247,24 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
 function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1];
   if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
+    throw new CliArgumentError(`${flag} requires a value`);
   }
   return value;
+}
+
+function validateCliArgs(argv: string[]): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      readRequiredFlagValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
 }
 
 function parseFlagValue(argv: string[], flag: string): string | undefined {
@@ -319,6 +348,7 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 }
 
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
+  validateCliArgs(argv);
   return {
     allowFailures: hasFlag(argv, "--allow-failures"),
     cases: resolveCases(parseRepeatableFlag(argv, "--case")),
@@ -802,27 +832,7 @@ function sanitizedEnv(
 }
 
 function writeRestartIntent(env: NodeJS.ProcessEnv, targetPid: number, reason: string): boolean {
-  const stateDir = env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    return false;
-  }
-  try {
-    mkdirSync(stateDir, { recursive: true });
-    const intentPath = path.join(stateDir, RESTART_INTENT_FILENAME);
-    writeFileSync(
-      intentPath,
-      `${JSON.stringify({
-        kind: "gateway-restart",
-        pid: targetPid,
-        createdAt: Date.now(),
-        reason,
-      })}\n`,
-      { mode: 0o600 },
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  return writeGatewayRestartIntentSync({ env, reason, targetPid });
 }
 
 function readProcessFdCount(pid: number | undefined): number | null {
@@ -1624,7 +1634,6 @@ async function main() {
 
 export const testing = {
   classifyGatewayReadyLog,
-  classifyProbeErrorKind,
   collectOutputLines,
   collectTraceLine,
   countLsofFileDescriptors,
@@ -1649,6 +1658,7 @@ export const testing = {
   shouldFailBenchmark,
   stopChild,
   summarizeCase,
+  validateCliArgs,
   waitForRestartProbe,
   writeConfig,
   writeRestartIntent,
@@ -1656,6 +1666,11 @@ export const testing = {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
     console.error(err instanceof Error ? err.stack : String(err));
     process.exitCode = 1;
   });

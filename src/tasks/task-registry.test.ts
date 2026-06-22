@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
-import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
+import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
   registerAgentRunContext,
@@ -67,7 +67,7 @@ import {
   runTaskRegistryMaintenance,
   setTaskRegistryMaintenanceRuntimeForTests,
   startTaskRegistryMaintenance,
-  stopTaskRegistryMaintenanceForTests,
+  stopTaskRegistryMaintenance,
   sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
@@ -137,7 +137,7 @@ vi.mock("../agents/subagent-control.js", () => ({
 
 vi.mock("../utils/message-channel.js", () => ({
   isDeliverableMessageChannel: (channel: string) =>
-    channel === "notifychat" || channel === "guildchat",
+    channel === "notifychat" || channel === "guildchat" || channel === "discord",
 }));
 
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
@@ -432,7 +432,7 @@ function resetTaskRegistryMemoryForTest(opts?: { persist?: boolean }) {
 }
 
 async function withTaskRegistryTempDir<T>(
-  run: () => Promise<T>,
+  run: (root: string) => Promise<T>,
   options?: { durableStore?: boolean },
 ): Promise<T> {
   return await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
@@ -443,7 +443,7 @@ async function withTaskRegistryTempDir<T>(
         configureInMemoryTaskStoresForTests();
       }
       try {
-        return await run();
+        return await run(root);
       } finally {
         // Close both sqlite-backed registries before Windows temp-dir cleanup tries to remove them.
         resetTaskRegistryForTests({ persist: false });
@@ -475,7 +475,7 @@ describe("task-registry", () => {
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
-    resetCronActiveJobsForTests();
+    resetCronActiveJobs();
     resetActiveCronTaskRunsForTests();
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
@@ -1322,6 +1322,148 @@ describe("task-registry", () => {
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
+
+  it("delivers delegated ACP completion directly to an explicitly bound Discord thread", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const runId = "run-bound-discord-thread-terminal";
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "channel:parent-channel",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:parent-channel",
+          threadId: "thread-84022",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId,
+        task: "Investigate thread-bound ACP delivery",
+        status: "running",
+        deliveryStatus: "pending",
+        terminalSummary: "ACP final answer",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() => {
+        const task = findTaskByRunId(runId);
+        if (!task) {
+          throw new Error(`Expected task for run ${runId}`);
+        }
+        expect(task.status).toBe("succeeded");
+        expect(task.deliveryStatus).toBe("delivered");
+      });
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
+      const message = sentMessageCall();
+      expectRecordFields(message, {
+        channel: "discord",
+        to: "channel:parent-channel",
+        threadId: "thread-84022",
+      });
+      expect(String(message.content)).toContain(
+        "Background task ready for review: ACP background task",
+      );
+      expect(String(message.content)).toContain("ACP final answer");
+      expect(String(message.content)).toContain(
+        "Next: parent will review/verify before calling it done.",
+      );
+      expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toStrictEqual(
+        [],
+      );
+    });
+  });
+
+  it.each([
+    {
+      id: "missing-thread",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:parent-channel",
+      },
+    },
+    {
+      id: "non-channel-target",
+      requesterOrigin: {
+        channel: "discord",
+        to: "user:U123",
+        threadId: "thread-84022",
+      },
+    },
+    {
+      id: "non-discord-channel",
+      requesterOrigin: {
+        channel: "guildchat",
+        to: "guildchat:channel:parent-channel",
+        threadId: "thread-84022",
+      },
+    },
+  ])(
+    "keeps delegated ACP completion queued without an explicit bound Discord thread ($id)",
+    async ({ requesterOrigin }) => {
+      await withTaskRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        const runId = `run-non-bound-discord-thread-terminal-${requesterOrigin.channel}-${requesterOrigin.to}`;
+        hoisted.sendMessageMock.mockResolvedValue({
+          channel: requesterOrigin.channel,
+          to: requesterOrigin.to,
+          via: "direct",
+        });
+
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
+          scopeKind: "session",
+          requesterOrigin,
+          childSessionKey: "agent:main:acp:child",
+          runId,
+          task: "Investigate thread-bound ACP delivery",
+          status: "running",
+          deliveryStatus: "pending",
+          terminalSummary: "ACP final answer",
+          startedAt: 100,
+        });
+
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            endedAt: 250,
+          },
+        });
+
+        await waitForAssertion(() => {
+          const task = findTaskByRunId(runId);
+          if (!task) {
+            throw new Error(`Expected task for run ${runId}`);
+          }
+          expect(task.status).toBe("succeeded");
+          expect(task.deliveryStatus).toBe("session_queued");
+        });
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+        expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toEqual([
+          expect.stringContaining("Background task ready for review: ACP background task"),
+        ]);
+      });
+    },
+  );
 
   it.each([
     {
@@ -2782,7 +2924,7 @@ describe("task-registry", () => {
       });
 
       startTaskRegistryMaintenance();
-      stopTaskRegistryMaintenanceForTests();
+      stopTaskRegistryMaintenance();
 
       await vi.advanceTimersByTimeAsync(5_000);
       await flushAsyncWork();

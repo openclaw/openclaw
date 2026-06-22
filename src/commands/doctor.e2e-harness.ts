@@ -105,9 +105,7 @@ const findLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as Mo
 const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 const findExtraGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 const findSystemGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
-const renderGatewayServiceCleanupHints = vi
-  .fn()
-  .mockReturnValue(["cleanup"]) as unknown as MockFn;
+const renderGatewayServiceCleanupHints = vi.fn().mockReturnValue(["cleanup"]) as unknown as MockFn;
 const auditGatewayServiceConfig = vi
   .fn()
   .mockResolvedValue({ ok: true, issues: [] }) as unknown as MockFn;
@@ -225,6 +223,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/plugins/installs.json",
       hasLegacy: false,
     },
+    debugProxyCaptureSidecar: {
+      sourcePath: "/tmp/state/debug-proxy/capture.sqlite",
+      blobDir: "/tmp/state/debug-proxy/blobs",
+      hasLegacy: false,
+    },
     stateSchema: {
       hasLegacy: false,
       preview: [],
@@ -237,6 +240,27 @@ function createLegacyStateMigrationDetectionResult(params?: {
     deliveryQueues: {
       outboundPath: "/tmp/state/delivery-queue",
       sessionPath: "/tmp/state/session-delivery-queue",
+      hasLegacy: false,
+    },
+    voiceWake: {
+      triggersPath: "/tmp/state/settings/voicewake.json",
+      routingPath: "/tmp/state/settings/voicewake-routing.json",
+      hasLegacy: false,
+    },
+    updateCheck: {
+      sourcePath: "/tmp/state/update-check.json",
+      hasLegacy: false,
+    },
+    configHealth: {
+      sourcePath: "/tmp/state/logs/config-health.json",
+      hasLegacy: false,
+    },
+    pluginBindingApprovals: {
+      sourcePath: "/tmp/state/plugin-binding-approvals.json",
+      hasLegacy: false,
+    },
+    currentConversationBindings: {
+      sourcePath: "/tmp/state/bindings/current-conversations.json",
       hasLegacy: false,
     },
     execApprovals: {

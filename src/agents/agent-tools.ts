@@ -39,7 +39,6 @@ import {
 import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
 import {
-  isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -59,7 +58,7 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamValidation,
 } from "./agent-tools.read.js";
-import { cleanToolSchemaForGemini, normalizeToolParameters } from "./agent-tools.schema.js";
+import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -93,6 +92,7 @@ import {
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
+import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -409,7 +409,6 @@ export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 
 /** Test-only access to internal tool assembly helpers. */
 export const testing = {
-  cleanToolSchemaForGemini,
   getToolParamsRecord,
   wrapToolParamValidation,
   assertRequiredParams,
@@ -429,6 +428,8 @@ export function createOpenClawCodingTools(options?: {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
+  /** Canonical transport channel when tool-policy provider differs from delivery channel. */
+  messageChannel?: string;
   /** Specific ingress provider used only for transport tool availability. */
   toolPolicyMessageProvider?: string;
   agentAccountId?: string;
@@ -451,6 +452,8 @@ export function createOpenClawCodingTools(options?: {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
@@ -868,6 +871,7 @@ export function createOpenClawCodingTools(options?: {
         currentChannelId: options?.currentChannelId,
         currentThreadTs: options?.currentThreadTs,
         accountId: options?.agentAccountId,
+        approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
         backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
         timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
         approvalRunningNoticeMs:
@@ -1212,6 +1216,8 @@ export function createOpenClawCodingTools(options?: {
     }),
   );
   options?.recordToolPrepStage?.("schema-normalization");
+  const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
+  const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
   const hookContext = {
     agentId,
     ...(options?.config ? { config: options.config } : {}),
@@ -1225,6 +1231,10 @@ export function createOpenClawCodingTools(options?: {
     sessionId: options?.sessionId,
     runId: options?.runId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
+    ...(turnSourceChannel ? { turnSourceChannel } : {}),
+    ...(turnSourceTo ? { turnSourceTo } : {}),
+    ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
+    ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     onToolOutcome: options?.onToolOutcome,
