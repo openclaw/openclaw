@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   type OwnedSessionTranscriptPublishedEntry,
@@ -875,6 +876,13 @@ function abortOwnerWaitReason(signal: AbortSignal): unknown {
   return abortReason(signal) ?? new Error("operation aborted", { cause: signal });
 }
 
+function resolveSessionFileOwnerWaitTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined) {
+    return undefined;
+  }
+  return clampTimerTimeoutMs(timeoutMs);
+}
+
 function waitForSessionFileOwnerRelease(params: {
   sessionFile: string;
   entry: SessionFileOwnerEntry;
@@ -909,17 +917,18 @@ function waitForSessionFileOwnerRelease(params: {
       cleanup();
       reject(toLintErrorObject(error, "Non-Error rejection"));
     };
-    if (params.timeoutMs !== undefined && Number.isFinite(params.timeoutMs)) {
+    const timeoutMs = resolveSessionFileOwnerWaitTimeoutMs(params.timeoutMs);
+    if (timeoutMs !== undefined) {
       waiter.timer = setTimeout(
         () => {
           waiter.reject(
             new EmbeddedAttemptSessionFileOwnerTimeoutError(
               params.sessionFile,
-              params.timeoutMs ?? 0,
+              timeoutMs,
             ),
           );
         },
-        Math.max(1, Math.floor(params.timeoutMs)),
+        timeoutMs,
       );
       waiter.timer.unref?.();
     }

@@ -174,6 +174,28 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
+  it("rejects option-shaped package candidate option values", () => {
+    for (const flag of [
+      "--artifact-dir",
+      "--github-output",
+      "--metadata",
+      "--output-dir",
+      "--output-name",
+      "--package-ref",
+      "--package-spec",
+      "--package-url",
+      "--package-sha256",
+      "--source",
+      "--trusted-source-id",
+      "--trusted-source-policy",
+    ]) {
+      expect(() => parseArgs([flag, "--output-dir", "out"]), flag).toThrow(
+        `${flag} requires a value`,
+      );
+      expect(() => parseArgs([flag, "-h"]), flag).toThrow(`${flag} requires a value`);
+    }
+  });
+
   it("rejects package candidate output names that escape the output directory", () => {
     for (const outputName of [
       "../openclaw-current.tgz",
@@ -387,6 +409,15 @@ describe("resolve-openclaw-package-candidate", () => {
     ).rejects.toThrow(/produced more than \d+ captured stdout chars/u);
   });
 
+  it("clamps oversized package runner command timers before scheduling", async () => {
+    await expect(
+      runCommandForTest(process.execPath, ["-e", "setTimeout(() => process.exit(0), 25);"], {
+        killAfterMs: Number.MAX_SAFE_INTEGER,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).resolves.toBe("");
+  });
+
   it("kills timed-out package runner process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -419,6 +450,45 @@ describe("resolve-openclaw-package-candidate", () => {
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
       await timeoutAssertion;
       await waitForDead(childPid, 2_000);
+    } finally {
+      if (childPid !== undefined && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+    }
+  });
+
+  it("clamps oversized package runner kill grace before scheduling", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-runner-grace-"));
+    tempDirs.push(dir);
+    const childPidPath = path.join(dir, "child.pid");
+    const cleanupPath = path.join(dir, "child.cleanup");
+    let childPid: number | undefined;
+
+    try {
+      const childScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {",
+        `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean'); process.exit(0); }, 75);`,
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const timeoutAssertion = expect(
+        runCommandForTest(process.execPath, ["-e", childScript], {
+          killAfterMs: Number.MAX_SAFE_INTEGER,
+          timeoutMs: 500,
+        }),
+      ).rejects.toThrow(/timed out after 500ms/u);
+
+      await waitForFile(childPidPath, 2_000);
+      childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+      await timeoutAssertion;
+      expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
     } finally {
       if (childPid !== undefined && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
@@ -1040,6 +1110,36 @@ describe("resolve-openclaw-package-candidate", () => {
       lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
       maxBytes: 3,
     });
+    await expect(readFile(target)).resolves.toEqual(Buffer.from([1, 2, 3]));
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
+  });
+
+  it("clamps oversized package_url download timers before scheduling", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+
+    await downloadUrl("https://packages.example/openclaw.tgz", target, {
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              setTimeout(() => {
+                controller.enqueue(new Uint8Array([1, 2, 3]));
+                controller.close();
+              }, 25);
+            },
+          }),
+          {
+            headers: { "content-length": "3" },
+            status: 200,
+          },
+        ),
+      lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+      maxBytes: 3,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
     await expect(readFile(target)).resolves.toEqual(Buffer.from([1, 2, 3]));
     await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });

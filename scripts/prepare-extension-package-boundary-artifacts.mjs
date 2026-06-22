@@ -18,6 +18,7 @@ const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
 const ROOT_SHIMS_NODE_OPTIONS =
   `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
 const NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const NODE_STEP_PARENT_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
   ["SIGHUP", 129],
@@ -469,10 +470,19 @@ function installNodeStepParentSignalForwarders() {
   });
 }
 
+function resolveNodeStepTimerTimeoutMs(valueMs) {
+  const value = Number(valueMs);
+  if (!Number.isFinite(value)) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
 /**
  * Runs one artifact step with timeout, abort propagation, and prefixed output.
  */
 export function runNodeStep(label, args, timeoutMs, params = {}) {
+  const resolvedTimeoutMs = resolveNodeStepTimerTimeoutMs(timeoutMs);
   const abortController = params.abortController;
   const spawnImpl = params.spawnImpl ?? spawn;
   installNodeStepParentSignalForwarders();
@@ -555,8 +565,8 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
       stdoutWriter.flush();
       stderrWriter.flush();
       abortSiblingSteps(abortController);
-      rejectPromise(new Error(`${label} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+      rejectPromise(new Error(`${label} timed out after ${resolvedTimeoutMs}ms`));
+    }, resolvedTimeoutMs);
     abortController?.signal.addEventListener("abort", abortStep, { once: true });
 
     child.stdout.setEncoding("utf8");

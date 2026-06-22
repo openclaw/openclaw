@@ -464,15 +464,6 @@ export function resolveSessionMcpConfigSummary(params: {
   };
 }
 
-/** Returns the session MCP config fingerprint with the same no-runtime/no-connect contract as the summary helper. */
-export function resolveSessionMcpConfigFingerprint(params: {
-  workspaceDir: string;
-  cfg?: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-}): string {
-  return resolveSessionMcpConfigSummary(params).fingerprint;
-}
-
 function createDisposedError(sessionId: string): Error {
   return new Error(`bundle-mcp runtime disposed for session ${sessionId}`);
 }

@@ -207,7 +207,3 @@ export async function closeQaWebSessions(pageIds?: Iterable<string>): Promise<vo
     await session.browser.close().catch(() => {});
   }
 }
-
-export async function closeAllQaWebSessions(): Promise<void> {
-  await closeQaWebSessions();
-}

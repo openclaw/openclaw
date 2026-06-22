@@ -36,6 +36,7 @@ const DEFAULT_HOT_WALL_WARN_MS = 30_000;
 const DEFAULT_MAX_RSS_WARN_MB = 1536;
 const DEFAULT_QA_PLUGIN_CHUNK_SIZE = 12;
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 /**
@@ -82,7 +83,7 @@ export function parseArgs(argv) {
     const arg = args[index];
     const readValue = () => {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`Missing value for ${arg}`);
       }
       index += 1;
@@ -439,6 +440,15 @@ function stripAnsi(value) {
   return value.replace(ANSI_PATTERN, "");
 }
 
+function resolveTimerTimeoutMs(valueMs) {
+  const value = Number.isFinite(valueMs) ? Math.floor(valueMs) : MAX_TIMER_TIMEOUT_MS;
+  return Math.min(Math.max(value, 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+function resolveOptionalTimerTimeoutMs(valueMs) {
+  return valueMs === undefined || valueMs <= 0 ? null : resolveTimerTimeoutMs(valueMs);
+}
+
 function writeCommandLog(params) {
   const { logDir, label, stdout, stderr } = params;
   fs.mkdirSync(logDir, { recursive: true });
@@ -487,7 +497,8 @@ export function runMeasuredCommandLive(params) {
     let parentTerminationSignal = null;
     const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
     const maxRelayBytes = params.consoleOutputMaxBytes ?? maxBufferBytes;
-    const timeoutKillGraceMs = params.timeoutKillGraceMs ?? 5_000;
+    const timeoutMs = resolveOptionalTimerTimeoutMs(params.timeoutMs);
+    const timeoutKillGraceMs = resolveTimerTimeoutMs(params.timeoutKillGraceMs ?? 5_000);
     const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
     const useProcessGroup =
       process.platform !== "win32" &&
@@ -519,8 +530,8 @@ export function runMeasuredCommandLive(params) {
         return Boolean(error && error.code === "EPERM");
       }
     };
-    const waitForProcessGroupExit = async (timeoutMs) => {
-      const deadlineAt = Date.now() + timeoutMs;
+    const waitForProcessGroupExit = async (timeoutBudgetMs) => {
+      const deadlineAt = Date.now() + timeoutBudgetMs;
       while (Date.now() < deadlineAt) {
         if (!processGroupAlive()) {
           return true;
@@ -641,16 +652,16 @@ export function runMeasuredCommandLive(params) {
     child.stdout?.on("data", (chunk) => appendOutput("stdout", chunk));
     child.stderr?.on("data", (chunk) => appendOutput("stderr", chunk));
     const timeout =
-      params.timeoutMs > 0
+      timeoutMs !== null
         ? setTimeout(() => {
             timedOut = true;
             spawnError = {
               code: "ETIMEDOUT",
-              message: `Command timed out after ${params.timeoutMs}ms`,
+              message: `Command timed out after ${timeoutMs}ms`,
             };
             killMeasuredProcess();
             scheduleForceKill();
-          }, params.timeoutMs)
+          }, timeoutMs)
         : null;
     timeout?.unref?.();
     const finish = (status, signal) => {

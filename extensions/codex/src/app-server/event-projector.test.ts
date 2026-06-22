@@ -278,6 +278,11 @@ describe("CodexAppServerEventProjector", () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
       await createProjectorWithAssistantHooks();
 
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "" },
+      }),
+    );
     await projector.handleNotification(agentMessageDelta("hel"));
     await projector.handleNotification(agentMessageDelta("lo"));
     await projector.handleNotification(
@@ -305,7 +310,10 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "hel", delta: "hel" },
+      { text: "hello", delta: "lo" },
+    ]);
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
@@ -321,7 +329,13 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("streams final-answer assistant deltas into partial replies", async () => {
-    const { onPartialReply, projector } = await createProjectorWithAssistantHooks();
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+      onPartialReply,
+    });
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -340,6 +354,79 @@ describe("CodexAppServerEventProjector", () => {
     expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
       { text: "hel", delta: "hel" },
       { text: "hello", delta: "lo" },
+    ]);
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "assistant"),
+    ).toEqual([
+      { stream: "assistant", data: { text: "hel", delta: "hel" } },
+      { stream: "assistant", data: { text: "hello", delta: "lo" } },
+    ]);
+  });
+
+  it("streams assistant deltas when the app-server omits the item phase", async () => {
+    // Newer Codex app-servers (>= 0.139) stream agentMessage deltas without a
+    // "final_answer" phase. These surface on the replaceable agent-event path;
+    // legacy append-oriented partial callbacks stay quiet.
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    await projector.handleNotification(agentMessageDelta("hel", "msg-final"));
+    await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
+      { stream: "assistant", data: { text: "hel", delta: "hel", replaceable: true } },
+      { stream: "assistant", data: { text: "hello", delta: "lo", replaceable: true } },
+    ]);
+  });
+
+  it("marks partial replacement when an unphased intermediate item is superseded by a final item", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    await projector.handleNotification(agentMessageDelta("coordination ", "msg-intermediate"));
+    await projector.handleNotification(agentMessageDelta("draft", "msg-intermediate"));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("final ", "msg-final"));
+    await projector.handleNotification(agentMessageDelta("answer", "msg-final"));
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "assistant"),
+    ).toEqual([
+      {
+        stream: "assistant",
+        data: { text: "coordination ", delta: "coordination ", replaceable: true },
+      },
+      {
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "draft", replaceable: true },
+      },
+      {
+        stream: "assistant",
+        data: { text: "final ", delta: "", replace: true, replaceable: true },
+      },
+      { stream: "assistant", data: { text: "final answer", delta: "answer", replaceable: true } },
     ]);
   });
 
@@ -1041,6 +1128,8 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    // Phase-less snapshots stay on the replaceable agent-event path so legacy
+    // append-only channel previews do not render superseded coordination text.
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(result.assistantTexts).toEqual([
       "release fixes first. please drop affected PRs, failing checks, and blockers here.",

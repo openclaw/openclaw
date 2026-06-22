@@ -1751,8 +1751,6 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
-export { isModelNotFoundErrorMessage };
-
 function isCliSessionExpiredErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;

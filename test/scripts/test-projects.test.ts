@@ -1389,6 +1389,11 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: ["test/scripts/update-clawtributors.test.ts"],
     });
 
+    expect(resolveChangedTestTargetPlan(["scripts/docs-list.js"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/docs-list.test.ts"],
+    });
+
     expect(resolveChangedTestTargetPlan(["scripts/docs-link-audit.mjs"])).toEqual({
       mode: "targets",
       targets: ["src/scripts/docs-link-audit.test.ts"],
@@ -3336,7 +3341,7 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(
       resolveChangedTestTargetPlan([
         "src/commands/doctor-memory-search.ts",
-        "src/memory-host-sdk/host/embedding-defaults.ts",
+        "packages/memory-host-sdk/src/host/embedding-defaults.ts",
       ]),
     ).toEqual({
       mode: "targets",

@@ -759,7 +759,7 @@ Tool name: `voice_call`.
 | `end_call`      | `callId`                                   |
 | `get_status`    | `callId`                                   |
 
-This repo ships a matching skill doc at `skills/voice-call/SKILL.md`.
+The voice-call plugin ships a matching agent skill.
 
 ## Gateway RPC
 
