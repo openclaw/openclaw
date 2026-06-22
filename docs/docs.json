@@ -1851,6 +1851,7 @@
               {
                 "group": "Release and CI",
                 "pages": [
+                  "maturity-scorecard",
                   "reference/RELEASING",
                   "reference/full-release-validation",
                   "reference/release-performance-sweep",

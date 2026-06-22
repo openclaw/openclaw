@@ -633,10 +633,6 @@ function writeOrCheck(outputPath: string, content: string, check: boolean): bool
   return false;
 }
 
-function anyOutputExists(outputDir: string, outputs: Map<string, string>): boolean {
-  return [...outputs.keys()].some((fileName) => fs.existsSync(path.join(outputDir, fileName)));
-}
-
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   const taxonomyPath = path.normalize(args.taxonomy);
@@ -683,12 +679,6 @@ function main(): void {
     ["taxonomy.md", renderTaxonomy({ taxonomy, scores })],
     ["taxonomy-outline.md", renderTaxonomyOutline({ taxonomy })],
   ]);
-  if (args.check && !anyOutputExists(outputDir, outputs)) {
-    process.stdout.write(
-      `maturity docs are not initialized in ${outputDir}; skipping generated-doc drift check\n`,
-    );
-    return;
-  }
   const changed: string[] = [];
   for (const [fileName, content] of outputs) {
     const outputPath = path.join(outputDir, fileName);
