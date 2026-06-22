@@ -35,6 +35,11 @@ on:
         description: Taxonomy QA profile id to run
         required: true
         type: string
+      fail_on_qa_failure:
+        description: Fail the reusable workflow when the QA profile command exits non-zero
+        required: false
+        default: false
+        type: boolean
     outputs:
       artifact_name:
         description: Uploaded QA profile evidence artifact name
@@ -42,6 +47,12 @@ on:
       qa_profile:
         description: Taxonomy QA profile id that produced the evidence
         value: ${{ jobs.run_qa_profile.outputs.qa_profile }}
+      qa_exit_code:
+        description: Exit code from the QA profile run; non-zero evidence is still uploaded
+        value: ${{ jobs.run_qa_profile.outputs.qa_exit_code }}
+      qa_passed:
+        description: Whether the QA profile command exited successfully
+        value: ${{ jobs.run_qa_profile.outputs.qa_passed }}
       target_sha:
         description: Resolved OpenClaw SHA that produced the evidence
         value: ${{ jobs.run_qa_profile.outputs.target_sha }}
@@ -180,6 +191,8 @@ jobs:
     outputs:
       artifact_name: ${{ steps.evidence.outputs.artifact_name }}
       qa_profile: ${{ steps.profile.outputs.profile }}
+      qa_exit_code: ${{ steps.evidence.outputs.qa_exit_code }}
+      qa_passed: ${{ steps.evidence.outputs.qa_passed }}
       target_sha: ${{ steps.evidence.outputs.target_sha }}
       trusted_reason: ${{ steps.evidence.outputs.trusted_reason }}
       qa_evidence_path: ${{ steps.evidence.outputs.qa_evidence_path }}
@@ -257,6 +270,7 @@ jobs:
         env:
           ARTIFACT_NAME: qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
           OUTPUT_DIR: ${{ steps.run_profile.outputs.output_dir }}
+          QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
           REQUESTED_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -272,6 +286,9 @@ jobs:
           const outputDir = process.env.OUTPUT_DIR;
           if (!outputDir) {
             throw new Error("OUTPUT_DIR is required");
+          }
+          if (!process.env.QA_EXIT_CODE) {
+            throw new Error("QA_EXIT_CODE is required");
           }
 
           const evidencePath = path.join(outputDir, "qa-evidence.json");
@@ -290,6 +307,8 @@ jobs:
             artifactName: process.env.ARTIFACT_NAME,
             generatedAt: new Date().toISOString(),
             qaProfile: process.env.QA_PROFILE,
+            qaExitCode: Number(process.env.QA_EXIT_CODE),
+            qaPassed: process.env.QA_EXIT_CODE === "0",
             requestedRef: process.env.REQUESTED_REF,
             targetSha: process.env.TARGET_SHA,
             trustedReason: process.env.TRUSTED_REASON,
@@ -309,6 +328,13 @@ jobs:
 
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
           echo "qa_profile=${QA_PROFILE}" >> "$GITHUB_OUTPUT"
+          echo "qa_exit_code=${QA_EXIT_CODE}" >> "$GITHUB_OUTPUT"
+          if [[ "$QA_EXIT_CODE" == "0" ]]; then
+            echo "qa_passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "qa_passed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::QA profile '${QA_PROFILE}' completed with exit code ${QA_EXIT_CODE}; evidence was still validated and uploaded."
+          fi
           echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=${TRUSTED_REASON}" >> "$GITHUB_OUTPUT"
           echo "qa_evidence_path=qa-evidence.json" >> "$GITHUB_OUTPUT"
@@ -317,6 +343,7 @@ jobs:
             echo
             echo "- Artifact: \`${ARTIFACT_NAME}\`"
             echo "- QA profile: \`${QA_PROFILE}\`"
+            echo "- QA exit code: \`${QA_EXIT_CODE}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Evidence path: \`${OUTPUT_DIR}/qa-evidence.json\`"
             echo "- Manifest: \`${OUTPUT_DIR}/qa-profile-evidence-manifest.json\`"
@@ -331,10 +358,11 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Fail if QA profile failed
-        if: always()
+      - name: Fail if configured QA gate failed
+        if: always() && (github.event_name == 'workflow_dispatch' || inputs.fail_on_qa_failure)
         env:
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
+          QA_PROFILE: ${{ steps.profile.outputs.profile }}
         shell: bash
         run: |
           set -euo pipefail
@@ -343,6 +371,6 @@ jobs:
             exit 1
           fi
           if [[ "$QA_EXIT_CODE" != "0" ]]; then
-            echo "QA profile failed with exit code ${QA_EXIT_CODE}." >&2
+            echo "QA profile '${QA_PROFILE}' failed with exit code ${QA_EXIT_CODE}." >&2
             exit "$QA_EXIT_CODE"
           fi
