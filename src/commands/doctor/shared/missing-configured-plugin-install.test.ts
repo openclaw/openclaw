@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => ({
   installPluginFromNpmSpec: vi.fn(),
   listChannelPluginCatalogEntries: vi.fn(),
   listOfficialExternalPluginCatalogEntries: vi.fn(),
+  listOfficialExternalChannelEnvVars: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(),
   loadPluginMetadataSnapshot: vi.fn(),
@@ -160,6 +161,7 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
 
 vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
   getOfficialExternalPluginCatalogManifest: mocks.getOfficialExternalPluginCatalogManifest,
+  listOfficialExternalChannelEnvVars: mocks.listOfficialExternalChannelEnvVars,
   listOfficialExternalPluginCatalogEntries: mocks.listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId: mocks.resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall: mocks.resolveOfficialExternalPluginInstall,
@@ -195,6 +197,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     mocks.listChannelPluginCatalogEntries.mockReturnValue([]);
+    mocks.listOfficialExternalChannelEnvVars.mockReturnValue([]);
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([]);
     mocks.resolveDefaultPluginExtensionsDir.mockReturnValue("/tmp/openclaw-plugins");
     mocks.resolveDefaultPluginNpmDir.mockReturnValue("/tmp/openclaw-npm");
