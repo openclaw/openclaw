@@ -243,12 +243,30 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Trims whitespace from object keys. Some tool-call extraction/serialization
+ * pipelines can produce keys with trailing spaces (e.g. "schedule " instead of
+ * "schedule"), which would bypass cron schema validation and cause confusing
+ * "unexpected property" errors. Defensively trim all keys before processing.
+ */
+function trimObjectKeys(value: Record<string, unknown>): void {
+  const keys = Object.keys(value);
+  for (const key of keys) {
+    const trimmed = key.trim();
+    if (trimmed !== key) {
+      value[trimmed] = value[key];
+      delete value[key];
+    }
+  }
+}
+
 /** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
 export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
   const next = { ...unwrapped };
+  trimObjectKeys(next);
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);

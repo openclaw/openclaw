@@ -181,4 +181,42 @@ describe("cron tool flat-params", () => {
       staggerMs: 30_000,
     });
   });
+
+  it("trims trailing whitespace from job object keys (#95407)", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    // Simulate the key-mangling issue where tool-call extraction/serialization
+    // pipelines append trailing spaces to specific top-level keys.
+    await tool.execute("call-trailing-space", {
+      action: "add",
+      job: {
+        name: "Holiday Check-in",
+        description: "Casual check-in",
+        "schedule ": { kind: "cron", expr: "30 10,20 * * *", tz: "Europe/Madrid" },
+        "sessionTarget ": "isolated",
+        "payload ": { kind: "agentTurn", message: "How's it going?" },
+        "enabled ": true,
+      },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      name?: string;
+      schedule?: unknown;
+      sessionTarget?: string;
+      payload?: unknown;
+      enabled?: boolean;
+    }>();
+    expect(method).toBe("cron.add");
+    // Keys should be trimmed: "schedule " -> "schedule", etc.
+    expect(params.name).toBe("Holiday Check-in");
+    expect(params.schedule).toBeDefined();
+    expect(params.sessionTarget).toBe("isolated");
+    expect(params.payload).toBeDefined();
+    expect(params.enabled).toBe(true);
+    // Trimmed keys should not appear in the output
+    expect(params).not.toHaveProperty("schedule ");
+    expect(params).not.toHaveProperty("sessionTarget ");
+    expect(params).not.toHaveProperty("payload ");
+    expect(params).not.toHaveProperty("enabled ");
+  });
 });
