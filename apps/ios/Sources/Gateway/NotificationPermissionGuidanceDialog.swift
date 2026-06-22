@@ -3,7 +3,6 @@ import SwiftUI
 private struct NotificationPermissionGuidanceDialogModifier: ViewModifier {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     let openNotifications: (String) -> Void
-    @State private var suppressFuture = false
 
     func body(content: Content) -> some View {
         content
@@ -14,18 +13,19 @@ private struct NotificationPermissionGuidanceDialogModifier: ViewModifier {
                             .ignoresSafeArea()
 
                         NotificationPermissionGuidanceCard(
-                            suppressFuture: self.$suppressFuture,
                             onOpenNotifications: {
                                 let approvalId = prompt.approvalId
                                 self.appModel.dismissNotificationPermissionGuidancePrompt(
-                                    suppressFuture: self.suppressFuture)
-                                self.suppressFuture = false
+                                    suppressFuture: false)
                                 self.openNotifications(approvalId)
                             },
                             onDismiss: {
                                 self.appModel.dismissNotificationPermissionGuidancePrompt(
-                                    suppressFuture: self.suppressFuture)
-                                self.suppressFuture = false
+                                    suppressFuture: false)
+                            },
+                            onSuppressFuture: {
+                                self.appModel.dismissNotificationPermissionGuidancePrompt(
+                                    suppressFuture: true)
                             })
                             .padding(.horizontal, 20)
                             .frame(maxWidth: 460)
@@ -38,16 +38,13 @@ private struct NotificationPermissionGuidanceDialogModifier: ViewModifier {
             .animation(
                 .easeInOut(duration: 0.18),
                 value: self.appModel.pendingNotificationPermissionGuidancePrompt?.id)
-            .onChange(of: self.appModel.pendingNotificationPermissionGuidancePrompt?.id) { _, _ in
-                self.suppressFuture = false
-            }
     }
 }
 
 private struct NotificationPermissionGuidanceCard: View {
-    @Binding var suppressFuture: Bool
     let onOpenNotifications: () -> Void
     let onDismiss: () -> Void
+    let onSuppressFuture: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -65,22 +62,6 @@ private struct NotificationPermissionGuidanceCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Button {
-                self.suppressFuture.toggle()
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: self.suppressFuture ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 20, weight: .semibold))
-                    Text("Don't show again")
-                        .font(.subheadline)
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Don't show again")
-            .accessibilityValue(self.suppressFuture ? "On" : "Off")
-
             VStack(spacing: 10) {
                 Button {
                     self.onOpenNotifications()
@@ -94,6 +75,14 @@ private struct NotificationPermissionGuidanceCard: View {
                     self.onDismiss()
                 } label: {
                     Text("Not Now")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    self.onSuppressFuture()
+                } label: {
+                    Text("Don't show again")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
