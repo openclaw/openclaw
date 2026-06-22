@@ -303,7 +303,16 @@ function redactNodeExecPath(execPath: string): string {
   if (execPath === osHome) {
     return "~";
   }
-  if (execPath.startsWith(osHome + "/") || execPath.startsWith(osHome + "\\")) {
+  // POSIX paths are case-sensitive, so compare the OS-home prefix exactly.
+  if (execPath.startsWith(osHome + "/")) {
+    return "~" + execPath.slice(osHome.length);
+  }
+  // Windows paths are case-insensitive (e.g. os.homedir() may return
+  // "C:\\Users\\Alice" while execPath is "c:\\users\\alice\\..."), so
+  // compare the backslash-boundary prefix case-insensitively. Slice by the
+  // original length to preserve the path's real casing in the redacted output.
+  const winPrefix = osHome + "\\";
+  if (execPath.toLowerCase().startsWith(winPrefix.toLowerCase())) {
     return "~" + execPath.slice(osHome.length);
   }
   return shortened;

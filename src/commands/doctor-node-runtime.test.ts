@@ -441,4 +441,22 @@ describe("buildNodeRuntimeSummary", () => {
       }
     }
   });
+
+  it("redacts the Windows OS home from execPath when only the casing differs", () => {
+    const diag = makeDiag({
+      version: "24.14.0",
+      execPath: "c:\\users\\alice\\AppData\\Roaming\\nvm\\v24.14.0\\node.exe",
+      versionManaged: true,
+      versionManagerHint: "nvm",
+    });
+    // os.homedir() reports canonical casing; execPath arrives lower-cased.
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\Alice");
+    try {
+      const summary = buildNodeRuntimeSummary(diag);
+      expect(summary).toContain("~\\AppData\\Roaming\\nvm\\v24.14.0\\node.exe");
+      expect(summary.toLowerCase()).not.toContain("users\\alice");
+    } finally {
+      homedirSpy.mockRestore();
+    }
+  });
 });
