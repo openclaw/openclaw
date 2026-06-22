@@ -13,6 +13,7 @@ import { listExtensionHealthChecksForDoctor } from "../flows/health-check-regist
 import {
   healthFindingMeetsSeverity,
   parseHealthFindingSeverity,
+  type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
 } from "../flows/health-checks.js";
@@ -76,15 +77,15 @@ export async function runDoctorLintCli(
     cfg: snapshot.config,
     cwd: resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config)),
     allowExecSecretRefs: opts.allowExec === true,
-    deep: opts.deep === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
   registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
   const coreChecks = await resolveDoctorContributionHealthChecks();
   const extensionChecks = listExtensionHealthChecksForDoctor(coreChecks);
+  const coreCtx = { ...ctx, deep: opts.deep === true };
 
   const runOpts: DoctorLintRunOptions = {
-    checks: [...coreChecks, ...extensionChecks],
+    checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };
@@ -118,6 +119,18 @@ export async function runDoctorLintCli(
   }
 
   return exitCodeFromFindings(result.findings, sevMin);
+}
+
+function withCoreLintContext(
+  check: HealthCheck,
+  ctx: HealthCheckContext & { readonly deep?: boolean },
+): HealthCheck {
+  return {
+    ...check,
+    detect(_ctx, scope) {
+      return check.detect(ctx, scope);
+    },
+  };
 }
 
 function writeJsonResult(result: {

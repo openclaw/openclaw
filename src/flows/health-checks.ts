@@ -56,7 +56,6 @@ export interface HealthCheckContext {
   readonly cwd?: string;
   readonly configPath?: string;
   readonly allowExecSecretRefs?: boolean;
-  readonly deep?: boolean;
 }
 
 /** Repair-capable health-check context; fixes may emit diffs or dry-run previews. */

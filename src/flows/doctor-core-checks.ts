@@ -31,12 +31,25 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { registerHealthCheck } from "./health-check-registry.js";
-import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
+import type {
+  HealthCheck,
+  HealthCheckContext,
+  HealthFinding,
+  HealthRepairContext,
+} from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
+
+type CoreHealthCheckContext = HealthCheckContext & {
+  readonly deep?: boolean;
+};
+
+type CoreHealthRepairContext = HealthRepairContext & {
+  readonly deep?: boolean;
+};
 
 const loadDoctorCoreChecksRuntimeModule = async () =>
   await import("./doctor-core-checks.runtime.js");
@@ -660,18 +673,20 @@ const gatewayServicesExtraCheck: HealthCheck = {
   description: "Extra gateway-like services are represented as structured findings.",
   source: "doctor",
   async detect(ctx) {
+    const coreCtx = ctx as CoreHealthCheckContext;
     const { detectExtraGatewayServiceIssues, extraGatewayServiceToHealthFinding } =
       await import("../commands/doctor-gateway-services.js");
-    return (await detectExtraGatewayServiceIssues({ deep: ctx.deep === true })).map(
+    return (await detectExtraGatewayServiceIssues({ deep: coreCtx.deep === true })).map(
       extraGatewayServiceToHealthFinding,
     );
   },
   async repair(ctx) {
+    const coreCtx = ctx as CoreHealthRepairContext;
     const { detectExtraGatewayServiceIssues, extraGatewayServiceToRepairEffects } =
       await import("../commands/doctor-gateway-services.js");
-    const effects = (await detectExtraGatewayServiceIssues({ deep: ctx.deep === true })).flatMap(
-      extraGatewayServiceToRepairEffects,
-    );
+    const effects = (
+      await detectExtraGatewayServiceIssues({ deep: coreCtx.deep === true })
+    ).flatMap(extraGatewayServiceToRepairEffects);
     if (ctx.dryRun === true) {
       return { status: "repaired", changes: [], effects };
     }

@@ -77,18 +77,18 @@ describe("runDoctorLintCli", () => {
     }
   });
 
-  it("passes deep mode to health check context", async () => {
+  it("does not expose deep mode to extension health check context", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
       config: {},
       path: "/tmp/openclaw.json",
     });
-    const detect = vi.fn(async () => []);
+    const detect = vi.fn(async (_ctx: unknown) => []);
     registerHealthCheck({
       id: "test/deep-context",
       kind: "plugin",
-      description: "test deep context",
+      description: "test extension context",
       detect,
     });
 
@@ -102,9 +102,9 @@ describe("runDoctorLintCli", () => {
       expect(detect).toHaveBeenCalledWith(
         expect.objectContaining({
           mode: "lint",
-          deep: true,
         }),
       );
+      expect(detect.mock.calls[0]?.[0]).not.toHaveProperty("deep");
     } finally {
       stdout.mockRestore();
     }

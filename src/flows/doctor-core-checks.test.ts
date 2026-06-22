@@ -128,7 +128,7 @@ describe("CORE_HEALTH_CHECKS", () => {
     const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
 
     await check.detect({
-      mode: "lint",
+      mode: "lint" as const,
       runtime,
       cfg,
     });
@@ -175,12 +175,14 @@ describe("CORE_HEALTH_CHECKS", () => {
       },
     ]);
 
-    await check.detect({
-      mode: "lint",
+    const ctx = {
+      mode: "lint" as const,
       runtime,
       cfg: {},
       deep: true,
-    });
+    };
+
+    await check.detect(ctx);
 
     expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
     expect(mocks.extraGatewayServiceToHealthFinding).toHaveBeenCalledWith(
@@ -211,16 +213,15 @@ describe("CORE_HEALTH_CHECKS", () => {
       },
     ]);
 
-    const result = await check.repair?.(
-      {
-        mode: "fix",
-        runtime,
-        cfg: {},
-        deep: true,
-        dryRun: true,
-      },
-      [],
-    );
+    const ctx = {
+      mode: "fix" as const,
+      runtime,
+      cfg: {},
+      deep: true,
+      dryRun: true,
+    };
+
+    const result = await check.repair?.(ctx, []);
 
     expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
     expect(result?.effects).toContainEqual(
