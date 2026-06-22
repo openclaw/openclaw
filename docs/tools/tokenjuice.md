@@ -13,9 +13,11 @@ tool results after the command has already run.
 It changes the returned `tool_result`, not the command itself. Tokenjuice does
 not rewrite shell input, rerun commands, or change exit codes.
 
-Today this applies to OpenClaw embedded runs and OpenClaw dynamic tools in the Codex
-app-server harness. Tokenjuice hooks OpenClaw's tool-result middleware and
-trims the output before it goes back into the active harness session.
+Today this applies to OpenClaw embedded runs, OpenClaw dynamic tools in the
+Codex app-server harness, and native Codex `PostToolUse` results that OpenClaw
+relays for local `bash` or `exec` calls. Tokenjuice hooks OpenClaw's tool-result
+middleware and trims the output before it goes back into the active harness
+session.
 
 ## Enable the plugin
 
@@ -62,7 +64,8 @@ If you prefer editing config directly:
 
 1. Enable the plugin.
 2. Start a session that can call `exec`.
-3. Run a noisy command such as `git status`.
+3. Run a noisy command such as `git status` from an OpenClaw `exec` session or a
+   Codex native `bash`/`exec` tool call.
 4. Check that the returned tool result is shorter and more structured than the raw shell output.
 
 ## Disable the plugin
