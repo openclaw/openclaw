@@ -205,6 +205,11 @@ class OpenShellFsBridge implements SandboxFsBridge {
       await fromRoot.move(fromRelativePath, toRelativePath, { overwrite: true });
       return;
     }
+    if (fromHostPath === toHostPath || isPathInside(fromHostPath, toHostPath)) {
+      throw new Error(
+        `OpenShell mirror bridge cannot rename a path into itself: ${from.containerPath} -> ${to.containerPath}`,
+      );
+    }
     await moveBetweenRoots({
       fromRoot,
       fromRelativePath,

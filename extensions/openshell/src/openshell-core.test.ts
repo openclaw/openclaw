@@ -881,6 +881,33 @@ describe("openshell fs bridges", () => {
     expect(backend["renameRemotePath"]).not.toHaveBeenCalled();
   });
 
+  it("rejects cross-root renames into the source tree before remote mutation", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    const sourceDir = path.join(workspaceDir, "source");
+    const agentWorkspaceDir = path.join(sourceDir, "agent-root");
+    await fs.mkdir(agentWorkspaceDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDir, "payload.txt"), "payload", "utf8");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir,
+        containerWorkdir: "/sandbox",
+        workspaceAccess: "rw",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(
+      bridge.rename({ from: "/sandbox/source", to: "/agent/nested/target" }),
+    ).rejects.toThrow("cannot rename a path into itself");
+    expect(backend["renameRemotePath"]).not.toHaveBeenCalled();
+    await expect(fs.readFile(path.join(sourceDir, "payload.txt"), "utf8")).resolves.toBe("payload");
+  });
+
   it("removes remote mirror paths through the pinned backend operation", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     await fs.writeFile(path.join(workspaceDir, "target.txt"), "payload", "utf8");
