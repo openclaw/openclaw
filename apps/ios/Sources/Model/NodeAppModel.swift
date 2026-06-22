@@ -5312,24 +5312,6 @@ extension NodeAppModel {
     func _test_restartGatewaySessionsAfterForegroundStaleConnection() async {
         await self.restartGatewaySessionsAfterForegroundStaleConnection()
     }
-
-    func _test_handleSuccessfulBootstrapGatewayOnboarding() async {
-        await self.handleSuccessfulBootstrapGatewayOnboarding(
-            url: URL(string: "wss://gateway.example")!,
-            stableID: "test-gateway",
-            token: nil,
-            password: nil,
-            nodeOptions: GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: "openclaw-ios",
-                clientMode: "node",
-                clientDisplayName: nil),
-            sessionBox: nil)
-    }
 }
 #endif
 // swiftlint:enable type_body_length file_length
