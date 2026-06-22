@@ -159,6 +159,73 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.api).toBe("openai-responses");
   });
 
+  it("merges explicit providers onto case-normalized implicit provider ids", () => {
+    const merged = mergeProviders({
+      implicit: {
+        openai: {
+          api: "openai-responses",
+          models: [
+            createModel({
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              reasoning: true,
+            }),
+          ],
+        } as ProviderConfig,
+      },
+      explicit: {
+        " OpenAI ": {
+          apiKey: configApiKey,
+          models: [
+            createModel({
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              reasoning: false,
+            }),
+          ],
+        } as ProviderConfig,
+      },
+    });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.apiKey).toBe(configApiKey);
+    expect(merged.openai?.api).toBe("openai-responses");
+    expect(merged.OpenAI).toBeUndefined();
+  });
+
+  it("normalizes implicit provider ids before merging explicit providers", () => {
+    const merged = mergeProviders({
+      implicit: {
+        " OpenAI ": {
+          api: "openai-responses",
+          models: [
+            createModel({
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              reasoning: true,
+            }),
+          ],
+        } as ProviderConfig,
+      },
+      explicit: {
+        openai: {
+          apiKey: configApiKey,
+          models: [
+            createModel({
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              reasoning: false,
+            }),
+          ],
+        } as ProviderConfig,
+      },
+    });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.apiKey).toBe(configApiKey);
+    expect(merged.OpenAI).toBeUndefined();
+  });
+
   it("keeps existing providers alongside newly configured providers in merge mode", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
@@ -247,6 +314,26 @@ describe("models-config merge helpers", () => {
 
     expect(merged.custom?.apiKey).toBe(preservedApiKey);
     expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
+  });
+
+  it("preserves existing secrets after provider key normalization", () => {
+    const normalized = mergeProviders({
+      explicit: {
+        openai: createConfigProvider(),
+      },
+    });
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: normalized,
+      existingProviders: {
+        " OpenAI ": createExistingProvider(),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.apiKey).toBe(preservedApiKey);
+    expect(merged.openai?.baseUrl).toBe("https://agent.example/v1");
+    expect(merged.OpenAI).toBeUndefined();
   });
 
   it("preserves implicit provider headers when explicit config adds extra headers", () => {
