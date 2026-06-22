@@ -27,6 +27,7 @@ export function buildGatewaySessionEventFields(params: {
     spawnDepth: sessionRow.spawnDepth,
     subagentRole: sessionRow.subagentRole,
     subagentControlScope: sessionRow.subagentControlScope,
+    title: sessionRow.title,
     label: params.label ?? sessionRow.label,
     displayName: params.displayName ?? sessionRow.displayName,
     deliveryContext: sessionRow.deliveryContext,
