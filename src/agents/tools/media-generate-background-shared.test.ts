@@ -5,7 +5,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
   deliverSubagentAnnouncement: vi.fn(),
-  loadRequesterSessionEntry: vi.fn<() => { entry: SessionEntry | undefined }>(() => ({
+  loadRequesterSessionEntry: vi.fn<() => { entry: Partial<SessionEntry> | undefined }>(() => ({
     entry: undefined,
   })),
 }));
