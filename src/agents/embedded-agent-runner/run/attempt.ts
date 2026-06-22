@@ -394,6 +394,7 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagn
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
+  dropReplayableAbortedAssistantLeaf,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptMediaTaskSystemPromptAddition,
@@ -4045,7 +4046,31 @@ export async function runEmbeddedAttempt(
         let transcriptPromptForRuntimeSplit = effectiveTranscriptPrompt;
         let promptForRuntimeContextSplit = promptBeforePromptBuildHooks;
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = isRawModelRun ? null : sessionManager.getLeafEntry();
+        // First drop any empty aborted-assistant leaf: a same-model idle-timeout retry persists
+        // one (a local interruption that produced no model output) between the user turn and this
+        // replay. transformMessages drops it before the model call, but on the transcript it hides
+        // the user leaf from the trailing-user repair below, so the replay would persist a
+        // duplicate user turn (and surface consecutive user turns to providers that reject them).
+        // Scope this to non-suppressed replays of the original prompt: suppress-mode retries
+        // (mid-turn continuation, compaction, codex recovery, before-finalize) drive their own
+        // continuation prompt and already skip the user re-append, so dropping the leaf there
+        // would let the orphan removeLeaf and the suppression both strip the user turn from the
+        // active branch. Error leaves (real provider/model responses) are intentionally not
+        // dropped here — they flow through the normal failover/orphan paths.
+        let leafEntry = isRawModelRun ? null : sessionManager.getLeafEntry();
+        if (
+          !isRawModelRun &&
+          !params.suppressNextUserMessagePersistence &&
+          dropReplayableAbortedAssistantLeaf(sessionManager, leafEntry)
+        ) {
+          const sessionContext = sessionManager.buildSessionContext();
+          activeSession.agent.state.messages = sessionContext.messages;
+          leafEntry = sessionManager.getLeafEntry();
+          log.debug(
+            `Dropped empty aborted-assistant leaf before trailing-user repair. ` +
+              `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`,
+          );
+        }
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
           const messageMergeStrategy = resolveMessageMergeStrategy();
           const orphanPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
