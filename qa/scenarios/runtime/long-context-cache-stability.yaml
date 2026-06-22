@@ -11,9 +11,9 @@ scenario:
       - runtime.long-context
   objective: Exercise repeated same-session turns after a large tool result so prompt assembly and provider cache reuse remain stable.
   successCriteria:
-    - The agent reads a large workspace fixture and returns the warmup marker.
+    - The agent reads a large workspace fixture and returns the warmup marker from the capped read output.
     - A follow-up turn reuses the same session and returns the hit marker.
-    - Mock-provider evidence shows the large tool result remained in the assembled prompt.
+    - Mock-provider evidence shows the capped large tool result remained in the assembled prompt.
   docsRefs:
     - docs/concepts/qa-e2e-automation.md
     - docs/reference/test.md
@@ -26,6 +26,7 @@ scenario:
     config:
       sessionKey: agent:qa:long-context-cache-stability
       fixtureFile: large-cache-fixture.txt
+      cacheEvidenceNeedle: CACHE-FIXTURE-0550
       warmupMarker: QA-LARGE-CACHE-WARMUP-OK
       hitMarker: QA-LARGE-CACHE-HIT-OK
 
@@ -55,7 +56,7 @@ flow:
             - sessionKey:
                 ref: sessionKey
               message:
-                expr: "`Read ${config.fixtureFile}, verify it contains CACHE-FIXTURE-1600, then reply exactly ${config.warmupMarker}.`"
+                expr: "`Read ${config.fixtureFile}, verify it contains ${config.cacheEvidenceNeedle}, then reply exactly ${config.warmupMarker}.`"
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 120000)
         - call: waitForCondition
@@ -70,7 +71,7 @@ flow:
             - sessionKey:
                 ref: sessionKey
               message:
-                expr: "`Using the already-read ${config.fixtureFile}, confirm CACHE-FIXTURE-1600 is still present and reply exactly ${config.hitMarker}.`"
+                expr: "`Using the already-read ${config.fixtureFile}, confirm ${config.cacheEvidenceNeedle} is still present and reply exactly ${config.hitMarker}.`"
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 120000)
         - call: waitForCondition
@@ -84,7 +85,7 @@ flow:
           value:
             expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
         - assert:
-            expr: "!env.mock || debugRequests.some((request) => request.plannedToolName === 'read' && String(request.allInputText ?? '').length >= 100000)"
+            expr: "!env.mock || debugRequests.some((request) => request.plannedToolName === 'read' && request.plannedToolArgs?.path === config.fixtureFile && String(request.allInputText ?? '').includes(config.cacheEvidenceNeedle) && String(request.allInputText ?? '').includes('[Read output capped at 50KB') && String(request.allInputText ?? '').length >= 50000)"
             message:
-              expr: "`large read tool result was not observed: ${JSON.stringify(debugRequests.slice(-8))}`"
+              expr: "`large capped read tool result was not observed: ${JSON.stringify(debugRequests.slice(-8).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, allInputLength: String(request.allInputText ?? '').length, hasNeedle: String(request.allInputText ?? '').includes(config.cacheEvidenceNeedle), hasReadCap: String(request.allInputText ?? '').includes('[Read output capped at 50KB') })))}`"
       detailsExpr: "outbound?.text ?? config.hitMarker"

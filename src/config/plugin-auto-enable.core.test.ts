@@ -28,6 +28,9 @@ vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
       cfg: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
     }) => {
+      if (params.channelId === "cache-channel") {
+        return Boolean(params.env?.CACHE_CHANNEL_TOKEN?.trim());
+      }
       if (params.channelId === "irc") {
         return Boolean(params.env?.IRC_HOST?.trim() && params.env?.IRC_NICK?.trim());
       }
@@ -1206,10 +1209,10 @@ describe("applyPluginAutoEnable core", () => {
     const config: OpenClawConfig = {};
     const mutableDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
     const manifestRegistry = makeRegistry([
-      { id: "test-channel-plugin", channels: ["test-channel"] },
+      { id: "cache-channel-plugin", channels: ["cache-channel"] },
     ]);
     const configuredEnv = makeIsolatedEnv({
-      TEST_CHANNEL_TOKEN: "token",
+      CACHE_CHANNEL_TOKEN: "configured",
     });
 
     const first = applyPluginAutoEnable({
@@ -1220,9 +1223,8 @@ describe("applyPluginAutoEnable core", () => {
     });
     mutableDiscovery.candidates.push(
       makeBundledChannelCandidate({
-        pluginId: "test-channel-plugin",
-        channelId: "test-channel",
-        configuredState: { env: { anyOf: ["TEST_CHANNEL_TOKEN"] } },
+        pluginId: "cache-channel-plugin",
+        channelId: "cache-channel",
       }),
     );
     const second = applyPluginAutoEnable({
@@ -1232,8 +1234,8 @@ describe("applyPluginAutoEnable core", () => {
       manifestRegistry,
     });
 
-    expect(first.config.plugins?.entries?.["test-channel-plugin"]).toBeUndefined();
-    expect(second.config.plugins?.entries?.["test-channel-plugin"]?.enabled).toBe(true);
+    expect(first.config.plugins?.entries?.["cache-channel-plugin"]).toBeUndefined();
+    expect(second.config.plugins?.entries?.["cache-channel-plugin"]?.enabled).toBe(true);
     expect(second).not.toBe(first);
   });
 

@@ -38,9 +38,10 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
-import { formatCliCommand, quoteCliArg } from "./command-format.js";
+import { formatCliCommand } from "./command-format.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 
 type DevicesRpcOpts = {
   url?: string;
