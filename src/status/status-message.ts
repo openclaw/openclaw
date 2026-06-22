@@ -1071,7 +1071,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       config: args.config,
     });
   const overrideLabel = configDefaultDiffersFromSession
-    ? ` · session override, default ${configuredDefaultModelLabel} · clear /model default`
+    ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
     : "";
   const modelLines = [
     `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,

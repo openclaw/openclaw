@@ -61,7 +61,7 @@ describe("buildStatusMessage context window", () => {
     });
 
     expect(text).toContain("Model: ollama-cloud/glm-5.1");
-    expect(text).toContain("session override, default ollama-cloud/deepseek-v4-pro");
+    expect(text).toContain("pinned session; config primary ollama-cloud/deepseek-v4-pro");
     expect(text).toContain("Context: 128k/200k");
     expect(text).not.toContain("Context: 128k/1.0m");
   });

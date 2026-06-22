@@ -1786,7 +1786,7 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Model: deepseek/deepseek-v4-flash");
-    expect(normalized).toContain("session override, default zhipu/glm-4.5-air");
+    expect(normalized).toContain("pinned session; config primary zhipu/glm-4.5-air");
     expect(normalized).toContain("clear /model default");
     expect(normalized).not.toContain("Configured default:");
     expect(normalized).not.toContain("Session selected:");
