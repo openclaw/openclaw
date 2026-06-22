@@ -8,6 +8,8 @@ import {
   getOrCreateSessionMcpRuntime,
 } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
+import { formatAgentInternalEventsForPlainPrompt } from "../../agents/internal-events.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
@@ -3720,6 +3722,48 @@ describe("drainFormattedSystemEvents", () => {
       });
 
       expect(result).toContain("Reminder: rotate API keys");
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    } finally {
+      resetSystemEventsForTest();
+    }
+  });
+
+  it("renders ACP continuation events without protected internal context delimiters", async () => {
+    try {
+      const eventText = formatAgentInternalEventsForPlainPrompt([
+        {
+          type: AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+          source: "acp",
+          childSessionKey: "agent:codex:acp:child",
+          childSessionId: "child-session-id",
+          announceType: "ACP background task",
+          taskLabel: "Repair the PR",
+          status: "ok",
+          statusLabel: "succeeded",
+          result:
+            "No child output is embedded here.\nInspect the task/run/session records and artifacts before deciding what to do next.",
+          replyInstruction:
+            "Inspect and verify the child task/run/session artifacts before deciding whether the original request is done.",
+        },
+      ]);
+      enqueueSystemEvent(eventText, {
+        sessionKey: "agent:main:main",
+        contextKey: "task:task_123:acp-terminal-continuation:succeeded:succeeded",
+      });
+
+      const result = await drainFormattedSystemEvents({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        isMainSession: true,
+        isNewSession: false,
+      });
+
+      expect(result).toContain("System:");
+      expect(result).toContain("source: acp");
+      expect(result).toContain("No child output is embedded here.");
+      expect(result).toContain("Inspect the task/run/session records and artifacts");
+      expect(result).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+      expect(result).not.toContain("OpenClaw runtime context (internal)");
       expect(peekSystemEvents("agent:main:main")).toEqual([]);
     } finally {
       resetSystemEventsForTest();

@@ -81,6 +81,27 @@ function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]):
   return task;
 }
 
+function expectAcpContinuationEvent(value: string): void {
+  expect(value).toContain("A background task completed.");
+  expect(value).toContain("source: acp");
+  expect(value).toContain("type: ACP background task");
+  expect(value).toContain("No child output is embedded here.");
+  expect(value).toContain("Inspect the task/run/session records and artifacts");
+  expect(value).toContain("Instruction:");
+  expect(value).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+  expect(value).not.toContain("OpenClaw runtime context (internal)");
+}
+
+function expectAcpTerminalSessionEvents(events: string[], terminalMessage: string | RegExp): void {
+  expect(events).toHaveLength(2);
+  if (typeof terminalMessage === "string") {
+    expect(events[0]).toContain(terminalMessage);
+  } else {
+    expect(events[0]).toMatch(terminalMessage);
+  }
+  expectAcpContinuationEvent(events[1] ?? "");
+}
+
 function createManagedTaskFlow(
   params: Parameters<typeof createManagedTaskFlowOrNull>[0],
 ): TaskFlowRecord {
@@ -1210,9 +1231,10 @@ describe("task-registry", () => {
         }),
       );
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(peekSystemEvents("agent:main:main")).toEqual([
-        expect.stringContaining("Background task ready for review: ACP background task"),
-      ]);
+      expectAcpTerminalSessionEvents(
+        peekSystemEvents("agent:main:main"),
+        "Background task ready for review: ACP background task",
+      );
     });
   });
 
@@ -1241,9 +1263,10 @@ describe("task-registry", () => {
         });
 
         await waitForAssertion(() =>
-          expect(peekSystemEvents("agent:main:main")).toEqual([
-            expect.stringContaining("Background task ready for review: ACP background task"),
-          ]),
+          expectAcpTerminalSessionEvents(
+            peekSystemEvents("agent:main:main"),
+            "Background task ready for review: ACP background task",
+          ),
         );
         expectRecordFields(requireTaskById(task.taskId), {
           deliveryStatus: "pending",
@@ -1256,9 +1279,10 @@ describe("task-registry", () => {
         expectRecordFields(requireTaskById(task.taskId), {
           deliveryStatus: "pending",
         });
-        expect(peekSystemEvents("agent:main:main")).toEqual([
-          expect.stringContaining("Background task ready for review: ACP background task"),
-        ]);
+        expectAcpTerminalSessionEvents(
+          peekSystemEvents("agent:main:main"),
+          "Background task ready for review: ACP background task",
+        );
         expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
       },
       { durableStore: true },
@@ -1380,8 +1404,8 @@ describe("task-registry", () => {
       expect(String(message.content)).toContain(
         "Next: parent will review/verify before calling it done.",
       );
-      expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toStrictEqual(
-        [],
+      expectAcpContinuationEvent(
+        peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")[0] ?? "",
       );
     });
   });
@@ -1455,9 +1479,10 @@ describe("task-registry", () => {
           expect(task.deliveryStatus).toBe("session_queued");
         });
         expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-        expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toEqual([
-          expect.stringContaining("Background task ready for review: ACP background task"),
-        ]);
+        expectAcpTerminalSessionEvents(
+          peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel"),
+          "Background task ready for review: ACP background task",
+        );
       });
     },
   );
@@ -1537,9 +1562,10 @@ describe("task-registry", () => {
         expect(task.deliveryStatus).toBe("session_queued");
       });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(peekSystemEvents(ownerKey)).toEqual([
-        expect.stringContaining("Background task ready for review: ACP background task"),
-      ]);
+      expectAcpTerminalSessionEvents(
+        peekSystemEvents(ownerKey),
+        "Background task ready for review: ACP background task",
+      );
       expect(hasPendingHeartbeatWake()).toBe(true);
     });
   });
@@ -1584,8 +1610,9 @@ describe("task-registry", () => {
       );
       await waitForAssertion(() => {
         const events = peekSystemEvents("agent:main:main");
-        expect(events).toHaveLength(1);
+        expect(events).toHaveLength(2);
         expect(events[0]).toContain("Background task failed: ACP background task");
+        expectAcpContinuationEvent(events[1] ?? "");
       });
     });
   });
@@ -1621,8 +1648,10 @@ describe("task-registry", () => {
       );
       expect(peekSystemEvents("agent:main:main")).toEqual([
         "Background task blocked: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
+        expect.stringContaining("source: acp"),
         "Task needs follow-up: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
       ]);
+      expectAcpContinuationEvent(peekSystemEvents("agent:main:main")[1] ?? "");
       expect(hasPendingHeartbeatWake()).toBe(true);
     });
   });
@@ -1659,8 +1688,9 @@ describe("task-registry", () => {
         }),
       );
       const events = peekSystemEvents("agent:main:main");
-      expect(events).toHaveLength(1);
+      expect(events).toHaveLength(2);
       expect(events[0]).toContain("Background task ready for review: ACP background task");
+      expectAcpContinuationEvent(events[1] ?? "");
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
@@ -1690,8 +1720,10 @@ describe("task-registry", () => {
       );
       expect(peekSystemEvents("agent:main:main")).toEqual([
         "Background task blocked: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
+        expect.stringContaining("source: acp"),
         "Task needs follow-up: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
       ]);
+      expectAcpContinuationEvent(peekSystemEvents("agent:main:main")[1] ?? "");
       expect(hasPendingHeartbeatWake()).toBe(true);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
@@ -1740,10 +1772,11 @@ describe("task-registry", () => {
 
       await waitForAssertion(() => {
         const events = peekSystemEvents("agent:main:main");
-        expect(events).toHaveLength(1);
+        expect(events).toHaveLength(2);
         expect(events[0]).toBe(
           "Background task ready for review: ACP background task (run run-deta). Next: parent will review/verify before calling it done.",
         );
+        expectAcpContinuationEvent(events[1] ?? "");
       });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
@@ -1782,8 +1815,10 @@ describe("task-registry", () => {
         }),
       );
       expect(peekSystemEvents("agent:main:main")).toEqual([
+        expect.stringContaining("source: acp"),
         "Task needs follow-up: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
       ]);
+      expectAcpContinuationEvent(peekSystemEvents("agent:main:main")[0] ?? "");
       expect(hasPendingHeartbeatWake()).toBe(true);
     });
   });
@@ -1816,10 +1851,11 @@ describe("task-registry", () => {
 
       await waitForAssertion(() => {
         const events = peekSystemEvents("agent:main:main");
-        expect(events).toHaveLength(1);
+        expect(events).toHaveLength(2);
         expect(events[0]).toBe(
           "Background task ready for review: ACP background task (run run-succ). Created /tmp/file.txt and verified contents. Next: parent will review/verify before calling it done.",
         );
+        expectAcpContinuationEvent(events[1] ?? "");
       });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
       expect(hasPendingHeartbeatWake()).toBe(true);
@@ -1961,9 +1997,10 @@ describe("task-registry", () => {
         task: "Spawn ACP child",
         deliveryStatus: "pending",
       });
-      expect(peekSystemEvents("agent:main:main")).toEqual([
-        expect.stringContaining("Background task ready for review: ACP background task"),
-      ]);
+      expectAcpTerminalSessionEvents(
+        peekSystemEvents("agent:main:main"),
+        "Background task ready for review: ACP background task",
+      );
     });
   });
 
@@ -3423,9 +3460,10 @@ describe("task-registry", () => {
       await flushAsyncWork();
 
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(peekSystemEvents("agent:main:main")).toEqual([
+      expectAcpTerminalSessionEvents(
+        peekSystemEvents("agent:main:main"),
         "Background task ready for review: ACP background task (run run-quie). Next: parent will review/verify before calling it done.",
-      ]);
+      );
       relay.dispose();
       vi.useRealTimers();
     });
@@ -3475,7 +3513,7 @@ describe("task-registry", () => {
         content:
           "Background task failed: ACP background task (run run-fail). Permission denied by ACP runtime",
       });
-      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+      expectAcpContinuationEvent(peekSystemEvents("agent:main:main")[0] ?? "");
     });
   });
 
