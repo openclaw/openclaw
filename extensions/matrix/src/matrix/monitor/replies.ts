@@ -5,9 +5,13 @@ import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
 import type { MarkdownTableMode, OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
-const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_TAG_NAME_RE = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
+const THINKING_TAG_RE = new RegExp(String.raw`<\s*\/?\s*${THINKING_TAG_NAME_RE}\b[^<>]*>`, "gi");
 const THINKING_BLOCK_RE =
-  /<\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+  new RegExp(
+    String.raw`<\s*${THINKING_TAG_NAME_RE}\b[^<>]*>[\s\S]*?<\s*\/\s*${THINKING_TAG_NAME_RE}\s*>`,
+    "gi",
+  );
 
 function shouldSuppressReasoningReplyText(text?: string): boolean {
   if (typeof text !== "string") {

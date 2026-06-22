@@ -183,6 +183,8 @@ describe("deliverMatrixReplies", () => {
       replies: [
         { text: "Reasoning:\n_hidden_" },
         { text: "<think>still hidden</think>" },
+        { text: "<mm:think>model reasoning</mm:think>" },
+        { text: "<antml:thinking>more reasoning</antml:thinking>" },
         { text: "Visible answer" },
       ],
       roomId: "room:5",
