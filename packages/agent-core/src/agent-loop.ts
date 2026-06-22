@@ -273,6 +273,17 @@ async function runLoop(
     if (!signal?.aborted) {
       return false;
     }
+    // Persist an aborted assistant outcome so session post-processing does not
+    // compact or continue from the preceding toolUse message.
+    const abortedMessage = createLoopFailureMessage(
+      config,
+      signal.reason instanceof Error ? signal.reason : new Error("Agent run aborted"),
+      true,
+    );
+    newMessages.push(abortedMessage);
+    await emit({ type: "message_start", message: abortedMessage });
+    await emit({ type: "message_end", message: abortedMessage });
+    await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });
     await emit({ type: "agent_end", messages: newMessages });
     return true;
   };

@@ -817,7 +817,13 @@ describe("agentLoop tool termination", () => {
     );
 
     expect(streamCalls).toBe(1);
-    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult"]);
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 
@@ -864,7 +870,13 @@ describe("agentLoop tool termination", () => {
     );
 
     expect(streamCalls).toBe(1);
-    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult"]);
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 });
