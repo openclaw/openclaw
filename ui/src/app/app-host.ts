@@ -1,4 +1,5 @@
 import type { ConfigState } from "../pages/config/data.ts";
+import type { LogsState } from "../pages/logs/data.ts";
 import type { SessionsState } from "../pages/sessions/data.ts";
 import type { SkillWorkshopState } from "../pages/skill-workshop/data.ts";
 // Shared Control UI host shapes used by app-level route and settings modules.
@@ -12,7 +13,6 @@ import type { DebugState } from "../ui/controllers/debug.ts";
 import type { DevicesState } from "../ui/controllers/devices.ts";
 import type { DreamingState, DreamingStatus } from "../ui/controllers/dreaming.ts";
 import type { ExecApprovalsState } from "../ui/controllers/exec-approvals.ts";
-import type { LogsState } from "../ui/controllers/logs.ts";
 import type { ModelAuthStatusState } from "../ui/controllers/model-auth-status.ts";
 import type { NodesState } from "../ui/controllers/nodes.ts";
 import type { PresenceState } from "../ui/controllers/presence.ts";

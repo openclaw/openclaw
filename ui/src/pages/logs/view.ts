@@ -1,8 +1,8 @@
 // Control UI view renders logs screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import type { LogEntry, LogLevel } from "../types.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
+import type { LogEntry, LogLevel } from "./data.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
 type ExportFileLabel = "filtered" | "visible";

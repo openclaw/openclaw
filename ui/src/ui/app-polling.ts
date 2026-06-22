@@ -1,14 +1,11 @@
 // Control UI module implements app polling behavior.
 import type { DebugState } from "./controllers/debug.ts";
 import { loadDebug } from "./controllers/debug.ts";
-import type { LogsState } from "./controllers/logs.ts";
-import { loadLogs } from "./controllers/logs.ts";
 import type { NodesState } from "./controllers/nodes.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 
 type PollingHost = {
   nodesPollInterval: number | null;
-  logsPollInterval: number | null;
   debugPollInterval: number | null;
 };
 
@@ -29,23 +26,6 @@ export function stopNodesPolling(host: PollingHost) {
   }
   clearInterval(host.nodesPollInterval);
   host.nodesPollInterval = null;
-}
-
-export function startLogsPolling(host: PollingHost) {
-  if (host.logsPollInterval != null) {
-    return;
-  }
-  host.logsPollInterval = window.setInterval(() => {
-    void loadLogs(host as unknown as LogsState, { quiet: true });
-  }, 2000);
-}
-
-export function stopLogsPolling(host: PollingHost) {
-  if (host.logsPollInterval == null) {
-    return;
-  }
-  clearInterval(host.logsPollInterval);
-  host.logsPollInterval = null;
 }
 
 export function startDebugPolling(host: PollingHost) {
