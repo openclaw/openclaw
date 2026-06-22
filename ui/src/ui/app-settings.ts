@@ -14,8 +14,6 @@ import { startThemeTransition, type ThemeTransitionContext } from "./theme-trans
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity } from "./user-identity.ts";
 
-export { setLastActiveSessionKey } from "./app-last-active-session.ts";
-
 type LocalUserIdentityHost = {
   userName?: string | null;
   userAvatar?: string | null;

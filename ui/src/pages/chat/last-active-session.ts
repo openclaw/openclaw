@@ -1,5 +1,5 @@
 // Control UI module implements app last active session behavior.
-import type { UiSettings } from "./storage.ts";
+import type { UiSettings } from "../../ui/storage.ts";
 
 type LastActiveSessionHost = {
   settings: UiSettings;

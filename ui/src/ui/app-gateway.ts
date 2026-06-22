@@ -43,6 +43,7 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "../pages/chat/gateway.ts";
+import { setLastActiveSessionKey } from "../pages/chat/last-active-session.ts";
 import { reconcileChatRunLifecycle } from "../pages/chat/run-lifecycle.ts";
 import { scheduleChatScroll } from "../pages/chat/scroll.ts";
 import { parseChatSideResult, type ChatSideResult } from "../pages/chat/side-result.ts";
@@ -57,7 +58,7 @@ import {
 } from "../pages/sessions/data.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { switchChatSession } from "./app-render.helpers.ts";
-import { applySettings, setLastActiveSessionKey, syncUrlWithSessionKey } from "./app-settings.ts";
+import { applySettings, syncUrlWithSessionKey } from "./app-settings.ts";
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
