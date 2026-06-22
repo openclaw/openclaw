@@ -16,7 +16,7 @@
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",
     "@openclaw/whatsapp": "workspace:*",
-    "crabline": "github:openclaw/crabline#670fe203613050cb2fe9c9a2d44a00dd2d082f35",
+    "crabline": "github:openclaw/crabline#3501db881ad1288fb3ceee83d6ec4cc9e184b3bb",
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
