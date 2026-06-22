@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
 
+const webhookVerificationTokenKey = "verificationToken";
+
 function expectSchemaIssue(
   result: ReturnType<typeof FeishuConfigSchema.safeParse>,
   issuePath: string,
@@ -18,7 +20,7 @@ function withWebhookVerificationToken<T extends Record<string, unknown>>(
 ): T & { verificationToken: string } {
   return {
     ...config,
-    ["verification" + "Token"]: token,
+    [webhookVerificationTokenKey]: token,
   } as T & { verificationToken: string };
 }
 
