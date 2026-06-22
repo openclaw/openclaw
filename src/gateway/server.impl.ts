@@ -14,6 +14,7 @@ import {
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
+import { applyConfigEnvVars } from "../config/config-env-vars.js";
 import {
   getRuntimeConfig,
   promoteConfigSnapshotToLastKnownGood,
@@ -621,6 +622,7 @@ export async function startGatewayServer(
   let startupLastGoodSnapshot = configSnapshot;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
+  applyConfigEnvVars(startupRuntimeConfig, process.env);
   startupTrace.setConfig(startupRuntimeConfig);
   const { prepareGatewayStartupConfig } = await startupConfigModulePromise;
   const authBootstrap = await startupTrace.measure(
