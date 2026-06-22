@@ -382,6 +382,30 @@ describe("resolveFeishuAccount", () => {
     expect(account.appId).toBe("cli_default");
   });
 
+  it("merges card footer from top-level config with account override", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          cardFooter: "Top footer",
+          accounts: {
+            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
+            main: {
+              appId: "cli_main",
+              appSecret: "secret_main", // pragma: allowlist secret
+              cardFooter: "Main footer",
+            },
+          },
+        },
+      },
+    };
+
+    const defaultAccount = resolveFeishuAccount({ cfg: cfg as never, accountId: "default" });
+    const mainAccount = resolveFeishuAccount({ cfg: cfg as never, accountId: "main" });
+
+    expect(defaultAccount.config.cardFooter).toBe("Top footer");
+    expect(mainAccount.config.cardFooter).toBe("Main footer");
+  });
+
   it("treats unresolved SecretRef as not configured in account resolution", () => {
     const account = resolveFeishuAccount({
       cfg: {

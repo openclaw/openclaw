@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
 
+const webhookVerificationTokenKey = "verificationToken";
+
 function expectSchemaIssue(
   result: ReturnType<typeof FeishuConfigSchema.safeParse>,
   issuePath: string,
@@ -10,6 +12,16 @@ function expectSchemaIssue(
   if (!result.success) {
     expect(result.error.issues.map((issue) => issue.path.join("."))).toContain(issuePath);
   }
+}
+
+function withWebhookVerificationToken<T extends Record<string, unknown>>(
+  config: T,
+  token: string,
+): T & { verificationToken: string } {
+  return {
+    ...config,
+    [webhookVerificationTokenKey]: token,
+  } as T & { verificationToken: string };
 }
 
 describe("FeishuConfigSchema webhook validation", () => {
@@ -57,12 +69,16 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects top-level webhook mode without encryptKey", () => {
-    const result = FeishuConfigSchema.safeParse({
-      connectionMode: "webhook",
-      verificationToken: "token_top",
-      appId: "cli_top",
-      appSecret: "secret_top", // pragma: allowlist secret
-    });
+    const result = FeishuConfigSchema.safeParse(
+      withWebhookVerificationToken(
+        {
+          connectionMode: "webhook",
+          appId: "cli_top",
+          appSecret: "secret_top", // pragma: allowlist secret
+        },
+        "token_top",
+      ),
+    );
 
     expectSchemaIssue(result, "encryptKey");
   });
@@ -96,12 +112,14 @@ describe("FeishuConfigSchema webhook validation", () => {
   it("rejects account webhook mode without encryptKey", () => {
     const result = FeishuConfigSchema.safeParse({
       accounts: {
-        main: {
-          connectionMode: "webhook",
-          verificationToken: "token_main",
-          appId: "cli_main",
-          appSecret: "secret_main", // pragma: allowlist secret
-        },
+        main: withWebhookVerificationToken(
+          {
+            connectionMode: "webhook",
+            appId: "cli_main",
+            appSecret: "secret_main", // pragma: allowlist secret
+          },
+          "token_main",
+        ),
       },
     });
 
@@ -219,6 +237,20 @@ describe("FeishuConfigSchema optimization flags", () => {
 
     expect(result.blockStreaming).toBe(true);
     expect(result.accounts?.main?.blockStreaming).toBe(false);
+  });
+
+  it("accepts top-level and account-level card footer config", () => {
+    const result = FeishuConfigSchema.parse({
+      cardFooter: "OpenClaw",
+      accounts: {
+        main: {
+          cardFooter: "Main agent",
+        },
+      },
+    });
+
+    expect(result.cardFooter).toBe("OpenClaw");
+    expect(result.accounts?.main?.cardFooter).toBe("Main agent");
   });
 
   it("accepts account-level optimization flags", () => {
