@@ -110,6 +110,7 @@
     width: min(86vw, 320px);
     min-width: 0;
     border-right: none;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
     box-shadow: 0 30px 80px color-mix(in srgb, black 40%, transparent);
     transform: translateX(-100%);
     opacity: 0;
@@ -140,6 +141,7 @@
     inset: 0;
     z-index: 65;
     border: 0;
+    background: rgba(0, 0, 0, 0.52);
     background: color-mix(in srgb, black 52%, transparent);
     opacity: 0;
     pointer-events: none;
@@ -271,7 +273,9 @@
     bottom: 10px;
     width: 3px;
     border-radius: var(--radius-full);
+    background: var(--accent);
     background: color-mix(in srgb, var(--accent) 86%, transparent);
+    box-shadow: 0 0 14px var(--accent-subtle);
     box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
   }
 
