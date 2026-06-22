@@ -29,6 +29,13 @@ export type CronFailureDestinationConfig = {
   mode?: "announce" | "webhook";
 };
 
+type CronBillingGuardConfig = {
+  /** Opt-in guard for recurring agent jobs that fail with billing-classified errors. */
+  enabled?: boolean;
+  /** Probe/backoff delays in ms while billing remains unavailable. */
+  probeBackoffMs?: number[];
+};
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
@@ -60,6 +67,8 @@ export type CronConfig = {
     keepLines?: number;
   };
   failureAlert?: CronFailureAlertConfig;
+  /** Opt-in billing guard for recurring agent jobs. */
+  billingGuard?: CronBillingGuardConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;
 };

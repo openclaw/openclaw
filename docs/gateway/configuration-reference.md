@@ -1304,6 +1304,10 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
       maxBytes: "2mb", // default 2_000_000 bytes
       keepLines: 2000, // default 2000
     },
+    billingGuard: {
+      enabled: false,
+      probeBackoffMs: [1800000, 3600000, 7200000],
+    },
   },
 }
 ```
@@ -1333,6 +1337,22 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - `retryOn`: error types that trigger retries - `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
 
 One-shot jobs stay enabled until retry attempts are exhausted, then disable while keeping the final error state. Recurring jobs use the same transient retry policy to run again after backoff before their next scheduled slot; permanent errors or exhausted transient retries fall back to the normal recurring schedule with error backoff.
+
+### `cron.billingGuard`
+
+```json5
+{
+  cron: {
+    billingGuard: {
+      enabled: true,
+      probeBackoffMs: [1800000, 3600000, 7200000],
+    },
+  },
+}
+```
+
+- `enabled`: opt recurring `agentTurn` jobs into billing-classified guard probes. Default: `false`.
+- `probeBackoffMs`: positive integer delays in ms used while billing remains unavailable. The job stays enabled and schedules the next probe at this cadence; a successful run clears the billing state and resumes the normal recurring schedule.
 
 ### `cron.failureAlert`
 

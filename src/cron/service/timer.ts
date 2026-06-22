@@ -106,6 +106,7 @@ const MIN_REFIRE_GAP_MS = 2_000;
 const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
 const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
 const DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS = 2 * 60_000;
+const DEFAULT_BILLING_GUARD_PROBE_BACKOFF_MS = [30 * 60_000, 60 * 60_000, 2 * 60 * 60_000];
 
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
@@ -412,7 +413,7 @@ function resolveCronNextRunWithLowerBound(params: {
   job: CronJob;
   naturalNext: number | undefined;
   lowerBoundMs: number;
-  context: "completion" | "error_backoff";
+  context: "completion" | "error_backoff" | "billing_guard";
 }): number | undefined {
   if (params.naturalNext === undefined) {
     params.state.deps.log.warn(
@@ -531,6 +532,29 @@ function removeQueuedSystemEventHandle(
       "cron: failed to remove undelivered main-session system event",
     );
   }
+}
+
+function isRecurringAgentTurnJob(job: CronJob): boolean {
+  return job.schedule.kind !== "at" && job.payload.kind === "agentTurn";
+}
+
+function shouldScheduleRecurringAgentBillingProbe(state: CronServiceState, job: CronJob): boolean {
+  return (
+    state.deps.cronConfig?.billingGuard?.enabled === true &&
+    isRecurringAgentTurnJob(job) &&
+    job.state.lastErrorReason === "billing"
+  );
+}
+
+function resolveRecurringAgentBillingProbeBackoffMs(state: CronServiceState, job: CronJob): number {
+  const configuredBackoff = state.deps.cronConfig?.billingGuard?.probeBackoffMs;
+  const usableBackoff = Array.isArray(configuredBackoff)
+    ? configuredBackoff.filter((value) => Number.isFinite(value) && value > 0)
+    : [];
+  return errorBackoffMs(
+    job.state.consecutiveErrors ?? 1,
+    usableBackoff.length > 0 ? usableBackoff : DEFAULT_BILLING_GUARD_PROBE_BACKOFF_MS,
+  );
 }
 
 function shouldRetryDisabledHeartbeatOneShot(
@@ -865,6 +889,35 @@ export function applyJobResult(
         }
         return normalNext;
       };
+      if (shouldScheduleRecurringAgentBillingProbe(state, job)) {
+        const backoffMs = resolveRecurringAgentBillingProbeBackoffMs(state, job);
+        normalNext = computeNormalNext();
+        const probeLowerBoundMs = result.endedAt + backoffMs;
+        job.state.nextRunAtMs =
+          job.schedule.kind === "cron"
+            ? resolveCronNextRunWithLowerBound({
+                state,
+                job,
+                naturalNext: normalNext,
+                lowerBoundMs: probeLowerBoundMs,
+                context: "billing_guard",
+              })
+            : normalNext !== undefined
+              ? Math.max(normalNext, probeLowerBoundMs)
+              : probeLowerBoundMs;
+        state.deps.log.warn(
+          {
+            jobId: job.id,
+            jobName: job.name,
+            lastErrorReason: job.state.lastErrorReason,
+            consecutiveErrors: job.state.consecutiveErrors,
+            backoffMs,
+            nextRunAtMs: job.state.nextRunAtMs,
+          },
+          "cron: scheduling billing guard probe for recurring agent job",
+        );
+        return shouldDelete;
+      }
       if (
         !opts?.preserveSchedule &&
         retryDecision.retryable &&

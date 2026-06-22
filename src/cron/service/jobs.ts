@@ -49,6 +49,8 @@ export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
   60 * 60_000,
 ];
 
+const DEFAULT_BILLING_GUARD_PROBE_BACKOFF_MS = [30 * 60_000, 60 * 60_000, 2 * 60 * 60_000];
+
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -194,6 +196,46 @@ function isPendingErrorBackoffSlot(params: {
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs && nextRunAtMs <= backoffUntilMs;
 }
 
+function resolveJobBillingGuardProbeUntilMs(
+  state: CronServiceState,
+  job: CronJob,
+): number | undefined {
+  if (state.deps.cronConfig?.billingGuard?.enabled !== true) {
+    return undefined;
+  }
+  if (job.payload.kind !== "agentTurn" || job.state.lastErrorReason !== "billing") {
+    return undefined;
+  }
+  const consecutiveErrors = job.state.consecutiveErrors ?? 0;
+  if (consecutiveErrors <= 0 || !isFiniteTimestamp(job.state.lastRunAtMs)) {
+    return undefined;
+  }
+  const configuredBackoff = state.deps.cronConfig.billingGuard.probeBackoffMs;
+  const usableBackoff = Array.isArray(configuredBackoff)
+    ? configuredBackoff.filter((value) => Number.isFinite(value) && value > 0)
+    : [];
+  const backoff = errorBackoffMs(
+    consecutiveErrors,
+    usableBackoff.length > 0 ? usableBackoff : DEFAULT_BILLING_GUARD_PROBE_BACKOFF_MS,
+  );
+  const durationMs = Number.isFinite(job.state.lastDurationMs)
+    ? Math.max(0, job.state.lastDurationMs ?? 0)
+    : 0;
+  return job.state.lastRunAtMs + durationMs + backoff;
+}
+
+function isPendingBillingGuardProbeSlot(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nextRunAtMs: number;
+  nowMs: number;
+}): boolean {
+  const probeUntilMs = resolveJobBillingGuardProbeUntilMs(params.state, params.job);
+  return (
+    probeUntilMs !== undefined && params.nowMs < probeUntilMs && params.nextRunAtMs <= probeUntilMs
+  );
+}
+
 function shouldRepairFutureCronNextRunAtMs(params: {
   state: CronServiceState;
   job: CronJob;
@@ -214,6 +256,13 @@ function shouldRepairFutureCronNextRunAtMs(params: {
   // backoff is pending. Once the retry window has elapsed, stale future cron
   // slots should be eligible for the same repair as ordinary schedule state.
   if (isPendingErrorBackoffSlot({ state, job, nextRunAtMs: nextRun, nowMs })) {
+    return false;
+  }
+
+  // Billing guard probes also intentionally delay recurring agent-turn cron jobs
+  // to a non-cron future timestamp. Preserve the probe while its guard window is
+  // pending so maintenance repair does not collapse it back to the natural slot.
+  if (isPendingBillingGuardProbeSlot({ state, job, nextRunAtMs: nextRun, nowMs })) {
     return false;
   }
 

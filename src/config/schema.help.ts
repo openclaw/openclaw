@@ -1711,6 +1711,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Backoff delays in ms for each retry attempt (default: [30000, 60000, 300000]). Use shorter values for faster retries.",
   "cron.retry.retryOn":
     "Error types to retry: rate_limit, overloaded, network, timeout, server_error. Use to restrict which errors trigger retries; omit to retry all transient types.",
+  "cron.billingGuard":
+    "Opt-in guard for recurring agent-turn jobs that fail with billing-classified provider errors. Keep disabled unless operators explicitly want billing failures to use a slower probe cadence instead of normal recurring retry timing.",
+  "cron.billingGuard.enabled":
+    "Enable billing guard probes for recurring agentTurn cron jobs. Default: false.",
+  "cron.billingGuard.probeBackoffMs":
+    "Positive millisecond delays used for billing guard probes, for example [1800000, 3600000, 7200000]. A successful probe clears the billing state and resumes the normal schedule.",
   "cron.webhook":
     'Deprecated legacy fallback webhook URL used by `openclaw doctor --fix` to migrate old jobs with `notify=true`. Runtime delivery uses per-job `delivery.mode="webhook"` plus `delivery.to`, or `delivery.completionDestination` when preserving announce delivery.',
   "cron.webhookToken":

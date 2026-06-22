@@ -496,6 +496,10 @@ Model override note:
       backoffMs: [60000, 120000, 300000],
       retryOn: ["rate_limit", "overloaded", "network", "server_error"],
     },
+    billingGuard: {
+      enabled: false,
+      probeBackoffMs: [1800000, 3600000, 7200000],
+    },
     webhookToken: "replace-with-dedicated-webhook-token",
     sessionRetention: "24h",
     runLog: { maxBytes: "2mb", keepLines: 2000 },
@@ -514,6 +518,8 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
     **One-shot retry**: transient errors (rate limit, overload, network, server error) retry up to 3 times with exponential backoff. Permanent errors disable immediately.
 
     **Recurring retry**: exponential backoff (30s to 60m) between retries. Backoff resets after the next successful run.
+
+    **Billing guard**: `cron.billingGuard.enabled` opts recurring `agentTurn` jobs into billing-classified probes instead of normal retry cadence. The job stays enabled and schedules the next run at the configured probe backoff; a successful probe clears the billing error and returns to the normal schedule.
 
   </Accordion>
   <Accordion title="Maintenance">

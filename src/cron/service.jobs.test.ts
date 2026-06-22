@@ -1126,6 +1126,77 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(retryAt);
   });
 
+  it("preserves pending billing guard probe nextRunAtMs values during maintenance", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const lastRunAtMs = Date.parse("2026-05-05T11:00:00.000Z");
+    const probeAt = Date.parse("2026-05-05T13:00:00.000Z");
+    const job: CronJob = {
+      id: "billing-guard-pending",
+      name: "billing guard pending",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T11:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 12 * * *", tz: "UTC", staggerMs: 0 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "tick" },
+      state: {
+        nextRunAtMs: probeAt,
+        lastRunAtMs,
+        lastRunStatus: "error",
+        lastErrorReason: "billing",
+        consecutiveErrors: 1,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      deps: {
+        ...createMockState(now).deps,
+        cronConfig: { billingGuard: { enabled: true, probeBackoffMs: [2 * 60 * 60_000] } },
+      },
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(probeAt);
+  });
+
+  it("repairs stale billing guard future values outside the probe lower bound", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const lastRunAtMs = Date.parse("2026-05-05T11:00:00.000Z");
+    const staleProbeAt = Date.parse("2026-05-08T16:00:00.000Z");
+    const expected = Date.parse("2026-05-05T14:00:00.000Z");
+    const job: CronJob = {
+      id: "billing-guard-elapsed",
+      name: "billing guard elapsed",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T11:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 14 * * *", tz: "UTC", staggerMs: 0 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "tick" },
+      state: {
+        nextRunAtMs: staleProbeAt,
+        lastRunAtMs,
+        lastRunStatus: "error",
+        lastErrorReason: "billing",
+        consecutiveErrors: 1,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      deps: {
+        ...createMockState(now).deps,
+        cronConfig: { billingGuard: { enabled: true, probeBackoffMs: [2 * 60 * 60_000] } },
+      },
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(expected);
+  });
+
   it("repairs stale future cron nextRunAtMs values after error backoff has elapsed", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const badFuture = Date.parse("2026-05-12T16:00:00.000Z");

@@ -883,6 +883,13 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        billingGuard: z
+          .object({
+            enabled: z.boolean().optional(),
+            probeBackoffMs: z.array(z.number().int().positive()).min(1).max(10).optional(),
+          })
+          .strict()
+          .optional(),
         failureDestination: z
           .object({
             channel: z.string().optional(),
