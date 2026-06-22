@@ -36,10 +36,6 @@ const CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
   "soul.md",
   "user.md",
 ]);
-const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
-  ...CODEX_INHERITED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
-  ...CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
-]);
 const CODEX_HEARTBEAT_CONTEXT_BASENAME = "heartbeat.md";
 const CODEX_MEMORY_CONTEXT_BASENAME = "memory.md";
 const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -193,36 +189,42 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     });
     const memoryToolRoutedBootstrapFiles: CodexBootstrapFile[] = [];
     const memoryReferenceFiles: EmbeddedContextFile[] = [];
-    const contextFiles = buildBootstrapContextForFiles(
-      bootstrapFiles,
-      {
-        config: params.params.config,
-        agentId: params.params.agentId ?? params.sessionAgentId,
-        warn: (message) => embeddedAgentLog.warn(message),
-      },
-    ).map((file) =>
+    const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, {
+      config: params.params.config,
+      agentId: params.params.agentId ?? params.sessionAgentId,
+      warn: (message) => embeddedAgentLog.warn(message),
+    }).map((file) =>
       remapCodexContextFilePath({
         file,
         sourceWorkspaceDir: params.resolvedWorkspace,
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
     );
-    const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles, {
+    const codexContextFiles = ensureCodexRootMemoryContextFile({
+      bootstrapFiles,
+      contextFiles,
+      memoryToolsAvailable,
+      config: params.params.config,
+      agentId: params.params.agentId ?? params.sessionAgentId,
+      resolvedWorkspace: params.resolvedWorkspace,
+      effectiveWorkspace: params.effectiveWorkspace,
+    });
+    const promptContextFiles = selectCodexWorkspacePromptContextFiles(codexContextFiles, {
       excludeMemory: false,
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
     const developerInstructionFiles = shouldInjectCodexOpenClawPromptContext(params.params)
-      ? selectCodexWorkspaceInheritedDeveloperInstructionFiles(contextFiles)
+      ? selectCodexWorkspaceInheritedDeveloperInstructionFiles(codexContextFiles)
       : [];
     const turnScopedDeveloperInstructionFiles = shouldInjectCodexOpenClawPromptContext(
       params.params,
     )
-      ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles)
+      ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(codexContextFiles)
       : [];
-    const heartbeatReferenceFiles = selectCodexWorkspaceHeartbeatReferenceFiles(contextFiles);
+    const heartbeatReferenceFiles = selectCodexWorkspaceHeartbeatReferenceFiles(codexContextFiles);
     return {
       bootstrapFiles,
-      contextFiles,
+      contextFiles: codexContextFiles,
       promptContextFiles,
       developerInstructionFiles,
       turnScopedDeveloperInstructionFiles,
@@ -252,6 +254,67 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
     return { bootstrapFiles: [], contextFiles: [] };
   }
+}
+
+function ensureCodexRootMemoryContextFile(params: {
+  bootstrapFiles: CodexBootstrapFile[];
+  contextFiles: EmbeddedContextFile[];
+  memoryToolsAvailable: boolean;
+  config: EmbeddedRunAttemptParams["config"] | undefined;
+  agentId: string;
+  resolvedWorkspace: string;
+  effectiveWorkspace: string;
+}): EmbeddedContextFile[] {
+  if (!params.memoryToolsAvailable) {
+    return params.contextFiles;
+  }
+  const rootMemoryBootstrapFile = params.bootstrapFiles.find(
+    (file) =>
+      !file.missing &&
+      readNonEmptyString(file.path) &&
+      isCodexWorkspaceRootMemoryPath({
+        filePath: file.path,
+        workspaceDir: params.resolvedWorkspace,
+      }),
+  );
+  if (!rootMemoryBootstrapFile) {
+    return params.contextFiles;
+  }
+  const hasInjectedRootMemory = params.contextFiles.some(
+    (file) =>
+      file.content.trim().length > 0 &&
+      isCodexWorkspaceRootMemoryContextFile({
+        file,
+        workspaceDir: params.effectiveWorkspace,
+      }),
+  );
+  if (hasInjectedRootMemory) {
+    return params.contextFiles;
+  }
+  const [rootMemoryContextFile] = buildBootstrapContextForFiles([rootMemoryBootstrapFile], {
+    config: params.config,
+    agentId: params.agentId,
+    warn: (message) => embeddedAgentLog.warn(message),
+  }).map((file) =>
+    remapCodexContextFilePath({
+      file,
+      sourceWorkspaceDir: params.resolvedWorkspace,
+      targetWorkspaceDir: params.effectiveWorkspace,
+    }),
+  );
+  if (!rootMemoryContextFile || rootMemoryContextFile.content.trim().length === 0) {
+    return params.contextFiles;
+  }
+  return [
+    ...params.contextFiles.filter(
+      (file) =>
+        !isCodexWorkspaceRootMemoryContextFile({
+          file,
+          workspaceDir: params.effectiveWorkspace,
+        }),
+    ),
+    rootMemoryContextFile,
+  ];
 }
 
 /**
@@ -667,7 +730,8 @@ function selectCodexWorkspacePromptContextFiles(
       return (
         baseName &&
         !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) &&
-        !CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
+        !CODEX_INHERITED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
+        !CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
         baseName !== CODEX_HEARTBEAT_CONTEXT_BASENAME &&
         (!excludeMemory ||
           !isCodexWorkspaceRootMemoryContextFile({
