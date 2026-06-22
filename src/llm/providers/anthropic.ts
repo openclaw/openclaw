@@ -1247,14 +1247,13 @@ function convertMessages(
             text: sanitizeSurrogates(block.text),
           });
         } else if (block.type === "thinking") {
-          // Strip thinking blocks from completed prior assistant turns.
-          // When replayThinkingEnabled is true, only keep thinking for the
-          // active tool-use cycle (signatures are needed for tool-result
-          // continuity). When false, strip all thinking. Completed turns
-          // without pending tool calls do not need preserved signatures and
-          // re-emitting stale signatures can cause 400 "Invalid signature
-          // in thinking block" on long multi-turn sessions.
-          if (!replayThinkingEnabled || i !== activeToolTurnAssistantIndex) {
+          // Strip thinking blocks from completed prior assistant turns:
+          // only the active tool-use cycle needs preserved signatures for
+          // tool-result continuity. Completed turns without pending tool
+          // calls do not need signatures, and re-emitting stale signatures
+          // can cause 400 "Invalid signature in thinking block" on long
+          // multi-turn sessions (#94228).
+          if (i !== activeToolTurnAssistantIndex) {
             omittedThinking = true;
             continue;
           }
