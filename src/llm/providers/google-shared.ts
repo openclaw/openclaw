@@ -350,6 +350,12 @@ const JSON_SCHEMA_META_DECLARATIONS = new Set([
   "$defs",
   "definitions", // pre-draft-2019-09 equivalent of $defs
 ]);
+const MAX_GOOGLE_TOOL_SCHEMA_NODES = 1_000;
+
+type GoogleToolSchemaReadState = {
+  stack: WeakSet<object>;
+  nodes: number;
+};
 
 /**
  * Strip meta-declarations from a schema obj
@@ -369,6 +375,44 @@ function sanitizeForOpenApi(schema: unknown): unknown {
   return result;
 }
 
+function snapshotGoogleToolSchema(
+  schema: unknown,
+  state: GoogleToolSchemaReadState = { stack: new WeakSet(), nodes: 0 },
+): unknown {
+  state.nodes += 1;
+  if (state.nodes > MAX_GOOGLE_TOOL_SCHEMA_NODES) {
+    throw new Error("Google tool schema exceeds traversal budget");
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  if (state.stack.has(schema)) {
+    throw new Error("Google tool schema contains cyclic object references");
+  }
+  state.stack.add(schema);
+
+  try {
+    if (Array.isArray(schema)) {
+      try {
+        return Array.from(schema, (value) => snapshotGoogleToolSchema(value, state));
+      } catch {
+        throw new Error("Google tool schema array is unreadable");
+      }
+    }
+    const snapshot: Record<string, unknown> = {};
+    try {
+      for (const key of Object.keys(schema)) {
+        snapshot[key] = snapshotGoogleToolSchema((schema as Record<string, unknown>)[key], state);
+      }
+    } catch {
+      throw new Error("Google tool schema object is unreadable");
+    }
+    return snapshot;
+  } finally {
+    state.stack.delete(schema);
+  }
+}
+
 /**
  * Convert tools to Gemini function declarations format.
  *
@@ -384,15 +428,26 @@ export function convertTools(
   if (tools.length === 0) {
     return undefined;
   }
-  return [
-    {
-      functionDeclarations: tools.map((tool) => ({
+  const functionDeclarations = tools.flatMap((tool) => {
+    try {
+      const parameters = snapshotGoogleToolSchema(tool.parameters);
+      return {
         name: tool.name,
         description: tool.description,
         ...(useParameters
-          ? { parameters: sanitizeForOpenApi(tool.parameters as unknown) }
-          : { parametersJsonSchema: tool.parameters }),
-      })),
+          ? { parameters: sanitizeForOpenApi(parameters) }
+          : { parametersJsonSchema: parameters }),
+      };
+    } catch {
+      return [];
+    }
+  });
+  if (functionDeclarations.length === 0) {
+    return undefined;
+  }
+  return [
+    {
+      functionDeclarations,
     },
   ];
 }
@@ -497,14 +552,15 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   if (options.stop !== undefined && options.stop.length > 0) {
     generationConfig.stopSequences = options.stop;
   }
+  const convertedTools = context.tools?.length ? convertTools(context.tools) : undefined;
 
   const config: GenerateContentConfig = {
     ...(Object.keys(generationConfig).length > 0 && generationConfig),
     ...(context.systemPrompt && { systemInstruction: sanitizeSurrogates(context.systemPrompt) }),
-    ...(context.tools && context.tools.length > 0 && { tools: convertTools(context.tools) }),
+    ...(convertedTools && { tools: convertedTools }),
   };
 
-  if (context.tools && context.tools.length > 0 && options.toolChoice) {
+  if (convertedTools && options.toolChoice) {
     config.toolConfig = {
       functionCallingConfig: {
         mode: mapToolChoice(options.toolChoice),

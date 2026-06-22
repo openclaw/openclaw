@@ -302,6 +302,63 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(declarations[1]?.behavior).toBe("NON_BLOCKING");
   });
 
+  it("skips unreadable Google Live tool schemas while preserving healthy declarations", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const hostileParameters: Record<string, unknown> = {
+      type: "object",
+      properties: {},
+    };
+    Object.defineProperty(hostileParameters.properties, "query", {
+      enumerable: true,
+      get() {
+        throw new Error("nested schema getter exploded");
+      },
+    });
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+      },
+      instructions: "Speak briefly.",
+      tools: [
+        {
+          type: "function",
+          name: "broken_lookup",
+          description: "Broken lookup",
+          parameters: hostileParameters,
+        },
+        {
+          type: "function",
+          name: "message",
+          description: "Send a message",
+          parameters: {
+            type: "object",
+            properties: {
+              text: { type: "string" },
+            },
+          },
+        },
+      ],
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    const declarations = lastConnectParams().config.tools?.[0]?.functionDeclarations ?? [];
+    expect(declarations).toEqual([
+      {
+        name: "message",
+        description: "Send a message",
+        parametersJsonSchema: {
+          type: "object",
+          properties: {
+            text: { type: "string" },
+          },
+        },
+      },
+    ]);
+  });
+
   it("omits zero temperature for native audio responses", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const bridge = provider.createBridge({

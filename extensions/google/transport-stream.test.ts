@@ -1247,6 +1247,186 @@ describe("google transport stream", () => {
     });
   });
 
+  it("skips unreadable Google transport tool schemas while preserving healthy tools", () => {
+    const hostileParameters: Record<string, unknown> = {
+      type: "object",
+      properties: {},
+    };
+    Object.defineProperty(hostileParameters.properties, "q", {
+      enumerable: true,
+      get() {
+        throw new Error("nested schema getter exploded");
+      },
+    });
+
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      tools: [
+        {
+          name: "broken_lookup",
+          description: "Broken lookup",
+          parameters: hostileParameters,
+        },
+        {
+          name: "lookup",
+          description: "Look up a value",
+          parameters: {
+            type: "object",
+            properties: { q: { type: "string" } },
+            required: ["q"],
+          },
+        },
+      ],
+    } as never);
+
+    expect(params.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parametersJsonSchema: {
+              type: "object",
+              properties: { q: { type: "string" } },
+              required: ["q"],
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("omits Google transport tool config when every tool schema is skipped", () => {
+    const hostileParameters: Record<string, unknown> = {
+      type: "object",
+      properties: {},
+    };
+    Object.defineProperty(hostileParameters.properties, "q", {
+      enumerable: true,
+      get() {
+        throw new Error("nested schema getter exploded");
+      },
+    });
+
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "broken_lookup",
+            description: "Broken lookup",
+            parameters: hostileParameters,
+          },
+        ],
+      } as never,
+      { toolChoice: "required" },
+    );
+
+    expect(params.tools).toBeUndefined();
+    expect(params.toolConfig).toBeUndefined();
+  });
+
+  it("drops function-specific Google tool choice when that tool schema is skipped", () => {
+    const hostileParameters: Record<string, unknown> = {
+      type: "object",
+      properties: {},
+    };
+    Object.defineProperty(hostileParameters.properties, "q", {
+      enumerable: true,
+      get() {
+        throw new Error("nested schema getter exploded");
+      },
+    });
+
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "broken_lookup",
+            description: "Broken lookup",
+            parameters: hostileParameters,
+          },
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: {
+              type: "object",
+              properties: { q: { type: "string" } },
+            },
+          },
+        ],
+      } as never,
+      {
+        toolChoice: {
+          type: "function",
+          function: { name: "broken_lookup" },
+        },
+      },
+    );
+
+    expect(params.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parametersJsonSchema: {
+              type: "object",
+              properties: { q: { type: "string" } },
+            },
+          },
+        ],
+      },
+    ]);
+    expect(params.toolConfig).toBeUndefined();
+  });
+
+  it("snapshots Google transport schemas before returning request params", () => {
+    let propertiesReads = 0;
+    const parameters: Record<string, unknown> = { type: "object" };
+    Object.defineProperty(parameters, "properties", {
+      enumerable: true,
+      get() {
+        propertiesReads += 1;
+        if (propertiesReads > 1) {
+          throw new Error("properties getter changed after snapshot");
+        }
+        return { q: { type: "string" } };
+      },
+    });
+
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      tools: [
+        {
+          name: "lookup",
+          description: "Look up a value",
+          parameters,
+        },
+      ],
+    } as never);
+
+    expect(propertiesReads).toBe(1);
+    expect(() => JSON.stringify(params.tools)).not.toThrow();
+    expect(params.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parametersJsonSchema: {
+              type: "object",
+              properties: { q: { type: "string" } },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
   it("replays Gemini tool call thought signatures for same-model history", () => {
     const model = buildGeminiModel({
       id: "gemini-3-flash-preview",

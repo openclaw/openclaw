@@ -27,6 +27,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildGoogleExtensionFunctionDeclarations } from "./function-declarations.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
@@ -287,12 +288,15 @@ function toolCallThoughtSignatureReplayKey(block: {
 
 function mapToolChoice(
   choice: GoogleTransportOptions["toolChoice"],
+  declaredToolNames?: ReadonlySet<string>,
 ): { mode: "AUTO" | "NONE" | "ANY"; allowedFunctionNames?: string[] } | undefined {
   if (!choice) {
     return undefined;
   }
   if (typeof choice === "object" && choice.type === "function") {
-    return { mode: "ANY", allowedFunctionNames: [choice.function.name] };
+    return declaredToolNames?.has(choice.function.name)
+      ? { mode: "ANY", allowedFunctionNames: [choice.function.name] }
+      : undefined;
   }
   switch (choice) {
     case "none":
@@ -707,13 +711,13 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
   if (tools.length === 0) {
     return undefined;
   }
+  const functionDeclarations = buildGoogleExtensionFunctionDeclarations(tools);
+  if (functionDeclarations.length === 0) {
+    return undefined;
+  }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parametersJsonSchema: tool.parameters,
-      })),
+      functionDeclarations,
     },
   ];
 }
@@ -759,9 +763,18 @@ export function buildGoogleGenerativeAiParams(
     };
   }
   if (!cachedContent && context.tools?.length) {
-    params.tools = convertGoogleTools(context.tools);
-    const toolChoice = mapToolChoice(options?.toolChoice);
-    if (toolChoice) {
+    const tools = convertGoogleTools(context.tools);
+    params.tools = tools;
+    const declaredToolNames = new Set(
+      tools?.flatMap(
+        (tool) =>
+          (tool.functionDeclarations as Array<{ name?: unknown }> | undefined)?.flatMap(
+            (declaration) => (typeof declaration.name === "string" ? [declaration.name] : []),
+          ) ?? [],
+      ),
+    );
+    const toolChoice = tools ? mapToolChoice(options?.toolChoice, declaredToolNames) : undefined;
+    if (tools && toolChoice) {
       params.toolConfig = {
         functionCallingConfig: toolChoice,
       };

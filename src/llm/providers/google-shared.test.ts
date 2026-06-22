@@ -1,7 +1,7 @@
 // Google shared provider tests cover response conversion and finish reasons.
 import { FinishReason, type GenerateContentResponse } from "@google/genai";
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, Model } from "../types.js";
+import type { AssistantMessage, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleGenerateContentParams,
@@ -50,6 +50,24 @@ function createOutput(): AssistantMessage {
     stopReason: "stop",
     timestamp: 0,
   };
+}
+
+function makeUnreadableParameterTool(): Tool {
+  const tool = {
+    name: "broken_tool",
+    description: "Broken tool",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "broken" }] };
+    },
+  };
+  Object.defineProperty(tool, "parameters", {
+    enumerable: true,
+    get() {
+      throw new Error("fuzzplugin parameters getter exploded");
+    },
+  });
+  return tool as unknown as Tool;
 }
 
 async function* chunks(items: GenerateContentResponse[]) {
@@ -145,5 +163,19 @@ describe("buildGoogleGenerateContentParams", () => {
     );
 
     expect(params.config?.stopSequences).toEqual(["STOP"]);
+  });
+
+  it("omits tool config when every Google tool schema is skipped", () => {
+    const params = buildGoogleGenerateContentParams(
+      model,
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [makeUnreadableParameterTool()],
+      },
+      { toolChoice: "any" },
+    );
+
+    expect(params.config?.tools).toBeUndefined();
+    expect(params.config?.toolConfig).toBeUndefined();
   });
 });
