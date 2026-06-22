@@ -14,7 +14,16 @@ const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
+const BUNDLEABLE_NODE_TEST_CONFIGS = new Set([
+  "test/vitest/vitest.commands.config.ts",
+  "test/vitest/vitest.cron.config.ts",
+  "test/vitest/vitest.infra.config.ts",
+]);
 const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
+  "agentic-agents-core-auth",
+  "agentic-agents-core-models",
+  "agentic-agents-core-runtime",
+  "agentic-agents-core-subagents",
   "agentic-agents-embedded",
   "agentic-agents-support",
   "agentic-agents-core-runner",
@@ -980,6 +989,8 @@ export function createNodeTestShardBundles(options = {}) {
     const runner = resolveCiNodeTestRunner(shard);
     if (
       shard.requiresDist ||
+      shard.configs.length !== 1 ||
+      !BUNDLEABLE_NODE_TEST_CONFIGS.has(shard.configs[0]) ||
       !Array.isArray(shard.includePatterns) ||
       shard.includePatterns.length === 0
     ) {

@@ -124,7 +124,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(bundledPatterns).toEqual(basePatterns);
     expect(
       bundled
-        .filter((shard) => shard.includePatterns)
+        .filter((shard) => shard.shardName.startsWith("bundle-"))
         .every((shard) => (shard.includePatterns?.length ?? 0) <= 64),
     ).toBe(true);
     expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
@@ -134,6 +134,10 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     );
     expect(bundled.find((shard) => shard.shardName === "bundle-infra-small-1")?.runner).toBe(
       "blacksmith-4vcpu-ubuntu-2404",
+    );
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-agents-core-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-gateway-server-"))).toBe(
+      false,
     );
   });
 
