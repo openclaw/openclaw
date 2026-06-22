@@ -10,8 +10,8 @@ import {
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
 import {
+  QA_MATURITY_SCORE_LABEL_BANDS,
   activeQaMaturityTaxonomySurfaces,
-  qaMaturityCategoryProfiles,
   qaMaturityFamilyOrder,
   qaMaturityTaxonomyLevelMap,
   parseQaMaturityTaxonomy,
@@ -210,15 +210,19 @@ function ltsText(lts?: QaMaturityScoreSurfaceLts): string {
   return `${lts.status ?? "unknown"} (${lts.supported_categories ?? 0}/${lts.total_categories ?? 0})`;
 }
 
-function frontmatter(title: string, summary: string): string[] {
-  return ["---", `title: "${title}"`, `summary: "${summary}"`, "---", ""];
-}
-
-function generatedNotice(): string[] {
+function renderScoreBands(): string[] {
   return [
-    "> This page is generated during OpenClaw release validation so the scores stay consistent across releases.",
+    "## Score bands",
+    "",
+    "| Label | Score range |",
+    "| --- | --- |",
+    ...QA_MATURITY_SCORE_LABEL_BANDS.map(([label, low, high]) => `| ${label} | ${low}-${high}% |`),
     "",
   ];
+}
+
+function frontmatter(title: string, summary: string): string[] {
+  return ["---", `title: "${title}"`, `summary: "${summary}"`, "---", ""];
 }
 
 function renderMetadataComment({
@@ -478,26 +482,26 @@ function renderMaturityScorecard({
     }),
     "# Maturity scorecard",
     "",
-    ...generatedNotice(),
-    "## Overview",
+    "These scores summarize release readiness across OpenClaw product areas, integrations, and supported workflows.",
     "",
-    `- Active surfaces: ${scores.counts.active_surfaces}`,
-    `- Category scores: ${scores.counts.category_scores}`,
-    `- Process version: ${scores.process_version}`,
+    `The current scorecard covers ${scores.counts.active_surfaces} surfaces and ${scores.counts.category_scores} capability areas.`,
     "",
-    "## Rollups",
+    "## Overall scores",
     "",
     "| Basis | Coverage | Quality | Completeness |",
     "| --- | --- | --- | --- |",
     `| Surface average | ${scoreText(scores.rollups.surface_average.coverage)} | ${scoreText(scores.rollups.surface_average.quality)} | ${scoreText(scores.rollups.surface_average.completeness)} |`,
     `| Category average | ${scoreText(scores.rollups.category_average.coverage)} | ${scoreText(scores.rollups.category_average.quality)} | ${scoreText(scores.rollups.category_average.completeness)} |`,
     "",
+    "Coverage measures how much of the area has release proof. Quality measures reliability and operational confidence. Completeness measures how much of the expected user workflow is available.",
+    "",
+    ...renderScoreBands(),
   ];
 
   lines.push(
     "## Surface scorecard",
     "",
-    "| Surface | Family | Level | Coverage | Quality | Completeness | LTS | Categories | Last score run |",
+    "| Surface | Family | Level | Coverage | Quality | Completeness | Long-term support | Areas | Last reviewed |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   );
   for (const surface of surfaces) {
@@ -513,7 +517,6 @@ function renderMaturityScorecard({
 function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "scores">): string {
   const levels = qaMaturityTaxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
-  const profilesByCategory = qaMaturityCategoryProfiles(taxonomy);
   const surfaces = activeQaMaturityTaxonomySurfaces(taxonomy);
   const lines = [
     ...frontmatter(
@@ -522,7 +525,6 @@ function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "s
     ),
     "# Maturity taxonomy",
     "",
-    ...generatedNotice(),
     "## Maturity levels",
     "",
     "| Level | Label | Meaning | Promotion bar |",
@@ -562,8 +564,8 @@ function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "s
         `- Rationale: ${surface.rationale ?? ""}`,
         `- Completeness instructions: ${yamlCode(surface.completeness_instructions ?? "")}`,
         "",
-        "| Category | Category ID | Features | Coverage IDs | Docs | Profiles | Coverage | Quality | Completeness | LTS |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Category | Category ID | Features | Coverage IDs | Docs | Coverage | Quality | Completeness | LTS |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
       );
       for (const category of surface.categories) {
         const categoryId = `${surface.id}.${category.id}`;
@@ -573,12 +575,9 @@ function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "s
           .filter(Boolean)
           .join("<br>");
         const docs = (category.docs ?? []).map((doc) => yamlCode(doc)).join("<br>");
-        const profiles = (profilesByCategory.get(categoryId) ?? [])
-          .map((id) => yamlCode(id))
-          .join("<br>");
         const scoreCategory = categoryScores.get(category.name);
         lines.push(
-          `| ${markdownEscape(category.name)} | ${yamlCode(categoryId)} | ${markdownEscape(featureNames)} | ${markdownEscape(coverageIds)} | ${docs} | ${profiles} | ${scoreText(scoreCategory?.coverage)} | ${scoreText(scoreCategory?.quality)} | ${scoreText(scoreCategory?.completeness)} | ${markdownEscape(scoreCategory?.lts?.supported ? "Yes" : "No")} |`,
+          `| ${markdownEscape(category.name)} | ${yamlCode(categoryId)} | ${markdownEscape(featureNames)} | ${markdownEscape(coverageIds)} | ${docs} | ${scoreText(scoreCategory?.coverage)} | ${scoreText(scoreCategory?.quality)} | ${scoreText(scoreCategory?.completeness)} | ${markdownEscape(scoreCategory?.lts?.supported ? "Yes" : "No")} |`,
         );
       }
       lines.push("");
@@ -596,7 +595,6 @@ function renderTaxonomyOutline({ taxonomy }: Pick<RenderInputs, "taxonomy">): st
     ),
     "# Maturity taxonomy outline",
     "",
-    ...generatedNotice(),
   ];
   for (const family of qaMaturityFamilyOrder(surfaces)) {
     lines.push(`## ${familyTitle(family)}`, "");
