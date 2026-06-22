@@ -360,6 +360,45 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       ).toBe("call123fc123");
     });
 
+    it("sanitizes raw replay function_call and function_call_output ids for strict targets", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "function_call",
+              call_id: "call_abc|fc_123",
+              name: "read",
+              arguments: { path: "README.md" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          call_id: "call_abc|fc_123",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
+        preserveNativeAnthropicToolUseIds: true,
+      });
+
+      expect(out).not.toBe(input);
+      expect((out[0] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        {
+          type: "function_call",
+          call_id: "callabcfc123",
+          name: "read",
+          arguments: { path: "README.md" },
+        },
+      ]);
+      expect(
+        (out[1] as Extract<AgentMessage, { role: "toolResult" }> & { call_id?: string }).call_id,
+      ).toBe("callabcfc123");
+    });
+
     it("preserves replay-safe signed-thinking tool ids when requested", () => {
       const input = castAgentMessages([
         {
