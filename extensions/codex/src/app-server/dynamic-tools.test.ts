@@ -1102,6 +1102,39 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
+  it("marks delivered message-tool-only source replies as terminal", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { messageId: "imessage-6264" }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBe(true);
+  });
+
+  it("does not mark explicit message-tool sends as terminal source replies", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { messageId: "other-chat-message" }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      target: "channel:other",
+      message: "cross-channel reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+  });
+
   it("does not record messaging side effects when the send fails", async () => {
     const tool = createTool({
       name: "message",

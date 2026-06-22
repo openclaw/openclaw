@@ -140,6 +140,7 @@ export {
   isToolResultError,
   sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
+export { isDeliveredMessageToolOnlySourceReplyResult } from "../agents/embedded-agent-message-tool-source-reply.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {

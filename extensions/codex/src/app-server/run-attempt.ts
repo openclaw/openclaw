@@ -843,6 +843,7 @@ export async function runCodexAppServerAttempt(
       currentMessagingTarget: params.currentMessagingTarget,
       currentThreadId: params.currentThreadTs,
       replyToMode: params.replyToMode,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       hasRepliedRef: params.hasRepliedRef,
       onToolOutcome: onCodexToolOutcome,
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
