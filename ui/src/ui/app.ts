@@ -6,6 +6,7 @@ import { appRouter, createApplicationContext, type ApplicationContext } from "..
 import { createRouterOutletSnapshot } from "../app/router-outlet.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import { loadCron as loadCronPage, loadOverview as loadOverviewPage } from "../pages/loaders.ts";
+import { type SkillWorkshopState } from "../pages/skill-workshop/data.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -110,7 +111,6 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import { type SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,

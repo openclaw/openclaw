@@ -1,17 +1,17 @@
 // Control UI controller manages skill workshop gateway state.
-import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
-} from "../session-key.ts";
+} from "../../ui/session-key.ts";
 import type {
   SkillWorkshopAction,
   SkillWorkshopActionNotice,
   SkillWorkshopMode,
   SkillWorkshopProposal,
   SkillWorkshopStatusFilter,
-} from "../views/skill-workshop.ts";
+} from "./view.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
 

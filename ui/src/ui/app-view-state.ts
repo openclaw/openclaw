@@ -1,3 +1,4 @@
+import type { SkillWorkshopState } from "../pages/skill-workshop/data.ts";
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
@@ -15,7 +16,6 @@ import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts
 import type { DevicePairingList, DevicePairSetup } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,

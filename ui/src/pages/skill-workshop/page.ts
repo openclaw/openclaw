@@ -7,17 +7,17 @@ import type { AppViewState } from "../../ui/app-view-state.ts";
 import { switchChatSessionAndWait } from "../../ui/chat-session-switch.ts";
 import { loadChatHistory } from "../../ui/controllers/chat.ts";
 import { createSessionAndRefresh, loadSessions } from "../../ui/controllers/sessions.ts";
+import { normalizeAgentId } from "../../ui/session-key.ts";
+import { normalizeOptionalString } from "../../ui/string-coerce.ts";
+import type { GatewaySessionRow } from "../../ui/types.ts";
 import {
   countSkillWorkshopProposals,
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
-} from "../../ui/controllers/skill-workshop.ts";
-import { normalizeAgentId } from "../../ui/session-key.ts";
-import { normalizeOptionalString } from "../../ui/string-coerce.ts";
-import type { GatewaySessionRow } from "../../ui/types.ts";
-import { renderSkillWorkshop } from "../../ui/views/skill-workshop.ts";
-import { filterSkillWorkshopProposals } from "../../ui/views/skill-workshop.ts";
+} from "./data.ts";
+import { renderSkillWorkshop } from "./view.ts";
+import { filterSkillWorkshopProposals } from "./view.ts";
 
 function setSkillWorkshopUseCurrentChatForRevisions(state: AppViewState, enabled: boolean): void {
   state.setSkillWorkshopUseCurrentChatForRevisions(enabled);

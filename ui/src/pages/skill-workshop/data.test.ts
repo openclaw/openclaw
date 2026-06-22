@@ -1,13 +1,13 @@
 // Control UI tests cover skill workshop controller behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { SkillWorkshopProposal } from "../views/skill-workshop.ts";
 import {
   loadSkillWorkshopProposalDetail,
   loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   type SkillWorkshopState,
-} from "./skill-workshop.ts";
+} from "./data.ts";
+import type { SkillWorkshopProposal } from "./view.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 

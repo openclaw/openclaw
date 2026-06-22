@@ -2,7 +2,7 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
-import "../components/file-preview-modal.ts";
+import "../../ui/components/file-preview-modal.ts";
 
 export type SkillWorkshopProposalStatus =
   | "pending"
