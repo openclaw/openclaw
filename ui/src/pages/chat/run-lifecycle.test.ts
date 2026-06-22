@@ -1,7 +1,7 @@
 // Control UI tests cover run lifecycle behavior.
 import { describe, expect, it } from "vitest";
+import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../ui/session-run-state.ts";
-import type { SessionsListResult } from "../../ui/types.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,

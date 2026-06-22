@@ -1,6 +1,6 @@
 // Control UI tests cover app channels behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelsStatusSnapshot } from "../../ui/types.ts";
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import type { ConfigState } from "../pages/config/data.ts";
 import { handleChannelConfigReload, handleChannelConfigSave } from "./actions.ts";
 import type { ChannelsState } from "./data.ts";

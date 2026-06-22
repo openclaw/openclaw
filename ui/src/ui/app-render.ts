@@ -1,6 +1,7 @@
 // Control UI module implements app render behavior.
 import { html, nothing } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { SIDEBAR_SECTIONS, subtitleForRoute, titleForRoute } from "../app-navigation.ts";
 import {
   appRouter,
@@ -30,6 +31,7 @@ import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatCommands } from "../pages/chat/data.ts";
 import { runUpdate } from "../pages/config/data.ts";
+import "../components/dashboard-header.ts";
 import {
   createChatSession,
   renderRouteNavItem,
@@ -38,10 +40,8 @@ import {
   renderTopbarThemeModeToggle,
   switchChatSession,
 } from "./app-render.helpers.ts";
-import "../components/dashboard-header.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { renderChatSessionSelect } from "./chat/session-controls.ts";
-import type { GatewaySessionRow } from "./types.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";

@@ -1,6 +1,13 @@
 // Control UI view renders agents panels tools skills screen content.
 import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
+import type {
+  SkillStatusEntry,
+  SkillStatusReport,
+  ToolsCatalogResult,
+  ToolsEffectiveEntry,
+  ToolsEffectiveResult,
+} from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
@@ -13,13 +20,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "../../lib/string-coerce.ts";
-import type {
-  SkillStatusEntry,
-  SkillStatusReport,
-  ToolsCatalogResult,
-  ToolsEffectiveEntry,
-  ToolsEffectiveResult,
-} from "../../ui/types.ts";
 import {
   type AgentToolEntry,
   type AgentToolSection,

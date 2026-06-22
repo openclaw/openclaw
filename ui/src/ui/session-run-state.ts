@@ -1,5 +1,5 @@
 // Control UI module implements session run state behavior.
-import type { SessionRunStatus } from "./types.ts";
+import type { SessionRunStatus } from "../api/types.ts";
 
 type SessionRunState = {
   hasActiveRun?: boolean;

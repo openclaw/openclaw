@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   createResolvedModelPatch,
   createModelCatalog,
@@ -7,7 +8,6 @@ import {
   OPENAI_GPT5_MINI_MODEL,
 } from "../chat-model.test-helpers.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 import { executeSlashCommand } from "./slash-command-executor.ts";
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {

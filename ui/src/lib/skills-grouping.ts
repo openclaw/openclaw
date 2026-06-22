@@ -1,5 +1,5 @@
 // Shared pure skill grouping helper.
-import type { SkillStatusEntry } from "../ui/types.ts";
+import type { SkillStatusEntry } from "../api/types.ts";
 
 export type SkillGroup = {
   id: string;

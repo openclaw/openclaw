@@ -3,13 +3,13 @@ import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
 } from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
-import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import type {
   AgentsListResult,
   SkillClawHubLink,
   SkillStatusEntry,
   SkillStatusReport,
-} from "../../ui/types.ts";
+} from "../../api/types.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 
 export type ClawHubSearchResult = {
   score: number;

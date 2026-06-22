@@ -1,4 +1,27 @@
 import type { EventLogEntry } from "../api/event-log.ts";
+import type {
+  AgentsListResult,
+  AgentsFilesListResult,
+  AgentIdentityResult,
+  AttentionItem,
+  ChannelsStatusSnapshot,
+  ConfigSnapshot,
+  ConfigUiHints,
+  HealthSummary,
+  ChatModelOverride,
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  NostrProfile,
+  PresenceEntry,
+  SessionsUsageResult,
+  CostUsageSummary,
+  SessionUsageTimeSeries,
+  SessionsListResult,
+  SessionCompactionCheckpoint,
+  SkillStatusReport,
+  StatusSummary,
+  ToolsCatalogResult,
+} from "../api/types.ts";
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
@@ -35,29 +58,6 @@ import type { SidebarContent } from "./sidebar-content.ts";
 import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
-import type {
-  AgentsListResult,
-  AgentsFilesListResult,
-  AgentIdentityResult,
-  AttentionItem,
-  ChannelsStatusSnapshot,
-  ConfigSnapshot,
-  ConfigUiHints,
-  HealthSummary,
-  ChatModelOverride,
-  ModelAuthStatusResult,
-  ModelCatalogEntry,
-  NostrProfile,
-  PresenceEntry,
-  SessionsUsageResult,
-  CostUsageSummary,
-  SessionUsageTimeSeries,
-  SessionsListResult,
-  SessionCompactionCheckpoint,
-  SkillStatusReport,
-  StatusSummary,
-  ToolsCatalogResult,
-} from "./types.ts";
 
 export type AppViewState = {
   settings: UiSettings;

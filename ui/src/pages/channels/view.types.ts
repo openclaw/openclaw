@@ -12,7 +12,7 @@ import type {
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
-} from "../../ui/types.ts";
+} from "../../api/types.ts";
 import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
 
 export type ChannelKey = string;

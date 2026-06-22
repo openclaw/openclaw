@@ -1,5 +1,14 @@
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
+import type {
+  AgentIdentityResult,
+  GatewaySessionRow,
+  SessionRunStatus,
+  GatewayThinkingLevelOption,
+  FastMode,
+  SessionCompactionCheckpoint,
+  SessionsListResult,
+} from "../../api/types.ts";
 import { pathForRoute } from "../../app-routes.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,15 +27,6 @@ import {
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
 } from "../../ui/thinking-labels.ts";
-import type {
-  AgentIdentityResult,
-  GatewaySessionRow,
-  SessionRunStatus,
-  GatewayThinkingLevelOption,
-  FastMode,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../ui/types.ts";
 import { resolveAgentRuntimeLabel } from "../../ui/views/agents-utils.ts";
 
 export type SessionsProps = {

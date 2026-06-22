@@ -1,6 +1,6 @@
 // Channels page data tests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelsStatusSnapshot } from "../../ui/types.ts";
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import { loadChannels, waitWhatsAppLogin, type ChannelsState } from "./data.ts";
 
 function createDeferred<T>() {

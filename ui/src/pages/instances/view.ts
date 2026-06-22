@@ -1,9 +1,9 @@
 // Instances page renders its screen content.
 import { html, nothing } from "lit";
+import type { PresenceEntry } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatPresenceAge } from "../../ui/presenter.ts";
-import type { PresenceEntry } from "../../ui/types.ts";
 
 export type InstancesProps = {
   loading: boolean;

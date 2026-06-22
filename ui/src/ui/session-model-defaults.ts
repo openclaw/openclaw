@@ -1,5 +1,5 @@
 // Shared helpers for comparing session rows against list defaults.
-import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 
 type SessionModelFields = Pick<GatewaySessionRow, "model" | "modelProvider">;
 

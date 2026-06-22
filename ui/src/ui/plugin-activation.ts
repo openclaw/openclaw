@@ -1,5 +1,5 @@
 // Control UI module implements plugin activation behavior.
-import type { ConfigSnapshot } from "./types.ts";
+import type { ConfigSnapshot } from "../api/types.ts";
 
 type PluginActivationOptions = {
   enabledByDefault?: boolean;

@@ -7,6 +7,16 @@ import {
   formatFastModeCommandOptions,
   formatFastModeCurrentStatus,
 } from "../../../../src/shared/fast-mode.js";
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  GatewayThinkingLevelOption,
+  FastMode,
+  ModelCatalogEntry,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../../api/types.ts";
 import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../../lib/session-key.ts";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -25,16 +35,6 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
-import type {
-  AgentsListResult,
-  ChatModelOverride,
-  GatewaySessionRow,
-  GatewayThinkingLevelOption,
-  FastMode,
-  ModelCatalogEntry,
-  SessionsListResult,
-  SessionsPatchResult,
-} from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {

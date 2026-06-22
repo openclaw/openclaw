@@ -1,8 +1,8 @@
 // Channels page renders WhatsApp status.
 import { html, nothing } from "lit";
+import type { WhatsAppStatus } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../../lib/format.ts";
-import type { WhatsAppStatus } from "../../ui/types.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {
   formatNullableBoolean,

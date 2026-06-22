@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../ui/types.ts";
 import { loadSessions } from "../sessions/data.ts";
 import {
   getChatAttachmentDataUrl,

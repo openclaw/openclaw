@@ -1,7 +1,6 @@
 // Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -13,7 +12,8 @@ import type {
   SkillStatusReport,
   ToolsCatalogResult,
   ToolsEffectiveResult,
-} from "../../ui/types.ts";
+} from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 export type { AgentsPanel } from "./types.ts";

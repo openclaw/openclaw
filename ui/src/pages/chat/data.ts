@@ -1,3 +1,10 @@
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  ModelCatalogEntry,
+} from "../../api/types.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import { normalizeBasePath } from "../../app-routes.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -39,13 +46,6 @@ import {
   type GatewayHelloOk,
 } from "../../ui/gateway.ts";
 import { isSessionRunActive } from "../../ui/session-run-state.ts";
-import type {
-  AgentsListResult,
-  ChatModelOverride,
-  GatewaySessionRow,
-  ModelCatalogEntry,
-} from "../../ui/types.ts";
-import type { SessionsListResult } from "../../ui/types.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import {
   applyChatHistorySessionInfo,

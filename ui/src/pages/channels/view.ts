@@ -1,7 +1,5 @@
 // Channels page renders its screen content.
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type {
   ChannelAccountSnapshot,
   ChannelUiMetaEntry,
@@ -15,7 +13,9 @@ import type {
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
-} from "../../ui/types.ts";
+} from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import { renderDiscordCard } from "./view.discord.ts";
 import { renderGoogleChatCard } from "./view.googlechat.ts";

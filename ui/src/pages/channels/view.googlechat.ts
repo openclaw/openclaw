@@ -1,8 +1,8 @@
 // Channels page renders Google Chat status.
 import { html, nothing } from "lit";
+import type { GoogleChatStatus } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import type { GoogleChatStatus } from "../../ui/types.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {
   formatNullableBoolean,

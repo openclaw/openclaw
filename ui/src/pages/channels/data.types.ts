@@ -1,6 +1,6 @@
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 // Channels page data contracts.
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import type { ChannelsStatusSnapshot } from "../../ui/types.ts";
 
 export type ChannelsState = {
   client: GatewayBrowserClient | null;

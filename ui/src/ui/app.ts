@@ -3,6 +3,29 @@ import { state } from "lit/decorators.js";
 // Control UI module implements app behavior.
 import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
 import type { EventLogEntry } from "../api/event-log.ts";
+import type {
+  AgentsListResult,
+  AgentsFilesListResult,
+  AgentIdentityResult,
+  ConfigSnapshot,
+  ConfigUiHints,
+  ChatModelOverride,
+  CronJob,
+  CronRunLogEntry,
+  CronStatus,
+  HealthSummary,
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  PresenceEntry,
+  ChannelsStatusSnapshot,
+  SessionCompactionCheckpoint,
+  SessionsListResult,
+  SkillStatusReport,
+  StatusSummary,
+  NostrProfile,
+  ToolsCatalogResult,
+  ToolsEffectiveResult,
+} from "../api/types.ts";
 import { appRouter, createApplicationContext, type ApplicationContext } from "../app-routes.ts";
 import { createRouterOutletSnapshot } from "../app/router-outlet.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
@@ -135,29 +158,6 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
-import type {
-  AgentsListResult,
-  AgentsFilesListResult,
-  AgentIdentityResult,
-  ConfigSnapshot,
-  ConfigUiHints,
-  ChatModelOverride,
-  CronJob,
-  CronRunLogEntry,
-  CronStatus,
-  HealthSummary,
-  ModelAuthStatusResult,
-  ModelCatalogEntry,
-  PresenceEntry,
-  ChannelsStatusSnapshot,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-  SkillStatusReport,
-  StatusSummary,
-  NostrProfile,
-  ToolsCatalogResult,
-  ToolsEffectiveResult,
-} from "./types.ts";
 
 declare global {
   interface Window {

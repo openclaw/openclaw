@@ -1,12 +1,12 @@
 // Control UI view renders agents panels overview screen content.
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
   AgentsListResult,
   ModelCatalogEntry,
-} from "../../ui/types.ts";
+} from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import {
   buildModelOptions,
   normalizeModelValue,

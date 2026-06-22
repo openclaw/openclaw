@@ -1,7 +1,7 @@
 // Control UI tests cover session goal behavior.
 import { describe, expect, it } from "vitest";
+import type { SessionGoal } from "../api/types.ts";
 import { formatGoalDetail, formatGoalSummary, formatGoalTokenCount } from "./session-goal.ts";
-import type { SessionGoal } from "./types.ts";
 
 function buildGoal(overrides: Partial<SessionGoal> = {}): SessionGoal {
   return {

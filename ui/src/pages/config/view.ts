@@ -1,6 +1,7 @@
 // Control UI view renders config screen content.
 import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
+import type { ConfigUiHints } from "../../api/types.ts";
 import {
   countSensitiveConfigValues,
   hintForPath,
@@ -26,7 +27,6 @@ import {
 } from "../../ui/storage.ts";
 import type { ThemeTransitionContext } from "../../ui/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../ui/theme.ts";
-import type { ConfigUiHints } from "../../ui/types.ts";
 
 const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   0: "None",

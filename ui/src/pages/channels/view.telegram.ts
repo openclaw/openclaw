@@ -1,8 +1,8 @@
 // Channels page renders Telegram status.
 import { html, nothing } from "lit";
+import type { ChannelAccountSnapshot, TelegramStatus } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import type { ChannelAccountSnapshot, TelegramStatus } from "../../ui/types.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {
   formatNullableBoolean,

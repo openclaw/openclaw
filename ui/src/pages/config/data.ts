@@ -1,5 +1,6 @@
 // Control UI controller manages config gateway state.
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
+import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import {
   cloneConfigObject,
@@ -9,7 +10,6 @@ import {
   setPathValue,
 } from "../../lib/config-form-utils.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../ui/types.ts";
 import { coerceFormValues } from "./form-coerce.ts";
 
 export type ConfigState = {

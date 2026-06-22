@@ -2,8 +2,8 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import type { GatewaySessionRow } from "../../ui/types.ts";
 import {
   getContextNoticeViewModel,
   renderContextNotice,

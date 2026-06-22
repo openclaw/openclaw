@@ -73,6 +73,7 @@ vi.mock("../pages/sessions/data.ts", () => ({
   syncSelectedSessionMessageSubscription: syncSelectedSessionMessageSubscriptionMock,
 }));
 
+import type { SessionsListResult } from "../api/types.ts";
 import {
   createChatSession,
   dismissChatError,
@@ -92,7 +93,6 @@ import {
   switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import type { SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 

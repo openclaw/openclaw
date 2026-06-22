@@ -5,6 +5,13 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import type { EventLogEntry } from "../api/event-log.ts";
+import type {
+  AgentsListResult,
+  PresenceEntry,
+  HealthSummary,
+  StatusSummary,
+  UpdateAvailable,
+} from "../api/types.ts";
 import { appRouter, getVisibleRouteId, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
 import {
@@ -97,13 +104,6 @@ import {
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { UiSettings } from "./storage.ts";
-import type {
-  AgentsListResult,
-  PresenceEntry,
-  HealthSummary,
-  StatusSummary,
-  UpdateAvailable,
-} from "./types.ts";
 
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());

@@ -1,6 +1,6 @@
+import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 // Control UI view renders config form.shared screen content.
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
-import type { ConfigUiHint, ConfigUiHints } from "../ui/types.ts";
 
 export type JsonSchema = {
   type?: string | string[];

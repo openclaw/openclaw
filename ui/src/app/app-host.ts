@@ -1,3 +1,4 @@
+import type { AgentsListResult, AttentionItem } from "../api/types.ts";
 import type { AgentsState } from "../pages/agents/data.ts";
 // Shared Control UI host shapes used by app-level route and settings modules.
 import type { AgentFilesState } from "../pages/agents/files.ts";
@@ -20,7 +21,6 @@ import type { UsageState } from "../pages/usage/data.ts";
 import type { ModelAuthStatusState } from "../ui/controllers/model-auth-status.ts";
 import type { UiSettings } from "../ui/storage.ts";
 import type { ResolvedTheme, ThemeMode, ThemeName } from "../ui/theme.ts";
-import type { AgentsListResult, AttentionItem } from "../ui/types.ts";
 
 export type SettingsHost = {
   settings: UiSettings;

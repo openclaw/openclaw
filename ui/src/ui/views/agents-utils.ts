@@ -5,13 +5,6 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../lib/string-coerce.ts";
-import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
-import { buildQualifiedChatModelValue } from "../chat-model-ref.ts";
-import { controlUiPublicAssetPath } from "../public-assets.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -19,7 +12,14 @@ import type {
   ModelCatalogEntry,
   ToolCatalogProfile,
   ToolsCatalogResult,
-} from "../types.ts";
+} from "../../api/types.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../lib/string-coerce.ts";
+import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
+import { buildQualifiedChatModelValue } from "../chat-model-ref.ts";
+import { controlUiPublicAssetPath } from "../public-assets.ts";
 
 export type AgentToolEntry = {
   id: string;

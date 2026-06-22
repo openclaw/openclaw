@@ -1,6 +1,7 @@
 // Control UI tests cover app render behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { SessionsListResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import {
   renderChatControls,
@@ -9,7 +10,6 @@ import {
   renderTopbarThemeModeToggle,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import type { SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 

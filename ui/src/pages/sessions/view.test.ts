@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionsListResult } from "../../ui/types.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
 function buildResult(

@@ -1,7 +1,7 @@
 // Channels page shared view helpers.
 import { html, nothing } from "lit";
+import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChannelAccountSnapshot } from "../../ui/types.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 
 type ChannelDisplayState = {

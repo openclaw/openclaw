@@ -1,6 +1,15 @@
 // Control UI view renders overview screen content.
 import { html, nothing } from "lit";
 import type { EventLogEntry } from "../../api/event-log.ts";
+import type {
+  AttentionItem,
+  CronJob,
+  CronStatus,
+  ModelAuthStatusResult,
+  SessionsListResult,
+  SessionsUsageResult,
+  SkillStatusReport,
+} from "../../api/types.ts";
 import type { RouteId } from "../../app-routes.ts";
 import { icons } from "../../components/icons.ts";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
@@ -15,15 +24,6 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { GatewayHelloOk } from "../../ui/gateway.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../ui/storage.ts";
-import type {
-  AttentionItem,
-  CronJob,
-  CronStatus,
-  ModelAuthStatusResult,
-  SessionsListResult,
-  SessionsUsageResult,
-  SkillStatusReport,
-} from "../../ui/types.ts";
 import { renderConnectCommand } from "../../ui/views/connect-command.ts";
 import { renderOverviewAttention } from "./attention.ts";
 import { renderOverviewCards } from "./cards.ts";

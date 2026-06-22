@@ -4,6 +4,7 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -13,7 +14,6 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
-import type { GatewaySessionRow } from "../../ui/types.ts";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "./data.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());

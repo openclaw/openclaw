@@ -1,6 +1,6 @@
+import type { AgentIdentityResult } from "../../api/types.ts";
 // Control UI controller manages agent identity gateway state.
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import type { AgentIdentityResult } from "../../ui/types.ts";
 
 export type AgentIdentityState = {
   client: GatewayBrowserClient | null;

@@ -1,4 +1,5 @@
 import { html } from "lit";
+import type { FastMode } from "../../api/types.ts";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,7 +8,6 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { setAssistantAvatarOverride } from "../../ui/controllers/assistant-identity.ts";
 import { loadLocalAssistantIdentity } from "../../ui/storage.ts";
-import type { FastMode } from "../../ui/types.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import { renderMcp } from "../../ui/views/mcp.ts";
 import { patchSession } from "../sessions/data.ts";

@@ -1,5 +1,6 @@
 // Control UI view renders channels screen content.
 import { html } from "lit";
+import type { ConfigUiHints } from "../../api/types.ts";
 import {
   analyzeConfigSchema,
   renderNode,
@@ -7,7 +8,6 @@ import {
   type JsonSchema,
 } from "../../components/config-form.ts";
 import { t } from "../../i18n/index.ts";
-import type { ConfigUiHints } from "../../ui/types.ts";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "./config-extras.ts";
 import type { ChannelsProps } from "./view.types.ts";
 

@@ -1,5 +1,5 @@
 // Control UI module implements model auth helpers behavior.
-import type { ModelAuthStatusProvider } from "./types.ts";
+import type { ModelAuthStatusProvider } from "../api/types.ts";
 
 /**
  * True when a provider's auth should be actively monitored on the dashboard.

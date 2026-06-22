@@ -1,7 +1,7 @@
 // Channels page view tests.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { WhatsAppStatus } from "../../ui/types.ts";
+import type { WhatsAppStatus } from "../../api/types.ts";
 import {
   channelEnabled,
   resolveChannelConfigured,

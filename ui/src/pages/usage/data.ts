@@ -1,3 +1,8 @@
+import type {
+  SessionsUsageResult,
+  CostUsageSummary,
+  SessionUsageTimeSeries,
+} from "../../api/types.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 // Control UI controller manages usage gateway state.
 import { getSafeLocalStorage } from "../../local-storage.ts";
@@ -6,11 +11,6 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../ui/controllers/scope-errors.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import type {
-  SessionsUsageResult,
-  CostUsageSummary,
-  SessionUsageTimeSeries,
-} from "../../ui/types.ts";
 import type { SessionLogEntry } from "./view.ts";
 
 export type UsageState = {

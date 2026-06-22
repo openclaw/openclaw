@@ -1,6 +1,6 @@
+import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
 // Control UI controller manages debug gateway state.
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import type { HealthSnapshot, StatusSummary } from "../../ui/types.ts";
 
 export type DebugState = {
   client: GatewayBrowserClient | null;

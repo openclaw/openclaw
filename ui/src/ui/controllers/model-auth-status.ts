@@ -1,6 +1,6 @@
+import type { ModelAuthStatusResult } from "../../api/types.ts";
 // Control UI controller manages model auth status gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ModelAuthStatusResult } from "../types.ts";
 
 const FALLBACK: ModelAuthStatusResult = { ts: 0, providers: [] };
 

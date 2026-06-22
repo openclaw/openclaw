@@ -1,12 +1,12 @@
-import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../lib/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
-import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import type {
   ArtifactDownloadResult,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
-} from "../../ui/types.ts";
+} from "../../api/types.ts";
+import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../lib/session-key.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import type { AppViewState } from "../../ui/app-view-state.ts";
+import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import { scopedAgentParamsForSession } from "./data.ts";
 import type { ChatProps } from "./view.ts";
 

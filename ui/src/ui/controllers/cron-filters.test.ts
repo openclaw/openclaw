@@ -1,6 +1,6 @@
 // Control UI tests cover cron filters behavior.
 import { describe, expect, it } from "vitest";
-import type { CronJob } from "../types.ts";
+import type { CronJob } from "../../api/types.ts";
 import { getVisibleCronJobs } from "./cron.ts";
 
 function job(id: string, overrides: Partial<CronJob> = {}): CronJob {

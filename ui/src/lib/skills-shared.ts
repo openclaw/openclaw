@@ -1,6 +1,6 @@
 // Shared skill status rendering and classification helpers.
 import { html, nothing } from "lit";
-import type { SkillStatusEntry } from "../ui/types.ts";
+import type { SkillStatusEntry } from "../api/types.ts";
 
 export function computeSkillMissing(skill: SkillStatusEntry): string[] {
   return [

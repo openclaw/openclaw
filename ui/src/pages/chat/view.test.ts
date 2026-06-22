@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
@@ -16,7 +17,6 @@ import {
 } from "../../ui/chat/code-block-copy-payload.ts";
 import { renderChatSessionSelect } from "../../ui/chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../ui/types.ts";
 import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
 import {
   getChatAttachmentDataUrl,

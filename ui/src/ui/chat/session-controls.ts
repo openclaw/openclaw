@@ -1,6 +1,7 @@
 // Control UI chat module implements session controls behavior.
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import type { FastMode, GatewayThinkingLevelOption, SessionsListResult } from "../../api/types.ts";
 import { pathForRoute, type RouteId } from "../../app-routes.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -48,7 +49,6 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
-import type { FastMode, GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 type ChatSessionSelectSurface = "desktop" | "mobile" | "sidebar";

@@ -4,6 +4,13 @@ import DOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
+import type {
+  AgentsFilesListResult,
+  ChannelAccountSnapshot,
+  ChannelsStatusSnapshot,
+  CronJob,
+  CronStatus,
+} from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
@@ -13,13 +20,6 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../ui/presenter.ts";
-import type {
-  AgentsFilesListResult,
-  ChannelAccountSnapshot,
-  ChannelsStatusSnapshot,
-  CronJob,
-  CronStatus,
-} from "../../ui/types.ts";
 import { formatBytes, type AgentContext } from "../../ui/views/agents-utils.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../channels/config-extras.ts";
 import type { AgentsPanel } from "./types.ts";

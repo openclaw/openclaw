@@ -1,9 +1,9 @@
 // Control UI view renders overview attention screen content.
 import { html, nothing } from "lit";
+import type { AttentionItem } from "../../api/types.ts";
 import { icons, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import type { AttentionItem } from "../../ui/types.ts";
 
 export type OverviewAttentionProps = {
   items: AttentionItem[];

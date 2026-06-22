@@ -1,3 +1,4 @@
+import type { ModelCatalogEntry } from "../api/types.ts";
 // Control UI module implements chat model select state behavior.
 import type { AppViewState } from "./app-view-state.ts";
 import {
@@ -8,7 +9,6 @@ import {
   resolvePreferredServerChatModelValue,
 } from "./chat-model-ref.ts";
 import { pushUniqueTrimmedSelectOption } from "./select-options.ts";
-import type { ModelCatalogEntry } from "./types.ts";
 
 type ChatModelSelectStateInput = Pick<
   AppViewState,
