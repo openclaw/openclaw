@@ -36,14 +36,14 @@ describe("telegramPlugin outbound", () => {
     clearTelegramRuntime();
     const text = 'Done.\n⚠️ 🛠️ `search "Pipeline" in ~/.openclaw/workspace-* (agent)` failed';
 
-    expect(telegramOutbound.sanitizeText?.({ text })).toBe("Done.");
+    expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe("Done.");
   });
 
   it("preserves ordinary outbound text while sanitizing", () => {
     clearTelegramRuntime();
     const text = "The pipeline has 3 deals.";
 
-    expect(telegramOutbound.sanitizeText?.({ text })).toBe(text);
+    expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe(text);
   });
 
   it("preserves explicit HTML parse mode before chunking", () => {
