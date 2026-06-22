@@ -116,6 +116,18 @@ describe("ci workflow guards", () => {
     expect(workflowSource).toContain("!emptyHeadCommit && parseBoolean");
   });
 
+  it("bounds matrix fan-out for runner-registration pressure", () => {
+    const workflow = readCiWorkflow();
+
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy.max-parallel).toBe(6);
+    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy.max-parallel).toBe(4);
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy.max-parallel).toBe(4);
+    expect(workflow.jobs["check-shard"].strategy.max-parallel).toBe(4);
+    expect(workflow.jobs["check-additional-shard"].strategy.max-parallel).toBe(4);
+    expect(workflow.jobs["checks-windows"].strategy.max-parallel).toBe(2);
+    expect(workflow.jobs.android.strategy.max-parallel).toBe(2);
+  });
+
   it("runs the session accessor ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];

@@ -846,6 +846,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - name: Checkout
@@ -935,6 +936,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -1015,6 +1017,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -1167,6 +1170,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 6
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout
@@ -1275,6 +1279,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         include:
           - check_name: check-guards
@@ -1416,6 +1421,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         include:
           - check_name: check-additional-boundaries-a
@@ -1790,6 +1796,7 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - name: Checkout
@@ -2119,6 +2126,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - name: Checkout
