@@ -834,6 +834,7 @@ function deleteGatewayDedupeEntries(params: {
 function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
+  trackingSessionKey?: string;
   dedupeKeys: readonly string[];
   /**
    * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
@@ -850,23 +851,27 @@ function dispatchAgentRunFromGateway(params: {
   let taskTracked = false;
   if (shouldTrackTask) {
     try {
+      const trackingSessionKey = params.trackingSessionKey?.trim() || params.ingressOpts.sessionKey;
+      const now = Date.now();
+      const requesterOrigin = normalizeDeliveryContext({
+        channel: params.ingressOpts.channel,
+        to: params.ingressOpts.to,
+        accountId: params.ingressOpts.accountId,
+        threadId: params.ingressOpts.threadId,
+      });
       taskTracked = Boolean(
         createRunningTaskRun({
           runtime: "cli",
           sourceId: params.runId,
-          ownerKey: params.ingressOpts.sessionKey,
+          ownerKey: trackingSessionKey,
           scopeKind: "session",
-          requesterOrigin: normalizeDeliveryContext({
-            channel: params.ingressOpts.channel,
-            to: params.ingressOpts.to,
-            accountId: params.ingressOpts.accountId,
-            threadId: params.ingressOpts.threadId,
-          }),
-          childSessionKey: params.ingressOpts.sessionKey,
+          requesterOrigin,
+          childSessionKey: trackingSessionKey,
           runId: params.runId,
           task: params.ingressOpts.message,
-          deliveryStatus: "not_applicable",
-          startedAt: Date.now(),
+          deliveryStatus: requesterOrigin?.channel ? "pending" : "not_applicable",
+          startedAt: now,
+          lastEventAt: now,
         }),
       );
     } catch (err) {
@@ -2725,6 +2730,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               allowModelOverride,
             },
             runId,
+            trackingSessionKey: requestedSessionKeyRaw,
             dedupeKeys: agentDedupeKeys,
             abortController: activeRunAbort.controller,
             cleanupAbortController: activeRunAbort.cleanup,

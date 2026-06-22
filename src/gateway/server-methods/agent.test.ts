@@ -155,6 +155,7 @@ vi.mock("../../infra/agent-events.js", () => ({
   clearAgentRunContext: mocks.clearAgentRunContext,
   emitAgentEvent: mocks.emitAgentEvent,
   getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
+  getAgentRunContext: vi.fn(),
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
@@ -4650,6 +4651,9 @@ describe("gateway agent handler", () => {
         {
           message: "background cli seam task",
           sessionKey: "agent:main:main",
+          channel: "telegram",
+          to: "telegram:-100",
+          threadId: "42",
           idempotencyKey: "task-registry-agent-seam",
         },
         { reqId: "task-registry-agent-seam" },
@@ -4661,6 +4665,7 @@ describe("gateway agent handler", () => {
         runId: "task-registry-agent-seam",
         childSessionKey: "agent:main:main",
         sourceId: "task-registry-agent-seam",
+        deliveryStatus: "pending",
       });
       expectStringFieldContains(
         mockCallArg(createRunningTaskRunSpy) as Record<string, unknown>,
