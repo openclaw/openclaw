@@ -6,7 +6,6 @@ import {
   formatDelay,
   generateJobName,
   buildReminderPrompt,
-  executeRemind,
   executeScheduledRemind,
   prepareRemindCronAction,
   type RemindCronAction,
@@ -110,21 +109,6 @@ describe("engine/tools/remind-logic", () => {
     it("includes the content in the prompt", () => {
       const prompt = buildReminderPrompt("drink water");
       expect(prompt).toContain("drink water");
-    });
-  });
-
-  describe("executeRemind", () => {
-    it("renders internal scheduling output without exposing cronParams", () => {
-      const result = executeRemind({ action: "list" });
-      expect(result.details).toEqual({
-        _instruction: "Gateway cron action prepared for internal QQ reminder scheduling.",
-        action: "list",
-        summary: undefined,
-      });
-      expect((result.details as { _instruction: string })["_instruction"]).not.toContain(
-        "Use the cron tool",
-      );
-      expect(result.details).not.toHaveProperty("cronParams");
     });
   });
 

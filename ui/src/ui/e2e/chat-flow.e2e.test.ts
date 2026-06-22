@@ -1,6 +1,6 @@
 // Control UI tests cover chat flow behavior.
-import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,8 +15,9 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
-let browser: Browser;
 let server: ControlUiE2eServer;
+const contextBrowsers = new WeakMap<BrowserContext, Browser>();
+const openBrowserContexts = new Set<BrowserContext>();
 
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -87,6 +88,33 @@ async function scrollChatThreadToTop(page: Page): Promise<void> {
     thread.scrollTop = 0;
     thread.dispatchEvent(new Event("scroll", { bubbles: true }));
   });
+}
+
+async function newBrowserContext(options: Parameters<Browser["newContext"]>[0]) {
+  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  let context: BrowserContext | undefined;
+  try {
+    context = await browser.newContext(options);
+    contextBrowsers.set(context, browser);
+    openBrowserContexts.add(context);
+    return context;
+  } catch (error) {
+    await context?.close().catch(() => {});
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function closeBrowserContext(context: BrowserContext): Promise<void> {
+  const browser = contextBrowsers.get(context);
+  openBrowserContexts.delete(context);
+  contextBrowsers.delete(context);
+  await context.close().catch(() => {});
+  await browser?.close().catch(() => {});
+}
+
+async function closeOpenBrowserContexts(): Promise<void> {
+  await Promise.all([...openBrowserContexts].map((context) => closeBrowserContext(context)));
 }
 
 async function controlUiEventPayloads(
@@ -173,16 +201,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       );
     }
     server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
 
   afterAll(async () => {
-    await browser?.close();
+    await closeOpenBrowserContexts();
     await server?.close();
   });
 
+  afterEach(async () => {
+    await closeOpenBrowserContexts();
+  });
+
   it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -217,12 +248,63 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByText("Harness verified.").waitFor({ timeout: 10_000 });
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps the composer clear when a stale native input replay arrives after send", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: "Ready for stale replay check.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Ready for stale replay check.").waitFor({ timeout: 10_000 });
+
+      const prompt = "submitted message";
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      expect(await composer.inputValue()).toBe("");
+
+      const afterReplay = await composer.evaluate((element, submitted) => {
+        const textarea = element as HTMLTextAreaElement;
+        textarea.value = submitted;
+        textarea.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            data: submitted,
+            inputType: "insertText",
+          }),
+        );
+        return textarea.value;
+      }, prompt);
+
+      expect(afterReplay).toBe("");
+      expect(await composer.inputValue()).toBe("");
+
+      await composer.pressSequentially(prompt);
+      expect(await composer.inputValue()).toBe(prompt);
+    } finally {
+      await closeBrowserContext(context);
     }
   });
 
   it("copies a code block over a non-secure context via the execCommand fallback", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -275,12 +357,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(copied).toContain(code);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("starts the workspace files panel collapsed and toggles it open", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -372,12 +454,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.setViewportSize({ height: 900, width: 1000 });
       expect(await page.locator(".chat-workspace-rail").isHidden()).toBe(true);
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -436,12 +518,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread strong").getByText("tail").waitFor({ timeout: 10_000 });
       expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("keeps chat usable while sessions are still loading", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -483,12 +565,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         timeout: 10_000,
       });
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("sends the first chat turn while agents startup loading is still pending", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -650,12 +732,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.waitForRequest("commands.list");
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("keeps streamed text visible when a chat error terminates the turn", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -697,12 +779,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByText(partialText).waitFor({ timeout: 10_000 });
       await page.getByText("Error: gateway disconnected").waitFor({ timeout: 10_000 });
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("keeps a delayed chat.send ACK visible as pending until the ACK resolves", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -736,12 +818,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("scrolls a delayed pending send into view before the ACK resolves", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -792,12 +874,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("keeps rejected pre-ACK sends visible and restores the draft", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -824,12 +906,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
       expect(await composer.inputValue()).toBe(prompt);
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("retries an ACK-lost send after reconnect with the same idempotency key", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -857,12 +939,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(secondParams.message).toBe(prompt);
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("keeps a session model override selected after switching away and back", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -929,12 +1011,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         "bedrock/claude-opus-4.5",
       );
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("shows a pending send while a model override save is still pending", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -976,12 +1058,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(params.message).toBe(prompt);
       expect(params.sessionKey).toBe("agent:main:session-a");
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 
   it("refreshes history after a tool-call window disconnects and reconnects", async () => {
-    const context = await browser.newContext({
+    const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -1032,7 +1114,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByText("Recovered from refreshed history.").waitFor({ timeout: 15_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
     } finally {
-      await context.close();
+      await closeBrowserContext(context);
     }
   });
 });

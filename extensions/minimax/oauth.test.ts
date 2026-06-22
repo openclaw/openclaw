@@ -3,6 +3,28 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loginMiniMaxPortalOAuth, normalizeOAuthExpires } from "./oauth.js";
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -30,6 +52,116 @@ describe("normalizeOAuthExpires", () => {
 });
 
 describe("loginMiniMaxPortalOAuth", () => {
+  it("bounds authorization error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(
+      `${"minimax authorization unavailable ".repeat(1024)}tail`,
+      {
+        status: 503,
+        headers: { "Content-Type": "text/plain" },
+      },
+    );
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tracked.response),
+    );
+
+    const error = await loginMiniMaxPortalOAuth({
+      openUrl: vi.fn(async () => undefined),
+      note: vi.fn(async () => undefined),
+      progress: { update: vi.fn(), stop: vi.fn() },
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(
+      /MiniMax OAuth authorization failed: minimax authorization unavailable/,
+    );
+    expect((error as Error).message).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds token error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"minimax token unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "Content-Type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    let callCount = 0;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      callCount += 1;
+      const body =
+        init?.body instanceof URLSearchParams
+          ? init.body
+          : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      if (callCount === 1) {
+        return new Response(
+          JSON.stringify({
+            user_code: "CODE",
+            verification_uri: "https://example.com/device",
+            expired_in: Date.now() + 10_000,
+            state: body.get("state"),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return tracked.response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await loginMiniMaxPortalOAuth({
+      openUrl: vi.fn(async () => undefined),
+      note: vi.fn(async () => undefined),
+      progress: { update: vi.fn(), stop: vi.fn() },
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("minimax token unavailable");
+    expect((error as Error).message).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds HTTP 200 token bodies before app-level parsing", async () => {
+    const tracked = cancelTrackedResponse(`${'{"status":"error","detail":"'.repeat(512)}tail`, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    let callCount = 0;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      callCount += 1;
+      const body =
+        init?.body instanceof URLSearchParams
+          ? init.body
+          : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      if (callCount === 1) {
+        return new Response(
+          JSON.stringify({
+            user_code: "CODE",
+            verification_uri: "https://example.com/device",
+            expired_in: Date.now() + 10_000,
+            state: body.get("state"),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return tracked.response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await loginMiniMaxPortalOAuth({
+      openUrl: vi.fn(async () => undefined),
+      note: vi.fn(async () => undefined),
+      progress: { update: vi.fn(), stop: vi.fn() },
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("MiniMax OAuth failed to parse response.");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
   it("uses MiniMax account OAuth endpoints directly for global and CN login", async () => {
     for (const [region, expectedHosts] of [
       [

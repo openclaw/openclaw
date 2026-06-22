@@ -52,4 +52,28 @@ describe("scripts/embedded-run-abort-leak", () => {
     );
     expect(readdirSync(looseThresholdProbe.snapDir)).toEqual([]);
   });
+
+  it("rejects missing snapshot directories before writing heap snapshots", () => {
+    const result = runHarness(["--snap-dir", "--quiet", "--iters", "1", "--batches", "1"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: --snap-dir requires a value");
+  });
+
+  it("rejects short flag values before writing heap snapshots", () => {
+    const snapDirResult = runHarness(["--snap-dir", "-h", "--quiet", "--iters", "1"]);
+    const itersResult = runHarness(["--iters", "-h", "--quiet"]);
+    const modeResult = runHarness(["--mode", "-h", "--quiet"]);
+
+    expect(snapDirResult.status).toBe(2);
+    expect(snapDirResult.stdout).toBe("");
+    expect(snapDirResult.stderr).toContain("error: --snap-dir requires a value");
+    expect(itersResult.status).toBe(2);
+    expect(itersResult.stdout).toBe("");
+    expect(itersResult.stderr).toContain("error: --iters requires a value");
+    expect(modeResult.status).toBe(2);
+    expect(modeResult.stdout).toBe("");
+    expect(modeResult.stderr).toContain("error: --mode requires a value");
+  });
 });

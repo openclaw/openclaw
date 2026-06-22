@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { replayRecentUserAssistantMessages } from "./session-transcript-replay.js";
+import { replayRecentUserAssistantMessages } from "../../config/sessions/transcript-replay.js";
 
 const DEFAULT_REPLAY_MAX_MESSAGES = 6;
 

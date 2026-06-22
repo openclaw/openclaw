@@ -287,6 +287,27 @@ function tryResolveRealPath(targetPath: string): string | null {
   }
 }
 
+function resolvePathThroughExistingAncestor(
+  targetPath: string,
+  resolveRealPath: (targetPath: string) => string | null,
+  pathOps: Pick<typeof path, "resolve" | "dirname" | "basename">,
+): string | null {
+  const missingSegments: string[] = [];
+  let candidate = pathOps.resolve(targetPath);
+  while (true) {
+    const resolved = resolveRealPath(candidate);
+    if (resolved) {
+      return pathOps.resolve(resolved, ...missingSegments);
+    }
+    const parent = pathOps.dirname(candidate);
+    if (parent === candidate) {
+      return null;
+    }
+    missingSegments.unshift(pathOps.basename(candidate));
+    candidate = parent;
+  }
+}
+
 function decodeMountInfoPath(value: string): string {
   return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
     String.fromCharCode(Number.parseInt(octal, 8)),
@@ -436,7 +457,9 @@ export function detectLinuxSdBackedStateDir(
   const linuxPath = path.posix;
 
   const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
-  const resolvedStatePath = resolveRealPath(stateDir) ?? linuxPath.resolve(stateDir);
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
+    linuxPath.resolve(stateDir);
   const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
   if (!mountInfo) {
     return null;
@@ -488,6 +511,72 @@ export function formatLinuxSdBackedStateDirWarning(
     `- State directory appears to be on SD/eMMC storage (${displayStateDir}; device ${safeSource}, fs ${safeFsType}, mount ${safeMountPoint}).`,
     "- SD/eMMC media can be slower for random I/O and wear faster under session/log churn.",
     "- For better startup and state durability, prefer SSD/NVMe (or USB SSD on Raspberry Pi) for OPENCLAW_STATE_DIR.",
+  ].join("\n");
+}
+
+type LinuxVolatileStateDir = {
+  path: string;
+  mountPoint: string;
+  fsType: string;
+};
+
+/** Filesystems whose state disappears on reboot. Docker overlayfs is intentionally excluded. */
+const VOLATILE_FS_TYPES = new Set(["tmpfs", "ramfs"]);
+
+/** Detects Linux state directories mounted on filesystems that do not survive a reboot. */
+export function detectLinuxVolatileStateDir(
+  stateDir: string,
+  deps?: {
+    platform?: NodeJS.Platform;
+    mountInfo?: string;
+    resolveRealPath?: (targetPath: string) => string | null;
+  },
+): LinuxVolatileStateDir | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "linux") {
+    return null;
+  }
+  const linuxPath = path.posix;
+
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
+    linuxPath.resolve(stateDir);
+  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
+  if (!mountInfo) {
+    return null;
+  }
+
+  const mountEntry = findLinuxMountInfoEntryForPath(
+    resolvedStatePath,
+    parseLinuxMountInfo(mountInfo),
+    linuxPath,
+  );
+  if (!mountEntry || !VOLATILE_FS_TYPES.has(mountEntry.fsType)) {
+    return null;
+  }
+
+  return {
+    path: linuxPath.resolve(resolvedStatePath),
+    mountPoint: linuxPath.resolve(mountEntry.mountPoint),
+    fsType: mountEntry.fsType,
+  };
+}
+
+/** Formats the warning for state stored on a volatile Linux filesystem. */
+export function formatLinuxVolatileStateDirWarning(
+  displayStateDir: string,
+  volatileDir: LinuxVolatileStateDir,
+): string {
+  const safeFsType = escapeControlCharsForTerminal(volatileDir.fsType);
+  const safeMountPoint =
+    volatileDir.mountPoint === "/"
+      ? "/"
+      : escapeControlCharsForTerminal(shortenHomePath(volatileDir.mountPoint));
+  return [
+    `- State directory is on a volatile filesystem (${displayStateDir}; fs ${safeFsType}, mount ${safeMountPoint}).`,
+    "- Sessions, credentials, config, and SQLite state (including WAL/journal sidecars) will be lost on reboot.",
+    "- Move OPENCLAW_STATE_DIR to a persistent filesystem to avoid data loss.",
   ].join("\n");
 }
 
@@ -642,6 +731,7 @@ export async function noteStateIntegrity(
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
+  const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
   const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
 
   if (cloudSyncedStateDir) {
@@ -656,6 +746,9 @@ export async function noteStateIntegrity(
   }
   if (linuxSdBackedStateDir) {
     warnings.push(formatLinuxSdBackedStateDirWarning(displayStateDir, linuxSdBackedStateDir));
+  }
+  if (linuxVolatileStateDir) {
+    warnings.push(formatLinuxVolatileStateDirWarning(displayStateDir, linuxVolatileStateDir));
   }
 
   let stateDirExists = existsDir(stateDir);

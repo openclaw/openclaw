@@ -2,6 +2,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeAgentId } from "./config-utils.js";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
@@ -22,6 +23,7 @@ import {
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import type { MemorySessionSyncTarget } from "./types.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -62,6 +64,18 @@ export type BuildSessionEntryOptions = {
 export type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
+};
+
+export type ResolvedMemorySessionSyncTarget = {
+  agentId: string;
+  sessionFile: string;
+  sessionId: string;
+};
+
+export type ResolvedSessionTranscriptIdentity = {
+  agentId: string;
+  sessionId: string;
+  sessionKey?: string;
 };
 
 type SessionTranscriptStoreEntry = {
@@ -256,6 +270,15 @@ function readSessionTranscriptClassificationStore(
   }
 }
 
+function findSessionTranscriptStoreEntryBySessionId(
+  store: Record<string, SessionTranscriptStoreEntry>,
+  sessionId: string,
+): SessionTranscriptStoreEntry | undefined {
+  return Object.values(store).find((entry) => {
+    return typeof entry.sessionId === "string" && entry.sessionId.trim() === sessionId;
+  });
+}
+
 export function loadDreamingNarrativeTranscriptPathSetForAgent(
   agentId: string,
 ): ReadonlySet<string> {
@@ -321,6 +344,148 @@ export function sessionPathForFile(absPath: string): string {
   return path
     .join("sessions", ...(agentId ? [agentId] : []), path.basename(absPath))
     .replace(/\\/g, "/");
+}
+
+/**
+ * Parses a deprecated path-shaped memory sync hint only when it points at an
+ * OpenClaw-owned usage-counted transcript in the canonical agent sessions dir.
+ */
+export function parseCanonicalSessionSyncTargetFromPath(
+  sessionFile: string,
+): MemorySessionSyncTarget | null {
+  const trimmed = sessionFile.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const resolved = path.resolve(trimmed);
+  const fileName = path.basename(resolved);
+  const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
+  if (!sessionId || !isUsageCountedSessionTranscriptFileName(fileName)) {
+    return null;
+  }
+  const agentId = extractAgentIdFromSessionPath(resolved);
+  if (!agentId) {
+    return null;
+  }
+  const canonicalSessionsDir = normalizeComparablePath(
+    resolveSessionTranscriptsDirForAgent(agentId),
+  );
+  if (normalizeComparablePath(path.dirname(resolved)) !== canonicalSessionsDir) {
+    return null;
+  }
+  return { agentId, sessionId };
+}
+
+/**
+ * Resolves a current transcript path back to the canonical session-store
+ * identity when available, falling back to the usage-counted file identity.
+ */
+export function resolveSessionIdentityForTranscriptFile(
+  sessionFile: string,
+): ResolvedSessionTranscriptIdentity | null {
+  const parsed = parseCanonicalSessionSyncTargetFromPath(sessionFile);
+  if (!parsed?.agentId) {
+    return null;
+  }
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(parsed.agentId);
+  const normalizedSessionFile = normalizeComparablePath(sessionFile);
+  const store = readSessionTranscriptClassificationStore(path.join(sessionsDir, "sessions.json"));
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
+    if (transcriptPath !== normalizedSessionFile) {
+      continue;
+    }
+    const sessionId = typeof entry.sessionId === "string" ? entry.sessionId.trim() : "";
+    if (!sessionId) {
+      continue;
+    }
+    return {
+      agentId: parsed.agentId,
+      sessionId,
+      ...(sessionKey.trim() ? { sessionKey } : {}),
+    };
+  }
+  return {
+    agentId: parsed.agentId,
+    sessionId: parsed.sessionId,
+  };
+}
+
+/**
+ * Resolves a storage-neutral memory sync target to the current file-backed
+ * transcript. The SQLite adapter implements this identity contract without
+ * deriving a path.
+ */
+export function resolveSessionFileForSyncTarget(
+  target: MemorySessionSyncTarget,
+  defaultAgentId?: string,
+): ResolvedMemorySessionSyncTarget | null {
+  const sessionId = target.sessionId.trim();
+  const rawAgentId = (target.agentId ?? defaultAgentId ?? "").trim();
+  if (!rawAgentId || !sessionId) {
+    return null;
+  }
+  const agentId = normalizeAgentId(rawAgentId);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const sessionKey = target.sessionKey?.trim();
+  let store: Record<string, SessionTranscriptStoreEntry> | null = null;
+  if (sessionKey) {
+    store = readSessionTranscriptClassificationStore(path.join(sessionsDir, "sessions.json"));
+    const persistedPath = resolveSessionStoreTranscriptPath(sessionsDir, store[sessionKey]);
+    const canonicalPath = resolveCanonicalSessionSyncFilePath(agentId, persistedPath);
+    if (canonicalPath) {
+      return {
+        agentId,
+        sessionId,
+        sessionFile: canonicalPath,
+      };
+    }
+  }
+  store ??= readSessionTranscriptClassificationStore(path.join(sessionsDir, "sessions.json"));
+  const persistedPath = resolveSessionStoreTranscriptPath(
+    sessionsDir,
+    findSessionTranscriptStoreEntryBySessionId(store, sessionId),
+  );
+  const canonicalPath = resolveCanonicalSessionSyncFilePath(agentId, persistedPath);
+  if (canonicalPath) {
+    return {
+      agentId,
+      sessionId,
+      sessionFile: canonicalPath,
+    };
+  }
+  const sessionFile = resolveCanonicalSessionSyncFilePath(
+    agentId,
+    path.join(sessionsDir, `${sessionId}.jsonl`),
+    sessionId,
+  );
+  if (!sessionFile) {
+    return null;
+  }
+  return {
+    agentId,
+    sessionId,
+    sessionFile,
+  };
+}
+
+function resolveCanonicalSessionSyncFilePath(
+  agentId: string,
+  sessionFile?: string | null,
+  expectedSessionId?: string,
+): string | null {
+  if (!sessionFile) {
+    return null;
+  }
+  const resolved = path.resolve(sessionFile);
+  const parsed = parseCanonicalSessionSyncTargetFromPath(resolved);
+  if (parsed?.agentId !== agentId) {
+    return null;
+  }
+  if (expectedSessionId !== undefined && parsed.sessionId !== expectedSessionId) {
+    return null;
+  }
+  return resolved;
 }
 
 async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {

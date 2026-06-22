@@ -24,6 +24,7 @@ import {
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
@@ -49,7 +50,7 @@ import {
   executePreparedCliRun,
   setCliRunnerExecuteTestDeps,
 } from "./cli-runner/execute.js";
-import { buildSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
+import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -272,7 +273,6 @@ async function withTempExecApprovalsFile(
   file: Record<string, unknown>,
   run: () => Promise<void>,
 ): Promise<void> {
-  const originalHome = process.env.HOME;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-exec-approvals-"));
   await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
   await fs.writeFile(
@@ -280,31 +280,18 @@ async function withTempExecApprovalsFile(
     `${JSON.stringify(file)}\n`,
     "utf-8",
   );
-  process.env.HOME = home;
   try {
-    await run();
+    await withEnvAsync({ HOME: home }, run);
   } finally {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
     await fs.rm(home, { recursive: true, force: true });
   }
 }
 
 async function withTempOpenClawHome(run: (home: string) => Promise<void>): Promise<void> {
-  const originalOpenClawHome = process.env.OPENCLAW_HOME;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-home-"));
-  process.env.OPENCLAW_HOME = home;
   try {
-    await run(home);
+    await withEnvAsync({ OPENCLAW_HOME: home }, async () => run(home));
   } finally {
-    if (originalOpenClawHome === undefined) {
-      delete process.env.OPENCLAW_HOME;
-    } else {
-      process.env.OPENCLAW_HOME = originalOpenClawHome;
-    }
     await fs.rm(home, { recursive: true, force: true });
   }
 }
@@ -404,7 +391,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("includes the OpenClaw skills prompt in CLI system prompts", () => {
-    const systemPrompt = buildSystemPrompt({
+    const systemPrompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp",
       modelDisplay: "claude-cli/sonnet",
       tools: [],
@@ -1246,76 +1233,101 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("keeps captured live prepared backend cleanup with the whole-run owner", async () => {
-    let stdoutListener: ((chunk: string) => void) | undefined;
-    let resolveExit: ((exit: RunExit) => void) | undefined;
-    const exited = new Promise<RunExit>((resolve) => {
-      resolveExit = resolve;
-    });
-    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
-      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
-      stdoutListener = input.onStdout;
-      return {
-        runId: "captured-live-cleanup-run",
-        pid: 2347,
-        startedAtMs: Date.now(),
-        stdin: {
-          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
-            stdoutListener?.(
-              [
-                JSON.stringify({
-                  type: "system",
-                  subtype: "init",
-                  session_id: "captured-live-cleanup",
-                }),
-                JSON.stringify({
-                  type: "result",
-                  session_id: "captured-live-cleanup",
-                  result: "ok",
-                }),
-              ].join("\n") + "\n",
-            );
-            cb?.();
-          }),
-          end: vi.fn(),
+    const mcpConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-cli-captured-mcp-config-"),
+    );
+    const mcpConfigPath = path.join(mcpConfigDir, "mcp.json");
+    await fs.writeFile(
+      mcpConfigPath,
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            openclaw: {
+              type: "http",
+              url: "http://127.0.0.1:23119/mcp",
+              headers: {},
+            },
+          },
         },
-        wait: vi.fn(() => exited),
-        cancel: vi.fn(() =>
-          resolveExit?.({
-            reason: "manual-cancel",
-            exitCode: null,
-            exitSignal: null,
-            durationMs: 1,
-            stdout: "",
-            stderr: "",
-            timedOut: false,
-            noOutputTimedOut: false,
-          }),
-        ),
-      };
-    });
-    const preparedBackendCleanup = vi.fn(async () => {});
-    const context = buildPreparedCliRunContext({
-      provider: "claude-cli",
-      model: "sonnet",
-      runId: "run-captured-live-cleanup",
-      prompt: "first",
-      backend: {
-        args: ["-p", "--strict-mcp-config", "--mcp-config", "/tmp/mcp-captured.json"],
-        liveSession: "claude-stdio",
-      },
-      mcpConfigHash: "captured-cleanup-mcp-config",
-      mcpDeliveryCapture: true,
-    });
-    context.preparedBackend.cleanup = preparedBackendCleanup;
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    try {
+      let stdoutListener: ((chunk: string) => void) | undefined;
+      let resolveExit: ((exit: RunExit) => void) | undefined;
+      const exited = new Promise<RunExit>((resolve) => {
+        resolveExit = resolve;
+      });
+      supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+        const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+        stdoutListener = input.onStdout;
+        return {
+          runId: "captured-live-cleanup-run",
+          pid: 2347,
+          startedAtMs: Date.now(),
+          stdin: {
+            write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+              stdoutListener?.(
+                [
+                  JSON.stringify({
+                    type: "system",
+                    subtype: "init",
+                    session_id: "captured-live-cleanup",
+                  }),
+                  JSON.stringify({
+                    type: "result",
+                    session_id: "captured-live-cleanup",
+                    result: "ok",
+                  }),
+                ].join("\n") + "\n",
+              );
+              cb?.();
+            }),
+            end: vi.fn(),
+          },
+          wait: vi.fn(() => exited),
+          cancel: vi.fn(() =>
+            resolveExit?.({
+              reason: "manual-cancel",
+              exitCode: null,
+              exitSignal: null,
+              durationMs: 1,
+              stdout: "",
+              stderr: "",
+              timedOut: false,
+              noOutputTimedOut: false,
+            }),
+          ),
+        };
+      });
+      const preparedBackendCleanup = vi.fn(async () => {});
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-captured-live-cleanup",
+        prompt: "first",
+        backend: {
+          args: ["-p", "--strict-mcp-config", "--mcp-config", mcpConfigPath],
+          liveSession: "claude-stdio",
+        },
+        mcpConfigHash: "captured-cleanup-mcp-config",
+        mcpDeliveryCapture: true,
+      });
+      context.preparedBackend.cleanup = preparedBackendCleanup;
 
-    const result = await executePreparedCliRun(context);
+      const result = await executePreparedCliRun(context);
 
-    expect(result.text).toBe("ok");
-    expect(context.preparedBackend.cleanup).toBe(preparedBackendCleanup);
-    expect(preparedBackendCleanup).not.toHaveBeenCalled();
+      expect(result.text).toBe("ok");
+      expect(context.preparedBackend.cleanup).toBe(preparedBackendCleanup);
+      expect(preparedBackendCleanup).not.toHaveBeenCalled();
 
-    await context.preparedBackend.cleanup?.();
-    expect(preparedBackendCleanup).toHaveBeenCalledOnce();
+      await context.preparedBackend.cleanup?.();
+      expect(preparedBackendCleanup).toHaveBeenCalledOnce();
+    } finally {
+      await fs.rm(mcpConfigDir, { recursive: true, force: true });
+    }
   });
 
   it("preserves completed output when system prompt cleanup fails after delivery", async () => {
@@ -1805,10 +1817,13 @@ describe("runCliAgent spawn path", () => {
         });
       })(),
     );
+    const rejectedRun = runs[16];
+    const rejectedRunExpectation = expect(rejectedRun).rejects.toThrow(
+      "Too many Claude CLI live sessions are active.",
+    );
 
     await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledTimes(16));
-    const rejectedRun = runs[16];
-    await expect(rejectedRun).rejects.toThrow("Too many Claude CLI live sessions are active.");
+    await rejectedRunExpectation;
     releaseSpawn?.();
     await expect(Promise.all(runs.slice(0, 16))).resolves.toHaveLength(16);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(16);
@@ -3723,7 +3738,7 @@ ${JSON.stringify({
       const { contextFiles } = await realResolveBootstrapContextForRun({
         workspaceDir,
       });
-      const allArgs = buildSystemPrompt({
+      const allArgs = buildCliAgentSystemPrompt({
         workspaceDir,
         modelDisplay: "claude-cli/sonnet",
         contextFiles,

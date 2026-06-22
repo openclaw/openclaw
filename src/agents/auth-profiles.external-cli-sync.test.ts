@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
 
-let readManagedExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").readManagedExternalCliCredential;
+let readExternalCliBootstrapCredential: typeof import("./auth-profiles/external-cli-sync.js").readExternalCliBootstrapCredential;
 let resolveExternalCliAuthProfiles: typeof import("./auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
 let hasUsableOAuthCredential: typeof import("./auth-profiles/external-cli-sync.js").hasUsableOAuthCredential;
 let isSafeToUseExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").isSafeToUseExternalCliCredential;
@@ -121,7 +121,7 @@ describe("external cli oauth resolution", () => {
     ({
       hasUsableOAuthCredential,
       isSafeToUseExternalCliCredential,
-      readManagedExternalCliCredential,
+      readExternalCliBootstrapCredential,
       resolveExternalCliAuthProfiles,
       shouldBootstrapFromExternalCliCredential,
       shouldReplaceStoredOAuthCredential,
@@ -299,7 +299,7 @@ describe("external cli oauth resolution", () => {
       }),
     );
 
-    const credential = readManagedExternalCliCredential({
+    const credential = readExternalCliBootstrapCredential({
       profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
       credential: makeOAuthCredential({ provider: "openai" }),
     });
@@ -365,7 +365,7 @@ describe("external cli oauth resolution", () => {
       makeOAuthCredential({ provider: "openai" }),
     );
 
-    const credential = readManagedExternalCliCredential({
+    const credential = readExternalCliBootstrapCredential({
       profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
       credential: makeOAuthCredential({ provider: "anthropic" }),
     });
