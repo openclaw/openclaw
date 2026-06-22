@@ -1193,10 +1193,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       buildToolContext: ({ context, hasRepliedRef }) => {
         const nativeChannelId = context.NativeChannelId?.trim();
         const hasChannelRoute = Boolean(nativeChannelId && nativeChannelId.includes("/"));
+        const inboundMessageId =
+          context.CurrentMessageId != null ? String(context.CurrentMessageId) : undefined;
         return {
           currentChannelId: normalizeOptionalString(context.To),
           currentGraphChannelId: hasChannelRoute ? nativeChannelId : undefined,
-          currentThreadTs: context.ReplyToId,
+          // Fresh channel @-mentions arrive without ReplyToId, so the reply would
+          // post at the channel root instead of threading under the user's message.
+          // Fall back to the inbound message id as the thread anchor for channel
+          // routes. See #38629 / #52954 (the native close never covered this path).
+          currentThreadTs: context.ReplyToId ?? (hasChannelRoute ? inboundMessageId : undefined),
           hasRepliedRef,
         };
       },

@@ -226,3 +226,44 @@ describe("msteams channel message adapter", () => {
     });
   });
 });
+
+describe("msteams threading buildToolContext", () => {
+  const buildToolContext = msteamsPlugin.threading?.buildToolContext;
+  const channelRoute = "19:team-id/channel-id@thread.tacv2";
+
+  it("threads fresh channel @-mentions under the inbound message when ReplyToId is absent (#38629)", () => {
+    expect(buildToolContext).toBeDefined();
+    const toolContext = buildToolContext?.({
+      cfg,
+      accountId: "default",
+      context: {
+        To: "conversation:team-1",
+        NativeChannelId: channelRoute,
+        CurrentMessageId: "1700000000000",
+      },
+    });
+    expect(toolContext?.currentThreadTs).toBe("1700000000000");
+  });
+
+  it("keeps an explicit ReplyToId as the thread anchor", () => {
+    const toolContext = buildToolContext?.({
+      cfg,
+      accountId: "default",
+      context: {
+        NativeChannelId: channelRoute,
+        CurrentMessageId: "1700000000000",
+        ReplyToId: "reply-99",
+      },
+    });
+    expect(toolContext?.currentThreadTs).toBe("reply-99");
+  });
+
+  it("does not anchor on the inbound id for non-channel (DM) routes", () => {
+    const toolContext = buildToolContext?.({
+      cfg,
+      accountId: "default",
+      context: { CurrentMessageId: "1700000000000" },
+    });
+    expect(toolContext?.currentThreadTs).toBeUndefined();
+  });
+});
