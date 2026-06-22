@@ -28,7 +28,7 @@ on:
       concurrency:
         description: QA suite worker concurrency.
         required: false
-        default: "1"
+        default: "8"
       evidence_mode:
         description: qa-evidence.json detail level for profile runs.
         required: false
@@ -65,7 +65,7 @@ jobs:
     name: Run QA Lab smoke profile
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -82,11 +82,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=12288
-        run: pnpm build
-
       - name: Run QA evidence lane
         id: run_qa
         env:
@@ -94,7 +89,7 @@ jobs:
           INPUT_SURFACE: ${{ github.event_name == 'workflow_dispatch' && inputs.surface || '' }}
           INPUT_CATEGORY: ${{ github.event_name == 'workflow_dispatch' && inputs.category || '' }}
           INPUT_SCENARIO_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario_id || '' }}
-          INPUT_CONCURRENCY: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrency || '1' }}
+          INPUT_CONCURRENCY: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrency || '8' }}
           INPUT_EVIDENCE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.evidence_mode || 'slim' }}
           INPUT_FAST: ${{ github.event_name != 'workflow_dispatch' || inputs.fast }}
         run: |
@@ -103,6 +98,10 @@ jobs:
           selected="${INPUT_SCENARIO_ID:-profile-${INPUT_QA_PROFILE}}"
           artifact_label="${selected//[^A-Za-z0-9._-]/-}"
           output_dir=".artifacts/qa-e2e/${artifact_label}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "qa_output_dir=$output_dir"
+            echo "qa_target=${INPUT_SCENARIO_ID:-profile:$INPUT_QA_PROFILE}"
+          } >> "$GITHUB_OUTPUT"
 
           if [[ -n "$INPUT_SCENARIO_ID" ]]; then
             command=(
@@ -142,11 +141,6 @@ jobs:
           printf ' %q' "${command[@]}"
           printf '\n'
           "${command[@]}"
-
-          {
-            echo "qa_output_dir=$output_dir"
-            echo "qa_target=${INPUT_SCENARIO_ID:-profile:$INPUT_QA_PROFILE}"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Summarize QA artifacts
         if: always()

@@ -1,6 +1,9 @@
 // Qa Lab provider module implements model/runtime integration.
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createMockProviderMap } from "./mock-model-config.js";
 import type { QaProviderDefinition, QaProviderMode } from "./types.js";
+
+const DEFAULT_MOCK_TURN_TIMEOUT_CAP_MS = 5_000;
 
 type MockQaProviderDefinitionParams = {
   mode: Extract<QaProviderMode, "aimock" | "mock-openai">;
@@ -12,6 +15,13 @@ type MockQaProviderDefinitionParams = {
 
 function mockModelRef(providerId: string, alternate?: boolean) {
   return `${providerId}/${alternate ? "gpt-5.5-alt" : "gpt-5.5"}`;
+}
+
+function resolveMockTurnTimeoutCapMs() {
+  return (
+    parseStrictPositiveInteger(process.env.OPENCLAW_QA_MOCK_TURN_TIMEOUT_CAP_MS) ??
+    DEFAULT_MOCK_TURN_TIMEOUT_CAP_MS
+  );
 }
 
 export function createMockQaProviderDefinition(
@@ -34,7 +44,7 @@ export function createMockQaProviderDefinition(
       transport: "sse",
       openaiWsWarmup: false,
     }),
-    resolveTurnTimeoutMs: ({ fallbackMs }) => fallbackMs,
+    resolveTurnTimeoutMs: ({ fallbackMs }) => Math.min(fallbackMs, resolveMockTurnTimeoutCapMs()),
     buildGatewayModels: ({ providerBaseUrl }) => ({
       mode: "replace",
       providers: createMockProviderMap(params.mode, providerBaseUrl),

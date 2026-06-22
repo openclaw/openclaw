@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 
 describe("qa live timeout policy", () => {
-  it("keeps mock lanes on the caller fallback", () => {
+  it("caps mock lanes below live-style fallbacks", () => {
     expect(
       resolveQaLiveTurnTimeoutMs(
         {
@@ -13,7 +13,20 @@ describe("qa live timeout policy", () => {
         },
         30_000,
       ),
-    ).toBe(30_000);
+    ).toBe(5_000);
+  });
+
+  it("keeps short mock fallbacks below the cap", () => {
+    expect(
+      resolveQaLiveTurnTimeoutMs(
+        {
+          providerMode: "mock-openai",
+          primaryModel: "mock-openai/gpt-5.5",
+          alternateModel: "mock-openai/gpt-5.5-alt",
+        },
+        2_500,
+      ),
+    ).toBe(2_500);
   });
 
   it("uses the higher gpt-5 live floor for openai heavy turns", () => {
