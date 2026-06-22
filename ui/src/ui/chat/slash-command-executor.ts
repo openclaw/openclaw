@@ -18,6 +18,7 @@ import type {
   SessionsPatchResult,
 } from "../../api/types.ts";
 import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../../lib/session-key.ts";
+import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -29,7 +30,6 @@ import {
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,

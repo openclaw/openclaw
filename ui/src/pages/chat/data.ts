@@ -17,6 +17,7 @@ import {
   resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/session-key.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -43,7 +44,6 @@ import {
   type GatewayBrowserClient,
   type GatewayHelloOk,
 } from "../../ui/gateway.ts";
-import { isSessionRunActive } from "../../ui/session-run-state.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import {
   applyChatHistorySessionInfo,

@@ -4,7 +4,7 @@ import type { EventLogEntry } from "../../api/event-log.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import { formatEventPayload } from "../../ui/presenter.ts";
+import { formatEventPayload } from "../../lib/presenter.ts";
 
 export type OverviewEventLogProps = {
   events: EventLogEntry[];

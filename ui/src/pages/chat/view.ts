@@ -11,6 +11,8 @@ import type {
 } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
+import { detectTextDirection } from "../../lib/text-direction.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
 import { copyToClipboard } from "../../ui/chat/clipboard.ts";
 import {
@@ -22,9 +24,7 @@ import {
   type SlashCommandDef,
 } from "../../ui/chat/slash-commands.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
-import { formatGoalDetail, formatGoalSummary } from "../../ui/session-goal.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
-import { detectTextDirection } from "../../ui/text-direction.ts";
 import { resolveLocalUserName } from "../../ui/user-identity.ts";
 import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
 import {

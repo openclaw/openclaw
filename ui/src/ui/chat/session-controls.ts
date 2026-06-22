@@ -6,6 +6,11 @@ import { pathForRoute, type RouteId } from "../../app-routes.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
+import { isMonitoredAuthProvider } from "../../lib/model-auth-helpers.ts";
+import {
+  collectQuotaWindowsFromAuthStatus,
+  formatQuotaReset,
+} from "../../lib/provider-quota-summary.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   buildAgentMainSessionKey,
@@ -14,6 +19,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../lib/session-key.ts";
+import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -31,10 +37,7 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
-import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
-import { collectQuotaWindowsFromAuthStatus, formatQuotaReset } from "../provider-quota-summary.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
-import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import {
   formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,

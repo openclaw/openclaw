@@ -19,7 +19,7 @@ import {
   formatCronSchedule,
   formatCronState,
   formatNextRun,
-} from "../../ui/presenter.ts";
+} from "../../lib/presenter.ts";
 import { formatBytes, type AgentContext } from "../../ui/views/agents-utils.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../channels/config-extras.ts";
 import type { AgentsPanel } from "./types.ts";

@@ -3,7 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
-import { detectTextDirection } from "../../ui/text-direction.ts";
+import { detectTextDirection } from "../../lib/text-direction.ts";
 import type { ChatSideResult } from "./side-result.ts";
 
 export function renderSideResult(

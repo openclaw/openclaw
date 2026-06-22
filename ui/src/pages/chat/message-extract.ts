@@ -7,7 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "../../lib/string-coerce.ts";
-import { stripThinkingTags } from "../../ui/strip-thinking-tags.ts";
+import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();

@@ -17,12 +17,12 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/session-key.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../ui/controllers/scope-errors.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../ui/gateway.ts";
-import { isSessionRunActive } from "../../ui/session-run-state.ts";
 // Control UI controller manages sessions gateway state.
 import {
   reconcileChatRunFromCurrentSessionRow,

@@ -17,8 +17,8 @@ import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
+import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
-import { formatCronSchedule, formatNextRun } from "../../ui/presenter.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,

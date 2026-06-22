@@ -5,12 +5,12 @@ import { until } from "lit/directives/until.js";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
 import { resolveUiHourCycleOptions } from "../../lib/format.ts";
+import { detectTextDirection } from "../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../../ui/assistant-identity.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import { openExternalUrlSafe } from "../../ui/open-external-url.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
-import { detectTextDirection } from "../../ui/text-direction.ts";
 import { resolveToolDisplay } from "../../ui/tool-display.ts";
 import { resolveLocalUserName } from "../../ui/user-identity.ts";
 import type {
