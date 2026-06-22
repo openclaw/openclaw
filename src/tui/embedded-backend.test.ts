@@ -148,6 +148,10 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => getRuntimeConfigMock(),
 }));
 
+vi.mock("../infra/state-migrations.js", () => ({
+  migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
+}));
+
 vi.mock("../gateway/cli-session-history.js", () => ({
   augmentChatHistoryWithCliSessionImports: ({ localMessages }: { localMessages?: unknown[] }) =>
     localMessages ?? [],
@@ -555,6 +559,29 @@ describe("EmbeddedTuiBackend", () => {
       store: {},
       opts: { agentId: "work", includeGlobal: true, search: "global" },
     });
+  });
+
+  it("gates session reads on the startup migration so legacy keys are never observed early", async () => {
+    const { migrateOrphanedSessionKeys } = await import("../infra/state-migrations.js");
+    let resolveMigration: () => void = () => {};
+    const migrationDone = new Promise<void>((resolve) => {
+      resolveMigration = resolve;
+    });
+    vi.mocked(migrateOrphanedSessionKeys).mockReturnValueOnce(
+      migrationDone.then(() => ({ changes: [], warnings: [] })),
+    );
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+
+    const listed = backend.listSessions({ agentId: "work" });
+    await flushMicrotasks();
+    expect(listSessionsFromStoreAsyncMock).not.toHaveBeenCalled();
+
+    resolveMigration();
+    await listed;
+    expect(listSessionsFromStoreAsyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("creates a local session entry before starting a goal", async () => {
@@ -1502,7 +1529,6 @@ describe("EmbeddedTuiBackend", () => {
       .mockResolvedValueOnce({ payloads: [{ text: "second done" }], meta: {} });
 
     const backend = new EmbeddedTuiBackend();
-    let callsAfterSendDuringError = 0;
     let sentDuringError: Promise<{ runId: string }> | undefined;
     backend.onEvent = (evt) => {
       const payload = evt.payload as { runId?: string; state?: string };
@@ -1516,7 +1542,6 @@ describe("EmbeddedTuiBackend", () => {
           message: "second",
           runId: "run-local-second",
         });
-        callsAfterSendDuringError = agentCommandFromIngressMock.mock.calls.length;
       }
     };
 
@@ -1530,9 +1555,9 @@ describe("EmbeddedTuiBackend", () => {
     await vi.waitFor(() => {
       expect(sentDuringError).toBeDefined();
     });
-    expect(callsAfterSendDuringError).toBe(2);
     await sentDuringError;
     await flushMicrotasks();
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {

@@ -300,6 +300,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
+  // Resolves once the one-time session-key migration has run; store methods await it.
+  private ready: Promise<void> = Promise.resolve();
 
   start() {
     if (this.unsubscribe) {
@@ -316,6 +318,15 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribe = onAgentEvent((evt) => {
       void this.handleAgentEvent(evt);
     });
+    // Local mode never runs gateway startup; canonicalize orphaned keys once here.
+    this.ready = (async () => {
+      try {
+        const { migrateOrphanedSessionKeys } = await import("../infra/state-migrations.js");
+        await migrateOrphanedSessionKeys({ cfg: getRuntimeConfig(), env: process.env });
+      } catch {
+        // Best-effort: a failed migration must not block the TUI.
+      }
+    })();
     queueMicrotask(() => {
       this.onConnected?.();
     });
@@ -357,6 +368,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
+    await this.ready;
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
     const runScope = {
@@ -428,6 +440,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
+    await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
     const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
       opts.sessionKey,
@@ -522,6 +535,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
+    await this.ready;
     const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
       agentId: opts?.agentId,
@@ -541,6 +555,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async patchSession(
     opts: Parameters<TuiBackend["patchSession"]>[0],
   ): Promise<SessionsPatchResult> {
+    await this.ready;
     const cfg = getRuntimeConfig();
     const target = resolveGatewaySessionStoreTarget({
       cfg,
@@ -595,6 +610,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
+    await this.ready;
     const result = await performGatewaySessionReset({
       key,
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
@@ -687,6 +703,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {
+    await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
     const { canonicalKey, storePath, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
     const sessionKey = canonicalKey ?? opts.sessionKey;
