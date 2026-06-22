@@ -330,7 +330,7 @@ export const streamOpenAICompletions: StreamFunction<
           : reasoningTagTextPartitioner.pushVisible(text);
         for (const delta of routedDeltas) {
           if (delta.kind === "text") {
-            appendTextDelta(delta.text, hasMirroredReasoning);
+            appendTextDelta(delta.text);
           }
         }
       };
