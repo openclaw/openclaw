@@ -130,6 +130,11 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onConfigSave: () => undefined,
     onModelChange: () => undefined,
     onModelFallbacksChange: () => undefined,
+    onTtsProviderChange: () => undefined,
+    onTtsApiKeyChange: () => undefined,
+    onTtsVoiceIdChange: () => undefined,
+    onTtsModelChange: () => undefined,
+    onTtsToggle: () => undefined,
     onChannelsRefresh: () => undefined,
     onCronRefresh: () => undefined,
     onCronRunNow: () => undefined,
@@ -353,6 +358,329 @@ describe("renderAgents", () => {
 
     expect(directText(skillsTab)).toBe("Skills");
     expect(skillsTab.querySelector(".agent-tab-count")?.textContent).toBe("1");
+  });
+
+  it("renders ElevenLabs fields when provider is elevenlabs", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "beta",
+            tts: {
+              enabled: true,
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  apiKey: "test-key",
+                  speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
+                  modelId: "eleven_multilingual_v2",
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+
+    // Voice/TTS card title should render
+    const cardTitle = Array.from(container.querySelectorAll(".card-title")).find((el) =>
+      el.textContent?.includes(t("agents.voice.title")),
+    );
+    expect(cardTitle).toBeTruthy();
+
+    // API key field should render (password input)
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeTruthy();
+    expect(passwordInput?.value).toBe("test-key");
+
+    // Voice ID field should render (text input with the voice ID value)
+    const textInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="text"]'),
+    );
+    const voiceIdInput = textInputs.find((input) => input.value === "EXAVITQu4vr4xnSDxMaL");
+    expect(voiceIdInput).toBeTruthy();
+
+    // Model select should render with the correct value
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      '.card select:not([class*="agent-model"])',
+    );
+    // The model select should exist and have the eleven_multilingual_v2 option selected
+    const allSelects = container.querySelectorAll<HTMLSelectElement>("select");
+    const ttsModelSelect = Array.from(allSelects).find((sel) =>
+      Array.from(sel.options).some((opt) => opt.value === "eleven_multilingual_v2"),
+    );
+    expect(ttsModelSelect).toBeTruthy();
+    expect(ttsModelSelect?.value).toBe("eleven_multilingual_v2");
+  });
+
+  it("renders SecretRef API key as read-only when apiKey is a SecretRef object", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "beta",
+            tts: {
+              enabled: true,
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  apiKey: { source: "env", provider: "vault", id: "ELEVEN_API_KEY" },
+                  speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
+                  modelId: "eleven_multilingual_v2",
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+
+    // No editable password input - key is a SecretRef
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeNull();
+
+    // A disabled text input showing the SecretRef placeholder should exist
+    const allTextInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="text"]'),
+    );
+    const secretRefInput = allTextInputs.find(
+      (el) => el.disabled && el.value.includes("SecretRef"),
+    );
+    expect(secretRefInput).toBeTruthy();
+  });
+
+  it("deep-merges inherited provider config from messages.tts with agent override", async () => {
+    // P1 fix: when messages.tts has ElevenLabs API key/model and the agent
+    // override only sets speakerVoiceId, the UI must show the inherited
+    // API key and model — not blank fields from a shallow merge.
+    const container = document.createElement("div");
+    const configForm = {
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          providers: {
+            elevenlabs: {
+              apiKey: "global-key",
+              modelId: "eleven_turbo_v2_5",
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "beta",
+            tts: {
+              auto: "always",
+              providers: {
+                elevenlabs: {
+                  speakerVoiceId: "agent-voice-id",
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: { form: configForm, loading: false, saving: false, dirty: false },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // Inherited API key should be visible in the password field
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeTruthy();
+    expect(passwordInput?.value).toBe("global-key");
+
+    // Inherited model should be selected
+    const allSelects = container.querySelectorAll<HTMLSelectElement>("select");
+    const ttsModelSelect = Array.from(allSelects).find((sel) =>
+      Array.from(sel.options).some((opt) => opt.value === "eleven_turbo_v2_5"),
+    );
+    expect(ttsModelSelect).toBeTruthy();
+    expect(ttsModelSelect?.value).toBe("eleven_turbo_v2_5");
+
+    // Agent-specific voice ID should be present
+    const textInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="text"]'),
+    );
+    const voiceIdInput = textInputs.find((input) => input.value === "agent-voice-id");
+    expect(voiceIdInput).toBeTruthy();
+  });
+
+  it("reflects auto mode in the enable toggle (auto: always → on)", async () => {
+    // P1 fix: configs using `auto: "always"` must show the toggle as ON,
+    // not OFF (which happened when reading only the deprecated `enabled` boolean).
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "beta",
+            tts: {
+              auto: "always",
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: { apiKey: "test-key" },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: { form: configForm, loading: false, saving: false, dirty: false },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // The toggle checkbox should be checked (auto: always → enabled)
+    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(true);
+  });
+
+  it("does not render ElevenLabs fields when resolved provider is openai", async () => {
+    // P1: ElevenLabs-only controls must be gated on the resolved provider
+    // being "elevenlabs". When the inherited provider is "openai", the
+    // API key / voice ID / model fields must NOT appear.
+    const container = document.createElement("div");
+    const configForm = {
+      messages: {
+        tts: {
+          auto: "always",
+          provider: "openai",
+          providers: {
+            openai: { apiKey: "sk-test" },
+          },
+        },
+      },
+      agents: {
+        defaults: {},
+        list: [{ id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: { form: configForm, loading: false, saving: false, dirty: false },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // Voice/TTS card title should render
+    const card = Array.from(container.querySelectorAll("section.card")).find((el) =>
+      el.textContent?.includes(t("agents.voice.title")),
+    );
+    expect(card).toBeTruthy();
+
+    // The toggle should be ON (auto: always)
+    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(true);
+
+    // No password input for API key should exist
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeNull();
+
+    // No voice ID text input with ElevenLabs model select should exist
+    const selects = container.querySelectorAll<HTMLSelectElement>("select");
+    const ttsModelSelect = Array.from(selects).find((sel) =>
+      Array.from(sel.options).some((opt) => opt.value === "eleven_multilingual_v2"),
+    );
+    expect(ttsModelSelect).toBeUndefined();
+  });
+
+  it("does not render ElevenLabs fields when provider is unset and TTS is enabled", async () => {
+    // P1: When no provider is set (empty inheritance) but TTS is enabled,
+    // ElevenLabs fields should NOT render — the user must select a provider first.
+    const container = document.createElement("div");
+    const configForm = {
+      messages: {
+        tts: { auto: "always" },
+      },
+      agents: {
+        defaults: {},
+        list: [{ id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: { form: configForm, loading: false, saving: false, dirty: false },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // The toggle should be ON (auto: always)
+    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(true);
+
+    // No password input for API key
+    const passwordInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(passwordInput).toBeNull();
   });
 
   it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
