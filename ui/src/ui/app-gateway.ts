@@ -10,9 +10,11 @@ import {
   flushChatQueueForEvent,
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
+  noteChatRunActivity,
   recordChatSendServerTiming,
   recordFirstAssistantChatTiming,
   refreshChatAvatar,
+  resetChatRunWatchdog,
   scopedAgentListParamsForRefreshTarget,
   retryReconnectableQueuedChatSends,
   scopedAgentListParamsForSession,
@@ -137,6 +139,11 @@ type GatewayHost = {
   sessionKey: string;
   sessionsShowArchived: boolean;
   chatRunId: string | null;
+  chatRunLastActivityAt?: number | null;
+  chatRunWatchdogTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
+  chatRunWatchdogProbeInFlight?: boolean;
+  chatStream?: string | null;
+  chatStreamStartedAt?: number | null;
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
   sessionsLoading?: boolean;
@@ -866,6 +873,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           clearRunStatus: !hadOrphanedRun,
         },
       );
+      resetChatRunWatchdog(host as unknown as Parameters<typeof resetChatRunWatchdog>[0]);
       const hasReconnectableChatSends = hasReconnectableQueuedChatSends(
         host as unknown as Parameters<typeof hasReconnectableQueuedChatSends>[0],
       );
@@ -911,6 +919,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      resetChatRunWatchdog(host as unknown as Parameters<typeof resetChatRunWatchdog>[0]);
       markQueuedChatSendsWaitingForReconnect(
         host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
       );
@@ -1061,14 +1070,22 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const activeRunIdBeforeEvent = host.chatRunId;
   const state = handleChatEvent(host as unknown as ChatState, payload);
+  const terminalEventIsForDifferentActiveRun = isEventForDifferentActiveRun(
+    payload,
+    activeRunIdBeforeEvent,
+  );
+  if (state === "delta") {
+    noteChatRunActivity(host as unknown as Parameters<typeof noteChatRunActivity>[0]);
+  } else if (
+    !terminalEventIsForDifferentActiveRun &&
+    (state === "final" || state === "error" || state === "aborted")
+  ) {
+    resetChatRunWatchdog(host as unknown as Parameters<typeof resetChatRunWatchdog>[0]);
+  }
   recordFirstAssistantChatTiming(
     host as unknown as Parameters<typeof recordFirstAssistantChatTiming>[0],
     payload,
     state,
-  );
-  const terminalEventIsForDifferentActiveRun = isEventForDifferentActiveRun(
-    payload,
-    activeRunIdBeforeEvent,
   );
   const historyReloaded = handleTerminalChatEvent(host, payload, state, activeRunIdBeforeEvent);
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;

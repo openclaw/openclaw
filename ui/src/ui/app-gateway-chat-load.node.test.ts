@@ -108,8 +108,10 @@ vi.mock("./app-chat.ts", () => ({
   flushChatQueueForEvent: vi.fn(),
   hasReconnectableQueuedChatSends: vi.fn(() => false),
   markQueuedChatSendsWaitingForReconnect: vi.fn(),
+  noteChatRunActivity: vi.fn(),
   retryReconnectableQueuedChatSends: vi.fn(async () => undefined),
   refreshChatAvatar: refreshChatAvatarMock,
+  resetChatRunWatchdog: vi.fn(),
 }));
 
 vi.mock("./app-settings.ts", () => ({

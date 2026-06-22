@@ -2259,6 +2259,244 @@ describe("sendChatMessage", () => {
   });
 });
 
+describe("chat run watchdog", () => {
+  function createWatchdogHost(
+    request: ReturnType<typeof vi.fn>,
+    overrides: Partial<ChatState> = {},
+  ) {
+    return {
+      ...createState({
+        client: { request } as unknown as ChatState["client"],
+        connected: true,
+        chatRunId: "run-1",
+        chatStream: "Working...",
+        chatStreamStartedAt: Date.now(),
+        ...overrides,
+      }),
+      chatQueue: [{ id: "q-1", text: "continue", createdAt: Date.now() }],
+      chatQueueBySession: {},
+      chatRunLastActivityAt: Date.now(),
+      chatRunWatchdogTimer: null,
+      chatRunWatchdogProbeInFlight: false,
+      chatError: null,
+      hello: null,
+      chatAvatarUrl: null,
+      chatModelOverrides: {},
+      chatModelsLoading: false,
+      chatModelCatalog: [],
+      refreshSessionsAfterChat: new Map(),
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      updateComplete: Promise.resolve(),
+      basePath: "",
+      settings: {
+        gatewayUrl: "ws://gateway.test/control",
+        token: "",
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+        theme: "system",
+        chatShowThinking: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navGroupsCollapsed: {},
+        borderRadius: 50,
+      },
+      applySettings: vi.fn(),
+    };
+  }
+
+  it("recovers a stale run and flushes a queued message", async () => {
+    vi.useFakeTimers();
+    try {
+      const { scheduleChatRunWatchdog } = await import("../app-chat.ts");
+      const request = vi.fn(async (method: string, payload?: unknown) => {
+        if (method === "agent.wait") {
+          return { status: "ok", runId: "run-1" };
+        }
+        if (method === "chat.history") {
+          return {
+            messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+            sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+          };
+        }
+        if (method === "chat.send") {
+          const record = requireRecord(payload);
+          return { runId: record.idempotencyKey, status: "started" };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const host = createWatchdogHost(request);
+
+      scheduleChatRunWatchdog(host as never);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(request).toHaveBeenCalledWith("agent.wait", {
+        runId: "run-1",
+        timeoutMs: 50,
+      });
+      expect(request).toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({ sessionKey: "main", limit: 100 }),
+      );
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({
+          sessionKey: "main",
+          message: "continue",
+          deliver: false,
+        }),
+      );
+      expect(host.chatQueue).toEqual([]);
+      expect(host.chatRunId).not.toBe("run-1");
+      expect(host.lastError).toBeNull();
+      expect(host.chatError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps waiting when the run is still active", async () => {
+    vi.useFakeTimers();
+    try {
+      const { resetChatRunWatchdog, scheduleChatRunWatchdog } = await import("../app-chat.ts");
+      const request = vi.fn(async (method: string) => {
+        if (method === "agent.wait") {
+          return { status: "timeout", runId: "run-1" };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const host = createWatchdogHost(request);
+
+      scheduleChatRunWatchdog(host as never);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(host.chatRunId).toBe("run-1");
+      expect(host.chatQueue).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      resetChatRunWatchdog(host as never);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps waiting when the watchdog receives an empty wait result", async () => {
+    vi.useFakeTimers();
+    try {
+      const { resetChatRunWatchdog, scheduleChatRunWatchdog } = await import("../app-chat.ts");
+      const request = vi.fn(async (method: string) => {
+        if (method === "agent.wait") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const host = createWatchdogHost(request);
+
+      scheduleChatRunWatchdog(host as never);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(host.chatRunId).toBe("run-1");
+      expect(host.chatQueue).toHaveLength(1);
+      expect(request).toHaveBeenCalledWith("agent.wait", {
+        runId: "run-1",
+        timeoutMs: 50,
+      });
+      expect(request).not.toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message: "continue" }),
+      );
+      expect(request).not.toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({ sessionKey: "main" }),
+      );
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      resetChatRunWatchdog(host as never);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps retry-grace timeout snapshots active without flushing queued chat", async () => {
+    vi.useFakeTimers();
+    try {
+      const { resetChatRunWatchdog, scheduleChatRunWatchdog } = await import("../app-chat.ts");
+      const request = vi.fn(async (method: string) => {
+        if (method === "agent.wait") {
+          return {
+            status: "timeout",
+            runId: "run-1",
+            error: "agent still starting",
+            pendingError: true,
+          };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const host = createWatchdogHost(request);
+
+      scheduleChatRunWatchdog(host as never);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(host.chatRunId).toBe("run-1");
+      expect(host.chatQueue).toHaveLength(1);
+      expect(request).toHaveBeenCalledWith("agent.wait", {
+        runId: "run-1",
+        timeoutMs: 50,
+      });
+      expect(request).not.toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message: "continue" }),
+      );
+      expect(request).not.toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({ sessionKey: "main" }),
+      );
+
+      resetChatRunWatchdog(host as never);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not surface transient probe failures as chat errors", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { resetChatRunWatchdog, scheduleChatRunWatchdog } = await import("../app-chat.ts");
+      const request = vi.fn(async (method: string) => {
+        if (method === "agent.wait") {
+          throw new Error("gateway closed (1006)");
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const host = createWatchdogHost(request);
+
+      scheduleChatRunWatchdog(host as never);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(host.chatRunId).toBe("run-1");
+      expect(host.chatQueue).toHaveLength(1);
+      expect(host.lastError).toBeNull();
+      expect(host.chatError).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        "[openclaw] chat run watchdog probe failed:",
+        expect.any(Error),
+      );
+
+      resetChatRunWatchdog(host as never);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("abortChatRun", () => {
   it("formats structured non-auth connect failures for chat abort", async () => {
     // Abort now shares the same structured connect-error formatter as send.

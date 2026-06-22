@@ -27,6 +27,10 @@ function createHost() {
     chatMessages: [],
     chatToolMessages: [],
     chatStream: null,
+    chatRunId: null as string | null,
+    chatRunLastActivityAt: null as number | null,
+    chatRunWatchdogTimer: null as ReturnType<typeof globalThis.setTimeout> | number | null,
+    chatRunWatchdogProbeInFlight: false,
     logsAutoFollow: false,
     logsAtBottom: true,
     logsEntries: [],
@@ -212,6 +216,32 @@ describe("handleUpdated", () => {
       draft: "draft with queued work",
       queue: [{ id: "queued-1", text: "next prompt", createdAt: 1 }],
     });
+  });
+
+  it("schedules and clears the chat run watchdog with chatRunId changes", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn();
+    const host = createHost();
+    host.client = { stop: vi.fn(), request } as unknown as typeof host.client;
+    host.connected = true;
+    host.chatRunId = "run-1";
+
+    handleUpdated(
+      host as unknown as Parameters<typeof handleUpdated>[0],
+      new Map<PropertyKey, unknown>([["chatRunId", null]]),
+    );
+
+    expect(host.chatRunWatchdogTimer).not.toBeNull();
+
+    host.chatRunId = null;
+    handleUpdated(
+      host as unknown as Parameters<typeof handleUpdated>[0],
+      new Map<PropertyKey, unknown>([["chatRunId", "run-1"]]),
+    );
+
+    expect(host.chatRunWatchdogTimer).toBeNull();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("persists drafts immediately when the active session changes", () => {

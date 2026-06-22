@@ -141,6 +141,9 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
+  chatRunLastActivityAt: number | null;
+  chatRunWatchdogTimer: ReturnType<typeof globalThis.setTimeout> | number | null;
+  chatRunWatchdogProbeInFlight: boolean;
   updateComplete?: Promise<unknown>;
   chatToolMessages: Record<string, unknown>[];
   activityEntries: ActivityEntry[];
@@ -199,6 +202,9 @@ function createHost(): TestGatewayHost {
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatRunLastActivityAt: null,
+    chatRunWatchdogTimer: null,
+    chatRunWatchdogProbeInFlight: false,
     chatSideResult: null,
     chatSending: false,
     toolStreamById: new Map(),
@@ -1733,6 +1739,66 @@ describe("connectGateway", () => {
       },
     ]);
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("arms the chat run watchdog when an active run receives a delta", () => {
+    const { host, client } = connectHostGateway();
+    client.emitHello();
+    host.chatRunId = "main-run-watchdog";
+    const before = Date.now();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-watchdog",
+        sessionKey: "main",
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: "working" }] },
+      },
+    });
+
+    expect(host.chatRunLastActivityAt).toBeGreaterThanOrEqual(before);
+    expect(host.chatRunWatchdogTimer).not.toBeNull();
+    globalThis.clearTimeout(host.chatRunWatchdogTimer as ReturnType<typeof globalThis.setTimeout>);
+    host.chatRunWatchdogTimer = null;
+  });
+
+  it("does not reset the watchdog for another run's terminal event", () => {
+    const { host, client } = connectHostGateway();
+    client.emitHello();
+    host.chatRunId = "main-run-watchdog";
+    host.chatRunWatchdogProbeInFlight = true;
+    host.chatRunWatchdogTimer = globalThis.setTimeout(() => undefined, 60_000);
+    const timer = host.chatRunWatchdogTimer;
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "other-run",
+        sessionKey: "main",
+        state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: "side result" }] },
+      },
+    });
+
+    expect(host.chatRunId).toBe("main-run-watchdog");
+    expect(host.chatRunWatchdogProbeInFlight).toBe(true);
+    expect(host.chatRunWatchdogTimer).toBe(timer);
+    globalThis.clearTimeout(timer);
+    host.chatRunWatchdogTimer = null;
+  });
+
+  it("resets the chat run watchdog on gateway close", () => {
+    const { host, client } = connectHostGateway();
+    client.emitHello();
+    host.chatRunId = "main-run-watchdog";
+    host.chatRunWatchdogProbeInFlight = true;
+    host.chatRunWatchdogTimer = globalThis.setTimeout(() => undefined, 60_000);
+
+    client.emitClose({ code: 1006, reason: "network" });
+
+    expect(host.chatRunWatchdogProbeInFlight).toBe(false);
+    expect(host.chatRunWatchdogTimer).toBeNull();
   });
 
   it("keeps source-reply finals live even when message tool events were seen", () => {

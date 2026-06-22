@@ -720,6 +720,9 @@ export class OpenClawApp extends LitElement {
   chatFollowLocked = false;
   chatIsProgrammaticScroll = false;
   chatProgrammaticScrollTarget = 0;
+  chatRunLastActivityAt: number | null = null;
+  chatRunWatchdogTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  chatRunWatchdogProbeInFlight = false;
   @state() chatNewMessagesBelow = false;
   nodesPollInterval: number | null = null;
   logsPollInterval: number | null = null;

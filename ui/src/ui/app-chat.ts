@@ -96,12 +96,16 @@ import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 export type ChatHost = ChatInputHistoryState & {
   client: GatewayBrowserClient | null;
   chatStream: string | null;
+  chatStreamStartedAt?: number | null;
   connected: boolean;
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatQueueBySession?: Record<string, ChatQueueItem[]>;
   chatMessagesBySession?: ChatMessageCache;
   chatRunId: string | null;
+  chatRunLastActivityAt?: number | null;
+  chatRunWatchdogTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
+  chatRunWatchdogProbeInFlight?: boolean;
   chatSending: boolean;
   lastError?: string | null;
   chatError?: string | null;
@@ -170,6 +174,9 @@ type SessionDefaultsSnapshot = {
 // Chat pickers need recency-free session rows so older channel chats remain selectable.
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
 export const CHAT_SESSIONS_REFRESH_LIMIT = 50;
+const CHAT_RUN_WATCHDOG_IDLE_MS = 15_000;
+const CHAT_RUN_WATCHDOG_RETRY_MS = 5_000;
+const CHAT_RUN_WATCHDOG_WAIT_TIMEOUT_MS = 50;
 
 export function createChatSessionsLoadOverrides(
   state: { sessionsShowArchived?: boolean },
@@ -211,6 +218,165 @@ export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
+}
+
+type ChatRunWatchdogHost = ChatHost & {
+  client: GatewayBrowserClient | null;
+  chatLoading?: boolean;
+  chatMessages?: unknown[];
+  chatThinkingLevel?: string | null;
+  chatRunLastActivityAt?: number | null;
+  chatRunWatchdogTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
+  chatRunWatchdogProbeInFlight?: boolean;
+  chatStream: string | null;
+  chatStreamStartedAt?: number | null;
+};
+
+function clearChatRunWatchdogTimer(host: ChatRunWatchdogHost) {
+  if (host.chatRunWatchdogTimer != null) {
+    globalThis.clearTimeout(host.chatRunWatchdogTimer);
+    host.chatRunWatchdogTimer = null;
+  }
+}
+
+export function resetChatRunWatchdog(host: ChatRunWatchdogHost) {
+  clearChatRunWatchdogTimer(host);
+  host.chatRunWatchdogProbeInFlight = false;
+  if (!host.chatRunId) {
+    host.chatRunLastActivityAt = null;
+  }
+}
+
+type ChatRunWatchdogWaitResult = {
+  status?: unknown;
+  endedAt?: unknown;
+  error?: unknown;
+  stopReason?: unknown;
+  livenessState?: unknown;
+  yielded?: unknown;
+  pendingError?: unknown;
+};
+
+function chatRunWatchdogStatus(result: ChatRunWatchdogWaitResult | null | undefined): string {
+  return typeof result?.status === "string" ? result.status.trim().toLowerCase() : "";
+}
+
+function chatRunWatchdogStatusIsDone(status: string): boolean {
+  return status === "ok" || status === "completed" || status === "succeeded";
+}
+
+function chatRunWatchdogResultIsTerminal(
+  result: ChatRunWatchdogWaitResult | null | undefined,
+): boolean {
+  if (!result) {
+    return false;
+  }
+  const status = chatRunWatchdogStatus(result);
+  if (!status) {
+    return false;
+  }
+  if (status === "pending") {
+    return false;
+  }
+  if (status !== "timeout" && status !== "timed_out") {
+    return true;
+  }
+  if (result?.pendingError === true) {
+    return false;
+  }
+  return (
+    result?.endedAt != null ||
+    result?.error != null ||
+    result?.stopReason != null ||
+    result?.livenessState != null ||
+    result?.yielded === true
+  );
+}
+
+function chatRunWatchdogOutcomeForStatus(status: string): "done" | "interrupted" {
+  return chatRunWatchdogStatusIsDone(status) ? "done" : "interrupted";
+}
+
+function chatRunWatchdogSessionStatusForStatus(status: string): "done" | "failed" {
+  return chatRunWatchdogStatusIsDone(status) ? "done" : "failed";
+}
+
+async function runChatRunWatchdog(host: ChatRunWatchdogHost, runId: string) {
+  if (!host.connected || !host.client || host.chatRunId !== runId) {
+    resetChatRunWatchdog(host);
+    return;
+  }
+  if (host.chatRunWatchdogProbeInFlight) {
+    scheduleChatRunWatchdog(host, CHAT_RUN_WATCHDOG_RETRY_MS);
+    return;
+  }
+
+  host.chatRunWatchdogProbeInFlight = true;
+  try {
+    const result = await host.client.request<ChatRunWatchdogWaitResult>("agent.wait", {
+      runId,
+      timeoutMs: CHAT_RUN_WATCHDOG_WAIT_TIMEOUT_MS,
+    });
+    if (host.chatRunId !== runId) {
+      return;
+    }
+    if (chatRunWatchdogResultIsTerminal(result)) {
+      const status = chatRunWatchdogStatus(result);
+      reconcileChatRunLifecycle(host as Parameters<typeof reconcileChatRunLifecycle>[0], {
+        outcome: chatRunWatchdogOutcomeForStatus(status),
+        sessionStatus: chatRunWatchdogSessionStatusForStatus(status),
+        runId,
+        sessionKey: host.sessionKey,
+        clearLocalRun: true,
+        clearChatStream: true,
+        clearToolStream: true,
+        clearSideResultTerminalRuns: true,
+        publishRunStatus: false,
+        armLocalTerminalReconcile: true,
+      });
+      host.chatRunLastActivityAt = null;
+      try {
+        await loadChatHistory(host as unknown as ChatState);
+      } finally {
+        await flushChatQueue(host);
+      }
+      return;
+    }
+  } catch (err) {
+    console.warn("[openclaw] chat run watchdog probe failed:", err);
+  } finally {
+    host.chatRunWatchdogProbeInFlight = false;
+  }
+
+  if (host.chatRunId === runId) {
+    scheduleChatRunWatchdog(host, CHAT_RUN_WATCHDOG_RETRY_MS);
+  }
+}
+
+export function scheduleChatRunWatchdog(host: ChatRunWatchdogHost, delayMs?: number) {
+  clearChatRunWatchdogTimer(host);
+  if (!host.connected || !host.client || !host.chatRunId) {
+    resetChatRunWatchdog(host);
+    return;
+  }
+
+  const now = Date.now();
+  const lastActivityAt = host.chatRunLastActivityAt ?? now;
+  const delay =
+    delayMs ?? Math.max(0, CHAT_RUN_WATCHDOG_IDLE_MS - Math.max(0, now - lastActivityAt));
+  const runId = host.chatRunId;
+  host.chatRunWatchdogTimer = globalThis.setTimeout(() => {
+    host.chatRunWatchdogTimer = null;
+    void runChatRunWatchdog(host, runId);
+  }, delay);
+}
+
+export function noteChatRunActivity(host: ChatRunWatchdogHost, now = Date.now()) {
+  if (!host.chatRunId) {
+    return;
+  }
+  host.chatRunLastActivityAt = now;
+  scheduleChatRunWatchdog(host);
 }
 
 export function hasAbortableSessionRun(host: {

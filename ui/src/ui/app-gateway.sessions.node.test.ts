@@ -40,8 +40,10 @@ vi.mock("./app-chat.ts", () => ({
   },
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
+  noteChatRunActivity: vi.fn(),
   recordFirstAssistantChatTiming: recordFirstAssistantChatTimingMock,
   refreshChatAvatar: vi.fn(),
+  resetChatRunWatchdog: vi.fn(),
 }));
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),
