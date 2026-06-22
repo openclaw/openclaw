@@ -959,6 +959,7 @@ export async function runCopilotAttempt(
     await dualWriteCopilotTranscriptBestEffort({
       sessionFile: sessionFileForMirror,
       sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
+      sessionId: readString(input.sessionId),
       agentId: readString(input.agentId),
       messages: taggedMessages,
       idempotencyScope: sessionIdForScope ? `copilot:${sessionIdForScope}` : undefined,
