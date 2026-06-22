@@ -273,7 +273,7 @@ export function isTelegramRateLimitError(err: unknown): boolean {
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const RICH_MESSAGE_UNSUPPORTED_RE =
-  /400:\s*Bad Request:\s*(?:this )?message\b.*\bnot supported|MESSAGE_UNSUPPORTED|UNSUPPORTED/i;
+  /400:\s*Bad Request:\s*(?:this )?message\b.*\bnot supported|MESSAGE_UNSUPPORTED|UNSUPPORTED_MESSAGE/i;
 const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
 const EDIT_TARGET_MISSING_RE =
   /400:\s*Bad Request:\s*message to edit not found|400:\s*Bad Request:\s*message can't be edited|MESSAGE_ID_INVALID/i;

@@ -846,10 +846,22 @@ export async function sendMessageTelegram(
     if (!useRichMessages) {
       return await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
     }
+    const richPlan = buildRichTextPlan(rawText);
+    const sentCount = { value: 0 };
     try {
-      return await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context);
+      return await sendTelegramRichTextChunks(richPlan, context, sentCount);
     } catch (err) {
       if (!isTelegramRichMessageUnsupportedError(err)) {
+        throw err;
+      }
+      // If some rich chunks were already delivered, falling back to HTML would
+      // duplicate visible content. Only fall back when no chunks were sent yet
+      // (client doesn't support rich messages at all), which is the 99.9% case.
+      if (sentCount.value > 0) {
+        logVerbose(
+          `telegram rich message not supported after ${sentCount.value} chunk(s) delivered; ` +
+            `cannot fall back without duplication: ${formatErrorMessage(err)}`,
+        );
         throw err;
       }
       logVerbose(
@@ -879,6 +891,7 @@ export async function sendMessageTelegram(
   const sendTelegramRichTextChunks = async (
     chunks: TelegramRichTextChunk[],
     context: string,
+    sentCount?: { value: number },
   ): Promise<{ messageId: string; chatId: string }> => {
     const richRawApi = getTelegramRichRawApi(api);
     let lastMessageId = "";
@@ -921,6 +934,9 @@ export async function sendMessageTelegram(
       lastChatId = String(result?.chat?.id ?? chatId);
       lastAcceptedParams = acceptedParams;
       sentChunkCount += 1;
+      if (sentCount) {
+        sentCount.value = sentChunkCount;
+      }
     }
     if (lastMessageId) {
       logTelegramOutboundSendOk({
@@ -1629,21 +1645,31 @@ export async function editMessageTelegram(
     plainCaptionParams.reply_markup = replyMarkup;
   }
 
-  const performTextEdit = () => {
+  const performTextEdit = async () => {
     if (richRawApi && richMessage) {
       const richEditParams: Pick<TelegramEditRichMessageTextParams, "reply_markup"> =
         replyMarkup === undefined ? {} : { reply_markup: replyMarkup };
-      return requestWithEditShouldLog(
-        () =>
-          richRawApi.editMessageText({
-            chat_id: chatId,
-            message_id: messageId,
-            rich_message: richMessage,
-            ...richEditParams,
-          }),
-        "editMessage",
-        (err) => !isTelegramMessageNotModifiedError(err),
-      );
+      try {
+        return await requestWithEditShouldLog(
+          () =>
+            richRawApi.editMessageText({
+              chat_id: chatId,
+              message_id: messageId,
+              rich_message: richMessage,
+              ...richEditParams,
+            }),
+          "editMessage",
+          (err) => !isTelegramMessageNotModifiedError(err),
+        );
+      } catch (err) {
+        if (!isTelegramRichMessageUnsupportedError(err)) {
+          throw err;
+        }
+        logVerbose(
+          `telegram edit rich message not supported; falling back to HTML edit: ${formatErrorMessage(err)}`,
+        );
+        // Fall through to regular HTML edit below.
+      }
     }
     return withTelegramHtmlParseFallback({
       label: "editMessage",

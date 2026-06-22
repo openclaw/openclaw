@@ -1027,6 +1027,34 @@ describe("sendMessageTelegram", () => {
       // sendRichMessage fails (unsupported) → HTML sendMessage fails (parse error) → plain text succeeds
       expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
     });
+
+    it("does not fall back to HTML when some rich chunks were already delivered (no duplication)", async () => {
+      const longText = "Hello world, this is a test message that would be chunked. ".repeat(1000);
+      botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+      // Simulate first rich chunk succeeding, second failing with unsupported
+      const sendRichMock = botRawApi.sendRichMessage as ReturnType<typeof vi.fn>;
+      sendRichMock
+        .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } })
+        .mockRejectedValueOnce(
+          Object.assign(
+            new Error("400: Bad Request: this message is currently not supported on Telegram Web"),
+            { error_code: 400 },
+          ),
+        );
+
+      await expect(
+        sendMessageTelegram("123", longText, {
+          cfg: { channels: { telegram: { richMessages: true } } },
+          token: "tok",
+        }),
+      ).rejects.toThrow(/not supported/);
+
+      // One rich chunk was sent; the second triggered unsupported error.
+      // Fallback should NOT have been used (would duplicate chunk 1 as HTML).
+      expect(sendRichMock).toHaveBeenCalledTimes(2);
+      expect(botApi.sendMessage).not.toHaveBeenCalled();
+    });
   });
 
   it.each([
@@ -3569,6 +3597,62 @@ describe("editMessageTelegram", () => {
       },
     );
     expect(botRawApi.editMessageText).not.toHaveBeenCalled();
+  });
+
+  describe("rich edit unsupported fallback", () => {
+    function createRichEditUnsupportedError(
+      message = "400: Bad Request: this message is currently not supported on Telegram Web",
+    ) {
+      return Object.assign(new Error(message), { error_code: 400 });
+    }
+
+    it("falls back to standard editMessageText when rich edit returns unsupported", async () => {
+      botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+      botRawApi.editMessageText.mockRejectedValue(createRichEditUnsupportedError());
+
+      await editMessageTelegram("123", 1, "**edited**", {
+        token: "tok",
+        cfg: { channels: { telegram: { richMessages: true } } },
+      });
+
+      // Rich edit attempted, failed with unsupported, fell back to standard HTML edit
+      expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
+      expect(botApi.editMessageText).toHaveBeenCalledWith("123", 1, "<b>edited</b>", {
+        parse_mode: "HTML",
+      });
+    });
+
+    it("does not fall back for non-unsupported rich edit errors", async () => {
+      botRawApi.editMessageText.mockRejectedValue(
+        Object.assign(new Error("400: Bad Request: can't parse entities"), { error_code: 400 }),
+      );
+
+      await expect(
+        editMessageTelegram("123", 1, "**edited**", {
+          token: "tok",
+          cfg: { channels: { telegram: { richMessages: true } } },
+        }),
+      ).rejects.toThrow(/can't parse entities/);
+
+      // Rich edit was attempted, should not have fallen back to standard edit
+      expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
+      expect(botApi.editMessageText).not.toHaveBeenCalled();
+    });
+
+    it("falls back for MESSAGE_UNSUPPORTED rich edit errors", async () => {
+      botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+      botRawApi.editMessageText.mockRejectedValue(
+        Object.assign(new Error("400: Bad Request: MESSAGE_UNSUPPORTED"), { error_code: 400 }),
+      );
+
+      await editMessageTelegram("123", 1, "Hello **bold**", {
+        token: "tok",
+        cfg: { channels: { telegram: { richMessages: true } } },
+      });
+
+      expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
+      expect(botApi.editMessageText).toHaveBeenCalled();
+    });
   });
 });
 
