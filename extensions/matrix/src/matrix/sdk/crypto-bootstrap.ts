@@ -76,6 +76,14 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
       strict,
     });
 
+    if (forceReset && (!crossSigning.ready || !crossSigning.published)) {
+      return {
+        crossSigningReady: crossSigning.ready,
+        crossSigningPublished: crossSigning.published,
+        ownDeviceVerified: null,
+      };
+    }
+
     // Second SSSS pass to pick up cross-signing keys published during bootstrap.
     await this.bootstrapSecretStorage(crypto, {
       strict,

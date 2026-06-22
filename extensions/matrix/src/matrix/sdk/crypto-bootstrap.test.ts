@@ -422,6 +422,27 @@ describe("MatrixCryptoBootstrapper", () => {
     expectBootstrapCrossSigningCall(bootstrapCrossSigning, 1, { setupNewCrossSigning: true });
   });
 
+  it("does not repair SSSS after a non-strict forced reset failure", async () => {
+    const bootstrapCrossSigning = vi.fn(async () => {
+      throw new Error("getSecretStorageKey callback returned falsey");
+    });
+    const { deps, crypto, bootstrapper } = createForcedResetHarness(bootstrapCrossSigning);
+
+    const result = await bootstrapper.bootstrap(crypto, {
+      strict: false,
+      forceResetCrossSigning: true,
+      allowSecretStorageRecreateWithoutRecoveryKey: true,
+    });
+
+    expect(result).toEqual({
+      crossSigningReady: false,
+      crossSigningPublished: false,
+      ownDeviceVerified: null,
+    });
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
+    expect(bootstrapCrossSigning).toHaveBeenCalledOnce();
+  });
+
   it("re-exports cross-signing keys after forced reset creates secret storage", async () => {
     const bootstrapCrossSigning = vi.fn(async () => {});
     const { deps, crypto, bootstrapper } = createForcedResetHarness(bootstrapCrossSigning);
