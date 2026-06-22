@@ -33,6 +33,7 @@ const DEFAULT_OUTPUT_DIR = "docs";
 type Args = {
   taxonomy: string;
   scores: string;
+  docsRoot: string;
   outputDir: string;
   staticAssetsDir?: string;
   evidenceDir?: string;
@@ -77,6 +78,7 @@ function parseArgs(argv: string[]): Args {
   const args: Args = {
     taxonomy: DEFAULT_TAXONOMY_PATH,
     scores: DEFAULT_SCORES_PATH,
+    docsRoot: DEFAULT_OUTPUT_DIR,
     outputDir: DEFAULT_OUTPUT_DIR,
     staticAssetsDir: undefined,
     evidenceDir: undefined,
@@ -108,6 +110,8 @@ function parseArgs(argv: string[]): Args {
       args.taxonomy = next();
     } else if (arg === "--scores") {
       args.scores = next();
+    } else if (arg === "--docs-root") {
+      args.docsRoot = next();
     } else if (arg === "--output-dir") {
       args.outputDir = next();
     } else if (arg === "--static-assets-dir") {
@@ -120,6 +124,7 @@ function parseArgs(argv: string[]): Args {
 Options:
   --taxonomy <path>     Taxonomy YAML path (default: taxonomy.yaml)
   --scores <path>       Aggregate score YAML path (default: qa/maturity-scores.yaml)
+  --docs-root <path>    Public docs source root for route validation (default: docs)
   --output-dir <path>   Directory for maturity/scorecard.md and maturity/taxonomy.md
   --static-assets-dir <path>
                         Copy source YAML and QA evidence JSON for docs components
@@ -735,6 +740,7 @@ function main(): void {
   const args = parseArgs(process.argv.slice(2));
   const taxonomyPath = path.normalize(args.taxonomy);
   const scoresPath = path.normalize(args.scores);
+  const docsRoot = path.normalize(args.docsRoot);
   const outputDir = path.normalize(args.outputDir);
   const taxonomy = parseQaMaturityTaxonomy(readYaml(taxonomyPath), taxonomyPath);
   const scores = parseQaMaturityScores(readYaml(scoresPath), scoresPath);
@@ -770,7 +776,7 @@ function main(): void {
     ],
     [
       "maturity/taxonomy.md",
-      renderTaxonomy({ docsRouteIndex: collectDocsRouteIndex(outputDir), taxonomy, scores }),
+      renderTaxonomy({ docsRouteIndex: collectDocsRouteIndex(docsRoot), taxonomy, scores }),
     ],
   ]);
   const changed: string[] = [];
