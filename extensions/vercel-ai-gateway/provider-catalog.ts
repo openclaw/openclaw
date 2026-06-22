@@ -9,11 +9,25 @@ import {
 } from "./models.js";
 import { resolveVercelAiGatewayThinkingProfile } from "./thinking.js";
 
+const VERCEL_AI_GATEWAY_IMAGE_MODEL_IDS = new Set([
+  "openai/gpt-5.5",
+  "openai/gpt-5.5-pro",
+  "openai/gpt-5.4",
+  "openai/gpt-5.4-pro",
+  "openai/gpt-5.4-mini",
+  "openai/gpt-5.4-nano",
+  "openai/gpt-5.3-codex",
+  "openai/gpt-5.3-codex-spark",
+  "openai/gpt-5.2",
+  "openai/gpt-5.2-codex",
+  "openai/gpt-5.1-codex",
+]);
+
 export function resolveVercelAiGatewayModel(modelId: string) {
   const model = resolveVercelAiGatewayDynamicModel(modelId);
   const input: Array<"text" | "image"> = model.input.includes("image")
     ? ["text", "image"]
-    : /^(?:anthropic|moonshotai|openai)\//.test(modelId)
+    : VERCEL_AI_GATEWAY_IMAGE_MODEL_IDS.has(modelId)
       ? ["text", "image"]
       : ["text"];
   return {
