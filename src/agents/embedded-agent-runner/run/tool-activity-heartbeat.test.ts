@@ -11,6 +11,11 @@ import {
   setChannelAgentToolMeta,
 } from "../../channel-tool-metadata.js";
 import {
+  copyToolTerminalPresentation,
+  setToolTerminalPresentation,
+  getToolTerminalPresentation,
+} from "../../tool-terminal-presentation.js";
+import {
   clearToolActivityRun,
   getLastToolActivityMs,
   notifyToolActivity,
@@ -156,5 +161,22 @@ describe("heartbeat wrapper metadata preservation", () => {
     expect((wrapped as Record<symbol, unknown>)[Symbol.for("openclaw:beforeToolCallWrapped")]).toBe(
       true,
     );
+  });
+
+  it("preserves terminal presentation metadata on heartbeat-wrapped tools", () => {
+    const source = { name: "test-tool", execute: vi.fn() as never };
+    const formatter = () => ({ text: "web_fetch: 3 pages" });
+    setToolTerminalPresentation(source as never, formatter);
+
+    const wrapped = {
+      ...source,
+      execute: ((...args: unknown[]) =>
+        (source.execute as (...a: unknown[]) => unknown)(...args)) as never,
+    };
+    copyToolTerminalPresentation(source as never, wrapped as never);
+
+    const copiedFormatter = getToolTerminalPresentation(wrapped as never);
+    expect(copiedFormatter).toBe(formatter);
+    expect(copiedFormatter?.(undefined, { content: [] } as never)?.text).toBe("web_fetch: 3 pages");
   });
 });
