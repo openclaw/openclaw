@@ -1515,7 +1515,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.preflight":
     "Preflight (budget-triggered) compaction gate. Disable to skip the pre-turn threshold check entirely and let every turn fall through to overflow recovery (which honors `compaction.timeoutSeconds`).",
   "agents.defaults.compaction.preflight.enabled":
-    "Enable preflight (budget-triggered) compaction. Default: true. Set false to skip preflight compaction; subsequent turns then rely on overflow recovery, which has its own 15-minute budget and is the only path that honors `compaction.timeoutSeconds` without being capped by the ~60s reply lifecycle.",
+    "Enable preflight (budget-triggered) compaction. Default: true. Set false to skip preflight compaction; subsequent turns then rely on overflow recovery, which honors `compaction.timeoutSeconds` without being capped by the reply lifecycle.",
   "agents.defaults.runRetries":
     "Outer run loop retry iteration boundaries for the embedded OpenClaw runner to prevent infinite execution loops during failure recovery.",
   "agents.defaults.runRetries.base":

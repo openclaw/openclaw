@@ -10,29 +10,35 @@
  *
  * Run: pnpm exec tsx scripts/repro/issue-95553-preflight-disabled-gate.mts
  *
- * Behavior proved here:
- *   1. `preflight.enabled === false` short-circuits the preflight check and
- *      `compactEmbeddedAgentSession` is NOT called.
- *   2. `preflight.enabled === true` proceeds to the preflight path (mock
- *      resolves ok; gate does not interfere).
- *   3. `preflight` key absent preserves the existing default-on behavior
- *      (preflight runs as before — the fix is strictly additive).
+ * Behavior proved here (real-environment proof, not a unit-test mock):
+ *   1. Writes a real `openclaw.json` to a temp state dir with
+ *      `agents.defaults.compaction.preflight.enabled: false`.
+ *   2. Loads it via the production `loadConfig()` (same code path as gateway
+ *      startup) so the gate value is read from a parsed config, not a cast.
+ *   3. Calls the production `runPreflightCompactionIfNeeded` with that
+ *      config plus a real on-disk session entry. The function short-circuits
+ *      before `compactEmbeddedAgentSession` is reached, returning the original
+ *      session entry unchanged.
  *
- * Real environment: this script runs against the real production
- * `runPreflightCompactionIfNeeded` function with vitest-style mocks for
- * `compactEmbeddedAgentSession`, `runEmbeddedAgent`, and `runWithModelFallback`.
- * The mocks are the same ones the unit tests use, so this script proves the
- * full production code path including the early-return gate.
+ * Real environment: this script runs against the production
+ * `runPreflightCompactionIfNeeded` function and the production config loader.
+ * The only stub is `replyOperation` (an in-process callback bag with no
+ * behavior exercised by the gate path).
  */
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { loadConfig } from "../../src/config/io.ts";
 import { runPreflightCompactionIfNeeded } from "../../src/auto-reply/reply/agent-runner-memory.ts";
+import { withEnvAsync } from "../../src/test-utils/env.ts";
 
 type SessionEntry = Parameters<typeof runPreflightCompactionIfNeeded>[0]["sessionEntry"];
 
-function makeSessionEntry(): SessionEntry {
+function makeSessionEntry(sessionFile: string): SessionEntry {
   return {
     sessionId: "session-95553-repro",
-    sessionFile: "/tmp/openclaw-95553-repro/session.jsonl",
+    sessionFile,
     updatedAt: Date.now(),
     totalTokens: 180_500,
     totalTokensFresh: true,
@@ -57,67 +63,87 @@ function makeReplyOperation(): Parameters<typeof runPreflightCompactionIfNeeded>
 }
 
 async function main(): Promise<void> {
-  const exitCode = 0;
-  console.log("=== Reproduction for issue #95553 — preflight gate ===");
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-95553-repro-"));
+  const configDir = path.join(tmpDir, "config");
+  const sessionsDir = path.join(tmpDir, "sessions");
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const configPath = path.join(configDir, "openclaw.json");
+  const sessionFile = path.join(sessionsDir, "session.jsonl");
+  const storePath = path.join(sessionsDir, "sessions.json");
 
-  // 1. preflight.enabled === false → no compactEmbeddedAgentSession call.
-  // We rely on the unit test that proves this for the full path; here we
-  // demonstrate the config-gate read is the only path that needs production
-  // verification (no model resolution needed when gate is false).
-  const cfg = {
+  const openclawJson = {
     agents: {
       defaults: {
+        model: "anthropic/claude-opus-4-6",
         compaction: {
           preflight: { enabled: false },
         },
       },
     },
   };
-  const sessionEntry = makeSessionEntry();
-  const replyOperation = makeReplyOperation();
+  await fs.writeFile(configPath, JSON.stringify(openclawJson, null, 2), "utf8");
+  await fs.writeFile(sessionFile, "", "utf8");
 
-  // The function returns synchronously when the gate is engaged and no
-  // preflight work is needed; the gate is evaluated before any model lookup
-  // or compactEmbeddedAgentSession call.
-  const result = await runPreflightCompactionIfNeeded({
-    cfg: cfg as never,
-    followupRun: {
-      run: {
-        sessionId: sessionEntry.sessionId,
-        sessionFile: sessionEntry.sessionFile,
-        sessionKey: "agent:main:main",
-        prompt: "x".repeat(5_000),
-        model: "anthropic/claude-opus-4-6",
-        provider: "anthropic",
-        ownerNumbers: [],
+  console.log("=== Reproduction for issue #95553 — preflight gate ===");
+  console.log(`tmpDir: ${tmpDir}`);
+  console.log(`openclaw.json: ${configPath}`);
+  console.log(`sessionFile: ${sessionFile}`);
+
+  try {
+    const cfg = await withEnvAsync(
+      {
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: tmpDir,
       },
-    } as never,
-    defaultModel: "anthropic/claude-opus-4-6",
-    agentCfgContextTokens: 200_000,
-    sessionEntry,
-    sessionStore: { "agent:main:main": sessionEntry },
-    sessionKey: "agent:main:main",
-    storePath: "/tmp/openclaw-95553-repro/sessions.json",
-    isHeartbeat: false,
-    replyOperation,
-  });
+      async () => loadConfig({ pin: false }),
+    );
 
-  assert.equal(result, sessionEntry, "result must be the same session entry");
-  console.log("PASS  1. preflight.enabled === false short-circuits preflight check");
-  console.log(`        sessionEntry returned unchanged: ${result?.sessionId}`);
+    const gateValue = cfg.agents?.defaults?.compaction?.preflight?.enabled;
+    console.log(`loaded config: agents.defaults.compaction.preflight.enabled = ${gateValue}`);
+    assert.equal(
+      gateValue,
+      false,
+      "loaded config must carry preflight.enabled=false from openclaw.json",
+    );
 
-  // 2-3 are covered by the unit test in
-  // src/auto-reply/reply/agent-runner-memory.test.ts
-  // ("skips preflight compaction when ... enabled === false") which
-  // additionally verifies the negative path: that compactEmbeddedAgentSession
-  // is never called and incrementCompactionCount is never called.
+    const sessionEntry = makeSessionEntry(sessionFile);
+    const replyOperation = makeReplyOperation();
 
-  if (exitCode !== 0) {
-    console.error("FAIL");
-  } else {
+    const result = await runPreflightCompactionIfNeeded({
+      cfg,
+      followupRun: {
+        run: {
+          sessionId: sessionEntry.sessionId,
+          sessionFile: sessionEntry.sessionFile,
+          sessionKey: "agent:main:main",
+          prompt: "x".repeat(5_000),
+          model: "anthropic/claude-opus-4-6",
+          provider: "anthropic",
+          ownerNumbers: [],
+        },
+      } as never,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    assert.equal(
+      result,
+      sessionEntry,
+      "result must be the same session entry (preflight gate short-circuits)",
+    );
+    console.log("PASS  preflight.enabled === false short-circuits preflight check");
+    console.log(`      sessionEntry returned unchanged: ${result?.sessionId}`);
     console.log("=== All repro assertions passed ===");
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
   }
-  process.exit(exitCode);
 }
 
 main().catch((err: unknown) => {

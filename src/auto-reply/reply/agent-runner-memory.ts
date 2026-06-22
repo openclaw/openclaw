@@ -713,8 +713,8 @@ export async function runPreflightCompactionIfNeeded(params: {
   }
   // `compaction.preflight.enabled: false` short-circuits the budget-triggered
   // preflight path entirely; subsequent turns then rely on overflow recovery,
-  // which already honors `compaction.timeoutSeconds` (~15min budget). The check
-  // is `=== false` so an unset key preserves the existing default-on behavior.
+  // which already honors `compaction.timeoutSeconds`. The check is `=== false`
+  // so an unset key preserves the existing default-on behavior.
   if (params.cfg.agents?.defaults?.compaction?.preflight?.enabled === false) {
     return entry ?? params.sessionEntry;
   }
