@@ -1,15 +1,17 @@
 // Control UI module implements app render behavior.
-import { html, nothing } from "lit";
+import { html, nothing, render } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { SIDEBAR_SECTIONS, subtitleForRoute, titleForRoute } from "../app-navigation.ts";
 import {
   appRouter,
+  createApplicationContext,
   pathForRoute,
   resolveAppNotFound,
   type ApplicationContext,
   type AppRouteModule,
   type RouteId,
 } from "../app-routes.ts";
+import type { SettingsHost } from "../app/app-host.ts";
 import {
   renderRouterOutlet,
   routerOutlet,
@@ -47,6 +49,10 @@ import { renderCommandPalette } from "./views/command-palette.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
+
+type AppStateSurfaceValue = {
+  value: AppViewState;
+};
 
 function isSidebarSessionBusy(state: AppViewState) {
   return (
@@ -292,23 +298,105 @@ function dismissUpdateBanner(updateAvailable: unknown) {
   }
 }
 
-export function renderApp(state: AppViewState, application: ApplicationContext) {
+class AppShellSurface extends HTMLElement {
+  private stateValue?: AppViewState;
+  private applicationValue?: ApplicationContext;
+  private unsubscribe?: () => void;
+
+  set state(value: AppStateSurfaceValue) {
+    this.stateValue = value.value;
+    this.updateSurface();
+  }
+
+  set application(value: ApplicationContext) {
+    this.applicationValue = value;
+    this.unsubscribe?.();
+    this.unsubscribe = value.routeSnapshot.subscribe(() => this.updateSurface());
+    this.updateSurface();
+  }
+
+  connectedCallback() {
+    this.updateSurface();
+  }
+
+  disconnectedCallback() {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+  }
+
+  private updateSurface() {
+    if (!this.stateValue || !this.applicationValue) {
+      return;
+    }
+    render(
+      renderConnectedApp(
+        { state: this.stateValue, navigate: this.applicationValue.navigate },
+        this.applicationValue,
+        this.applicationValue.routeSnapshot.get(),
+      ),
+      this,
+    );
+  }
+}
+
+class AppRouteContentSurface extends HTMLElement {
+  private stateValue?: AppViewState;
+  private applicationValue?: ApplicationContext;
+
+  set state(value: AppStateSurfaceValue) {
+    this.stateValue = value.value;
+    this.updateSurface();
+  }
+
+  set application(value: ApplicationContext) {
+    this.applicationValue = value;
+    this.updateSurface();
+  }
+
+  private updateSurface() {
+    if (!this.stateValue || !this.applicationValue) {
+      return;
+    }
+    const context = {
+      state: this.stateValue,
+      navigate: this.applicationValue.navigate,
+    };
+    render(
+      routerOutlet(
+        this.applicationValue.routeSnapshot,
+        context,
+        {
+          onNotFound: () =>
+            void resolveAppNotFound(this.applicationValue!.routeLoadContext).catch(() => undefined),
+        },
+        (selection) =>
+          renderRouterOutlet(appRouter, context, selection, {
+            retryContext: this.applicationValue!.routeLoadContext,
+          }),
+      ),
+      this,
+    );
+  }
+}
+
+if (!customElements.get("openclaw-shell-surface")) {
+  customElements.define("openclaw-shell-surface", AppShellSurface);
+}
+if (!customElements.get("openclaw-route-content-surface")) {
+  customElements.define("openclaw-route-content-surface", AppRouteContentSurface);
+}
+
+export function renderApp(
+  state: AppViewState,
+  application = createApplicationContext(state as unknown as SettingsHost),
+) {
   if (!state.connected) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
-  const context = {
-    state,
-    navigate: application.navigate,
-  };
-  return routerOutlet(
-    appRouter,
-    context,
-    {
-      onNotFound: () =>
-        void resolveAppNotFound(application.routeLoadContext).catch(() => undefined),
-    },
-    (selection) => renderConnectedApp(context, application, selection),
-  );
+  return html`<openclaw-shell-surface
+    .state=${{ value: state }}
+    .application=${application}
+  ></openclaw-shell-surface>`;
 }
 
 function renderConnectedApp(
@@ -339,9 +427,6 @@ function renderConnectedApp(
     activeRouteModule !== null &&
     "header" in activeRouteModule &&
     activeRouteModule.header === true;
-  const routedPage = renderRouterOutlet(appRouter, context, routeView, {
-    retryContext: application.routeLoadContext,
-  });
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !state.onboarding;
@@ -622,7 +707,10 @@ function renderConnectedApp(
                 ${headerError ? html`<div class="pill danger">${headerError}</div>` : nothing}
               </div>
             </section>`}
-        ${routedPage ?? nothing}
+        <openclaw-route-content-surface
+          .state=${{ value: state }}
+          .application=${application}
+        ></openclaw-route-content-surface>
       </main>
       ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
     </div>

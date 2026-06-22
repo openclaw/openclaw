@@ -2,7 +2,8 @@ import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
 // Control UI module implements app behavior.
 import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
-import { createApplicationContext, type ApplicationContext } from "../app-routes.ts";
+import { appRouter, createApplicationContext, type ApplicationContext } from "../app-routes.ts";
+import { createRouterOutletSnapshot } from "../app/router-outlet.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import { loadCron as loadCronPage, loadOverview as loadOverviewPage } from "../pages/loaders.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
@@ -213,6 +214,7 @@ export class OpenClawApp extends LitElement {
   readonly i18nController = new I18nController(this);
   readonly applicationContext: ApplicationContext = createApplicationContext(
     this as unknown as Parameters<typeof createApplicationContext>[0],
+    createRouterOutletSnapshot(appRouter),
   );
   clientInstanceId = generateUUID();
   connectGeneration = 0;

@@ -1,4 +1,5 @@
 import type { SettingsAppHost, SettingsHost } from "./app/app-host.ts";
+import type { RouterOutletSnapshotStore } from "./app/router-outlet.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
@@ -38,6 +39,7 @@ type ApplicationHost = SettingsHost & {
 
 export type ApplicationContext = {
   routeLoadContext: RouteLoadContext;
+  routeSnapshot: RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>;
   navigate: (routeId: RouteId) => void;
   preload: (routeId: RouteId) => Promise<void>;
   notifyStateChange: (state: AppViewState, changed: ReadonlyMap<PropertyKey, unknown>) => void;
@@ -92,7 +94,10 @@ export const appRouter = createRouter<RouteId, RouteLoadContext, AppRouteModule>
   routes: appRoutes,
 });
 
-export function createApplicationContext(host: SettingsHost): ApplicationContext {
+export function createApplicationContext(
+  host: SettingsHost,
+  routeSnapshot?: RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>,
+): ApplicationContext {
   const applicationHost = host as ApplicationHost;
   const loadContext = routeLoadContext(host);
   const navigate = (next: RouteId) => {
@@ -119,6 +124,18 @@ export function createApplicationContext(host: SettingsHost): ApplicationContext
   };
   return {
     routeLoadContext: loadContext,
+    routeSnapshot:
+      routeSnapshot ??
+      ({
+        get: () => ({
+          status: "idle",
+          active: undefined,
+          pending: undefined,
+          showPending: false,
+        }),
+        subscribe: () => () => undefined,
+        dispose: () => undefined,
+      } as RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>),
     navigate,
     preload: (routeId) => appRouter.preloadRoute(routeId, loadContext),
     notifyStateChange: (state, changed) => {
