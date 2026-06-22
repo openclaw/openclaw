@@ -94,6 +94,7 @@ import {
   releaseIMessageInboundReplay,
 } from "./inbound-dedupe.js";
 import {
+  buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
@@ -1039,6 +1040,55 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
+    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
+    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
+    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
+    if (privateApiStatus?.available === true) {
+      // Surface a single warning per restart when the bridge is up but we
+      // had to gate off typing/read because the imsg build pre-dates the
+      // capability list. Otherwise the user sees no typing bubble / no
+      // "Read" receipt with no visible reason.
+      if (!supportsTyping || !supportsRead) {
+        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
+      }
+    }
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      sessionKey: decision.route.sessionKey,
+      channel: "imessage",
+      chatType: decision.isGroup ? "group" : "direct",
+    });
+    const shouldStartDirectTyping =
+      supportsTyping &&
+      !decision.isGroup &&
+      sendPolicy !== "deny" &&
+      (configuredTypingMode === undefined || configuredTypingMode === "instant");
+    const earlyDirectTypingTarget = shouldStartDirectTyping
+      ? buildDirectIMessageReplyTarget({
+          cfg,
+          accountId: decision.route.accountId,
+          sender: decision.sender,
+        })
+      : undefined;
+    if (earlyDirectTypingTarget) {
+      // Start channel-native feedback before the expensive history/context/model
+      // path. Use a short-lived client so a slow typing RPC cannot block the
+      // monitor client's watch stream or later dispatcher typing teardown.
+      void sendIMessageTyping(earlyDirectTypingTarget, true, {
+        cfg,
+        accountId: accountInfo.accountId,
+      }).catch((err) => {
+        logTypingFailure({
+          log: (msg) => logVerbose(msg),
+          channel: "imessage",
+          action: "start",
+          target: earlyDirectTypingTarget,
+          error: err,
+        });
+      });
+    }
     const stagedAttachments = remoteHost
       ? []
       : await stageIMessageAttachments(validAttachments, {
@@ -1107,31 +1157,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
-    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
-    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
-    if (privateApiStatus?.available === true) {
-      // Surface a single warning per restart when the bridge is up but we
-      // had to gate off typing/read because the imsg build pre-dates the
-      // capability list. Otherwise the user sees no typing bubble / no
-      // "Read" receipt with no visible reason.
-      if (!supportsTyping || !supportsRead) {
-        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
-      }
-    }
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
 
     if (supportsRead && sendReadReceipts && typingTarget) {
-      try {
-        await markIMessageChatRead(typingTarget, {
-          cfg,
-          accountId: accountInfo.accountId,
-          client: getActiveClient(),
-        });
-      } catch (err) {
+      // Read receipts are best-effort channel UI. Do not put them on the
+      // critical path before model dispatch; slow private-API reads otherwise
+      // make accepted iMessage turns feel stuck before the agent starts. Use
+      // a short-lived client so a stuck read cannot block monitor-client typing.
+      void markIMessageChatRead(typingTarget, {
+        cfg,
+        accountId: accountInfo.accountId,
+      }).catch((err) => {
         runtime.error?.(`imessage: mark read failed: ${String(err)}`);
-      }
+      });
     }
 
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -1234,19 +1273,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
     let directTypingController: IMessageTypingController | undefined;
-    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
-    const sendPolicy = resolveSendPolicy({
-      cfg,
-      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
-      sessionKey: decision.route.sessionKey,
-      channel: "imessage",
-      chatType: decision.isGroup ? "group" : "direct",
-    });
-    const shouldStartToolTyping =
-      !decision.isGroup &&
-      sendPolicy !== "deny" &&
-      (configuredTypingMode === undefined || configuredTypingMode === "instant");
-    const directToolTypingOptions = shouldStartToolTyping
+    const directToolTypingOptions = shouldStartDirectTyping
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
           // visible tool-progress message. The suppress flag is what lets
